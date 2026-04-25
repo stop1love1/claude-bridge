@@ -304,11 +304,11 @@ function buildRetryPrompt(
  * tree visualizer renders both attempts as siblings under the
  * coordinator.
  */
-function spawnRetryRun(args: {
+async function spawnRetryRun(args: {
   taskId: string;
   failedRun: Run;
   exitCode: number | null;
-}): { sessionId: string; run: Run } | null {
+}): Promise<{ sessionId: string; run: Run } | null> {
   const { taskId, failedRun, exitCode } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
@@ -359,7 +359,7 @@ function spawnRetryRun(args: {
     parentSessionId: failedRun.parentSessionId ?? null,
     retryOf: failedRun.sessionId,
   };
-  appendRun(sessionsDir, retryRun);
+  await appendRun(sessionsDir, retryRun);
   wireRunLifecycle(
     sessionsDir,
     sessionId,
@@ -377,21 +377,26 @@ function spawnRetryRun(args: {
  * not take down the lifecycle wire.
  */
 export function maybeScheduleRetry(args: ScheduleArgs & { exitCode: number | null }): void {
-  try {
-    const { taskId, failedRun, exitCode } = args;
-    const ineligible = isEligibleForRetry(taskId, failedRun);
-    if (ineligible) {
-      // Quiet — most failed runs are ineligible (no parent, already a
-      // retry, etc.) and we don't want to spam logs.
-      return;
+  // Wrap in an async IIFE so callers (lifecycle exit handlers) can stay
+  // sync. Errors are logged rather than re-thrown — a retry-path bug
+  // must not take down the lifecycle wire.
+  void (async () => {
+    try {
+      const { taskId, failedRun, exitCode } = args;
+      const ineligible = isEligibleForRetry(taskId, failedRun);
+      if (ineligible) {
+        // Quiet — most failed runs are ineligible (no parent, already a
+        // retry, etc.) and we don't want to spam logs.
+        return;
+      }
+      const result = await spawnRetryRun({ taskId, failedRun, exitCode });
+      if (!result) return;
+      emitRetried(taskId, result.run, failedRun.sessionId);
+      console.log(
+        `[auto-retry] ${taskId}: spawned ${result.sessionId} (role=${result.run.role}) for failed ${failedRun.sessionId}`,
+      );
+    } catch (e) {
+      console.error("auto-retry scheduling crashed", e);
     }
-    const result = spawnRetryRun({ taskId, failedRun, exitCode });
-    if (!result) return;
-    emitRetried(taskId, result.run, failedRun.sessionId);
-    console.log(
-      `[auto-retry] ${taskId}: spawned ${result.sessionId} (role=${result.run.role}) for failed ${failedRun.sessionId}`,
-    );
-  } catch (e) {
-    console.error("auto-retry scheduling crashed", e);
-  }
+  })();
 }

@@ -55,12 +55,12 @@ export function wireRunLifecycle(
     }
   };
 
-  const failRun = (reason: string, exitCode: number | null) => {
+  const failRun = async (reason: string, exitCode: number | null) => {
     try {
       const meta = readMeta(sessionsDir);
       const run = meta?.runs.find((r) => r.sessionId === sessionId);
       if (run && run.status === "running") {
-        updateRun(sessionsDir, sessionId, {
+        await updateRun(sessionsDir, sessionId, {
           status: "failed",
           endedAt: new Date().toISOString(),
         });
@@ -72,14 +72,14 @@ export function wireRunLifecycle(
     tryAutoRetry(exitCode);
   };
 
-  const succeedRun = () => {
+  const succeedRun = async () => {
     let runForGit: { repo: string; role: string } | null = null;
     let taskTitle = "";
     try {
       const meta = readMeta(sessionsDir);
       const run = meta?.runs.find((r) => r.sessionId === sessionId);
       if (run && run.status === "running") {
-        updateRun(sessionsDir, sessionId, {
+        await updateRun(sessionsDir, sessionId, {
           status: "done",
           endedAt: new Date().toISOString(),
         });
@@ -117,13 +117,13 @@ export function wireRunLifecycle(
   };
 
   child.on("error", (err) => {
-    failRun(`spawn error: ${err.message}`, null);
+    void failRun(`spawn error: ${err.message}`, null);
   });
   child.on("exit", (code) => {
     if (code === 0) {
-      succeedRun();
+      void succeedRun();
     } else if (code !== null) {
-      failRun(`exit code ${code}`, code);
+      void failRun(`exit code ${code}`, code);
     }
   });
 }
@@ -226,7 +226,9 @@ function injectRepoProfilesBlock(rendered: string): string {
   return `${rendered.slice(0, idx)}${block}\n${rendered.slice(idx)}`;
 }
 
-export function spawnCoordinatorForTask(task: Pick<Task, "id" | "title" | "body">): string | null {
+export async function spawnCoordinatorForTask(
+  task: Pick<Task, "id" | "title" | "body">,
+): Promise<string | null> {
   const sessionsDir = join(SESSIONS_DIR, task.id);
 
   // meta.json is created by `createTask` in tasksStore. If it's missing
@@ -298,7 +300,7 @@ export function spawnCoordinatorForTask(task: Pick<Task, "id" | "title" | "body"
       // permission hook is NOT attached here for the same reason.
       settings: { mode: "bypassPermissions" },
     });
-    appendRun(sessionsDir, {
+    await appendRun(sessionsDir, {
       sessionId,
       role: "coordinator",
       repo: basename(BRIDGE_ROOT),

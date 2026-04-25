@@ -36,13 +36,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   const existing = meta.runs.find((r) => r.sessionId === body.sessionId);
   if (existing) {
-    updateRun(dir, body.sessionId, {
+    await updateRun(dir, body.sessionId, {
       role: body.role,
       repo: body.repo,
       ...(body.status ? { status: body.status } : {}),
     });
   } else {
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: body.sessionId,
       role: body.role,
       repo: body.repo,

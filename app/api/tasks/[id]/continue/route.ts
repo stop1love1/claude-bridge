@@ -32,7 +32,9 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       return NextResponse.json({ action: "resumed", sessionId: coordinatorRun.sessionId });
     }
 
-    spawnCoordinatorForTask(task);
+    // Fire-and-forget: the spawn writes the run row asynchronously
+    // under the meta lock and the response shouldn't block on it.
+    void spawnCoordinatorForTask(task);
     return NextResponse.json({ action: "spawned" });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

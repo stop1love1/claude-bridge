@@ -16,7 +16,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const task = getTask(id);
   if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
-  const sessionId = spawnCoordinatorForTask(task);
+  const sessionId = await spawnCoordinatorForTask(task);
   if (!sessionId) return NextResponse.json({ error: "spawn failed" }, { status: 500 });
   return NextResponse.json({ action: "spawned", sessionId });
 }
