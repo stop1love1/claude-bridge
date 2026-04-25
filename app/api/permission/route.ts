@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { listAllPending } from "@/lib/permissionStore";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,6 @@ export const dynamic = "force-dynamic";
  * endpoint, with the originating `sessionId` carried in each entry so the
  * client can POST the answer back to the matching per-session route.
  */
-export async function GET(_req: NextRequest) {
+export async function GET() {
   return NextResponse.json({ pending: listAllPending() });
 }
