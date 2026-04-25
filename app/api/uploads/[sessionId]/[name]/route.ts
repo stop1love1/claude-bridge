@@ -1,9 +1,10 @@
 import { type NextRequest } from "next/server";
 import { existsSync, statSync, createReadStream } from "node:fs";
-import { basename, extname, join, normalize } from "node:path";
+import { basename, extname, join } from "node:path";
 import { Readable } from "node:stream";
 import { BRIDGE_ROOT } from "@/lib/paths";
 import { isValidSessionId } from "@/lib/validate";
+import { assertInsideUploadDir } from "@/lib/uploadGuards";
 
 export const dynamic = "force-dynamic";
 
@@ -49,8 +50,12 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   }
 
   const dir = join(BRIDGE_ROOT, ".uploads", sessionId);
-  const full = normalize(join(dir, decoded));
-  if (!full.startsWith(dir)) {
+  const full = join(dir, decoded);
+  // Use the shared helper so the serving route enforces the SAME
+  // containment rule as the write route — `resolve()` + `sep`-suffixed
+  // prefix check rules out the `/uploads/abc` vs `/uploads/abc-evil/`
+  // sibling-prefix attack a bare `startsWith(dir)` would let through.
+  if (!assertInsideUploadDir(dir, full)) {
     return new Response("outside upload dir", { status: 400 });
   }
   if (!existsSync(full)) return new Response("not found", { status: 404 });
@@ -58,14 +63,31 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const stat = statSync(full);
   if (!stat.isFile()) return new Response("not a file", { status: 404 });
 
-  const mime = MIME[extname(decoded).toLowerCase()] ?? "application/octet-stream";
+  const ext = extname(decoded).toLowerCase();
+  const mime = MIME[ext] ?? "application/octet-stream";
   const stream = Readable.toWeb(createReadStream(full)) as unknown as ReadableStream<Uint8Array>;
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      "content-type": mime,
-      "content-length": String(stat.size),
-      "cache-control": "private, max-age=3600",
-    },
-  });
+
+  // L1: defensive headers on user-uploaded content.
+  //   - `nosniff` on every response prevents the browser from
+  //     MIME-sniffing a `.txt` into HTML and running an XSS payload
+  //     that was dragged into the upload dir.
+  //   - `attachment` for SVG: SVG is XML and can carry inline `<script>`
+  //     that executes in the bridge's origin if a top-level navigation
+  //     opens it. Forcing download neutralizes that without breaking
+  //     chat thumbnails (which load via `<img src>`, not navigation).
+  const headers: Record<string, string> = {
+    "content-type": mime,
+    "content-length": String(stat.size),
+    "cache-control": "private, max-age=3600",
+    "x-content-type-options": "nosniff",
+  };
+  if (ext === ".svg") {
+    // Strip CR/LF (and quotes) from the filename before injecting it
+    // into the header. Node 18+ already blocks CR/LF in header values
+    // at runtime, but doing it here turns a 500 into a clean response
+    // and matches the defense-in-depth pattern used elsewhere.
+    const headerSafe = decoded.replace(/["\r\n]/g, "");
+    headers["content-disposition"] = `attachment; filename="${headerSafe}"`;
+  }
+  return new Response(stream, { status: 200, headers });
 }
