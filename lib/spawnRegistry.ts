@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { treeKill } from "./processKill";
 
 /**
  * In-process registry of live child Claude processes, keyed by session
@@ -52,24 +53,22 @@ export function unregisterChild(sessionId: string): void {
  * still alive. Returns true if a child was found (and a kill was sent),
  * false if the session id has no live process registered. Idempotent
  * for the false case.
+ *
+ * Uses `treeKill` so on Windows we kill the whole descendant tree
+ * (taskkill /T) instead of just the parent PID. On POSIX we send the
+ * signal to the direct child — children no longer spawn with
+ * `detached: true`, so they're already in the bridge's own process
+ * group and sub-shells get cleaned up via the normal exit cascade.
  */
 export function killChild(sessionId: string): boolean {
   const child = registry.children.get(sessionId);
   if (!child) return false;
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    // ignore — best-effort
-  }
+  treeKill(child, "SIGTERM");
   // Escalate to SIGKILL after 3s if SIGTERM didn't take. We unref the
   // timer so node won't keep the event loop alive just for this.
   const t = setTimeout(() => {
     if (registry.children.get(sessionId) === child) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore
-      }
+      treeKill(child, "SIGKILL");
     }
   }, 3000);
   if (typeof t.unref === "function") t.unref();

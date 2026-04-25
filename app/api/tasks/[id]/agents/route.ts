@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRun, readMeta } from "@/lib/meta";
+import { appendRun, readMeta, updateRun } from "@/lib/meta";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
 import { resolveRepoCwd, resolveRepos } from "@/lib/repos";
 import { spawnFreeSession } from "@/lib/spawn";
@@ -29,6 +29,12 @@ import {
 } from "@/lib/permissionStore";
 
 export const dynamic = "force-dynamic";
+// `waitForSpawnApproval` blocks for up to APPROVAL_TIMEOUT_MS (180s) when
+// the caller opted in to user mediation. Next.js' default request
+// timeout is plenty on bare-metal Node, but some serverless hosts cap
+// shorter. Be explicit and pad past the 180s ceiling so we never get
+// the 504 racing with the deny-on-timeout path.
+export const maxDuration = 200;
 
 const execFileP = promisify(execFile);
 
@@ -105,7 +111,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "prompt is required" }, { status: 400 });
   }
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  // BRIDGE.md is the canonical Repos-table source, but the bridge has
+  // to keep working in fresh checkouts where it hasn't been written yet
+  // (the apps registry in `bridge.json` is the actual source of truth
+  // post-Phase-G). Empty string = "no repos declared via BRIDGE.md",
+  // which is the same fallback `resolveRepos` already handles.
+  let md = "";
+  try {
+    md = readFileSync(BRIDGE_MD, "utf8");
+  } catch (err) {
+    console.warn("BRIDGE.md unreadable — continuing with empty Repos table", err);
+  }
   const profileStore = loadProfiles();
   const profilesMap = profileStore?.profiles;
 
@@ -238,6 +254,24 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // endpoint, consider whether to inherit / fan out the hook differently.
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
+  // Append the run BEFORE spawning so a spawn failure can never produce
+  // an alive-but-untracked child. The flow is:
+  //   1. record `queued`,
+  //   2. try spawn,
+  //   3a. success → `updateRun({status:"running", startedAt: now})`
+  //   3b. failure → `updateRun({status:"failed", endedAt: now})` and bail.
+  // wireRunLifecycle will then take over and flip running → done/failed
+  // on child exit as before.
+  await appendRun(sessionsDir, {
+    sessionId,
+    role,
+    repo,
+    status: "queued",
+    startedAt: null,
+    endedAt: null,
+    parentSessionId: parentSessionId ?? null,
+  });
+
   let childHandle;
   try {
     childHandle = spawnFreeSession(
@@ -248,18 +282,29 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       sessionId,
     );
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      await updateRun(sessionsDir, sessionId, {
+        status: "failed",
+        endedAt: new Date().toISOString(),
+      });
+    } catch (uErr) {
+      console.error("failed to mark queued run failed after spawn error", uErr);
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  await appendRun(sessionsDir, {
-    sessionId,
-    role,
-    repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: parentSessionId ?? null,
-  });
+  // Spawn succeeded — promote queued → running and stamp startedAt now
+  // that we actually have a live child. wireRunLifecycle handles the
+  // running → done / failed transition on exit.
+  try {
+    await updateRun(sessionsDir, sessionId, {
+      status: "running",
+      startedAt: new Date().toISOString(),
+    });
+  } catch (uErr) {
+    console.error("failed to promote queued → running", uErr);
+  }
 
   wireRunLifecycle(sessionsDir, sessionId, childHandle.child, `agent ${id}/${sessionId}`);
 

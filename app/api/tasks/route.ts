@@ -61,9 +61,35 @@ export async function POST(req: NextRequest) {
   // Phase G: build repo profiles once before the very first coordinator
   // spawn so the prompt gets the enriched "## Repo profiles" block.
   autoInitProfilesOnce();
-  // Fire-and-forget: the spawn writes the run row asynchronously under
-  // the meta lock; we don't want to block task creation on it.
-  void spawnCoordinatorForTask({ id: task.id, title: task.title, body: task.body });
 
-  return NextResponse.json(task, { status: 201 });
+  // Wrap the coordinator spawn so a `claude` binary missing / fork
+  // failure / etc. doesn't make the route return 500 with the task
+  // already half-created on disk — that would prompt clients to retry,
+  // and each retry would create another duplicate `t_…` directory.
+  // Keep the task (createTask already wrote meta.json) and return 201
+  // with an `error` field so the UI can surface "task created but
+  // coordinator failed to spawn" and offer a manual retry instead of
+  // silently double-creating. `spawnCoordinatorForTask` already does
+  // an internal try/catch that returns null on failure, but a thrown
+  // exception (e.g. profile lookup blowing up unexpectedly) would
+  // still escape — this is the belt around its suspenders.
+  let spawnError: string | null = null;
+  try {
+    const sessionId = await spawnCoordinatorForTask({
+      id: task.id,
+      title: task.title,
+      body: task.body,
+    });
+    if (!sessionId) {
+      spawnError = "coordinator spawn returned null (see server logs)";
+    }
+  } catch (err) {
+    spawnError = err instanceof Error ? err.message : String(err);
+    console.error("spawnCoordinatorForTask threw for", task.id, err);
+  }
+
+  return NextResponse.json(
+    spawnError ? { ...task, error: spawnError } : task,
+    { status: 201 },
+  );
 }

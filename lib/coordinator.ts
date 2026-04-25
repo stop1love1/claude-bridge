@@ -422,32 +422,58 @@ export async function spawnCoordinatorForTask(
       ? withProfiles.replace("## Your job", `${hintBlock}## Your job`)
       : withProfiles;
 
-    const { child } = spawnClaude(BRIDGE_ROOT, {
-      role: "coordinator",
-      taskId: task.id,
-      prompt: renderedPrompt,
-      sessionId,
-      // Coordinator runs unattended — there's no TTY for permission
-      // prompts. Without this, the first tool call hangs waiting for
-      // confirmation and the process eventually exits. The free-chat
-      // permission hook is NOT attached here for the same reason.
-      settings: { mode: "bypassPermissions" },
-    });
+    // Append the run BEFORE spawning — H4 orphan-window fix. If
+    // `spawnClaude` throws (claude binary missing, fork EAGAIN, etc.)
+    // we still have a tracked `failed` row in meta.json instead of a
+    // silent gap. `appendRun` is async (per-task lock from cluster B).
     await appendRun(sessionsDir, {
       sessionId,
       role: "coordinator",
       repo: basename(BRIDGE_ROOT),
-      status: "running",
-      startedAt: new Date().toISOString(),
+      status: "queued",
+      startedAt: null,
       endedAt: null,
     });
 
-    // Mark the run failed if the spawn itself errors (e.g. ENOENT —
-    // claude binary not on PATH) or if the child exits non-zero before
-    // the coordinator's self-update could mark it done. Belt-and-
-    // suspenders: if the coordinator finishes cleanly (exit 0) but
-    // forgot to PATCH itself to "done" via the link API, flip the run.
-    // Shared with the child spawn path (`/api/tasks/<id>/agents`).
+    let child;
+    try {
+      ({ child } = spawnClaude(BRIDGE_ROOT, {
+        role: "coordinator",
+        taskId: task.id,
+        prompt: renderedPrompt,
+        sessionId,
+        // Coordinator runs unattended — there's no TTY for permission
+        // prompts. Without this, the first tool call hangs waiting for
+        // confirmation and the process eventually exits. The free-chat
+        // permission hook is NOT attached here for the same reason.
+        settings: { mode: "bypassPermissions" },
+      }));
+    } catch (spawnErr) {
+      try {
+        await updateRun(sessionsDir, sessionId, {
+          status: "failed",
+          endedAt: new Date().toISOString(),
+        });
+      } catch (uErr) {
+        console.error("failed to mark coordinator run failed after spawn error", uErr);
+      }
+      throw spawnErr;
+    }
+
+    // Spawn succeeded — promote queued → running with a real
+    // startedAt. `wireRunLifecycle` then handles running → done/failed
+    // on child exit. Belt-and-suspenders: if the coordinator finishes
+    // cleanly (exit 0) but forgot to PATCH itself to "done" via the
+    // link API, the lifecycle hook flips the run.
+    try {
+      await updateRun(sessionsDir, sessionId, {
+        status: "running",
+        startedAt: new Date().toISOString(),
+      });
+    } catch (uErr) {
+      console.error("failed to promote coordinator queued → running", uErr);
+    }
+
     wireRunLifecycle(sessionsDir, sessionId, child, `coordinator ${task.id}`);
     return sessionId;
   } catch (err) {

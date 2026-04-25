@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildCoordinatorArgs } from "../spawn";
+import { appendRun, createMeta, readMeta, updateRun } from "../meta";
 
 describe("buildCoordinatorArgs", () => {
   it("pins the session-id and ends with -p (prompt is piped via stdin)", () => {
@@ -66,5 +70,97 @@ describe("buildCoordinatorArgs", () => {
     expect(args).not.toContain("--permission-mode");
     expect(args).not.toContain("--effort");
     expect(args).not.toContain("--model");
+  });
+});
+
+/**
+ * H4 regression: the route handler used to call `appendRun` AFTER the
+ * spawn, so a thrown spawn left a live (or attempted) child with no
+ * matching row in meta.json. Spec is now:
+ *
+ *   1. appendRun({status:"queued", startedAt:null})
+ *   2. try { spawn() } catch { updateRun({status:"failed", endedAt:now}); rethrow }
+ *   3. updateRun({status:"running", startedAt:now})
+ *
+ * This test simulates that flow with a synthetic "spawn" that throws,
+ * and asserts the meta.json on disk ends up with one row, status
+ * "failed", endedAt populated.
+ */
+describe("appendRun-before-spawn (H4)", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "spawn-h4-"));
+  });
+
+  const HEADER = {
+    taskId: "t_20260424_h4",
+    taskTitle: "agents H4",
+    taskBody: "exercise spawn-failure path",
+    taskStatus: "todo" as const,
+    taskSection: "TODO" as const,
+    taskChecked: false,
+    createdAt: "2026-04-24T10:00:00Z",
+  };
+
+  const SESSION_ID = "h4-failed-session";
+
+  function fakeRouteFlow(opts: { spawnThrows: boolean }) {
+    appendRun(tmp, {
+      sessionId: SESSION_ID,
+      role: "coder",
+      repo: "fake-repo",
+      status: "queued",
+      startedAt: null,
+      endedAt: null,
+      parentSessionId: null,
+    });
+
+    try {
+      if (opts.spawnThrows) {
+        throw new Error("ENOENT: claude binary not on PATH");
+      }
+      // Simulate a successful spawn promotion path so the success
+      // branch is also exercised by the second case below.
+      updateRun(tmp, SESSION_ID, {
+        status: "running",
+        startedAt: "2026-04-24T10:00:01Z",
+      });
+      return { ok: true as const };
+    } catch (err) {
+      updateRun(tmp, SESSION_ID, {
+        status: "failed",
+        endedAt: "2026-04-24T10:00:01Z",
+      });
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  it("records run as failed when spawn throws — no orphan window", () => {
+    createMeta(tmp, HEADER);
+    const result = fakeRouteFlow({ spawnThrows: true });
+    expect(result.ok).toBe(false);
+
+    const meta = readMeta(tmp);
+    expect(meta).not.toBeNull();
+    expect(meta!.runs).toHaveLength(1);
+    const run = meta!.runs[0];
+    expect(run.sessionId).toBe(SESSION_ID);
+    expect(run.status).toBe("failed");
+    expect(run.endedAt).toBe("2026-04-24T10:00:01Z");
+    // startedAt stays null because the spawn never succeeded — the run
+    // was queued and immediately failed without ever going running.
+    expect(run.startedAt).toBeNull();
+  });
+
+  it("promotes queued → running on successful spawn", () => {
+    createMeta(tmp, HEADER);
+    const result = fakeRouteFlow({ spawnThrows: false });
+    expect(result.ok).toBe(true);
+
+    const meta = readMeta(tmp);
+    const run = meta!.runs[0];
+    expect(run.status).toBe("running");
+    expect(run.startedAt).toBe("2026-04-24T10:00:01Z");
+    expect(run.endedAt).toBeNull();
   });
 });
