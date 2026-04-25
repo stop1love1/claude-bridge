@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,25 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "./ui/alert-dialog";
-
-/**
- * Global PreToolUse permission dialog. Subscribes to
- * `/api/permission/stream` (the cross-session SSE) so a popup pops on
- * whichever page the user happens to be on, regardless of which run
- * the bridge is showing in the chat panel. The originating sessionId
- * travels in every event payload, so we can POST the answer back to
- * the per-session endpoint exactly like the legacy PermissionDialog.
- */
-
-interface GlobalPendingRequest {
-  sessionId: string;
-  requestId: string;
-  tool: string;
-  input: unknown;
-  createdAt?: string;
-}
-
-interface GlobalPermissionEvent extends GlobalPendingRequest {}
+import { usePermissionQueue, type PendingRequest } from "./usePermissionQueue";
 
 const MAX_INPUT_CHARS = 400;
 
@@ -45,82 +27,29 @@ function summarize(input: unknown): string {
   return s;
 }
 
+/**
+ * Cross-session Allow / Deny dialog. Subscribes to the global
+ * `/api/permission` backlog + `/api/permission/stream` SSE, so a popup
+ * pops on whichever page the user happens to be on, regardless of which
+ * run the bridge is showing in the chat panel. The shared
+ * `usePermissionQueue` hook handles backlog fetch, SSE subscribe, and
+ * cross-scope deduplication: any request whose session already has a
+ * session-scoped consumer mounted (e.g. `<InlinePermissionRequests>` in
+ * the visible SessionLog) is skipped here so we never render two
+ * dialogs for the same request.
+ */
 export function GlobalPermissionDialog() {
-  const [queue, setQueue] = useState<GlobalPendingRequest[]>([]);
+  const { queue, answer } = usePermissionQueue({ all: true });
   const [remember, setRemember] = useState(false);
-  // Memo is keyed by `${sessionId}:${tool}` so a remembered allow on
-  // session A doesn't leak into session B answering the same tool.
-  const remembered = useRef<Map<string, "allow" | "deny">>(new Map());
-  const inFlight = useRef<Set<string>>(new Set());
-
-  const respond = useCallback(
-    async (req: GlobalPendingRequest, decision: "allow" | "deny") => {
-      try {
-        await fetch(
-          `/api/sessions/${encodeURIComponent(req.sessionId)}/permission/${encodeURIComponent(req.requestId)}`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              decision,
-              reason: decision === "deny" ? "User denied via bridge UI" : undefined,
-            }),
-          },
-        );
-      } catch {
-        /* hook fails open on timeout; nothing to do */
-      }
-      setQueue((q) => q.filter((r) => r.requestId !== req.requestId));
-    },
-    [],
-  );
-
-  const handle = useCallback(
-    (req: GlobalPendingRequest) => {
-      const memoKey = `${req.sessionId}:${req.tool}`;
-      const memo = remembered.current.get(memoKey);
-      if (memo) {
-        if (inFlight.current.has(req.requestId)) return;
-        inFlight.current.add(req.requestId);
-        void respond(req, memo);
-        return;
-      }
-      setQueue((q) => (q.some((r) => r.requestId === req.requestId) ? q : [...q, req]));
-    },
-    [respond],
-  );
-
-  useEffect(() => {
-    const es = new EventSource(`/api/permission/stream`);
-    es.addEventListener("pending", (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as GlobalPermissionEvent;
-        handle(data);
-      } catch { /* ignore */ }
-    });
-    es.addEventListener("answered", (ev: MessageEvent) => {
-      // Another window answered — drop from queue so we don't show stale.
-      try {
-        const data = JSON.parse(ev.data) as { requestId: string };
-        setQueue((q) => q.filter((r) => r.requestId !== data.requestId));
-      } catch { /* ignore */ }
-    });
-    es.onerror = () => { /* browser auto-retries */ };
-
-    return () => { es.close(); };
-  }, [handle]);
-
-  const current = queue[0];
+  const current: PendingRequest | undefined = queue[0];
 
   const onAnswer = useCallback(
     async (decision: "allow" | "deny") => {
       if (!current) return;
-      if (remember) {
-        remembered.current.set(`${current.sessionId}:${current.tool}`, decision);
-      }
-      await respond(current, decision);
+      setRemember(false);
+      await answer(current, decision, remember);
     },
-    [current, remember, respond],
+    [current, remember, answer],
   );
 
   if (!current) return null;

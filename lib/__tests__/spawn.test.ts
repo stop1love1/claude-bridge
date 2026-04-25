@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCoordinatorArgs } from "../spawn";
+import { autoApproveEnv, buildCoordinatorArgs } from "../spawn";
 import { appendRun, createMeta, readMeta, updateRun } from "../meta";
 
 describe("buildCoordinatorArgs", () => {
@@ -162,5 +162,36 @@ describe("appendRun-before-spawn (H4)", () => {
     expect(run.status).toBe("running");
     expect(run.startedAt).toBe("2026-04-24T10:00:01Z");
     expect(run.endedAt).toBeNull();
+  });
+});
+
+/**
+ * CRIT-1 regression: the permission hook used to no-op unless the
+ * spawner explicitly opted IN to bridge-mediated approval. The fix
+ * inverts that — the hook contacts the bridge by default, and the
+ * spawn path opts the child OUT only for `bypassPermissions` mode
+ * (coordinator + auto-spawned children where there's no human at the
+ * keyboard to click Allow). `autoApproveEnv` is the single source of
+ * truth for that mapping; the spawn function spreads its result into
+ * the child env.
+ */
+describe("autoApproveEnv (CRIT-1)", () => {
+  it("returns BRIDGE_AUTO_APPROVE=1 only for bypassPermissions", () => {
+    expect(autoApproveEnv({ mode: "bypassPermissions" })).toEqual({
+      BRIDGE_AUTO_APPROVE: "1",
+    });
+  });
+
+  it("returns empty for every interactive mode (popup must fire)", () => {
+    expect(autoApproveEnv({ mode: "default" })).toEqual({});
+    expect(autoApproveEnv({ mode: "acceptEdits" })).toEqual({});
+    expect(autoApproveEnv({ mode: "plan" })).toEqual({});
+    expect(autoApproveEnv({ mode: "auto" })).toEqual({});
+    expect(autoApproveEnv({ mode: "dontAsk" })).toEqual({});
+  });
+
+  it("returns empty when settings or mode is absent", () => {
+    expect(autoApproveEnv(undefined)).toEqual({});
+    expect(autoApproveEnv({})).toEqual({});
   });
 });
