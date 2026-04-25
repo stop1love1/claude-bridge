@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_MD, BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR } from "./paths";
-import { createMeta, readMeta, writeMeta, type Meta } from "./meta";
+import { createMeta, readMeta, withTaskLock, writeMeta, type Meta } from "./meta";
 import { resolveRepoCwd } from "./repos";
 import { projectDirFor } from "./sessions";
 import { killChild } from "./spawnRegistry";
@@ -114,22 +114,30 @@ export function createTask(input: {
 
 type TaskPatch = Partial<Pick<Task, "title" | "body" | "section" | "status" | "checked">>;
 
-export function updateTask(id: string, patch: TaskPatch): Task | null {
+export async function updateTask(id: string, patch: TaskPatch): Promise<Task | null> {
   const dir = safeSessionDir(id);
   if (!dir) return null;
-  const meta = readMeta(dir);
-  if (!meta) return null;
-  if (patch.title !== undefined) meta.taskTitle = patch.title;
-  if (patch.body !== undefined) meta.taskBody = patch.body;
-  if (patch.checked !== undefined) meta.taskChecked = patch.checked;
-  if (patch.section !== undefined) {
-    meta.taskSection = patch.section;
-    meta.taskStatus = SECTION_STATUS[patch.section];
-  } else if (patch.status !== undefined) {
-    meta.taskStatus = patch.status;
-  }
-  writeMeta(dir, meta);
-  return metaToTask(meta);
+  // Acquired the per-task mutex here too so a UI title/section edit
+  // racing a child's appendRun (or any other run-row mutator) can't
+  // silently overwrite the just-appended row. meta.runs and the task
+  // header live in the same JSON, so the read-modify-write window
+  // must be serialized against everything in lib/meta.ts that
+  // takes the same lock.
+  return withTaskLock(dir, () => {
+    const meta = readMeta(dir);
+    if (!meta) return null;
+    if (patch.title !== undefined) meta.taskTitle = patch.title;
+    if (patch.body !== undefined) meta.taskBody = patch.body;
+    if (patch.checked !== undefined) meta.taskChecked = patch.checked;
+    if (patch.section !== undefined) {
+      meta.taskSection = patch.section;
+      meta.taskStatus = SECTION_STATUS[patch.section];
+    } else if (patch.status !== undefined) {
+      meta.taskStatus = patch.status;
+    }
+    writeMeta(dir, meta);
+    return metaToTask(meta);
+  });
 }
 
 export interface DeleteTaskResult {
@@ -204,21 +212,28 @@ export function isValidSection(section: string): section is TaskSection {
  * we skip it and continue. The caller reports the count back to the UI
  * as a toast so the operator can spot a partial cascade.
  */
-export function migrateTaskApp(oldName: string, newName: string): number {
+export async function migrateTaskApp(oldName: string, newName: string): Promise<number> {
   if (oldName === newName) return 0;
   let migrated = 0;
   for (const id of listMetaIds()) {
     const dir = join(SESSIONS_DIR, id);
-    const meta = readMeta(dir);
-    if (!meta) continue;
-    if (meta.taskApp !== oldName) continue;
-    meta.taskApp = newName;
-    try {
+    // Each task gets its own lock acquisition: a parallel `Promise.all`
+    // would block on the same dir's queue anyway, and a sequential loop
+    // keeps the error handling per-task simple. The lock is the same
+    // one appendRun/updateRun take, so a child agent's run-row mutate
+    // running against the same task can't trample our header rewrite.
+    const ok = await withTaskLock(dir, () => {
+      const meta = readMeta(dir);
+      if (!meta) return false;
+      if (meta.taskApp !== oldName) return false;
+      meta.taskApp = newName;
       writeMeta(dir, meta);
-      migrated += 1;
-    } catch (err) {
+      return true;
+    }).catch((err) => {
       console.error("migrateTaskApp: failed to rewrite", id, err);
-    }
+      return false;
+    });
+    if (ok) migrated += 1;
   }
   return migrated;
 }

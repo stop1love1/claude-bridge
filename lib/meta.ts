@@ -165,9 +165,15 @@ function emit(ev: MetaChangeEvent): void {
  * failed op doesn't poison the queue for everyone behind it. We
  * best-effort GC the entry when the chain settles, but a tiny leak is
  * preferable to dropping the chain link mid-flight.
+ *
+ * Exported so other modules (e.g. `tasksStore.updateTask`,
+ * `tasksStore.migrateTaskApp`) can serialize their own `readMeta →
+ * mutate header → writeMeta` sequences against the run-row helpers
+ * below. Without this, a UI title edit racing a child's appendRun
+ * could silently drop the just-appended run.
  */
 const writeQueues = new Map<string, Promise<unknown>>();
-async function withTaskLock<T>(dir: string, fn: () => T | Promise<T>): Promise<T> {
+export async function withTaskLock<T>(dir: string, fn: () => T | Promise<T>): Promise<T> {
   const prev = writeQueues.get(dir) ?? Promise.resolve();
   // Run regardless of whether `prev` resolved or rejected — one bad
   // operation must not strand later writes for the same task.
