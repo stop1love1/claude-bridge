@@ -146,14 +146,16 @@ function AppsPage() {
                           {app.rawPath !== app.path && ` → ${app.path}`}
                         </p>
                       </div>
-                      <button
+                      <Button
                         onClick={() => handleDelete(app.name)}
-                        className="text-fg-dim hover:text-destructive transition-colors p-1 rounded shrink-0"
+                        variant="ghost"
+                        size="iconSm"
                         title="Remove from registry (folder on disk is kept)"
                         aria-label={`Remove ${app.name}`}
+                        className="text-fg-dim hover:text-destructive shrink-0"
                       >
                         <Trash2 size={14} />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 );

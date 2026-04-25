@@ -1,30 +1,34 @@
 /**
- * Apps registry — `sessions/init.md`.
+ * Apps registry — `bridge.json`.
  *
- * The bridge no longer reads `BRIDGE.md` to discover sibling apps. Each
- * developer declares their workspace explicitly through the UI ("Add
- * app" form + "Auto-detect" button), and this module owns the read /
- * write of `sessions/init.md` as the source of truth.
+ * The bridge keeps user-declared apps (and any future bridge-level
+ * settings) in `bridge.json` at the project root. JSON keeps parsing
+ * trivial and the file is meant to be tracked in git so a team shares
+ * the same workspace roster.
  *
- * File format — strict so the parser is round-trip stable:
+ * Schema:
  *
- *   # Apps
+ *   {
+ *     "version": 1,
+ *     "apps": [
+ *       { "name": "app-web", "path": "../app-web", "description": "..." },
+ *       { "name": "app-api", "path": "../app-api", "description": "..." }
+ *     ]
+ *   }
  *
- *   > Managed by the Bridge UI. Edit via "Add app" / "Auto-detect"
- *   > buttons in the dashboard.
+ * `version` is reserved for future schema migrations. Only `apps[]`
+ * is consumed today; additional top-level keys (e.g. `settings`) are
+ * preserved on write so other modules can claim their own sections.
  *
- *   ## <name>
- *   - **Path:** `<absolute-or-relative-path>`
- *   - **Description:** <single-line description, optional>
+ * Apps are addressed by `name`; names must match
+ * `^[A-Za-z0-9][A-Za-z0-9._-]*$` (same shape as a folder slug). `path`
+ * is stored verbatim — the caller resolves it against `BRIDGE_ROOT`
+ * when needed.
  *
- *   ## <other-name>
- *   - **Path:** ...
- *   - **Description:** ...
- *
- * Apps are addressed by their `name`; names must match
- * `^[A-Za-z0-9][A-Za-z0-9._-]*$` (same shape as a folder slug). Path is
- * stored verbatim — the caller resolves it against `BRIDGE_ROOT` when
- * needed.
+ * Legacy fallback: if `bridge.json` is missing but the old
+ * `sessions/init.md` registry exists, we parse it on load so the
+ * upgrade is transparent — the next `saveApps` rewrites the data as
+ * JSON.
  */
 
 import {
@@ -46,8 +50,16 @@ export interface App {
   description: string;
 }
 
-const INIT_MD = join(SESSIONS_DIR, "init.md");
+export interface BridgeManifest {
+  version: number;
+  apps: Array<{ name: string; path: string; description?: string }>;
+  [key: string]: unknown;
+}
+
+const BRIDGE_JSON = join(BRIDGE_ROOT, "bridge.json");
+const LEGACY_INIT_MD = join(SESSIONS_DIR, "init.md");
 const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SCHEMA_VERSION = 1;
 
 export function isValidAppName(name: unknown): name is string {
   return typeof name === "string" && APP_NAME_RE.test(name);
@@ -56,64 +68,6 @@ export function isValidAppName(name: unknown): name is string {
 function resolveAppPath(rawPath: string): string {
   if (!rawPath) return rawPath;
   return isAbsolute(rawPath) ? resolve(rawPath) : resolve(BRIDGE_ROOT, rawPath);
-}
-
-const HEADER_LINES = [
-  "# Apps",
-  "",
-  "> Managed by the Bridge UI. Edit via \"Add app\" / \"Auto-detect\"",
-  "> buttons in the dashboard. Hand-edits to this file are preserved",
-  "> as long as each `## <name>` section keeps the documented shape.",
-  "",
-];
-
-export function serializeApps(apps: App[]): string {
-  const lines: string[] = [...HEADER_LINES];
-  for (const app of apps) {
-    lines.push(`## ${app.name}`);
-    lines.push(`- **Path:** \`${app.rawPath}\``);
-    if (app.description.trim().length > 0) {
-      lines.push(`- **Description:** ${app.description.trim()}`);
-    }
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-
-/**
- * Parse `sessions/init.md`. Tolerant of extra prose before the first
- * `## <name>` heading (e.g. legacy snapshots written by the old
- * `scripts/init.mjs` we removed) — only the strict h2-section blocks
- * with both `Path:` and a name regex match are surfaced.
- */
-export function parseApps(md: string): App[] {
-  const apps: App[] = [];
-  if (!md) return apps;
-  const sections = md.split(/^##\s+/m).slice(1); // first chunk is the preamble
-  for (const sec of sections) {
-    const newlineIdx = sec.indexOf("\n");
-    if (newlineIdx === -1) continue;
-    const heading = sec.slice(0, newlineIdx).trim();
-    const body = sec.slice(newlineIdx + 1);
-    if (!APP_NAME_RE.test(heading)) continue;
-    const rawPath = matchField(body, /^[\s\-*]*\*\*Path:\*\*\s*`?([^`\n]+?)`?\s*$/im);
-    if (!rawPath) continue;
-    const description = matchField(body, /^[\s\-*]*\*\*Description:\*\*\s*(.+?)\s*$/im) ?? "";
-    apps.push({
-      name: heading,
-      path: resolveAppPath(rawPath),
-      rawPath,
-      description,
-    });
-  }
-  // Stable order for round-trip; UI sorts on its own.
-  apps.sort((a, b) => a.name.localeCompare(b.name));
-  return apps;
-}
-
-function matchField(text: string, re: RegExp): string | null {
-  const m = text.match(re);
-  return m ? m[1].trim() : null;
 }
 
 function atomicWrite(path: string, contents: string): void {
@@ -129,18 +83,138 @@ function atomicWrite(path: string, contents: string): void {
   }
 }
 
-export function loadApps(): App[] {
-  if (!existsSync(INIT_MD)) return [];
+/**
+ * Read the raw manifest, preserving any unknown top-level keys so
+ * write-modify-write cycles don't accidentally drop `settings`,
+ * `experiments`, etc. that future modules might add.
+ */
+function readManifest(): BridgeManifest {
+  if (!existsSync(BRIDGE_JSON)) {
+    return { version: SCHEMA_VERSION, apps: [] };
+  }
   try {
-    return parseApps(readFileSync(INIT_MD, "utf8"));
+    const parsed = JSON.parse(readFileSync(BRIDGE_JSON, "utf8")) as Partial<BridgeManifest>;
+    return {
+      version: typeof parsed.version === "number" ? parsed.version : SCHEMA_VERSION,
+      apps: Array.isArray(parsed.apps) ? parsed.apps : [],
+      ...Object.fromEntries(
+        Object.entries(parsed).filter(([k]) => k !== "version" && k !== "apps"),
+      ),
+    };
   } catch (err) {
-    console.error("apps: failed to parse sessions/init.md", err);
-    return [];
+    console.error("apps: bridge.json is unreadable — starting empty", err);
+    return { version: SCHEMA_VERSION, apps: [] };
   }
 }
 
+function writeManifest(manifest: BridgeManifest): void {
+  const ordered = {
+    version: SCHEMA_VERSION,
+    apps: manifest.apps,
+    ...Object.fromEntries(
+      Object.entries(manifest).filter(([k]) => k !== "version" && k !== "apps"),
+    ),
+  };
+  atomicWrite(BRIDGE_JSON, JSON.stringify(ordered, null, 2) + "\n");
+}
+
+/** Public for tests — parse a manifest blob without touching disk. */
+export function parseApps(json: string): App[] {
+  if (!json || !json.trim()) return [];
+  let parsed: Partial<BridgeManifest>;
+  try { parsed = JSON.parse(json) as Partial<BridgeManifest>; }
+  catch { return []; }
+  if (!Array.isArray(parsed.apps)) return [];
+  const out: App[] = [];
+  for (const raw of parsed.apps) {
+    if (!raw || typeof raw !== "object") continue;
+    const name = (raw as { name?: unknown }).name;
+    const rawPath = (raw as { path?: unknown }).path;
+    const description = (raw as { description?: unknown }).description;
+    if (!isValidAppName(name)) continue;
+    if (typeof rawPath !== "string" || !rawPath.trim()) continue;
+    out.push({
+      name,
+      rawPath,
+      path: resolveAppPath(rawPath),
+      description: typeof description === "string" ? description : "",
+    });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+/** Public for tests — render an apps list as a manifest JSON blob. */
+export function serializeApps(apps: App[]): string {
+  const manifest = {
+    version: SCHEMA_VERSION,
+    apps: apps.map((a) => {
+      const entry: { name: string; path: string; description?: string } = {
+        name: a.name,
+        path: a.rawPath,
+      };
+      if (a.description.trim().length > 0) {
+        entry.description = a.description.trim();
+      }
+      return entry;
+    }),
+  };
+  return JSON.stringify(manifest, null, 2) + "\n";
+}
+
+/**
+ * Soft-migration helper. Reads the legacy `sessions/init.md` markdown
+ * format used in the previous version of the registry, surfacing
+ * whatever `## <name>` sections it carried. Used only when
+ * `bridge.json` is missing — the next `saveApps` writes JSON and
+ * supersedes the .md.
+ */
+function readLegacyInitMd(): App[] {
+  if (!existsSync(LEGACY_INIT_MD)) return [];
+  let md: string;
+  try { md = readFileSync(LEGACY_INIT_MD, "utf8"); }
+  catch { return []; }
+  const apps: App[] = [];
+  const sections = md.split(/^##\s+/m).slice(1);
+  for (const sec of sections) {
+    const newlineIdx = sec.indexOf("\n");
+    if (newlineIdx === -1) continue;
+    const heading = sec.slice(0, newlineIdx).trim();
+    const body = sec.slice(newlineIdx + 1);
+    if (!APP_NAME_RE.test(heading)) continue;
+    const pathMatch = body.match(/^[\s\-*]*\*\*Path:\*\*\s*`?([^`\n]+?)`?\s*$/im);
+    if (!pathMatch) continue;
+    const descMatch = body.match(/^[\s\-*]*\*\*Description:\*\*\s*(.+?)\s*$/im);
+    const rawPath = pathMatch[1].trim();
+    apps.push({
+      name: heading,
+      rawPath,
+      path: resolveAppPath(rawPath),
+      description: descMatch ? descMatch[1].trim() : "",
+    });
+  }
+  apps.sort((a, b) => a.name.localeCompare(b.name));
+  return apps;
+}
+
+export function loadApps(): App[] {
+  if (existsSync(BRIDGE_JSON)) {
+    return parseApps(readFileSync(BRIDGE_JSON, "utf8"));
+  }
+  return readLegacyInitMd();
+}
+
 export function saveApps(apps: App[]): void {
-  atomicWrite(INIT_MD, serializeApps(apps));
+  const manifest = readManifest();
+  manifest.apps = apps.map((a) => {
+    const entry: { name: string; path: string; description?: string } = {
+      name: a.name,
+      path: a.rawPath,
+    };
+    if (a.description.trim().length > 0) entry.description = a.description.trim();
+    return entry;
+  });
+  writeManifest(manifest);
 }
 
 export function getApp(name: string): App | null {
@@ -217,8 +291,6 @@ function safeReadJson(p: string): { description?: string } | null {
 function deriveDescription(repoPath: string): string {
   const pkg = safeReadJson(join(repoPath, "package.json"));
   if (pkg?.description) return pkg.description;
-  // Read up to ~256 bytes from CLAUDE.md / README.md to grab the first
-  // heading as a description hint.
   for (const candidate of ["CLAUDE.md", "README.md", "readme.md"]) {
     try {
       const text = readFileSync(join(repoPath, candidate)).subarray(0, 1024).toString("utf8");
@@ -236,9 +308,8 @@ export interface AutoDetectResult {
 
 /**
  * Scan the parent directory for sibling code repos and add any that
- * aren't already registered. The bridge folder itself is always skipped
- * (it's not an "app" the coordinator dispatches to). Returns the diff
- * so the UI can toast a summary.
+ * aren't already registered. The bridge folder itself is always
+ * skipped. Returns the diff so the UI can toast a summary.
  */
 export function autoDetectApps(): AutoDetectResult {
   const parent = dirname(BRIDGE_ROOT);

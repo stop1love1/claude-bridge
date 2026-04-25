@@ -18,6 +18,9 @@ import { useToast } from "./Toasts";
 import { useConfirm } from "./ConfirmProvider";
 import { api } from "@/lib/client/api";
 import { AgentTree } from "./AgentTree";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Textarea } from "./ui/textarea";
 
 export function TaskDetail({
   task,
@@ -177,53 +180,58 @@ export function TaskDetail({
     <section className="flex-1 min-w-0 overflow-y-auto border-r border-border">
       <div className="p-6 max-w-3xl mx-auto">
         <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
-          <button
+          <Button
             onClick={copyId}
-            className="inline-flex items-center gap-1 font-mono text-fg-dim hover:text-foreground transition-colors group"
+            variant="ghost"
+            size="xs"
             title="Copy task ID"
+            className="font-mono text-fg-dim h-6 px-1.5 gap-1 hover:bg-transparent hover:text-foreground"
           >
             {task.id}
-            {copiedId ? <Check size={11} className="text-success" /> : <Copy size={11} className="opacity-60 hover:opacity-100" />}
-          </button>
+            {copiedId ? <Check size={11} className="text-success" /> : <Copy size={11} className="opacity-60" />}
+          </Button>
           <span className="text-fg-dim ml-auto">{relativeTime(meta?.createdAt ?? `${task.date}T00:00:00Z`)}</span>
-          <button
+          <Button
             onClick={confirmDelete}
-            className="text-fg-dim hover:text-destructive transition-colors p-1 rounded"
+            variant="ghost"
+            size="iconSm"
             title="Delete task"
+            className="text-fg-dim hover:text-destructive h-6 w-6"
           >
             <Trash2 size={13} />
-          </button>
+          </Button>
         </div>
 
-        <input
+        <Input
           ref={titleRef}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={save}
           placeholder="Task title (auto-derived from the first line)"
-          className="w-full bg-transparent border-0 border-b border-border pb-2 mb-3 text-lg font-medium focus:outline-none focus:border-primary transition-colors"
+          className="bg-transparent border-0 border-b border-border rounded-none px-0 pb-2 mb-3 text-lg font-medium h-auto focus-visible:ring-0 focus-visible:border-primary"
         />
 
-        <textarea
+        <Textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           onBlur={save}
           placeholder="Task title / short description"
           rows={2}
-          className="w-full bg-card border border-border rounded-md p-3 font-mono text-xs focus:outline-none focus:border-primary resize-y mb-4"
+          className="font-mono text-xs resize-y mb-4"
         />
 
         {canContinue && (
           <div className="flex gap-2 mb-6 items-center">
-            <button
+            <Button
               disabled={continuing}
               onClick={continueTask}
+              variant="secondary"
+              size="sm"
               title="Resume the coordinator (last run was killed or died unexpectedly)"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-secondary border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-sm transition-colors"
             >
               <RotateCw size={14} className={continuing ? "animate-spin" : ""} />
               {continuing ? "Continuing…" : "Continue"}
-            </button>
+            </Button>
             <span className="text-[11px] text-fg-dim">
               Last coordinator run ended in <span className="font-mono">{lastCoordinator?.status}</span> — pick up where it stopped.
             </span>
@@ -238,14 +246,16 @@ export function TaskDetail({
             <p className="text-[11px] text-muted-foreground leading-relaxed mb-2">
               Open <code className="font-mono text-foreground">claude</code> in the bridge repo (or any sibling) and paste the line below. The CLAUDE.md guide self-registers the session — it will appear here as an agent.
             </p>
-            <button
+            <Button
               onClick={copyCli}
-              className="w-full flex items-center gap-2 px-2.5 py-2 rounded bg-background border border-border font-mono text-xs text-foreground hover:bg-accent"
+              variant="outline"
+              size="sm"
+              className="w-full justify-start font-mono text-xs h-auto py-2"
             >
               <span className="text-muted-foreground">$</span>
               <span className="flex-1 text-left">{cliHint}</span>
               {copiedCmd ? <Check size={12} className="text-success" /> : <Copy size={12} className="text-fg-dim" />}
-            </button>
+            </Button>
           </div>
         )}
 
@@ -254,9 +264,11 @@ export function TaskDetail({
           return (
             <>
               <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Owner</h3>
-              <button
+              <Button
                 onClick={() => onSelectRun(owner)}
-                className={`w-full mb-4 flex items-center gap-2 px-3 py-2.5 rounded-md text-xs font-mono transition-colors bg-primary/5 border ${
+                variant="outline"
+                size="sm"
+                className={`w-full mb-4 justify-start text-xs font-mono h-auto py-2.5 bg-primary/5 ${
                   activeRunId === owner.sessionId ? "border-primary/60 ring-1 ring-primary/30" : "border-primary/30 hover:bg-primary/10"
                 }`}
               >
@@ -280,7 +292,7 @@ export function TaskDetail({
                   <span className="text-fg-dim">· {duration(owner.startedAt, owner.endedAt)}</span>
                 )}
                 <span className="ml-auto text-fg-dim uppercase text-[10px]">{owner.status}</span>
-              </button>
+              </Button>
             </>
           );
         })()}

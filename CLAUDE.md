@@ -38,7 +38,7 @@ If the coordinator prompt in `bridge/coordinator.md` tells you to spawn sub-agen
 ## What *not* to do
 
 - Don't invent a new session format. Sessions are the plain `.jsonl` files Claude Code writes to `~/.claude/projects/<slug>/`.
-- Don't hardcode absolute paths or repo names. The apps registry lives in `sessions/init.md`, edited via the UI's "Add app" / "Auto-detect" buttons. The bridge folder itself is referenced via `basename "$PWD"`, never a hardcoded string.
+- Don't hardcode absolute paths or repo names. The apps registry lives in `bridge.json` (committed to git), edited via the UI's "Add app" / "Auto-detect" buttons. The bridge folder itself is referenced via `basename "$PWD"`, never a hardcoded string.
 - Don't edit files inside `../<other-repo>/` from here — spawn a child `claude` in that repo instead.
 - Don't edit `bridge/tasks.md` to move tasks between sections. Use `PATCH /api/tasks/<id>` with `{"section": "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived", ...}` — the bridge writes the canonical state to `sessions/<id>/meta.json`.
 

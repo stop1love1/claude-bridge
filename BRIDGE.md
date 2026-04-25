@@ -72,7 +72,7 @@ All bridge-runtime markdown lives under the `bridge/` folder. Top-level
 | `bridge/bugs.md` | Cross-repo bugs | Repo that finds the bug | low |
 | `contracts/<feature>.md` | API contract — request/response/errors | Repo that owns the endpoint | medium |
 | `contracts/README.md` | Index of contracts | Updated when a new contract is added | low |
-| `sessions/init.md` | Apps registry — declared by the UI's "Add app" / "Auto-detect" buttons | Bridge UI | low |
+| `bridge.json` | Apps registry + bridge-level settings — declared by the UI's "Add app" / "Auto-detect" buttons | Bridge UI | low |
 
 ## Conventions
 

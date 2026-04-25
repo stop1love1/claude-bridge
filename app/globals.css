@@ -93,6 +93,25 @@ body {
   color: var(--foreground);
 }
 
+/**
+ * Every interactive control gets a pointer cursor unless it is
+ * disabled. Covers raw `<button>` / `<a>` / `<select>` / role=button
+ * elements, plus links with hrefs. Disabled buttons fall back to
+ * `not-allowed`. Tailwind's `disabled:pointer-events-none` on shadcn
+ * buttons already kills hover, so this rule is purely cosmetic.
+ */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+select:not(:disabled),
+summary,
+a[href] {
+  cursor: pointer;
+}
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
 /* Scrollbar polish */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

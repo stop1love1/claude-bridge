@@ -13,6 +13,15 @@ import { HeaderShell } from "../_components/HeaderShell";
 import { NewTaskDialog } from "../_components/NewTaskDialog";
 import { TaskGrid } from "../_components/TaskGrid";
 import { CommandPalette } from "../_components/CommandPalette";
+import { Button } from "../_components/ui/button";
+import { Input } from "../_components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../_components/ui/select";
 import { useToast } from "../_components/Toasts";
 import { useConfirm } from "../_components/ConfirmProvider";
 
@@ -195,26 +204,29 @@ function Dashboard() {
           ) : undefined,
         }}
       >
-        <input
+        <Input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search tasks"
-          className="flex-1 max-w-sm bg-background border border-border rounded-md px-3 py-1 text-xs focus:outline-none focus:border-primary"
+          className="flex-1 max-w-sm h-7 text-xs"
         />
 
-        <select
-          value={appFilter}
-          onChange={(e) => setAppFilter(e.target.value)}
-          className="bg-background border border-border rounded-md px-2 py-1 text-xs focus:outline-none focus:border-primary"
-          title="Filter tasks by target app"
-        >
-          <option value="__all__">All apps</option>
-          <option value="__auto__">Auto (no app set)</option>
-          {apps.map((a) => (
-            <option key={a.name} value={a.name}>{a.name}</option>
-          ))}
-        </select>
+        <Select value={appFilter} onValueChange={setAppFilter}>
+          <SelectTrigger
+            className="h-7 px-2 text-xs gap-1 [&>span]:truncate w-[150px]"
+            title="Filter tasks by target app"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">All apps</SelectItem>
+            <SelectItem value="__auto__">Auto (no app set)</SelectItem>
+            {apps.map((a) => (
+              <SelectItem key={a.name} value={a.name}>{a.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         <div className="ml-auto flex items-center gap-2">
           {runningCount > 0 && (
@@ -226,13 +238,15 @@ function Dashboard() {
               {runningCount}
             </span>
           )}
-          <button
+          <Button
             onClick={() => setPaletteOpen(true)}
-            className="text-[10px] font-mono text-fg-dim hover:text-foreground px-1.5 py-0.5 rounded border border-border"
+            variant="outline"
+            size="xs"
             title="Command palette"
+            className="font-mono text-[10px] text-fg-dim h-6 px-1.5"
           >
             ⌘K
-          </button>
+          </Button>
           <NewTaskDialog apps={apps} onCreate={handleCreate} openRef={newDialogRef} />
         </div>
       </HeaderShell>
