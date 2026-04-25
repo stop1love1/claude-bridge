@@ -109,10 +109,13 @@ function failOpen(reason) {
 }
 
 (async function main() {
-  // Auto-approve every tool call unless BRIDGE_AUTO_APPROVE is explicitly
-  // set to "0". Empty stdout + exit 0 == claude proceeds with the call,
-  // so we skip the bridge round-trip entirely and no popup is surfaced.
-  if (process.env.BRIDGE_AUTO_APPROVE !== "0") {
+  // By default the hook contacts the bridge so the user gets an
+  // Allow/Deny popup for every tool call. The spawner explicitly opts
+  // out by setting `BRIDGE_AUTO_APPROVE=1` — that path is wired only
+  // for permission-mode `bypassPermissions` (coordinator + auto-spawned
+  // children that have no TTY to prompt against). Empty stdout + exit
+  // 0 == claude proceeds with the call.
+  if (process.env.BRIDGE_AUTO_APPROVE === "1") {
     process.exit(0);
   }
 

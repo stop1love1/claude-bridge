@@ -203,15 +203,43 @@ function readStderrTail(child: ChildProcess, maxBytes = 2000): string {
  * stderr is drained AND tailed so callers can surface failures via
  * `waitEarlyFailure`.
  */
+/**
+ * Decide whether to set `BRIDGE_AUTO_APPROVE=1` for the child. Only the
+ * `bypassPermissions` mode skips the popup — coordinator and auto-spawned
+ * children run headless, so a hung permission hook would block the whole
+ * task. Every other mode (`default`, `acceptEdits`, `plan`, `auto`,
+ * `dontAsk`) leaves the env unset so the hook contacts the bridge and
+ * the user sees an Allow/Deny popup.
+ *
+ * Exported for unit testing — the spawn path itself stitches the result
+ * into the child env via spread.
+ */
+export function autoApproveEnv(
+  settings: ChatSettings | undefined,
+): { BRIDGE_AUTO_APPROVE: string } | Record<string, never> {
+  if (settings?.mode === "bypassPermissions") return { BRIDGE_AUTO_APPROVE: "1" };
+  return {};
+}
+
 function spawnClaudeWithStdin(
   cwd: string,
   args: string[],
   stdinPayload: string,
   sessionId: string,
+  settings: ChatSettings | undefined,
 ): ChildProcess {
   const child = spawn(CLAUDE_BIN, args, {
     cwd,
-    detached: true,
+    // NOTE: NOT `detached: true`. The bridge wants spawned `claude`
+    // children to die when the bridge dies (operator hits Ctrl-C, the
+    // dev server reloads, the host VM goes down). With `detached:true`
+    // + `unref()` the children survived parent exit and kept consuming
+    // the .jsonl files — orphaned, untracked, and a pain to clean up
+    // by PID. Leaving children in the bridge's own process group means
+    // a SIGTERM to the bridge propagates naturally on POSIX, and on
+    // Windows the Job-object the dev server runs in already cleans the
+    // tree on parent exit. The kill path uses `treeKill` (taskkill /T
+    // on Windows, `kill -GROUP` on POSIX) for explicit Stop-button kills.
     // stdin: pipe so we can write the prompt; stdout/stderr piped + drained.
     stdio: ["pipe", "pipe", "pipe"],
     // Force-propagate BRIDGE_PORT / BRIDGE_URL so the spawned child's
@@ -220,18 +248,29 @@ function spawnClaudeWithStdin(
     // Without this the hook defaults to 7777 even when the operator
     // started the bridge with PORT=8080, and the Allow/Deny popup never
     // reaches the UI.
-    env: {
-      ...process.env,
-      BRIDGE_PORT: String(BRIDGE_PORT),
-      BRIDGE_URL,
-    },
+    //
+    // BRIDGE_AUTO_APPROVE is set only for `bypassPermissions` mode (see
+    // `autoApproveEnv`) — every other mode leaves it unset so the hook
+    // pops the Allow/Deny dialog in the bridge UI. We DO NOT inherit the
+    // operator's BRIDGE_AUTO_APPROVE from process.env: the per-spawn
+    // setting is the source of truth, and an inherited "1" would silently
+    // override the user's per-task choice.
+    env: (() => {
+      const { BRIDGE_AUTO_APPROVE: _drop, ...rest } = process.env;
+      void _drop;
+      return {
+        ...rest,
+        BRIDGE_PORT: String(BRIDGE_PORT),
+        BRIDGE_URL,
+        ...autoApproveEnv(settings),
+      };
+    })(),
     // shell:true wraps the call in `cmd /c ...` on Windows, which mangles
     // UTF-8 stdin and breaks claude.exe's handshake. CLAUDE_BIN is always
     // an absolute path to a .exe (or `claude` shim on PATH), so spawn
     // can launch it directly without a shell on every platform.
     windowsHide: true,
   });
-  child.unref();
   if (child.stdin) {
     child.stdin.on("error", () => { /* swallow EPIPE on early child exit */ });
     child.stdin.write(stdinPayload);
@@ -376,6 +415,7 @@ export function spawnClaude(cwd: string, opts: SpawnOpts): SpawnedSession {
     buildCoordinatorArgs(opts, sessionId),
     opts.prompt,
     sessionId,
+    opts.settings,
   );
   registerChild(sessionId, child);
   return { child, sessionId };
@@ -406,6 +446,7 @@ export function spawnFreeSession(
     ],
     prompt,
     sessionId,
+    settings,
   );
   registerChild(sessionId, child);
   return { child, sessionId };
@@ -443,6 +484,7 @@ export function resumeClaude(
     ],
     message,
     sessionId,
+    settings,
   );
   // Resume re-attaches the same session UUID, so registering by it
   // means the kill endpoint can target the latest one-shot subprocess.
