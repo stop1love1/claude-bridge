@@ -33,6 +33,23 @@ const LABEL_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const RUN_STATUSES = ["queued", "running", "done", "failed", "stale"] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
+/**
+ * Allowed values for `ChatSettings.mode` — kept in sync with the enum
+ * declared in `lib/spawn.ts` (the canonical list, since that module
+ * actually shells out to `claude --permission-mode`). Duplicated here
+ * as a frozen tuple so route handlers can validate untrusted bodies
+ * without pulling in the full spawn module.
+ */
+const PERMISSION_MODES = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "auto",
+  "bypassPermissions",
+  "dontAsk",
+] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
 export function isValidSessionId(s: unknown): s is string {
   return typeof s === "string" && UUID_RE.test(s);
 }
@@ -57,6 +74,19 @@ export function isValidToolName(s: unknown): s is string {
 export function isValidRunStatus(s: unknown): s is RunStatus {
   return (
     typeof s === "string" && (RUN_STATUSES as readonly string[]).includes(s)
+  );
+}
+
+/**
+ * Type-guard for `ChatSettings.mode`. Accepts only the documented
+ * `claude --permission-mode` values; anything else (including the
+ * empty string) is rejected so a caller can't sneak `bypassPermissions`
+ * past the UI by spoofing arbitrary text.
+ */
+export function isValidPermissionMode(s: unknown): s is PermissionMode {
+  return (
+    typeof s === "string" &&
+    (PERMISSION_MODES as readonly string[]).includes(s)
   );
 }
 

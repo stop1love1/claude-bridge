@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   badRequest,
   isValidAgentRole,
+  isValidPermissionMode,
   isValidRepoLabel,
   isValidRequestId,
   isValidRunStatus,
@@ -151,6 +152,35 @@ describe("isValidRunStatus", () => {
     expect(isValidRunStatus("pending")).toBe(false);
     expect(isValidRunStatus("../etc/passwd")).toBe(false);
     for (const v of NON_STRING_INPUTS) expect(isValidRunStatus(v)).toBe(false);
+  });
+});
+
+describe("isValidPermissionMode", () => {
+  it("accepts every documented `claude --permission-mode` value", () => {
+    for (const mode of [
+      "default",
+      "acceptEdits",
+      "plan",
+      "auto",
+      "bypassPermissions",
+      "dontAsk",
+    ]) {
+      expect(isValidPermissionMode(mode)).toBe(true);
+    }
+  });
+
+  it("rejects unknown / case-mismatched / empty inputs", () => {
+    expect(isValidPermissionMode("")).toBe(false);
+    expect(isValidPermissionMode("BYPASSPERMISSIONS")).toBe(false);
+    expect(isValidPermissionMode("bypass")).toBe(false);
+    expect(isValidPermissionMode("readOnly")).toBe(false);
+    expect(isValidPermissionMode("../etc/passwd")).toBe(false);
+  });
+
+  it("rejects non-string inputs", () => {
+    for (const v of NON_STRING_INPUTS) {
+      expect(isValidPermissionMode(v)).toBe(false);
+    }
   });
 });
 
