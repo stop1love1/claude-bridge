@@ -15,7 +15,7 @@ import { suggestRepo } from "@/lib/repoHeuristic";
 import { loadProfiles } from "@/lib/profileStore";
 import { buildChildPrompt } from "@/lib/childPrompt";
 import { isValidTaskId } from "@/lib/tasks";
-import { badRequest, isValidAgentRole } from "@/lib/validate";
+import { badRequest, isValidAgentRole, isValidSessionId } from "@/lib/validate";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
@@ -77,6 +77,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     typeof body.parentSessionId === "string" && body.parentSessionId
       ? body.parentSessionId
       : undefined;
+  // H1: parentSessionId is written into meta.json and used as the
+  // permissionStore key when blocking on user-approval. Same threat
+  // shape as every other sessionId — gate it before it lands in either.
+  if (parentSessionId !== undefined && !isValidSessionId(parentSessionId)) {
+    return badRequest("invalid parentSessionId");
+  }
   // Default OFF: spawning is auto-approved unless the caller explicitly
   // sets `requireUserApproval: true`. CLI / programmatic callers without
   // a parent session id implicitly skip it too, since there's nowhere
