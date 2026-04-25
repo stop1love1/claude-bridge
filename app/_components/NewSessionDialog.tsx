@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
+import { AddAppDialog } from "./AddAppDialog";
 
 const REPO_KEY = "bridge.newSession.repo";
 
@@ -30,11 +31,14 @@ export function NewSessionDialog({
   repos,
   defaultRepo,
   onCreate,
+  onReposChanged,
   openRef,
 }: {
   repos: Repo[];
   defaultRepo?: string;
   onCreate: (args: { repo: string }) => Promise<void> | void;
+  /** Called after Add app / Auto-detect succeeds so parent can refetch repos. */
+  onReposChanged?: () => void;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }) {
   // Hydrate from localStorage *after* mount so SSR doesn't flash a
@@ -57,10 +61,14 @@ export function NewSessionDialog({
   }, [repo, repos, defaultRepo]);
 
   const groups = useMemo(() => {
-    const declared = repos.filter((r) => r.declared !== false && !r.isBridge);
-    const bridge   = repos.filter((r) => r.isBridge);
-    const other    = repos.filter((r) => r.declared === false);
-    return { declared, bridge, other };
+    // `declared === true && !isBridge` are apps registered in
+    // sessions/init.md. `isBridge` is the bridge folder itself.
+    // `declared === false` are sibling folders the bridge spotted on
+    // disk but the user hasn't registered yet.
+    const registered = repos.filter((r) => r.declared !== false && !r.isBridge);
+    const bridge     = repos.filter((r) => r.isBridge);
+    const other      = repos.filter((r) => r.declared === false);
+    return { registered, bridge, other };
   }, [repos]);
 
   const create = () => {
@@ -89,16 +97,16 @@ export function NewSessionDialog({
     ));
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 flex-wrap">
       <Select value={repo} onValueChange={setRepo}>
-        <SelectTrigger className="h-7 px-2 text-[11px] gap-1 [&>span]:truncate max-w-[140px]">
+        <SelectTrigger className="h-7 px-2 text-[11px] gap-1 [&>span]:truncate max-w-[160px]">
           <SelectValue placeholder="Pick a repo" />
         </SelectTrigger>
         <SelectContent>
-          {groups.declared.length > 0 && (
+          {groups.registered.length > 0 && (
             <SelectGroup>
-              <SelectLabel>Declared in BRIDGE.md</SelectLabel>
-              {renderItems(groups.declared)}
+              <SelectLabel>Registered apps</SelectLabel>
+              {renderItems(groups.registered)}
             </SelectGroup>
           )}
           {groups.bridge.length > 0 && (
@@ -118,6 +126,7 @@ export function NewSessionDialog({
       <Button onClick={create} disabled={!repo} size="sm">
         <Plus className="h-3.5 w-3.5" /> New session
       </Button>
+      <AddAppDialog onChanged={onReposChanged} />
     </div>
   );
 }

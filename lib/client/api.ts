@@ -12,7 +12,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   repos: () => req<Repo[]>("/repos"),
   tasks: () => req<Task[]>("/tasks"),
-  createTask: (body: { title?: string; body: string }) =>
+  createTask: (body: { title?: string; body: string; app?: string | null }) =>
     req<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
   updateTask: (id: string, patch: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
@@ -91,4 +91,18 @@ export const api = {
       "/sessions",
       { method: "POST", body: JSON.stringify(body) },
     ),
+  apps: () =>
+    req<Array<{ name: string; path: string; rawPath: string; description: string }>>("/apps"),
+  addApp: (body: { name: string; path: string; description?: string }) =>
+    req<{ name: string; path: string; rawPath: string; description: string }>(
+      "/apps",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  removeApp: (name: string) =>
+    req<{ ok: true }>(`/apps/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  autoDetectApps: () =>
+    req<{
+      added: Array<{ name: string; path: string; rawPath: string; description: string }>;
+      skipped: Array<{ name: string; reason: "already-registered" | "not-a-repo" }>;
+    }>("/apps/auto-detect", { method: "POST" }),
 };

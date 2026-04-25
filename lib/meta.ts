@@ -76,6 +76,12 @@ export interface Meta {
   taskStatus: TaskStatus;
   taskSection: TaskSection;
   taskChecked: boolean;
+  /**
+   * Target app name from the apps registry (`sessions/init.md`).
+   * `null` / absent means "auto" — let the coordinator's heuristic
+   * decide which repo to dispatch to based on the task body.
+   */
+  taskApp?: string | null;
   createdAt: string;
   runs: Run[];
 }

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { AGENTS_DIR, BRIDGE_FOLDER, BRIDGE_ROOT, BRIDGE_URL, SESSIONS_DIR } from "./paths";
+import { BRIDGE_FOLDER, BRIDGE_LOGIC_DIR, BRIDGE_ROOT, BRIDGE_URL, SESSIONS_DIR } from "./paths";
 import { appendRun, readMeta, updateRun } from "./meta";
 import { spawnClaude } from "./spawn";
 import type { Task } from "./tasks";
@@ -215,7 +215,7 @@ export function spawnCoordinatorForTask(task: Pick<Task, "id" | "title" | "body"
     // bridge-pre-registered run stuck at "running" forever.
     const sessionId = randomUUID();
 
-    const template = readFileSync(join(AGENTS_DIR, "coordinator.md"), "utf8");
+    const template = readFileSync(join(BRIDGE_LOGIC_DIR, "coordinator.md"), "utf8");
     // Build a one-shot example of `repo` to use in curl snippets so the
     // template doesn't have to hardcode a project-specific name.
     let exampleRepo = BRIDGE_FOLDER;

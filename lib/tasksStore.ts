@@ -39,6 +39,7 @@ function metaToTask(meta: Meta): Task {
     status: meta.taskStatus,
     section: meta.taskSection,
     checked: meta.taskChecked,
+    app: meta.taskApp ?? null,
   };
 }
 
@@ -79,11 +80,16 @@ export function generateTaskId(now: Date): string {
   return generateIdFromList(now, listMetaIds());
 }
 
-export function createTask(input: { title: string; body: string }): Task {
+export function createTask(input: {
+  title: string;
+  body: string;
+  app?: string | null;
+}): Task {
   ensureSessionsDir();
   const now = new Date();
   const id = generateTaskId(now);
   const dir = join(SESSIONS_DIR, id);
+  const taskApp = input.app && input.app.trim() ? input.app.trim() : null;
   createMeta(dir, {
     taskId: id,
     taskTitle: input.title,
@@ -91,6 +97,7 @@ export function createTask(input: { title: string; body: string }): Task {
     taskStatus: "todo",
     taskSection: "TODO",
     taskChecked: false,
+    taskApp,
     createdAt: now.toISOString(),
   });
   return {
@@ -101,6 +108,7 @@ export function createTask(input: { title: string; body: string }): Task {
     status: "todo",
     section: "TODO",
     checked: false,
+    app: taskApp,
   };
 }
 

@@ -1,69 +1,58 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { loadApps, type App } from "./apps";
 
 export interface RepoEntry { name: string }
 export interface ResolvedRepo extends RepoEntry { path: string }
 
 /**
- * Parse BRIDGE.md Repos table. Accepts any number of repos with a minimal
- * single-column layout:
+ * Apps registry now lives in `sessions/init.md`, owned by `lib/apps.ts`.
+ * `parseReposTable` / `resolveRepos` remain as a thin wrapper so the
+ * existing call sites (coordinator, profile loader, route handlers) keep
+ * working without scattering `loadApps()` everywhere.
  *
- *   | Folder name |
- *   |-------------|
- *   | `app-web`   |
- *   | `app-api`   |
- *
- * Additional columns (e.g. Stack, Purpose) are ignored — only the folder
- * name cell is required. No role hardcoding; the bridge treats all
- * siblings equally and the coordinator decides which to target per task.
+ * BRIDGE.md is no longer parsed for the apps roster — it stays as a
+ * pure human-readable notebook for cross-repo decisions / contracts.
  */
-export function parseReposTable(bridgeMd: string): RepoEntry[] {
-  const section = bridgeMd.match(/##\s+Repos[\s\S]*?(?=\n##\s|\n$|$)/);
-  if (!section) throw new Error("No Repos table found in BRIDGE.md");
 
-  const entries: RepoEntry[] = [];
-  const seen = new Set<string>();
-  for (const line of section[0].split("\n")) {
-    if (!line.startsWith("|")) continue;
-    if (/^\|\s*-{2,}/.test(line)) continue;                   // separator row
-    if (/\|\s*folder\s*name\s*\|/i.test(line)) continue;      // header row
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    const folder = cells
-      .map((c) => c.replace(/^`|`$/g, ""))
-      .find((c) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(c));
-    if (!folder || seen.has(folder)) continue;
-    seen.add(folder);
-    entries.push({ name: folder });
-  }
-  if (entries.length === 0) throw new Error("Repos table is empty");
-  return entries;
+function appsAsRepos(): ResolvedRepo[] {
+  return loadApps().map((app: App) => ({ name: app.name, path: app.path }));
 }
 
-export function resolveRepos(bridgeMd: string, bridgeRoot: string): ResolvedRepo[] {
-  const parent = dirname(resolve(bridgeRoot));
-  return parseReposTable(bridgeMd).map((e) => ({
-    ...e,
-    path: resolve(parent, e.name),
-  }));
+/**
+ * Kept for API compatibility. The `bridgeMd` argument is ignored; the
+ * apps registry is now `sessions/init.md`. Tests still pass a fixture
+ * string to assert legacy behaviour — they should migrate to seeding
+ * `sessions/init.md` directly.
+ */
+export function parseReposTable(_bridgeMd: string): RepoEntry[] {
+  return loadApps().map((app) => ({ name: app.name }));
+}
+
+export function resolveRepos(_bridgeMd: string, _bridgeRoot: string): ResolvedRepo[] {
+  return appsAsRepos();
 }
 
 /**
  * Resolve a repo *name* to an absolute cwd. Tries, in order:
- *   1. the bridge folder itself
- *   2. anything declared in BRIDGE.md
+ *   1. the bridge folder itself (so `repo: "<bridge-folder>"` keeps working)
+ *   2. anything declared in the apps registry (sessions/init.md)
  *   3. any sibling folder that exists next to the bridge
  *
  * Returns `null` if no match — the caller should reject the request.
+ *
+ * `bridgeMd` is accepted (ignored) for backwards compatibility — every
+ * caller still threads it through, but the registry is no longer there.
  */
 export function resolveRepoCwd(
-  bridgeMd: string,
+  _bridgeMd: string,
   bridgeRoot: string,
   name: string,
 ): string | null {
   if (!name || /[\\/]/.test(name)) return null;
   const root = resolve(bridgeRoot);
   if (name === basename(root)) return root;
-  const declared = resolveRepos(bridgeMd, bridgeRoot).find((r) => r.name === name);
+  const declared = appsAsRepos().find((r) => r.name === name);
   if (declared) return declared.path;
   const sibling = join(dirname(root), name);
   if (existsSync(sibling)) return sibling;

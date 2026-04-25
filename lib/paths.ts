@@ -14,14 +14,31 @@ export const BRIDGE_ROOT = resolve(process.cwd());
 export const BRIDGE_FOLDER = basename(BRIDGE_ROOT);
 export const BRIDGE_MD = join(BRIDGE_ROOT, "BRIDGE.md");
 export const SESSIONS_DIR = join(BRIDGE_ROOT, "sessions");
-export const AGENTS_DIR = join(BRIDGE_ROOT, "agents");
+
+/**
+ * All bridge-runtime markdown lives here:
+ *   - `coordinator.md`     — the coordinator prompt template
+ *   - `report-template.md` — the child agent report contract
+ *   - `bugs.md`, `decisions.md`, `questions.md`, `schema.md` —
+ *     cross-repo registers the coordinator reads / writes
+ *   - `tasks.md`           — legacy notebook (no longer runtime data)
+ */
+export const BRIDGE_LOGIC_DIR = join(BRIDGE_ROOT, "bridge");
 
 /**
  * Where standalone Node hook scripts live. The bridge writes a
  * per-spawn settings JSON that points `claude --settings` at the
- * `permission-hook.cjs` script in this directory.
+ * `permission-hook.cjs` script in this directory. Kept separate from
+ * `BRIDGE_LOGIC_DIR` because hooks are executable JS, not markdown.
  */
-export const HOOKS_DIR = AGENTS_DIR;
+export const HOOKS_DIR = join(BRIDGE_ROOT, "agents");
+
+/**
+ * @deprecated Use `BRIDGE_LOGIC_DIR` for markdown templates and
+ * `HOOKS_DIR` for `permission-hook.cjs`. Kept as an alias so older
+ * callers don't break during the migration.
+ */
+export const AGENTS_DIR = BRIDGE_LOGIC_DIR;
 
 /**
  * Scratch dir for bridge-managed runtime state per free (non-task)

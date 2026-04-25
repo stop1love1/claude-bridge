@@ -1,9 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { listTasks, createTask } from "@/lib/tasksStore";
 import { spawnCoordinatorForTask } from "@/lib/coordinator";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
-import { resolveRepos } from "@/lib/repos";
+import { loadApps } from "@/lib/apps";
 import {
   profileStoreExists,
   refreshAll,
@@ -24,14 +23,12 @@ export const dynamic = "force-dynamic";
 function autoInitProfilesOnce(): void {
   if (profileStoreExists()) return;
   try {
-    const md = readFileSync(BRIDGE_MD, "utf8");
-    const declared = resolveRepos(md, BRIDGE_ROOT);
-    const repos: RepoLike[] = declared.map((r) => ({
-      name: r.name,
-      path: r.path,
-      exists: existsSync(r.path),
+    const repos: RepoLike[] = loadApps().map((a) => ({
+      name: a.name,
+      path: a.path,
+      exists: existsSync(a.path),
     }));
-    refreshAll(repos);
+    if (repos.length > 0) refreshAll(repos);
   } catch (err) {
     console.error("auto-init repo profiles failed (non-fatal)", err);
   }
@@ -48,7 +45,11 @@ function deriveTitle(body: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const { title: givenTitle, body } = (await req.json()) as { title?: string; body?: string };
+  const { title: givenTitle, body, app } = (await req.json()) as {
+    title?: string;
+    body?: string;
+    app?: string | null;
+  };
   const rawBody = (body ?? "").trim();
   const title = givenTitle?.trim() || deriveTitle(rawBody);
 
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "description required" }, { status: 400 });
   }
 
-  const task = createTask({ title, body: rawBody });
+  const task = createTask({ title, body: rawBody, app: app ?? null });
   // Phase G: build repo profiles once before the very first coordinator
   // spawn so the prompt gets the enriched "## Repo profiles" block.
   autoInitProfilesOnce();

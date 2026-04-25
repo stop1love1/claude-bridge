@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
+import type { App } from "@/lib/client/types";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -11,22 +12,36 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
+import { Label } from "./ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
+export const APP_AUTO = "__auto__";
+
 export function NewTaskDialog({
+  apps,
   onCreate,
   openRef,
 }: {
-  onCreate: (t: { body: string }) => Promise<void>;
+  apps: App[];
+  onCreate: (t: { body: string; app: string | null }) => Promise<void>;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
+  const [app, setApp] = useState<string>(APP_AUTO);
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const triggerOpen = () => {
     setBody("");
+    setApp(APP_AUTO);
     setOpen(true);
   };
 
@@ -41,7 +56,10 @@ export function NewTaskDialog({
     if (!trimmed) return;
     setSubmitting(true);
     try {
-      await onCreate({ body: trimmed });
+      await onCreate({
+        body: trimmed,
+        app: app === APP_AUTO ? null : app,
+      });
       setOpen(false);
     } finally {
       setSubmitting(false);
@@ -68,6 +86,29 @@ export function NewTaskDialog({
             onSubmit={(e) => { e.preventDefault(); submit(); }}
             className="grid gap-3"
           >
+            <div className="grid gap-1.5">
+              <Label htmlFor="task-app">Target app</Label>
+              <Select value={app} onValueChange={setApp}>
+                <SelectTrigger id="task-app" className="h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={APP_AUTO}>
+                    Auto (let the coordinator decide)
+                  </SelectItem>
+                  {apps.map((a) => (
+                    <SelectItem key={a.name} value={a.name}>
+                      {a.name}
+                      {a.description ? ` — ${a.description}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Pick a specific app to constrain dispatch, or leave on Auto so the heuristic chooses based on the task body.
+              </p>
+            </div>
+
             <Textarea
               ref={taRef}
               autoFocus

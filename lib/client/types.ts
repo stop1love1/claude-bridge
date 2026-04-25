@@ -9,6 +9,8 @@ export interface Task {
   status: TaskStatus;
   section: TaskSection;
   checked: boolean;
+  /** Target app name; `null` means "auto" (coordinator decides). */
+  app?: string | null;
 }
 
 /**
@@ -51,10 +53,19 @@ export interface Repo {
   exists: boolean;
   /** true only for the bridge itself */
   isBridge?: boolean;
-  /** declared in BRIDGE.md vs auto-discovered as a sibling folder */
+  /** registered in `sessions/init.md` vs auto-discovered as a sibling folder */
   declared?: boolean;
+  /** description from the apps registry (only set on registered repos) */
+  description?: string;
   /** current git branch (null = not a git repo or read failed) */
   branch?: string | null;
+}
+
+export interface App {
+  name: string;
+  path: string;
+  rawPath: string;
+  description: string;
 }
 
 export interface SessionSummary {

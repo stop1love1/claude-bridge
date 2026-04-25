@@ -33,13 +33,13 @@ Update `status` to `"done"` (or `"failed"`) and set `endedAt` when you finish.
 
 ## When spawning sub-agents
 
-If the coordinator prompt in `agents/coordinator.md` tells you to spawn sub-agents (coder/reviewer/…), each child `claude -p` process must also register itself — either have the child run the curl above, or do it yourself after capturing the child's session UUID from its stdout.
+If the coordinator prompt in `bridge/coordinator.md` tells you to spawn sub-agents (coder/reviewer/…), each child `claude -p` process must also register itself — either have the child run the curl above, or do it yourself after capturing the child's session UUID from its stdout.
 
 ## What *not* to do
 
 - Don't invent a new session format. Sessions are the plain `.jsonl` files Claude Code writes to `~/.claude/projects/<slug>/`.
-- Don't hardcode absolute paths or repo names. Sibling repos are resolved as `../<folder-name>` where `<folder-name>` comes from `BRIDGE.md`. The bridge folder itself is referenced via `basename "$PWD"`, never a hardcoded string.
+- Don't hardcode absolute paths or repo names. The apps registry lives in `sessions/init.md`, edited via the UI's "Add app" / "Auto-detect" buttons. The bridge folder itself is referenced via `basename "$PWD"`, never a hardcoded string.
 - Don't edit files inside `../<other-repo>/` from here — spawn a child `claude` in that repo instead.
-- Don't edit `tasks.md` to move tasks between sections. Use `PATCH /api/tasks/<id>` with `{"section": "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived", ...}` — the bridge writes the canonical state to `sessions/<id>/meta.json`.
+- Don't edit `bridge/tasks.md` to move tasks between sections. Use `PATCH /api/tasks/<id>` with `{"section": "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived", ...}` — the bridge writes the canonical state to `sessions/<id>/meta.json`.
 
-See `agents/coordinator.md` for the full orchestration playbook.
+See `bridge/coordinator.md` for the full orchestration playbook.

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/client/api";
 import {
+  type App,
   type Meta,
   type SessionSummary,
   type Task,
@@ -21,6 +22,8 @@ function Dashboard() {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [apps, setApps] = useState<App[]>([]);
+  const [appFilter, setAppFilter] = useState<string>("__all__");
   const [query, setQuery] = useState("");
   const [metaByTask, setMetaByTask] = useState<Map<string, Meta>>(new Map());
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -33,6 +36,11 @@ function Dashboard() {
     try { setTasks(await api.tasks()); }
     catch (e) { toast("error", (e as Error).message); }
   }, [toast]);
+
+  const refreshApps = useCallback(async () => {
+    try { setApps(await api.apps()); }
+    catch { /* registry may not exist yet — ignore */ }
+  }, []);
 
   const refreshAllMeta = useCallback(async () => {
     try {
@@ -57,6 +65,7 @@ function Dashboard() {
   }, []);
 
   useEffect(() => { refreshTasks(); }, [refreshTasks]);
+  useEffect(() => { refreshApps(); }, [refreshApps]);
 
   useEffect(() => {
     if (!visible) return;
@@ -106,9 +115,9 @@ function Dashboard() {
     [router],
   );
 
-  const handleCreate = async ({ body }: { body: string }) => {
+  const handleCreate = async ({ body, app }: { body: string; app: string | null }) => {
     try {
-      const t = await api.createTask({ body });
+      const t = await api.createTask({ body, app });
       await refreshTasks();
       toast("success", `Created ${t.id}`);
       router.push(`/tasks/${t.id}`);
@@ -216,6 +225,19 @@ function Dashboard() {
           className="flex-1 max-w-sm bg-background border border-border rounded-md px-3 py-1 text-xs focus:outline-none focus:border-primary"
         />
 
+        <select
+          value={appFilter}
+          onChange={(e) => setAppFilter(e.target.value)}
+          className="bg-background border border-border rounded-md px-2 py-1 text-xs focus:outline-none focus:border-primary"
+          title="Filter tasks by target app"
+        >
+          <option value="__all__">All apps</option>
+          <option value="__auto__">Auto (no app set)</option>
+          {apps.map((a) => (
+            <option key={a.name} value={a.name}>{a.name}</option>
+          ))}
+        </select>
+
         <div className="ml-auto flex items-center gap-2">
           {runningCount > 0 && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-[11px] font-medium">
@@ -233,13 +255,17 @@ function Dashboard() {
           >
             ⌘K
           </button>
-          <NewTaskDialog onCreate={handleCreate} openRef={newDialogRef} />
+          <NewTaskDialog apps={apps} onCreate={handleCreate} openRef={newDialogRef} />
         </div>
       </header>
 
       <main className="flex-1 flex min-h-0">
         <TaskGrid
-          tasks={tasks}
+          tasks={tasks.filter((t) => {
+            if (appFilter === "__all__") return true;
+            if (appFilter === "__auto__") return !t.app;
+            return t.app === appFilter;
+          })}
           metaByTask={metaByTask}
           activeTaskId={null}
           query={query}

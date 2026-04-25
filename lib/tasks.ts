@@ -9,6 +9,8 @@ export interface Task {
   status: TaskStatus;
   section: TaskSection;
   checked: boolean;      // [x] vs [ ]
+  /** Target app name; `null` means "auto" (coordinator decides). */
+  app?: string | null;
 }
 
 export const SECTION_STATUS: Record<TaskSection, TaskStatus> = {

@@ -217,6 +217,7 @@ function SessionsPageInner() {
             repos={repos}
             defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
             onCreate={handleCreate}
+            onReposChanged={() => api.repos().then(setRepos).catch(() => {})}
             openRef={newSessionRef}
           />
         </div>

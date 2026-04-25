@@ -51,27 +51,33 @@ After finishing a cross-repo task:
 |---|---|
 | Just shipped a new endpoint or changed a contract | `contracts/<feature>.md` + create a follow-up task for the consumer repo via the UI |
 | Just migrated the DB / changed an entity / added an enum | `schema.md` (Recent migrations section) |
-| Just locked in a decision that isn't obvious from the code (naming, format, pagination style…) | `decisions.md` (append, dated) |
-| Need to ask another repo something before continuing | `questions.md` (OPEN section) |
-| Found a bug whose root cause is in another repo | `bugs.md` (OPEN section) |
+| Just locked in a decision that isn't obvious from the code (naming, format, pagination style…) | `bridge/decisions.md` (append, dated) |
+| Need to ask another repo something before continuing | `bridge/questions.md` (OPEN section) |
+| Found a bug whose root cause is in another repo | `bridge/bugs.md` (OPEN section) |
 
 ## File map
+
+All bridge-runtime markdown lives under the `bridge/` folder. Top-level
+`BRIDGE.md` and `README.md` are project-level docs.
 
 | File | Purpose | Who writes | Frequency |
 |---|---|---|---|
 | `BRIDGE.md` | Index (this file) | Rarely changed | very low |
-| `tasks.md` | Stale notebook — kept for reference; runtime data lives in `sessions/<id>/meta.json` | (none — bridge writes meta.json) | n/a |
+| `bridge/coordinator.md` | Coordinator prompt template | Bridge maintainers | very low |
+| `bridge/report-template.md` | Child agent report contract | Bridge maintainers | very low |
+| `bridge/tasks.md` | Legacy notebook — runtime data lives in `sessions/<id>/meta.json` | (none — bridge writes meta.json) | n/a |
+| `bridge/schema.md` | Data model — entities, enums, migration log | Repo that owns the DB | low |
+| `bridge/decisions.md` | Decisions log (append-only, dated) | Any repo | low |
+| `bridge/questions.md` | Open questions between repos | Repo that asks | low |
+| `bridge/bugs.md` | Cross-repo bugs | Repo that finds the bug | low |
 | `contracts/<feature>.md` | API contract — request/response/errors | Repo that owns the endpoint | medium |
 | `contracts/README.md` | Index of contracts | Updated when a new contract is added | low |
-| `schema.md` | Data model — entities, enums, migration log | Repo that owns the DB | low |
-| `decisions.md` | Decisions log (append-only, dated) | Any repo | low |
-| `questions.md` | Open questions between repos | Repo that asks | low |
-| `bugs.md` | Cross-repo bugs | Repo that finds the bug | low |
+| `sessions/init.md` | Apps registry — declared by the UI's "Add app" / "Auto-detect" buttons | Bridge UI | low |
 
 ## Conventions
 
 - **Plain markdown** — no JSON/YAML, so both humans and AI can read it.
 - **Always date entries** with `YYYY-MM-DD`.
-- **`decisions.md` is append-only.** To reverse an old decision, write a new entry that references the old one (`Supersedes: #YYYY-MM-DD-slug`).
+- **`bridge/decisions.md` is append-only.** To reverse an old decision, write a new entry that references the old one (`Supersedes: #YYYY-MM-DD-slug`).
 - **Cross-link.** Link tasks → contracts / questions / decisions, using relative paths.
 - **Don't dump everything.** The bridge holds only what **cannot be derived** from the source code or git history of any repo.
