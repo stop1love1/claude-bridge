@@ -112,6 +112,87 @@ describe("buildChildPrompt", () => {
     expect(out).toMatch(/\.\.\/[^/]+\/sessions\//);
   });
 
+  // P1 / C3 — house rules
+  it("omits the House rules section when houseRules is null/empty", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## House rules");
+    expect(buildChildPrompt({ ...baseOpts, houseRules: null })).not.toContain("## House rules");
+    expect(buildChildPrompt({ ...baseOpts, houseRules: "   " })).not.toContain("## House rules");
+  });
+
+  it("emits House rules between Language and Task when provided", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      houseRules: "- Prefer named exports.\n- No raw fetch in components.",
+    });
+    const lang = out.indexOf("## Language");
+    const house = out.indexOf("## House rules");
+    const task = out.indexOf("## Task");
+    expect(lang).toBeGreaterThan(-1);
+    expect(house).toBeGreaterThan(lang);
+    expect(task).toBeGreaterThan(house);
+    expect(out).toContain("- Prefer named exports.");
+    expect(out).toContain("No raw fetch in components.");
+  });
+
+  // P1 / H1 — playbook
+  it("omits the role playbook block when playbookBody is null/empty", () => {
+    const out = buildChildPrompt(baseOpts);
+    expect(out).not.toContain("Role playbook");
+  });
+
+  it("renders the playbook before the coordinator brief inside Your role", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      playbookBody: "Reviewer rubric: ship/needs-rework/blocked, with file:line evidence.",
+    });
+    const role = out.indexOf("## Your role");
+    const playbook = out.indexOf("Role playbook");
+    const taskBrief = out.indexOf("Task-specific brief");
+    const body = out.indexOf("Build the endpoint POST /users/me");
+    expect(role).toBeGreaterThan(-1);
+    expect(playbook).toBeGreaterThan(role);
+    expect(taskBrief).toBeGreaterThan(playbook);
+    expect(body).toBeGreaterThan(taskBrief);
+    expect(out).toContain("Reviewer rubric");
+  });
+
+  // P1 / D1 — verify hint
+  it("omits the Verify commands section when verifyHint is null/empty object", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## Verify commands");
+    expect(buildChildPrompt({ ...baseOpts, verifyHint: null })).not.toContain("## Verify commands");
+    expect(buildChildPrompt({ ...baseOpts, verifyHint: {} })).not.toContain("## Verify commands");
+  });
+
+  it("renders Verify commands after Report contract, before Spawn-time signals", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      verifyHint: { test: "bun test", lint: "eslint .", typecheck: "tsc --noEmit" },
+    });
+    const report = out.indexOf("## Report contract");
+    const verify = out.indexOf("## Verify commands");
+    const spawn = out.indexOf("## Spawn-time signals");
+    expect(report).toBeGreaterThan(-1);
+    expect(verify).toBeGreaterThan(report);
+    expect(spawn).toBeGreaterThan(verify);
+    // Ordering inside the section: typecheck → lint → test (build/format absent)
+    const tcIdx = out.indexOf("`tsc --noEmit`");
+    const lintIdx = out.indexOf("`eslint .`");
+    const testIdx = out.indexOf("`bun test`");
+    expect(tcIdx).toBeGreaterThan(verify);
+    expect(lintIdx).toBeGreaterThan(tcIdx);
+    expect(testIdx).toBeGreaterThan(lintIdx);
+  });
+
+  it("drops empty/whitespace verify command strings", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      verifyHint: { test: "bun test", lint: "   ", build: "" },
+    });
+    expect(out).toContain("`bun test`");
+    expect(out).not.toContain("**Lint**");
+    expect(out).not.toContain("**Build**");
+  });
+
   it("sanitizes task body so a stray ``` cannot break out of the wrapper fence", () => {
     const malicious = [
       "Look at this:",

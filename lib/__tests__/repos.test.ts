@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
-import { DEFAULT_GIT_SETTINGS, parseApps, serializeApps, type App } from "../apps";
+import { DEFAULT_GIT_SETTINGS, DEFAULT_VERIFY, parseApps, serializeApps, type App } from "../apps";
 
 describe("parseApps", () => {
   it("returns empty list when input is empty", () => {
@@ -67,6 +67,7 @@ describe("serializeApps + round-trip", () => {
         rawPath: "../app-api",
         description: "API",
         git: { ...DEFAULT_GIT_SETTINGS },
+        verify: { ...DEFAULT_VERIFY },
       },
       {
         name: "app-web",
@@ -74,6 +75,7 @@ describe("serializeApps + round-trip", () => {
         rawPath: "../app-web",
         description: "Web",
         git: { ...DEFAULT_GIT_SETTINGS },
+        verify: { ...DEFAULT_VERIFY },
       },
     ];
     const json = serializeApps(apps);
@@ -92,6 +94,7 @@ describe("serializeApps + round-trip", () => {
         rawPath: "../app-web",
         description: "   ",
         git: { ...DEFAULT_GIT_SETTINGS },
+        verify: { ...DEFAULT_VERIFY },
       },
     ]);
     const parsed = JSON.parse(json) as { apps: Array<Record<string, unknown>> };
@@ -117,6 +120,7 @@ describe("serializeApps + round-trip", () => {
           autoCommit: true,
           autoPush: true,
         },
+        verify: { ...DEFAULT_VERIFY },
       },
     ];
     const json = serializeApps(apps);

@@ -6,7 +6,9 @@ import {
   renameApp,
   updateAppDescription,
   updateAppGitSettings,
+  updateAppVerify,
   type AppGitSettings,
+  type AppVerify,
   type GitBranchMode,
 } from "@/lib/apps";
 import { migrateTaskApp } from "@/lib/tasksStore";
@@ -24,7 +26,15 @@ interface PatchBody {
   name?: string;
   description?: string;
   git?: Partial<AppGitSettings>;
+  verify?: Partial<AppVerify>;
 }
+
+const VERIFY_KEYS: Array<keyof AppVerify> = [
+  "test", "lint", "build", "typecheck", "format",
+];
+// Verify commands run via `sh -c <cmd>` in P2; cap length to a sane
+// shell-line bound so a runaway paste can't blow up later exec calls.
+const VERIFY_CMD_MAX = 1024;
 
 export async function PATCH(
   req: Request,
@@ -44,9 +54,11 @@ export async function PATCH(
   const hasDescription = typeof body.description === "string";
   const gitPatch = body.git;
   const hasGit = !!gitPatch && typeof gitPatch === "object";
-  if (!hasName && !hasDescription && !hasGit) {
+  const verifyPatch = body.verify;
+  const hasVerify = !!verifyPatch && typeof verifyPatch === "object";
+  if (!hasName && !hasDescription && !hasGit && !hasVerify) {
     return NextResponse.json(
-      { error: "patch is empty (expected name, description, or git)" },
+      { error: "patch is empty (expected name, description, git, or verify)" },
       { status: 400 },
     );
   }
@@ -111,6 +123,38 @@ export async function PATCH(
 
   if (hasGit) {
     const updated = updateAppGitSettings(currentName, gitPatch as Partial<AppGitSettings>);
+    if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
+  if (hasVerify) {
+    const vp = verifyPatch as Partial<AppVerify>;
+    // Validate every supplied verify command up-front: shell strings (or
+    // empty string to clear). Reject unknown keys / non-strings so a bad
+    // patch never lands in bridge.json.
+    const sanitized: Partial<AppVerify> = {};
+    for (const key of VERIFY_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(vp, key)) continue;
+      const v = vp[key];
+      if (v === "" || v === null) {
+        sanitized[key] = "";
+        continue;
+      }
+      if (typeof v !== "string") {
+        return NextResponse.json(
+          { error: `verify.${key} must be a string (or "" to clear)` },
+          { status: 400 },
+        );
+      }
+      const trimmed = v.trim();
+      if (trimmed.length > VERIFY_CMD_MAX) {
+        return NextResponse.json(
+          { error: `verify.${key} exceeds ${VERIFY_CMD_MAX} chars` },
+          { status: 400 },
+        );
+      }
+      sanitized[key] = trimmed;
+    }
+    const updated = updateAppVerify(currentName, sanitized);
     if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 

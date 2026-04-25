@@ -3,8 +3,23 @@ import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { BRIDGE_FOLDER, BRIDGE_LOGIC_DIR, BRIDGE_ROOT, BRIDGE_URL, SESSIONS_DIR } from "./paths";
-import { appendRun, readMeta, updateRun } from "./meta";
+import { appendRun, emitRetried, readMeta, updateRun, type Run, type RunVerify, type RunVerifyStep } from "./meta";
 import { spawnClaude } from "./spawn";
+// Type-only import — runtime side resolves via lazy `require` inside the
+// post-exit flow to break the import cycle (verifyChain.ts imports
+// `wireRunLifecycle` from this file).
+import type * as VerifyChain from "./verifyChain";
+
+/**
+ * Lazy bridge to `./verifyChain`. Mirrors the `childRetry` lazy pattern
+ * (line 51) — we MUST NOT eagerly import that module at the top of this
+ * file because it imports `wireRunLifecycle` from here, and the cycle
+ * would leave one side seeing `undefined` exports during init.
+ */
+function loadVerifyChain(): typeof VerifyChain {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("./verifyChain") as typeof VerifyChain;
+}
 import type { Task } from "./tasks";
 import { loadProfiles } from "./profileStore";
 import type { RepoProfile } from "./repoProfile";
@@ -73,48 +88,166 @@ export function wireRunLifecycle(
   };
 
   const succeedRun = () => {
-    let runForGit: { repo: string; role: string } | null = null;
+    let finishedRun: Run | null = null;
     let taskTitle = "";
     try {
       const meta = readMeta(sessionsDir);
       const run = meta?.runs.find((r) => r.sessionId === sessionId);
       if (run && run.status === "running") {
-        updateRun(sessionsDir, sessionId, {
-          status: "done",
-          endedAt: new Date().toISOString(),
-        });
+        // NOTE: only flip to "done" here when there's no verify chain to
+        // run. When verify will run, the post-verify path below performs
+        // a single combined updateRun so we never race two patches on
+        // the same record (see meta.ts read-modify-write note).
+        const app = getApp(run.repo);
+        const vc = loadVerifyChain();
+        const verify = vc.verifyConfigOf(app);
+        const willRunVerify =
+          run.role !== "coordinator" &&
+          vc.hasAnyVerifyCommand(verify) &&
+          !vc.isAlreadyRetryRun(run.role);
+        if (!willRunVerify) {
+          updateRun(sessionsDir, sessionId, {
+            status: "done",
+            endedAt: new Date().toISOString(),
+          });
+        }
       }
       if (run && meta) {
-        runForGit = { repo: run.repo, role: run.role };
+        finishedRun = run;
         taskTitle = meta.taskTitle;
       }
     } catch (e) {
       console.error("failed to mark run done for", tag, e);
     }
 
-    // After a child run succeeds, honor the app's auto-commit / auto-push
-    // settings. Skip the coordinator (it lives in the bridge folder, not
-    // an app dir) and any run whose repo isn't a registered app. Failures
-    // are non-fatal — we log and move on so a missing upstream / dirty
-    // working tree doesn't trap the run as failed after the fact.
-    if (runForGit && runForGit.role !== "coordinator") {
-      const app = getApp(runForGit.repo);
-      if (app && (app.git.autoCommit || app.git.autoPush)) {
-        const message = `[${taskId}] ${taskTitle}`.trim();
-        autoCommitAndPush(app.path, app.git, message)
-          .then((r) => {
-            if (r.ok) {
-              console.log(`auto-git for ${tag}: ${r.message}`);
-            } else {
-              console.warn(`auto-git for ${tag}: ${r.message} — ${r.error ?? ""}`);
-            }
-          })
-          .catch((err) => {
-            console.error(`auto-git crashed for ${tag}`, err);
-          });
-      }
+    // P2 — verify chain + commit gate. Wrapped in an async IIFE so the
+    // `child.on("exit", ...)` handler stays sync; rejections surface via
+    // .catch() rather than crashing the Next.js dev server (Risk 1).
+    if (finishedRun && finishedRun.role !== "coordinator") {
+      void postExitFlow({
+        sessionsDir,
+        taskId,
+        tag,
+        finishedRun,
+        taskTitle,
+      }).catch((err) => {
+        console.error(`post-exit flow crashed for ${tag}`, err);
+      });
     }
   };
+
+  /**
+   * Async post-exit pipeline:
+   *   1. Run verify chain (if app has any commands) — store result + flip
+   *      run status to "done" in ONE combined updateRun call.
+   *   2. If verify failed → spawn `<role>-vretry` and skip auto-commit.
+   *   3. If verify passed (or didn't run) → honor `git.autoCommit` /
+   *      `git.autoPush` per the app's settings, same as before P2.
+   */
+  async function postExitFlow(args: {
+    sessionsDir: string;
+    taskId: string;
+    tag: string;
+    finishedRun: Run;
+    taskTitle: string;
+  }): Promise<void> {
+    const { sessionsDir: dir, taskId: tid, tag: t, finishedRun: run, taskTitle: title } = args;
+
+    const app = getApp(run.repo);
+    const vc = loadVerifyChain();
+    const verifyCfg = vc.verifyConfigOf(app);
+    const willRunVerify =
+      app !== null &&
+      vc.hasAnyVerifyCommand(verifyCfg) &&
+      !vc.isAlreadyRetryRun(run.role);
+
+    let verifyResult: RunVerify | null = null;
+    if (willRunVerify && verifyCfg && app) {
+      try {
+        verifyResult = await vc.runVerifyChain({
+          cwd: app.path,
+          verify: verifyCfg,
+        });
+      } catch (err) {
+        console.error(`verify chain crashed for ${t}`, err);
+        verifyResult = null;
+      }
+
+      // Decide whether to retry BEFORE writing meta. We then collapse the
+      // status-flip + verify result + retryScheduled flag into a single
+      // updateRun call so concurrent writes (e.g. the new retry run's
+      // appendRun fired by spawnVerifyRetry) can't race a follow-up
+      // patch on the same record.
+      let scheduledRetry: ReturnType<typeof vc.spawnVerifyRetry> = null;
+      if (verifyResult && !verifyResult.passed) {
+        const metaForCheck = readMeta(dir);
+        const eligible =
+          !!metaForCheck &&
+          vc.isEligibleForVerifyRetry({ finishedRun: run, meta: metaForCheck });
+        if (eligible) {
+          scheduledRetry = vc.spawnVerifyRetry({
+            taskId: tid,
+            finishedRun: run,
+            verify: verifyResult,
+          });
+        }
+      }
+
+      const finalVerify: RunVerify | null = verifyResult
+        ? { ...verifyResult, retryScheduled: !!scheduledRetry }
+        : null;
+
+      const meta = readMeta(dir);
+      const r = meta?.runs.find((x) => x.sessionId === run.sessionId);
+      if (r && r.status === "running") {
+        updateRun(dir, run.sessionId, {
+          status: "done",
+          endedAt: new Date().toISOString(),
+          verify: finalVerify,
+        });
+      } else if (finalVerify) {
+        // Status was already flipped (rare race); still attach verify.
+        updateRun(dir, run.sessionId, { verify: finalVerify });
+      }
+
+      if (verifyResult && !verifyResult.passed) {
+        const failedName = verifyResult.steps.find((s: RunVerifyStep) => !s.ok)?.name;
+        if (scheduledRetry) {
+          // Fire the SSE retried event so AgentTree draws the retryOf
+          // arrow — same contract as crash-retry path emits via
+          // childRetry.maybeScheduleRetry → emitRetried.
+          emitRetried(tid, scheduledRetry.run, run.sessionId);
+          console.log(
+            `[verify] ${t}: chain failed at \`${failedName}\` — spawned retry ${scheduledRetry.sessionId}`,
+          );
+        } else {
+          console.log(
+            `[verify] ${t}: chain failed at \`${failedName}\` — retry ineligible / already attempted`,
+          );
+        }
+        // Verify failed → block the auto-commit. The retry (if any) will
+        // re-trigger this whole flow when it exits.
+        return;
+      }
+    }
+
+    // Verify passed (or didn't run) → honor the app's auto-commit /
+    // auto-push settings, same gate as before P2.
+    if (app && (app.git.autoCommit || app.git.autoPush)) {
+      const message = `[${tid}] ${title}`.trim();
+      autoCommitAndPush(app.path, app.git, message)
+        .then((r) => {
+          if (r.ok) {
+            console.log(`auto-git for ${t}: ${r.message}`);
+          } else {
+            console.warn(`auto-git for ${t}: ${r.message} — ${r.error ?? ""}`);
+          }
+        })
+        .catch((err) => {
+          console.error(`auto-git crashed for ${t}`, err);
+        });
+    }
+  }
 
   child.on("error", (err) => {
     failRun(`spawn error: ${err.message}`, null);

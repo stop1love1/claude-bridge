@@ -14,6 +14,8 @@ import { prepareBranch } from "@/lib/gitOps";
 import { suggestRepo } from "@/lib/repoHeuristic";
 import { loadProfiles } from "@/lib/profileStore";
 import { buildChildPrompt } from "@/lib/childPrompt";
+import { loadHouseRules } from "@/lib/houseRules";
+import { loadPlaybook } from "@/lib/playbooks";
 import { isValidTaskId } from "@/lib/tasks";
 import { badRequest, isValidAgentRole, isValidSessionId } from "@/lib/validate";
 import {
@@ -183,6 +185,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // role-specific instructions in `body.prompt` — the bridge owns the
   // boilerplate so children get a consistent, structured prompt
   // regardless of which coordinator wrote them.
+  // P1 — opt-in agentic-coder layers. Each loader returns null when
+  // the underlying file / config is absent so existing apps without any
+  // of these set behave exactly as before.
+  const houseRules = loadHouseRules(app?.path ?? null);
+  const playbookBody = loadPlaybook(role);
+  const verifyHint = app?.verify ?? null;
+
   const prependedPrompt = buildChildPrompt({
     taskId: id,
     taskTitle: meta.taskTitle,
@@ -195,6 +204,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     contextBlock,
     coordinatorBody: prompt,
     profile: profilesMap?.[repo],
+    houseRules,
+    playbookBody,
+    verifyHint,
   });
 
   // User mediation. We only ask if (a) the caller didn't opt out AND

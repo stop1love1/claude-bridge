@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Boxes, Folder, GitBranch, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/lib/client/api";
-import type { App } from "@/lib/client/types";
+import type { App, Meta, Task } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { AddAppDialog } from "../_components/AddAppDialog";
 import { AppSettingsDialog } from "../_components/AppSettingsDialog";
@@ -28,6 +28,8 @@ function AppsPage() {
   const router = useRouter();
   const [apps, setApps] = useState<App[]>([]);
   const [repos, setRepos] = useState<RepoEntry[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [metaByTask, setMetaByTask] = useState<Map<string, Meta>>(new Map());
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState<Set<string>>(new Set());
   const [settingsApp, setSettingsApp] = useState<App | null>(null);
@@ -47,7 +49,59 @@ function AppsPage() {
     }
   }, [toast]);
 
+  const refreshStats = useCallback(async () => {
+    try {
+      const [t, m] = await Promise.all([api.tasks(), api.allMeta()]);
+      setTasks(t);
+      setMetaByTask(new Map(Object.entries(m)));
+    } catch { /* stats are best-effort */ }
+  }, []);
+
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { refreshStats(); }, [refreshStats]);
+
+  // Live-ish stats: poll faster while any run is active, slower otherwise.
+  const metaRef = useRef(metaByTask);
+  useEffect(() => { metaRef.current = metaByTask; }, [metaByTask]);
+  useEffect(() => {
+    let h: ReturnType<typeof setTimeout> | null = null;
+    const tick = () => {
+      const anyRunning = Array.from(metaRef.current.values()).some((m) =>
+        m.runs.some((r) => r.status === "running"),
+      );
+      refreshStats();
+      h = setTimeout(tick, anyRunning ? 4_000 : 15_000);
+    };
+    h = setTimeout(tick, 4_000);
+    return () => { if (h) clearTimeout(h); };
+  }, [refreshStats]);
+
+  const statsByApp = useMemo(() => {
+    const stats = new Map<string, { idle: number; doing: number; done: number; activeSessions: number }>();
+    const ensure = (name: string) => {
+      let s = stats.get(name);
+      if (!s) {
+        s = { idle: 0, doing: 0, done: 0, activeSessions: 0 };
+        stats.set(name, s);
+      }
+      return s;
+    };
+    for (const t of tasks) {
+      if (!t.app) continue;
+      const s = ensure(t.app);
+      if (t.section === "DONE — not yet archived") s.done += 1;
+      else if (t.section === "DOING") s.doing += 1;
+      else if (t.section === "TODO") s.idle += 1;
+      // BLOCKED is intentionally left out of the three task buckets.
+      const meta = metaByTask.get(t.id);
+      if (meta) {
+        for (const r of meta.runs) {
+          if (r.status === "running") s.activeSessions += 1;
+        }
+      }
+    }
+    return stats;
+  }, [tasks, metaByTask]);
 
   const handleScan = async (name: string) => {
     setScanning((s) => new Set(s).add(name));
@@ -133,6 +187,7 @@ function AppsPage() {
                 const meta = repoMeta(app.name);
                 const exists = meta?.exists ?? false;
                 const branch = meta?.branch ?? null;
+                const stats = statsByApp.get(app.name) ?? { idle: 0, doing: 0, done: 0, activeSessions: 0 };
                 const openTasks = () =>
                   router.push(`/tasks?app=${encodeURIComponent(app.name)}`);
                 return (
@@ -184,6 +239,38 @@ function AppsPage() {
                           {app.rawPath}
                           {app.rawPath !== app.path && ` → ${app.path}`}
                         </p>
+                        <div className="mt-2 flex items-center gap-1.5 flex-wrap text-[10px] font-medium">
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-warning/15 text-warning"
+                            title="Tasks in DOING"
+                          >
+                            <span className="tabular-nums">{stats.doing}</span> doing
+                          </span>
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-success/15 text-success"
+                            title="Tasks in DONE — not yet archived"
+                          >
+                            <span className="tabular-nums">{stats.done}</span> done
+                          </span>
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-fg-dim/15 text-fg-dim"
+                            title="Tasks in TODO"
+                          >
+                            <span className="tabular-nums">{stats.idle}</span> idle
+                          </span>
+                          {stats.activeSessions > 0 && (
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-warning/15 text-warning"
+                              title="Sessions currently running for this app's tasks"
+                            >
+                              <span className="relative inline-flex h-1.5 w-1.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
+                                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
+                              </span>
+                              <span className="tabular-nums">{stats.activeSessions}</span> active
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <Button
                         onClick={(e) => { e.stopPropagation(); handleScan(app.name); }}

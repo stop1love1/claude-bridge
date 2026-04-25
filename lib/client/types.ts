@@ -70,12 +70,27 @@ export interface AppGitSettings {
   autoPush: boolean;
 }
 
+/**
+ * Per-app verify contract — shell commands the bridge runs after a
+ * child agent finishes. P1 surfaces these into the child prompt so the
+ * agent self-checks before reporting; P2 will exec them and feed
+ * failures into auto-retry.
+ */
+export interface AppVerify {
+  test?: string;
+  lint?: string;
+  build?: string;
+  typecheck?: string;
+  format?: string;
+}
+
 export interface App {
   name: string;
   path: string;
   rawPath: string;
   description: string;
   git: AppGitSettings;
+  verify: AppVerify;
 }
 
 export interface SessionSummary {

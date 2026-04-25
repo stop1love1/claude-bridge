@@ -62,6 +62,46 @@ export interface Run {
    * `null` / absent means this run is not a retry.
    */
   retryOf?: string | null;
+  /**
+   * P2 verify chain: when an app has at least one `verify` command
+   * configured (`bridge.json.apps[].verify`), the bridge runs the chain
+   * after the child exits cleanly and persists the per-step results
+   * here. Absent / null = chain didn't run (no commands configured, or
+   * the run was a coordinator / unregistered repo).
+   */
+  verify?: RunVerify | null;
+}
+
+/**
+ * P2 — outcome of the post-run verify chain. Steps are persisted in
+ * declaration order (`format → lint → typecheck → test → build`), but
+ * only the steps the app actually configured a command for appear here
+ * (no skipped placeholder rows, to keep meta.json terse).
+ */
+export interface RunVerify {
+  steps: RunVerifyStep[];
+  /** True iff every step in `steps` exited 0. */
+  passed: boolean;
+  startedAt: string;
+  endedAt: string;
+  /** True if the bridge spawned a `-vretry` follow-up because of this. */
+  retryScheduled?: boolean;
+}
+
+export interface RunVerifyStep {
+  /** Canonical step name — matches the AppVerify field key. */
+  name: "format" | "lint" | "typecheck" | "test" | "build";
+  /** Exact command line the bridge ran via `sh -c` / `cmd /c`. */
+  cmd: string;
+  ok: boolean;
+  /** Process exit code; `null` when the chain aborted (timeout, spawn error). */
+  exitCode: number | null;
+  durationMs: number;
+  /**
+   * Combined stdout+stderr, capped at the runner's outputCapBytes
+   * (default 16 KB). Truncation marker appended when capped.
+   */
+  output: string;
 }
 
 /**

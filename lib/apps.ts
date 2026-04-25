@@ -72,12 +72,33 @@ export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
   autoPush: false,
 };
 
+/**
+ * Per-app verify contract — shell commands the bridge runs after a
+ * child agent finishes (Phase 2 of the agentic-coder roadmap). Each
+ * field is a single shell command line; missing fields are skipped.
+ *
+ * P1 only loads + surfaces these into the child prompt as a `## Verify
+ * commands` block so the agent knows how to self-check before writing
+ * its report. P2 will exec them via `sh -c` after the run, attach
+ * pass/fail to `meta.json`, and feed failures into the auto-retry path.
+ */
+export interface AppVerify {
+  test?: string;
+  lint?: string;
+  build?: string;
+  typecheck?: string;
+  format?: string;
+}
+
+export const DEFAULT_VERIFY: AppVerify = {};
+
 export interface App {
   name: string;
   path: string;          // absolute, resolved against BRIDGE_ROOT
   rawPath: string;       // exactly what the user wrote (relative or absolute)
   description: string;
   git: AppGitSettings;
+  verify: AppVerify;
 }
 
 interface ManifestAppEntry {
@@ -85,6 +106,7 @@ interface ManifestAppEntry {
   path: string;
   description?: string;
   git?: Partial<AppGitSettings>;
+  verify?: AppVerify;
 }
 
 export interface BridgeManifest {
@@ -165,6 +187,43 @@ function normalizeGitSettings(raw: unknown): AppGitSettings {
   return { branchMode, fixedBranch, autoCommit, autoPush };
 }
 
+/**
+ * Coerce arbitrary input into an `AppVerify`. Each field must be a
+ * non-empty trimmed string — anything else is dropped. Returns `{}`
+ * when nothing usable was provided (matches `DEFAULT_VERIFY`).
+ */
+function normalizeVerify(raw: unknown): AppVerify {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_VERIFY };
+  const r = raw as Partial<Record<keyof AppVerify, unknown>>;
+  const out: AppVerify = {};
+  for (const key of ["test", "lint", "build", "typecheck", "format"] as const) {
+    const v = r[key];
+    if (typeof v === "string") {
+      const trimmed = v.trim();
+      if (trimmed.length > 0) out[key] = trimmed;
+    }
+  }
+  return out;
+}
+
+/**
+ * Drop the `verify` key entirely when no commands are configured so old
+ * `bridge.json` files stay terse — matches the `serializeGitSettings`
+ * convention. Returns the trimmed AppVerify when at least one command
+ * is set, `undefined` otherwise.
+ */
+function serializeVerify(v: AppVerify | undefined): AppVerify | undefined {
+  if (!v) return undefined;
+  const out: AppVerify = {};
+  for (const key of ["test", "lint", "build", "typecheck", "format"] as const) {
+    const cmd = v[key];
+    if (typeof cmd === "string" && cmd.trim().length > 0) {
+      out[key] = cmd.trim();
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function serializeGitSettings(g: AppGitSettings | undefined): Partial<AppGitSettings> | undefined {
   // Drop the key entirely when settings are at defaults so old bridge.json
   // files stay terse and `git`-aware diffs only fire when there's real
@@ -196,6 +255,7 @@ export function parseApps(json: string): App[] {
     const rawPath = (raw as { path?: unknown }).path;
     const description = (raw as { description?: unknown }).description;
     const gitRaw = (raw as { git?: unknown }).git;
+    const verifyRaw = (raw as { verify?: unknown }).verify;
     if (!isValidAppName(name)) continue;
     if (typeof rawPath !== "string" || !rawPath.trim()) continue;
     out.push({
@@ -204,6 +264,7 @@ export function parseApps(json: string): App[] {
       path: resolveAppPath(rawPath),
       description: typeof description === "string" ? description : "",
       git: normalizeGitSettings(gitRaw),
+      verify: normalizeVerify(verifyRaw),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -224,6 +285,8 @@ export function serializeApps(apps: App[]): string {
       }
       const git = serializeGitSettings(a.git);
       if (git) entry.git = git;
+      const verify = serializeVerify(a.verify);
+      if (verify) entry.verify = verify;
       return entry;
     }),
   };
@@ -250,6 +313,8 @@ export function saveApps(apps: App[]): void {
     if (a.description.trim().length > 0) entry.description = a.description.trim();
     const git = serializeGitSettings(a.git);
     if (git) entry.git = git;
+    const verify = serializeVerify(a.verify);
+    if (verify) entry.verify = verify;
     return entry;
   });
   writeManifest(manifest);
@@ -290,6 +355,7 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     path: resolveAppPath(rawPath),
     description: (input.description ?? "").trim(),
     git: { ...DEFAULT_GIT_SETTINGS },
+    verify: { ...DEFAULT_VERIFY },
   };
   apps.push(app);
   apps.sort((a, b) => a.name.localeCompare(b.name));
@@ -340,6 +406,33 @@ export function updateAppGitSettings(
   else next.fixedBranch = (next.fixedBranch ?? "").trim();
   if (next.autoPush) next.autoCommit = true;
   target.git = next;
+  saveApps(apps);
+  return target;
+}
+
+/**
+ * Patch a single app's verify contract. The caller passes a partial —
+ * fields omitted retain their current value; passing an empty string
+ * for a key clears that command. Empty trimmed values are dropped on
+ * the way in (mirrors `normalizeVerify`), so callers can use `""` as
+ * "unset this field".
+ */
+export function updateAppVerify(
+  name: string,
+  patch: Partial<AppVerify>,
+): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  const next: AppVerify = { ...target.verify };
+  for (const key of ["test", "lint", "build", "typecheck", "format"] as const) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    const v = patch[key];
+    if (typeof v === "string" && v.trim().length > 0) next[key] = v.trim();
+    else delete next[key];
+  }
+  target.verify = next;
   saveApps(apps);
   return target;
 }
@@ -460,6 +553,7 @@ export function autoDetectApps(): AutoDetectResult {
       path: repoPath,
       description,
       git: { ...DEFAULT_GIT_SETTINGS },
+      verify: { ...DEFAULT_VERIFY },
     };
     added.push(app);
     known.add(entry.name);

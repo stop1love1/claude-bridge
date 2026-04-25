@@ -11,6 +11,7 @@
  * what's expected. Keep additions append-only, don't reorder.
  */
 import type { RepoProfile } from "./repoProfile";
+import type { AppVerify } from "./apps";
 import { BRIDGE_URL, BRIDGE_FOLDER } from "./paths";
 
 export interface BuildChildPromptOpts {
@@ -34,6 +35,28 @@ export interface BuildChildPromptOpts {
    * but tests / non-default deployments can override.
    */
   bridgeFolder?: string;
+  /**
+   * (P1/C3) Pre-loaded global+per-app `house-rules.md` markdown. Rendered
+   * verbatim into a `## House rules` section after `## Language` so the
+   * agent reads team constraints before the task body. Null/undefined =
+   * skip the section entirely.
+   */
+  houseRules?: string | null;
+  /**
+   * (P1/H1) Pre-loaded `bridge/playbooks/<role>.md` markdown. When
+   * present, prepended to the coordinator brief inside `## Your role`
+   * so the role contract is visible before the task-specific brief.
+   * Null/undefined = render only the coordinator body (current behavior).
+   */
+  playbookBody?: string | null;
+  /**
+   * (P1/D1) Per-app verify contract from `bridge.json`. When at least
+   * one command is set, rendered as a `## Verify commands` section so
+   * the agent self-checks before writing its report. P2 will exec these
+   * automatically — surfacing them in P1 lets agents catch issues before
+   * the bridge has to.
+   */
+  verifyHint?: AppVerify | null;
 }
 
 const COORDINATOR_BODY_CAP = 16 * 1024;
@@ -86,16 +109,19 @@ export function sanitizeTaskBodyForFence(body: string): string {
 /**
  * Build the full child prompt. Pure function — no I/O.
  *
- * Output sections, in order:
+ * Output sections, in order (sections marked OPT-IN are emitted only
+ * when the corresponding input is present):
  *   1. Header line (role, task id, repo, cwd, dispatcher disclaimer)
  *   2. ## Language
- *   3. ## Task
- *   4. ## Your role (with the coordinator's verbatim brief)
- *   5. ## Repo profile
- *   6. ## Repo context (auto-captured by bridge)
- *   7. ## Self-register
- *   8. ## Report contract — REQUIRED
- *   9. ## Spawn-time signals
+ *   3. ## House rules                            (OPT-IN — opts.houseRules)
+ *   4. ## Task
+ *   5. ## Your role (playbook prepended if any, then coordinator brief)
+ *   6. ## Repo profile
+ *   7. ## Repo context (auto-captured by bridge)
+ *   8. ## Self-register
+ *   9. ## Report contract — REQUIRED
+ *  10. ## Verify commands                        (OPT-IN — opts.verifyHint)
+ *  11. ## Spawn-time signals
  */
 export function buildChildPrompt(opts: BuildChildPromptOpts): string {
   const {
@@ -111,6 +137,9 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     coordinatorBody,
     profile,
     bridgeFolder = BRIDGE_FOLDER,
+    houseRules,
+    playbookBody,
+    verifyHint,
   } = opts;
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
@@ -120,13 +149,28 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     : `(no profile cached — call \`GET ${BRIDGE_URL}/api/repos/profiles\` to refresh)`;
   const ctx = (contextBlock ?? "").trim() || "(none — bridge skipped pre-warm)";
 
-  return [
+  const lines: string[] = [
     `You are a \`${role}\` agent dispatched by the bridge coordinator for task \`${taskId}\`. You run inside \`${repo}\` (cwd resolves to \`${repoCwd}\`). You are NOT the coordinator — your job is the specific task below; you do not orchestrate, you do not spawn other agents, you produce one report and exit.`,
     "",
     "## Language",
     "",
     "Mirror the language of the task body (whatever it is) in every reply, code comment narration, and the final report. Identifier-level text (file paths, function names, JSON keys, shell commands) stays in English.",
     "",
+  ];
+
+  const houseRulesTrimmed = (houseRules ?? "").trim();
+  if (houseRulesTrimmed.length > 0) {
+    lines.push(
+      "## House rules",
+      "",
+      "Team constraints that apply to every change in this codebase. Treat as hard requirements — violating one means the work will be rejected at review.",
+      "",
+      houseRulesTrimmed,
+      "",
+    );
+  }
+
+  lines.push(
     "## Task",
     "",
     `- ID: \`${taskId}\``,
@@ -143,6 +187,23 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "",
     "---",
     "",
+  );
+
+  const playbookTrimmed = (playbookBody ?? "").trim();
+  if (playbookTrimmed.length > 0) {
+    lines.push(
+      `**Role playbook (\`${role}\`):**`,
+      "",
+      playbookTrimmed,
+      "",
+      "---",
+      "",
+      "**Task-specific brief (from coordinator):**",
+      "",
+    );
+  }
+
+  lines.push(
     safeBody,
     "",
     "---",
@@ -202,10 +263,51 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "",
     "**Git is bridge-managed.** Do NOT run `git checkout`, `git commit`, or `git push` yourself — the bridge already prepared the branch before your spawn and will (if the app is configured for it) auto-commit + auto-push after you exit cleanly. Duplicating those commands races the lifecycle hook and produces empty / conflicting commits. Write code, write the report, exit.",
     "",
+  );
+
+  const verifyEntries = renderVerifyEntries(verifyHint);
+  if (verifyEntries.length > 0) {
+    lines.push(
+      "## Verify commands",
+      "",
+      "Run these locally before writing your report. Each one is the team's source of truth for `it works` — your report's `## How to verify` section should reference them. P2 of the bridge will exec these automatically; for now, running them yourself catches problems before the report goes out.",
+      "",
+      ...verifyEntries,
+      "",
+    );
+  }
+
+  lines.push(
     "## Spawn-time signals",
     "",
     `- Bridge heuristic suggested target repo: \`${repo}\` (this is you).`,
     `- Parent coordinator session: \`${parentSessionId}\` — for cross-referencing in your report.`,
     "",
-  ].join("\n");
+  );
+
+  return lines.join("\n");
+}
+
+/**
+ * Render the AppVerify object as bullet lines for the `## Verify
+ * commands` section. Returns an empty array when there's nothing to
+ * surface so the caller can skip the section header entirely.
+ */
+function renderVerifyEntries(v: AppVerify | null | undefined): string[] {
+  if (!v) return [];
+  const out: string[] = [];
+  const ordered: Array<[keyof AppVerify, string]> = [
+    ["typecheck", "Typecheck"],
+    ["lint", "Lint"],
+    ["format", "Format"],
+    ["test", "Test"],
+    ["build", "Build"],
+  ];
+  for (const [key, label] of ordered) {
+    const cmd = v[key];
+    if (typeof cmd === "string" && cmd.trim().length > 0) {
+      out.push(`- **${label}** — \`${cmd.trim()}\``);
+    }
+  }
+  return out;
 }
