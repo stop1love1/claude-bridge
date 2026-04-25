@@ -48,7 +48,7 @@ If the bridge UI isn't running (`curl` fails), fall back to direct file write: r
 - The bridge prepends a `## Repo profiles` block when launching you (auto-derived stack / features / entrypoints for every declared sibling). Read it before deciding which repo to dispatch to. If profiles look wrong or stale, force a refresh via `POST {{BRIDGE_URL}}/api/repos/profiles/refresh` (optional body `{ "repo": "<name>" }` for a single repo).
 - `BRIDGE.md` → the **Repos** table lists every sibling folder available as a target. All are equal; there is no hardcoded FE/BE distinction.
 - `sessions/{{TASK_ID}}/meta.json` → the canonical task record, including `taskBody` and the running list of agent runs. Read with `cat sessions/{{TASK_ID}}/meta.json` (or `GET {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/meta`). Extract a single field with `jq -r .taskBody sessions/{{TASK_ID}}/meta.json` when you only need the body. Do NOT read or write `bridge/tasks.md` — it's stale documentation, not data.
-- `contracts/` / `bridge/decisions.md` / `bridge/schema.md` → whatever the task body references.
+- `contracts/` / `bridge/decisions.md` → whatever the task body references.
 
 ### 2 · Plan the team
 
@@ -101,6 +101,8 @@ For each agent you decided to run:
 3. Watch for completion by polling `GET /api/tasks/{{TASK_ID}}/meta` periodically and looking for the run's `status` to leave `running`. The bridge's `wireRunLifecycle` flips it to `done` (exit 0) or `failed` (non-zero / spawn error) — you don't need to PATCH it yourself unless the child crashed silently and the stale-run reaper hasn't kicked in yet. (TODO: Phase C will add an SSE stream so you can wait without polling.)
 
 Run agents sequentially unless the task explicitly benefits from parallelism (independent repos, non-overlapping files). The agents endpoint returns immediately after spawn — fire all your parallel children with one curl each, then move into the watch loop.
+
+**Git is bridge-managed.** Per `bridge.json` settings, the bridge runs `git checkout` before each spawn (current branch / fixed branch / `claude/<task-id>`) and optionally `git add -A && git commit && git push` after each child run succeeds. **Never instruct a child to run those git commands itself** — duplicating them races the lifecycle hook and produces empty / conflicting commits. Children write code; the bridge moves bytes around git.
 
 #### Recipes — common task shapes
 
@@ -156,9 +158,8 @@ Keep it scannable — no raw logs, no command dumps. After you've sent the chat 
 - **Never** Read / Edit / Write / Bash-into source files of any repo (including this bridge repo). Your tools are limited to: reading `BRIDGE.md` / `meta.json` / `summary.md`, calling the bridge HTTP APIs (PATCH task, link, agents spawn), and writing the final `summary.md`. Anything else is a child's job.
 - **Never** spawn zero agents for a non-trivial task. If you'd be tempted to "just answer it yourself", you're wrong — open a single-agent dispatch with `role: "writer"` (or whatever fits) and let the child produce the answer + report.
 - **Hands off children once spawned.** Each child agent receives ONE prompt at spawn time and runs to completion on its own. Do NOT call `resumeClaude` / `POST /api/sessions/<sid>/message` against a child — even with "good intentions" like "checking on progress" or "nudging it back on track". The user may chat directly with any child via the bridge UI, and that conversation is between the user and that child only — your role ends at the spawn. If a child's work is genuinely off-track, your tools are: wait for it to fail (auto-retry runs once), or surface the issue in your final summary so the user can re-dispatch.
-
-
-
+- **Never auto-promote a task to DONE.** The success path leaves the task in `DOING` with `READY FOR REVIEW` in the summary. The user ticks the checkbox in the UI to confirm completion — that PATCH is the only path into `DONE — not yet archived`.
+- **Never run `git checkout` / `git commit` / `git push` from a child prompt.** The bridge does both branch prep and post-run commit/push automatically per the app's `bridge.json` settings.
 - You do not write production code yourself. Only orchestration, status updates, and prompt/plan authoring.
 - Paths outside the bridge repo come from `BRIDGE.md`. **Never hardcode** absolute paths like `D:/…`.
 - `meta.json` updates are read-modify-write on the whole file — never hand-edit lines. Prefer the PATCH/link APIs over direct writes when the UI is up.

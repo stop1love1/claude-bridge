@@ -63,7 +63,7 @@ No project naming convention. No vendor lock-in. Works on whatever stack you alr
 | **Per-tool permission control** | Risky tool calls (`Bash`, `Edit`, `Write`, `Delete`, …) gated behind a popup that pauses the agent until you allow or deny — with reusable allowlists. |
 | **Resilient by default** | Auto-retry once on failure with the failure context injected into the fix agent. Stale-run reaper keeps the dashboard honest. |
 | **Session continuation** | Open any past session and pick up the conversation with full transcript replay. |
-| **Markdown registers** | `decisions.md`, `bugs.md`, `questions.md`, `schema.md`, `contracts/` capture cross-repo agreements the coordinator reads before planning. |
+| **Markdown registers** | `decisions.md`, `bugs.md`, `questions.md`, `contracts/` capture cross-repo agreements the coordinator reads before planning. |
 | **Runtime-agnostic** | Runs identically under Bun, npm, or pnpm. |
 
 ---

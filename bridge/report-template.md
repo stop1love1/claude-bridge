@@ -30,3 +30,5 @@ Anything the coordinator should know when aggregating: cross-repo dependencies s
 ```
 
 After writing the report, the child does NOT call any more tools. The last assistant message mirrors the report's `## Summary` section so the user sees it in the chat too.
+
+**Git is bridge-managed.** Do NOT run `git checkout`, `git commit`, or `git push` yourself — the bridge's lifecycle hook handles branch setup before your spawn and (if the app is configured for it) auto-commit + auto-push after a clean exit. Just write the code and exit; the bridge moves the bytes. The `## Changed files` section above is enough audit trail.

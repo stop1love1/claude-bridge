@@ -20,7 +20,7 @@ export const SESSIONS_DIR = join(BRIDGE_ROOT, "sessions");
  * All bridge-runtime markdown lives here:
  *   - `coordinator.md`     — the coordinator prompt template
  *   - `report-template.md` — the child agent report contract
- *   - `bugs.md`, `decisions.md`, `questions.md`, `schema.md` —
+ *   - `bugs.md`, `decisions.md`, `questions.md` —
  *     cross-repo registers the coordinator reads / writes
  *   - `tasks.md`           — legacy notebook (no longer runtime data)
  */
@@ -69,8 +69,8 @@ export const USER_CLAUDE_DIR = join(homedir(), ".claude");
 
 /**
  * Port the bridge listens on. Read from BRIDGE_PORT first (legacy /
- * permission-hook precedent), then PORT (the Next.js convention used
- * inside Docker), falling back to 7777 — the documented default in
+ * permission-hook precedent), then PORT (the standard Next.js
+ * convention), falling back to 7777 — the documented default in
  * CLAUDE.md / BRIDGE.md.
  *
  * Spawned children call the bridge back over HTTP (self-register, agent

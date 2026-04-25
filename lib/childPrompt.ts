@@ -200,6 +200,8 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "",
     "After writing the report, do NOT call any more tools. Your last assistant message should mirror the report's `## Summary` section so the user sees it in the chat too.",
     "",
+    "**Git is bridge-managed.** Do NOT run `git checkout`, `git commit`, or `git push` yourself — the bridge already prepared the branch before your spawn and will (if the app is configured for it) auto-commit + auto-push after you exit cleanly. Duplicating those commands races the lifecycle hook and produces empty / conflicting commits. Write code, write the report, exit.",
+    "",
     "## Spawn-time signals",
     "",
     `- Bridge heuristic suggested target repo: \`${repo}\` (this is you).`,
