@@ -1,0 +1,44 @@
+# build artefacts that the Dockerfile rebuilds inside the image
+.next/
+out/
+build/
+node_modules/
+*.tsbuildinfo
+next-env.d.ts
+
+# vcs metadata (not needed in the image)
+.git/
+.gitignore
+.gitattributes
+
+# bridge runtime state — these are bind-mounted at run time, baking
+# them into the image would shadow the volume on first start
+sessions/
+.uploads/
+.bridge-state/
+.playwright-mcp/
+
+# secrets / per-machine
+.env
+.env.*
+*.pem
+.claude/settings.local.json
+
+# editor / OS noise
+.DS_Store
+.vscode/
+.idea/
+*.log
+
+# scratch images / pasted screenshots in the repo root
+*.png
+*.jpe?g
+*.gif
+*.webp
+
+# vercel
+.vercel/
+
+# the Dockerfile + ignore itself don't need to ship inside the image
+Dockerfile
+.dockerignore

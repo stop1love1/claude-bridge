@@ -1,0 +1,94 @@
+import type { NextRequest } from "next/server";
+import { listAllPending, subscribeAll } from "@/lib/permissionStore";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Global SSE stream of pending PreToolUse permission requests across
+ * every active session. Mounted via the GlobalPermissionDialog in
+ * Providers so any tab — including ones that aren't watching the
+ * originating session — surfaces the popup.
+ *
+ * Event payloads carry the originating `sessionId` so the dialog can
+ * POST the answer back to `/api/sessions/<sid>/permission/<rid>`.
+ *
+ * 15s keepalive comment, cleanup on `req.signal.abort` — same shape as
+ * the per-session permission stream.
+ */
+export async function GET(req: NextRequest) {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (event: string, data: unknown) => {
+        try {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+          );
+        } catch {
+          /* client disconnected */
+        }
+      };
+
+      // Replay the global backlog so a freshly-mounted dialog catches
+      // anything that was announced before the SSE connect landed.
+      for (const p of listAllPending()) {
+        send("pending", {
+          sessionId: p.sessionId,
+          requestId: p.requestId,
+          tool: p.tool,
+          input: p.input,
+          createdAt: p.createdAt,
+        });
+      }
+
+      const unsub = subscribeAll(
+        (p) => {
+          send("pending", {
+            sessionId: p.sessionId,
+            requestId: p.requestId,
+            tool: p.tool,
+            input: p.input,
+            createdAt: p.createdAt,
+          });
+        },
+        (p) => {
+          send("answered", {
+            sessionId: p.sessionId,
+            requestId: p.requestId,
+            status: p.status,
+          });
+        },
+      );
+
+      const ka = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`: keepalive\n\n`));
+        } catch {
+          /* ignore */
+        }
+      }, 15000);
+
+      const close = () => {
+        unsub();
+        clearInterval(ka);
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      };
+
+      req.signal.addEventListener("abort", close);
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "connection": "keep-alive",
+      "x-accel-buffering": "no",
+    },
+  });
+}

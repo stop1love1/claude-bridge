@@ -1,0 +1,60 @@
+# bridge artefacts
+*.log
+.DS_Store
+.playwright-mcp/
+.uploads/
+.bridge-state/
+
+# local-only bridge runtime state — per-task meta.json + spawned sessions
+/sessions/*
+!/sessions/.gitkeep
+
+# user-local Claude Code allowlist — shouldn't be shared across machines
+/.claude/settings.local.json
+
+# uploaded / pasted images at the bridge root only (don't shadow
+# tracked assets under public/, app/, etc.)
+/*.png
+/*.jpeg
+/*.jpg
+
+# dependencies
+node_modules/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+bun.lock
+bun.lockb
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# misc
+*.pem

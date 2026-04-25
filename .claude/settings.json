@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d//**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:7777/api/repos)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 7777 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 1; \"killed\")",
+      "PowerShell(Get-NetTCPConnection -LocalPort 7777 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 1; \"done\")"
+    ]
+  }
+}

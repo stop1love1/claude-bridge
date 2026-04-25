@@ -1,0 +1,32 @@
+# Child agent report template
+
+Every child agent spawned via `POST /api/tasks/<id>/agents` MUST write its report to `../<bridge-folder>/sessions/<task-id>/reports/<role>-<repo>.md` before exiting (`mkdir -p` the dir first), where `<bridge-folder>` is the basename of the bridge repo (the wrapper in `lib/childPrompt.ts` substitutes the actual name at spawn time, so children see the real path in their wrapped prompt). The coordinator parses these section headers exactly when aggregating — adding sections is fine, removing or renaming is NOT.
+
+The wrapper in `lib/childPrompt.ts` (function `buildChildPrompt`) already injects this contract into every child prompt; this file is the canonical standalone copy that the coordinator can `cat agents/report-template.md` to refresh its memory, and that future hooks (e.g., a CI lint) can read.
+
+```markdown
+# <role> @ <repo>
+
+## Verdict
+DONE | BLOCKED | PARTIAL — one line, no extra prose. If BLOCKED, the next section MUST start with `BLOCK: <reason>` so the bridge auto-retry path can read it.
+
+## Summary
+2–4 sentences in the user's language describing what shipped end-to-end. No raw logs.
+
+## Changed files
+- `<path>` — one-line description of the change.
+(Bullet per file. If you only ran read-only analysis, write `(none — analysis only)` and proceed.)
+
+## How to verify
+Concrete steps a human can run to confirm the work: a curl, a test command, a screen to open. 1–3 bullets.
+
+## Risks / out-of-scope
+- Risks introduced by this change.
+- Things adjacent to the task that you deliberately did not touch.
+(Either bullet list, or write `(none)` for both.)
+
+## Notes for the coordinator
+Anything the coordinator should know when aggregating: cross-repo dependencies surfaced (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks worth filing.
+```
+
+After writing the report, the child does NOT call any more tools. The last assistant message mirrors the report's `## Summary` section so the user sees it in the chat too.

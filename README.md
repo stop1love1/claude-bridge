@@ -1,4 +1,4 @@
-# claude-bridge
+# Claude Bridge
 
 A cross-repo coordinator that runs Claude Code agents against multiple sibling app folders. The bridge is a thin Next.js dashboard plus a small set of markdown files (`BRIDGE.md`, `decisions.md`, `bugs.md`, `questions.md`, `schema.md`, `contracts/`) that hold whatever **cannot be derived** from any single app's source.
 
