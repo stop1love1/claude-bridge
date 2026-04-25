@@ -300,11 +300,23 @@ export async function applyManyRuns(
     for (const { sessionId, patch } of patches) {
       const run = meta.runs.find((r) => r.sessionId === sessionId);
       if (!run) continue;
+      // Review nit: skip patches that are a no-op against the
+      // current on-disk state. Primary case: the reaper's outer
+      // `readMeta` saw the run as `running`, but between that read
+      // and our locked re-read another writer flipped it to
+      // `failed` (e.g. lifecycle hook firing). Without this guard
+      // we'd emit a spurious `"updated"` SSE event and rewrite
+      // identical bytes.
       const prevStatus = run.status;
+      const statusUnchanged =
+        patch.status === undefined || patch.status === prevStatus;
+      const noOtherFields = Object.keys(patch).every(
+        (k) => k === "status" || (run as unknown as Record<string, unknown>)[k] === (patch as Record<string, unknown>)[k],
+      );
+      if (statusUnchanged && noOtherFields) continue;
       Object.assign(run, patch);
       mutated = true;
-      const statusChanged =
-        patch.status !== undefined && patch.status !== prevStatus;
+      const statusChanged = !statusUnchanged;
       pending.push({
         taskId: taskIdFromDir(dir),
         kind: statusChanged ? "transition" : "updated",

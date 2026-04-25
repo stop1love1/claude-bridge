@@ -9,6 +9,8 @@ import {
   updateRun,
   applyManyRuns,
   removeSessionFromTask,
+  subscribeMeta,
+  type MetaChangeEvent,
 } from "../meta";
 
 let tmp: string;
@@ -215,5 +217,40 @@ describe("meta.ts", () => {
 
     const meta = readMeta(dir);
     expect(meta!.runs.map((r) => r.sessionId)).toEqual(["keep"]);
+  });
+
+  // Review nit: applyManyRuns should skip a patch whose status (and
+  // every other field) already matches the on-disk run — that
+  // happens when the reaper's outer readMeta saw `running` but
+  // another writer flipped the run to `failed` between the read and
+  // our locked re-read. We must not emit a spurious `"updated"` SSE
+  // event or rewrite identical bytes.
+  it("applyManyRuns skips no-op patches (review nit)", async () => {
+    const dir = join(tmp, "t_20260424_noop");
+    createMeta(dir, { ...HEADER, taskId: "t_20260424_noop" });
+    await appendRun(dir, {
+      sessionId: "already-failed",
+      role: "coder",
+      repo: "claude-bridge",
+      status: "failed",
+      startedAt: "2026-04-24T11:00:00Z",
+      endedAt: "2026-04-24T11:00:30Z",
+    });
+
+    const events: MetaChangeEvent[] = [];
+    const off = subscribeMeta("t_20260424_noop", (ev) => events.push(ev));
+    try {
+      // Patch matches current state exactly — should be a no-op:
+      // no events emitted, file untouched.
+      await applyManyRuns(dir, [
+        {
+          sessionId: "already-failed",
+          patch: { status: "failed", endedAt: "2026-04-24T11:00:30Z" },
+        },
+      ]);
+      expect(events).toEqual([]);
+    } finally {
+      off();
+    }
   });
 });
