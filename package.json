@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start --port 7777",
     "serve": "next build && next start --port 7777",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -40,6 +42,7 @@
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
     "typescript": "^5",
+    "vitest": "^2.1.8",
     "@types/bun": "latest"
   }
 }

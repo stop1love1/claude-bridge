@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { pathToSlug, tailJsonl, tailJsonlBefore, findSessionByPrefix } from "../sessions";
 import { join } from "node:path";
 import { mkdtempSync, writeFileSync, utimesSync } from "node:fs";

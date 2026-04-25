@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { parseReposTable, resolveRepos } from "../repos";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";

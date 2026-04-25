@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 import { suggestRepo, classifyRepoRoles } from "../repoHeuristic";
 import type { RepoProfile } from "../repoProfile";
 

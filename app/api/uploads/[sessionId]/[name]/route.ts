@@ -52,7 +52,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   if (!stat.isFile()) return new Response("not a file", { status: 404 });
 
   const mime = MIME[extname(decoded).toLowerCase()] ?? "application/octet-stream";
-  const stream = Readable.toWeb(createReadStream(full)) as ReadableStream<Uint8Array>;
+  const stream = Readable.toWeb(createReadStream(full)) as unknown as ReadableStream<Uint8Array>;
   return new Response(stream, {
     status: 200,
     headers: {

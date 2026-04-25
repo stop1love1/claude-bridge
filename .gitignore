@@ -29,6 +29,8 @@ node_modules/
 !.yarn/versions
 bun.lock
 bun.lockb
+package-lock.json
+pnpm-lock.yaml
 
 # testing
 /coverage
