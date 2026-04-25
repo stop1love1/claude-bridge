@@ -65,11 +65,9 @@ export async function POST(req: NextRequest) {
   // permission modes. Without this check a caller could pass any
   // arbitrary string — including `bypassPermissions` — even when the
   // UI didn't expose that choice.
-  if (
-    body.settings !== undefined &&
-    body.settings !== null &&
-    typeof body.settings !== "object"
-  ) {
+  // Loose `!=` rejects both `undefined` and `null` in one shot, so the
+  // remaining check is just "must be a real object literal".
+  if (body.settings != null && typeof body.settings !== "object") {
     return badRequest("invalid settings");
   }
   if (

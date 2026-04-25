@@ -1,9 +1,10 @@
 import { type NextRequest } from "next/server";
 import { existsSync, statSync, createReadStream } from "node:fs";
-import { basename, extname, join, normalize } from "node:path";
+import { basename, extname, join } from "node:path";
 import { Readable } from "node:stream";
 import { BRIDGE_ROOT } from "@/lib/paths";
 import { isValidSessionId } from "@/lib/validate";
+import { assertInsideUploadDir } from "@/lib/uploadGuards";
 
 export const dynamic = "force-dynamic";
 
@@ -49,8 +50,12 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   }
 
   const dir = join(BRIDGE_ROOT, ".uploads", sessionId);
-  const full = normalize(join(dir, decoded));
-  if (!full.startsWith(dir)) {
+  const full = join(dir, decoded);
+  // Use the shared helper so the serving route enforces the SAME
+  // containment rule as the write route — `resolve()` + `sep`-suffixed
+  // prefix check rules out the `/uploads/abc` vs `/uploads/abc-evil/`
+  // sibling-prefix attack a bare `startsWith(dir)` would let through.
+  if (!assertInsideUploadDir(dir, full)) {
     return new Response("outside upload dir", { status: 400 });
   }
   if (!existsSync(full)) return new Response("not found", { status: 404 });
@@ -77,8 +82,12 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     "x-content-type-options": "nosniff",
   };
   if (ext === ".svg") {
-    headers["content-disposition"] =
-      `attachment; filename="${decoded.replace(/"/g, "")}"`;
+    // Strip CR/LF (and quotes) from the filename before injecting it
+    // into the header. Node 18+ already blocks CR/LF in header values
+    // at runtime, but doing it here turns a 500 into a clean response
+    // and matches the defense-in-depth pattern used elsewhere.
+    const headerSafe = decoded.replace(/["\r\n]/g, "");
+    headers["content-disposition"] = `attachment; filename="${headerSafe}"`;
   }
   return new Response(stream, { status: 200, headers });
 }
