@@ -1,4 +1,5 @@
 import { resolve, join, basename } from "node:path";
+import { homedir } from "node:os";
 
 /**
  * The Next app now lives at the bridge repo root (no separate `ui/`
@@ -49,6 +50,22 @@ export const AGENTS_DIR = BRIDGE_LOGIC_DIR;
  * attachments — different concern). Gitignored via `.bridge-state/`.
  */
 export const BRIDGE_STATE_DIR = join(BRIDGE_ROOT, ".bridge-state");
+
+/**
+ * Project-local `.claude/` directory (Claude Code's per-repo config:
+ * `settings.json`, `settings.local.json`).
+ */
+export const CLAUDE_DIR = join(BRIDGE_ROOT, ".claude");
+
+/**
+ * Claude Code's GLOBAL user config directory under `$HOME`. The bridge
+ * stores its own `bridge.json` (apps registry + future settings) here
+ * so the file lives **outside** the bridge project and survives every
+ * upstream `git pull` / version upgrade. One registry per machine,
+ * not per project; if the operator runs multiple bridge installs they
+ * share the same apps roster.
+ */
+export const USER_CLAUDE_DIR = join(homedir(), ".claude");
 
 /**
  * Port the bridge listens on. Read from BRIDGE_PORT first (legacy /

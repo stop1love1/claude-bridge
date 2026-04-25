@@ -1,10 +1,12 @@
 /**
- * Apps registry — `bridge.json`.
+ * Apps registry — `~/.claude/bridge.json`.
  *
  * The bridge keeps user-declared apps (and any future bridge-level
- * settings) in `bridge.json` at the project root. JSON keeps parsing
- * trivial and the file is meant to be tracked in git so a team shares
- * the same workspace roster.
+ * settings) alongside Claude Code's GLOBAL user config under
+ * `$HOME/.claude/`. Storing it outside the bridge project means a
+ * `git pull` / version upgrade on the bridge repo never touches the
+ * operator's app roster — the file lives on the operator's machine,
+ * not in the project tree.
  *
  * Schema:
  *
@@ -24,11 +26,6 @@
  * `^[A-Za-z0-9][A-Za-z0-9._-]*$` (same shape as a folder slug). `path`
  * is stored verbatim — the caller resolves it against `BRIDGE_ROOT`
  * when needed.
- *
- * Legacy fallback: if `bridge.json` is missing but the old
- * `sessions/init.md` registry exists, we parse it on load so the
- * upgrade is transparent — the next `saveApps` rewrites the data as
- * JSON.
  */
 
 import {
@@ -41,7 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, USER_CLAUDE_DIR } from "./paths";
 
 export interface App {
   name: string;
@@ -56,8 +53,7 @@ export interface BridgeManifest {
   [key: string]: unknown;
 }
 
-const BRIDGE_JSON = join(BRIDGE_ROOT, "bridge.json");
-const LEGACY_INIT_MD = join(SESSIONS_DIR, "init.md");
+const BRIDGE_JSON = join(USER_CLAUDE_DIR, "bridge.json");
 const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SCHEMA_VERSION = 1;
 
@@ -162,46 +158,14 @@ export function serializeApps(apps: App[]): string {
   return JSON.stringify(manifest, null, 2) + "\n";
 }
 
-/**
- * Soft-migration helper. Reads the legacy `sessions/init.md` markdown
- * format used in the previous version of the registry, surfacing
- * whatever `## <name>` sections it carried. Used only when
- * `bridge.json` is missing — the next `saveApps` writes JSON and
- * supersedes the .md.
- */
-function readLegacyInitMd(): App[] {
-  if (!existsSync(LEGACY_INIT_MD)) return [];
-  let md: string;
-  try { md = readFileSync(LEGACY_INIT_MD, "utf8"); }
-  catch { return []; }
-  const apps: App[] = [];
-  const sections = md.split(/^##\s+/m).slice(1);
-  for (const sec of sections) {
-    const newlineIdx = sec.indexOf("\n");
-    if (newlineIdx === -1) continue;
-    const heading = sec.slice(0, newlineIdx).trim();
-    const body = sec.slice(newlineIdx + 1);
-    if (!APP_NAME_RE.test(heading)) continue;
-    const pathMatch = body.match(/^[\s\-*]*\*\*Path:\*\*\s*`?([^`\n]+?)`?\s*$/im);
-    if (!pathMatch) continue;
-    const descMatch = body.match(/^[\s\-*]*\*\*Description:\*\*\s*(.+?)\s*$/im);
-    const rawPath = pathMatch[1].trim();
-    apps.push({
-      name: heading,
-      rawPath,
-      path: resolveAppPath(rawPath),
-      description: descMatch ? descMatch[1].trim() : "",
-    });
-  }
-  apps.sort((a, b) => a.name.localeCompare(b.name));
-  return apps;
-}
-
 export function loadApps(): App[] {
-  if (existsSync(BRIDGE_JSON)) {
+  if (!existsSync(BRIDGE_JSON)) return [];
+  try {
     return parseApps(readFileSync(BRIDGE_JSON, "utf8"));
+  } catch (err) {
+    console.error("apps: cannot read", BRIDGE_JSON, err);
+    return [];
   }
-  return readLegacyInitMd();
 }
 
 export function saveApps(apps: App[]): void {
