@@ -864,6 +864,12 @@ function SessionLogInner({
 
     let stopped = false;
     let es: EventSource | null = null;
+    // SSE-driven timers we own and must clear on unmount / re-run. The
+    // `alive: false` handler schedules a delayed sweep of the live
+    // streaming buffer; without storing the handle, an unmount or a
+    // visibility flip would let the callback fire on a stale closure
+    // and clobber `partials` of the next mount (CRIT-6).
+    let aliveSweepTimer: ReturnType<typeof setTimeout> | null = null;
 
     /**
      * Apply a `{ lines, offset, lineOffsets }` payload — same merge
@@ -997,7 +1003,9 @@ function SessionLogInner({
           // couple of seconds after exit.
           if (!alive) {
             setActivity({ kind: "idle" });
-            setTimeout(() => {
+            if (aliveSweepTimer) clearTimeout(aliveSweepTimer);
+            aliveSweepTimer = setTimeout(() => {
+              aliveSweepTimer = null;
               if (stopped) return;
               setPartials((prev) => (Object.keys(prev).length ? {} : prev));
             }, 2000);
@@ -1055,6 +1063,10 @@ function SessionLogInner({
     openStream();
     return () => {
       stopped = true;
+      if (aliveSweepTimer) {
+        clearTimeout(aliveSweepTimer);
+        aliveSweepTimer = null;
+      }
       closeStream();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVis);
