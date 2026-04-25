@@ -58,14 +58,27 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const stat = statSync(full);
   if (!stat.isFile()) return new Response("not a file", { status: 404 });
 
-  const mime = MIME[extname(decoded).toLowerCase()] ?? "application/octet-stream";
+  const ext = extname(decoded).toLowerCase();
+  const mime = MIME[ext] ?? "application/octet-stream";
   const stream = Readable.toWeb(createReadStream(full)) as unknown as ReadableStream<Uint8Array>;
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      "content-type": mime,
-      "content-length": String(stat.size),
-      "cache-control": "private, max-age=3600",
-    },
-  });
+
+  // L1: defensive headers on user-uploaded content.
+  //   - `nosniff` on every response prevents the browser from
+  //     MIME-sniffing a `.txt` into HTML and running an XSS payload
+  //     that was dragged into the upload dir.
+  //   - `attachment` for SVG: SVG is XML and can carry inline `<script>`
+  //     that executes in the bridge's origin if a top-level navigation
+  //     opens it. Forcing download neutralizes that without breaking
+  //     chat thumbnails (which load via `<img src>`, not navigation).
+  const headers: Record<string, string> = {
+    "content-type": mime,
+    "content-length": String(stat.size),
+    "cache-control": "private, max-age=3600",
+    "x-content-type-options": "nosniff",
+  };
+  if (ext === ".svg") {
+    headers["content-disposition"] =
+      `attachment; filename="${decoded.replace(/"/g, "")}"`;
+  }
+  return new Response(stream, { status: 200, headers });
 }
