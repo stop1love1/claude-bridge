@@ -226,8 +226,18 @@ function Dashboard() {
     };
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen(true); return; }
-      if (mod && e.key.toLowerCase() === "n") { e.preventDefault(); newDialogRef.current?.(); return; }
+      if (mod && e.key.toLowerCase() === "k") {
+        if (isTextInput(e.target)) return;
+        e.preventDefault();
+        setPaletteOpen(true);
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "n") {
+        if (isTextInput(e.target)) return;
+        e.preventDefault();
+        newDialogRef.current?.();
+        return;
+      }
       if (!isTextInput(e.target) && !paletteOpen && e.key === "/") {
         e.preventDefault();
         document.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
