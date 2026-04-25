@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { readMeta, updateRun } from "@/lib/meta";
 import { SESSIONS_DIR } from "@/lib/paths";
 import { killChild } from "@/lib/spawnRegistry";
+import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -23,9 +24,7 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
-  if (!sessionId) {
-    return NextResponse.json({ error: "sessionId required" }, { status: 400 });
-  }
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
 
   const killed = killChild(sessionId);
   if (!killed) {

@@ -1,8 +1,9 @@
 import { type NextRequest } from "next/server";
 import { existsSync, statSync, createReadStream } from "node:fs";
-import { extname, join, normalize } from "node:path";
+import { basename, extname, join, normalize } from "node:path";
 import { Readable } from "node:stream";
 import { BRIDGE_ROOT } from "@/lib/paths";
+import { isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -33,11 +34,17 @@ type Ctx = { params: Promise<{ sessionId: string; name: string }> };
  */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { sessionId, name } = await ctx.params;
-  if (!/^[a-z0-9-]{8,}$/i.test(sessionId)) {
+  if (!isValidSessionId(sessionId)) {
     return new Response("invalid sessionId", { status: 400 });
   }
   const decoded = decodeURIComponent(name);
-  if (decoded.includes("/") || decoded.includes("\\") || decoded.includes("..")) {
+  // basename() strips any traversal segment / prefix the client could
+  // smuggle in; if the result differs from the original, reject — we
+  // refuse to second-guess what the caller actually meant.
+  if (!decoded || basename(decoded) !== decoded) {
+    return new Response("invalid name", { status: 400 });
+  }
+  if (decoded.includes("\0")) {
     return new Response("invalid name", { status: 400 });
   }
 

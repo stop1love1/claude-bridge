@@ -14,6 +14,8 @@ import { prepareBranch } from "@/lib/gitOps";
 import { suggestRepo } from "@/lib/repoHeuristic";
 import { loadProfiles } from "@/lib/profileStore";
 import { buildChildPrompt } from "@/lib/childPrompt";
+import { isValidTaskId } from "@/lib/tasks";
+import { badRequest, isValidAgentRole, isValidSessionId } from "@/lib/validate";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
@@ -59,6 +61,7 @@ type Ctx = { params: Promise<{ id: string }> };
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
+  if (!isValidTaskId(id)) return badRequest("invalid task id");
 
   let body: Partial<AgentBody>;
   try {
@@ -74,6 +77,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     typeof body.parentSessionId === "string" && body.parentSessionId
       ? body.parentSessionId
       : undefined;
+  // H1: parentSessionId is written into meta.json and used as the
+  // permissionStore key when blocking on user-approval. Same threat
+  // shape as every other sessionId — gate it before it lands in either.
+  if (parentSessionId !== undefined && !isValidSessionId(parentSessionId)) {
+    return badRequest("invalid parentSessionId");
+  }
   // Default OFF: spawning is auto-approved unless the caller explicitly
   // sets `requireUserApproval: true`. CLI / programmatic callers without
   // a parent session id implicitly skip it too, since there's nowhere
@@ -82,6 +91,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   if (!role) {
     return NextResponse.json({ error: "role is required" }, { status: 400 });
+  }
+  // CRIT-5 / M4: gate role to a tight charset before it gets templated
+  // into filenames (see prompt route's `${run.role}-${run.repo}.prompt.txt`)
+  // and meta.json. We only validate role here; repo is validated below
+  // against the BRIDGE.md repo list, which is itself a closed set.
+  if (!isValidAgentRole(role)) {
+    return badRequest("invalid role");
   }
   if (!prompt.trim()) {
     return NextResponse.json({ error: "prompt is required" }, { status: 400 });

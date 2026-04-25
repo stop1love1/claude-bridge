@@ -1,5 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { announcePending, listPending } from "@/lib/permissionStore";
+import {
+  badRequest,
+  isValidRequestId,
+  isValidSessionId,
+  isValidToolName,
+} from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +27,8 @@ interface AnnounceBody {
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
+
   const body = (await req.json()) as Partial<AnnounceBody>;
   if (!body.requestId || !body.tool) {
     return NextResponse.json(
@@ -28,6 +36,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 },
     );
   }
+  // L6: gate the body fields. The permission store keys on (sessionId,
+  // requestId) and the UI templates `tool` into the popup label, so a
+  // malformed value here would either pollute the in-memory map or
+  // render unsafely.
+  if (!isValidRequestId(body.requestId)) return badRequest("invalid requestId");
+  if (!isValidToolName(body.tool)) return badRequest("invalid tool");
+
   announcePending({
     sessionId,
     requestId: body.requestId,
@@ -45,5 +60,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
  */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
   return NextResponse.json({ pending: listPending(sessionId) });
 }

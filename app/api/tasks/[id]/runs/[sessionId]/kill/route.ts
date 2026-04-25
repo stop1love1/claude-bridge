@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { readMeta, updateRun } from "@/lib/meta";
 import { SESSIONS_DIR } from "@/lib/paths";
 import { killChild } from "@/lib/spawnRegistry";
+import { isValidTaskId } from "@/lib/tasks";
+import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,8 @@ type Ctx = { params: Promise<{ id: string; sessionId: string }> };
  */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id, sessionId } = await ctx.params;
+  if (!isValidTaskId(id)) return badRequest("invalid task id");
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
 
   const dir = join(SESSIONS_DIR, id);
   const meta = readMeta(dir);

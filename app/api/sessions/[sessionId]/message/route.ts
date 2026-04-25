@@ -6,6 +6,7 @@ import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
 import { resumeClaude, spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/lib/spawn";
 import { projectDirFor } from "@/lib/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
+import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,7 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
   const body = (await req.json()) as { message?: string; repo?: string; settings?: ChatSettings };
   const { message, repo, settings } = body;
   if (!message?.trim()) return NextResponse.json({ error: "message required" }, { status: 400 });

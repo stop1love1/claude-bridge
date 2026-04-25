@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateTask, deleteTask, isValidSection } from "@/lib/tasksStore";
-import type { Task, TaskSection } from "@/lib/tasks";
+import { isValidTaskId, type Task, type TaskSection } from "@/lib/tasks";
 import { SECTION_STATUS } from "@/lib/tasks";
+import { badRequest } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
+  if (!isValidTaskId(id)) return badRequest("invalid task id");
   const patch = (await req.json()) as Partial<
     Pick<Task, "title" | "body" | "section" | "status" | "checked">
   >;
@@ -29,6 +31,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
 export async function DELETE(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
+  if (!isValidTaskId(id)) return badRequest("invalid task id");
   const result = deleteTask(id);
   if (!result.ok) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(result);

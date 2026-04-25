@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { join } from "node:path";
 import { readMeta, subscribeMeta, type MetaChangeEvent } from "@/lib/meta";
 import { SESSIONS_DIR } from "@/lib/paths";
+import { isValidTaskId } from "@/lib/tasks";
+import { badRequest } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,7 @@ type Ctx = { params: Promise<{ id: string }> };
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
+  if (!isValidTaskId(id)) return badRequest("invalid task id");
   const sessionsDir = join(SESSIONS_DIR, id);
   const encoder = new TextEncoder();
 

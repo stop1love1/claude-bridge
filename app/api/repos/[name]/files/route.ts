@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename as pathBasename, join, relative } from "node:path";
 import { resolveRepoCwd } from "@/lib/repos";
 import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { isValidAppName } from "@/lib/apps";
+import { badRequest } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +39,7 @@ type Ctx = { params: Promise<{ name: string }> };
 
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { name } = await ctx.params;
+  if (!isValidAppName(name)) return badRequest("invalid app name");
   const { searchParams } = new URL(req.url);
   const q = (searchParams.get("q") ?? "").toLowerCase();
 

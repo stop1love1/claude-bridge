@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { projectDirFor, tailJsonl, tailJsonlBefore } from "@/lib/sessions";
+import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,7 @@ type Ctx = { params: Promise<{ sessionId: string }> };
 
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
   const { searchParams } = new URL(req.url);
   const repoPath = searchParams.get("repo");
   const sinceParam = searchParams.get("since");

@@ -1,5 +1,6 @@
-import type { NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { listPending, subscribe } from "@/lib/permissionStore";
+import { isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,9 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) {
+    return NextResponse.json({ error: "invalid sessionId" }, { status: 400 });
+  }
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
