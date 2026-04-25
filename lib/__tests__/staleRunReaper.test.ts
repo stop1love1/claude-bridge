@@ -28,12 +28,12 @@ function withCreatedAt(iso: string) {
 }
 
 describe("reapStaleRunsForDir — H4 queued state", () => {
-  it("flips a queued run to failed when meta.createdAt is older than the cutoff", () => {
+  it("flips a queued run to failed when meta.createdAt is older than the cutoff", async () => {
     // 5 minutes ago, well past the default 2-minute queued cutoff.
     const oldCreated = new Date(Date.now() - 5 * 60_000).toISOString();
     const dir = join(tmp, "t_q1");
     createMeta(dir, withCreatedAt(oldCreated));
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: "stuck-queued",
       role: "coder",
       repo: "fake",
@@ -42,7 +42,7 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       endedAt: null,
     });
 
-    const meta = reapStaleRunsForDir(dir);
+    const meta = await reapStaleRunsForDir(dir);
     expect(meta).not.toBeNull();
     const run = meta!.runs[0];
     expect(run.status).toBe("failed");
@@ -53,10 +53,10 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     expect(reread!.runs[0].status).toBe("failed");
   });
 
-  it("leaves a freshly-queued run alone (within the cutoff window)", () => {
+  it("leaves a freshly-queued run alone (within the cutoff window)", async () => {
     const dir = join(tmp, "t_q2");
     createMeta(dir, HEADER_FRESH); // createdAt = now
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: "fresh-queued",
       role: "coder",
       repo: "fake",
@@ -65,17 +65,17 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       endedAt: null,
     });
 
-    const meta = reapStaleRunsForDir(dir);
+    const meta = await reapStaleRunsForDir(dir);
     expect(meta!.runs[0].status).toBe("queued");
   });
 
-  it("respects BRIDGE_QUEUED_STALE_MIN env override", () => {
+  it("respects BRIDGE_QUEUED_STALE_MIN env override", async () => {
     process.env.BRIDGE_QUEUED_STALE_MIN = "0.01"; // ~600ms cutoff
     const dir = join(tmp, "t_q3");
     // createdAt = 30s ago — well past 0.01 min (=600ms)
     const old = new Date(Date.now() - 30_000).toISOString();
     createMeta(dir, withCreatedAt(old));
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: "queued-via-env",
       role: "coder",
       repo: "fake",
@@ -84,15 +84,15 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       endedAt: null,
     });
 
-    const meta = reapStaleRunsForDir(dir);
+    const meta = await reapStaleRunsForDir(dir);
     expect(meta!.runs[0].status).toBe("failed");
   });
 
-  it("still reaps stale running rows alongside queued rows", () => {
+  it("still reaps stale running rows alongside queued rows", async () => {
     const dir = join(tmp, "t_q4");
     const old = new Date(Date.now() - 10 * 60_000).toISOString();
     createMeta(dir, withCreatedAt(old));
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: "old-queued",
       role: "coder",
       repo: "fake",
@@ -100,7 +100,7 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       startedAt: null,
       endedAt: null,
     });
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: "old-running",
       role: "coder",
       repo: "fake",
@@ -110,16 +110,16 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       endedAt: null,
     });
 
-    const meta = reapStaleRunsForDir(dir);
+    const meta = await reapStaleRunsForDir(dir);
     expect(meta!.runs[0].status).toBe("failed");
     expect(meta!.runs[1].status).toBe("failed");
   });
 
-  it("does not touch done / failed rows", () => {
+  it("does not touch done / failed rows", async () => {
     const dir = join(tmp, "t_q5");
     const old = new Date(Date.now() - 60 * 60_000).toISOString();
     createMeta(dir, withCreatedAt(old));
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: "done-already",
       role: "coder",
       repo: "fake",
@@ -127,7 +127,7 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       startedAt: old,
       endedAt: old,
     });
-    appendRun(dir, {
+    await appendRun(dir, {
       sessionId: "failed-already",
       role: "coder",
       repo: "fake",
@@ -136,7 +136,7 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       endedAt: old,
     });
 
-    const meta = reapStaleRunsForDir(dir);
+    const meta = await reapStaleRunsForDir(dir);
     expect(meta!.runs[0].status).toBe("done");
     expect(meta!.runs[1].status).toBe("failed");
     // endedAt unchanged

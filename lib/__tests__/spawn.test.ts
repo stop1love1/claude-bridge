@@ -104,8 +104,8 @@ describe("appendRun-before-spawn (H4)", () => {
 
   const SESSION_ID = "h4-failed-session";
 
-  function fakeRouteFlow(opts: { spawnThrows: boolean }) {
-    appendRun(tmp, {
+  async function fakeRouteFlow(opts: { spawnThrows: boolean }) {
+    await appendRun(tmp, {
       sessionId: SESSION_ID,
       role: "coder",
       repo: "fake-repo",
@@ -121,13 +121,13 @@ describe("appendRun-before-spawn (H4)", () => {
       }
       // Simulate a successful spawn promotion path so the success
       // branch is also exercised by the second case below.
-      updateRun(tmp, SESSION_ID, {
+      await updateRun(tmp, SESSION_ID, {
         status: "running",
         startedAt: "2026-04-24T10:00:01Z",
       });
       return { ok: true as const };
     } catch (err) {
-      updateRun(tmp, SESSION_ID, {
+      await updateRun(tmp, SESSION_ID, {
         status: "failed",
         endedAt: "2026-04-24T10:00:01Z",
       });
@@ -135,9 +135,9 @@ describe("appendRun-before-spawn (H4)", () => {
     }
   }
 
-  it("records run as failed when spawn throws — no orphan window", () => {
+  it("records run as failed when spawn throws — no orphan window", async () => {
     createMeta(tmp, HEADER);
-    const result = fakeRouteFlow({ spawnThrows: true });
+    const result = await fakeRouteFlow({ spawnThrows: true });
     expect(result.ok).toBe(false);
 
     const meta = readMeta(tmp);
@@ -152,9 +152,9 @@ describe("appendRun-before-spawn (H4)", () => {
     expect(run.startedAt).toBeNull();
   });
 
-  it("promotes queued → running on successful spawn", () => {
+  it("promotes queued → running on successful spawn", async () => {
     createMeta(tmp, HEADER);
-    const result = fakeRouteFlow({ spawnThrows: false });
+    const result = await fakeRouteFlow({ spawnThrows: false });
     expect(result.ok).toBe(true);
 
     const meta = readMeta(tmp);
