@@ -87,7 +87,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "prompt is required" }, { status: 400 });
   }
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  // BRIDGE.md is the canonical Repos-table source, but the bridge has
+  // to keep working in fresh checkouts where it hasn't been written yet
+  // (the apps registry in `bridge.json` is the actual source of truth
+  // post-Phase-G). Empty string = "no repos declared via BRIDGE.md",
+  // which is the same fallback `resolveRepos` already handles.
+  let md = "";
+  try {
+    md = readFileSync(BRIDGE_MD, "utf8");
+  } catch (err) {
+    console.warn("BRIDGE.md unreadable — continuing with empty Repos table", err);
+  }
   const profileStore = loadProfiles();
   const profilesMap = profileStore?.profiles;
 
