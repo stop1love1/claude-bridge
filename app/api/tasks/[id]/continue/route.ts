@@ -5,6 +5,8 @@ import { readMeta } from "@/lib/meta";
 import { resumeClaude } from "@/lib/spawn";
 import { spawnCoordinatorForTask } from "@/lib/coordinator";
 import { BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
+import { isValidTaskId } from "@/lib/tasks";
+import { badRequest } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +14,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
+  if (!isValidTaskId(id)) return badRequest("invalid task id");
   try {
     const task = getTask(id);
     if (!task) {
