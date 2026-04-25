@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Hash } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { Meta, Repo, Run, Task } from "@/lib/client/types";
+import { HeaderShell } from "@/app/_components/HeaderShell";
 import { TaskDetail } from "@/app/_components/TaskDetail";
 import { SessionLog } from "@/app/_components/SessionLog";
 import { useToast } from "@/app/_components/Toasts";
@@ -263,16 +264,7 @@ function TaskPageInner() {
 
   return (
     <div className="flex flex-col h-screen">
-      <header className="h-11 shrink-0 px-3 border-b border-border bg-card flex items-center gap-3">
-        <button
-          onClick={() => router.push("/")}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent text-xs"
-          aria-label="Back"
-          title="Back (Esc)"
-        >
-          <ArrowLeft size={14} /> Back
-        </button>
-
+      <HeaderShell active="tasks">
         <div className="flex-1 min-w-0 flex items-center gap-2">
           <span className="font-mono text-xs text-fg-dim shrink-0">{task.id}</span>
           <span className="text-fg-dim shrink-0">·</span>
@@ -287,7 +279,7 @@ function TaskPageInner() {
             Esc back
           </kbd>
         </div>
-      </header>
+      </HeaderShell>
 
       <main className="flex-1 flex flex-col lg:flex-row min-h-0">
         <div className="lg:flex-1 lg:min-w-0 lg:max-w-2xl xl:max-w-3xl border-b lg:border-b-0 lg:border-r border-border flex max-h-[40vh] lg:max-h-none">

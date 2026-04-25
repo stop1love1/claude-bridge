@@ -13,7 +13,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
-import { AddAppDialog } from "./AddAppDialog";
 
 const REPO_KEY = "bridge.newSession.repo";
 
@@ -31,14 +30,11 @@ export function NewSessionDialog({
   repos,
   defaultRepo,
   onCreate,
-  onReposChanged,
   openRef,
 }: {
   repos: Repo[];
   defaultRepo?: string;
   onCreate: (args: { repo: string }) => Promise<void> | void;
-  /** Called after Add app / Auto-detect succeeds so parent can refetch repos. */
-  onReposChanged?: () => void;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }) {
   // Hydrate from localStorage *after* mount so SSR doesn't flash a
@@ -126,7 +122,6 @@ export function NewSessionDialog({
       <Button onClick={create} disabled={!repo} size="sm">
         <Plus className="h-3.5 w-3.5" /> New session
       </Button>
-      <AddAppDialog onChanged={onReposChanged} />
     </div>
   );
 }

@@ -1,11 +1,11 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, LayoutGrid, PanelLeftClose, PanelLeftOpen, Terminal } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { Repo, SessionSummary, Task } from "@/lib/client/types";
+import { HeaderShell } from "../_components/HeaderShell";
 import { SessionLog } from "../_components/SessionLog";
 import { SessionsBrowser } from "../_components/SessionsBrowser";
 import { LinkSessionDialog } from "../_components/LinkSessionDialog";
@@ -175,7 +175,16 @@ function SessionsPageInner() {
 
   return (
     <div className="flex flex-col h-screen">
-      <header className="h-11 shrink-0 px-2 sm:px-3 border-b border-border bg-card flex items-center gap-2 sm:gap-3">
+      <HeaderShell
+        active="sessions"
+        badges={{
+          sessions: orphanCount > 0 ? (
+            <Badge variant="warning" className="ml-1 px-1 py-0 text-[9px]">
+              {orphanCount}
+            </Badge>
+          ) : undefined,
+        }}
+      >
         <Button
           variant="ghost"
           size="iconSm"
@@ -186,29 +195,6 @@ function SessionsPageInner() {
           {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
         </Button>
 
-        <Button asChild variant="ghost" size="xs">
-          <Link href="/" title="Back to Tasks">
-            <ArrowLeft className="h-3.5 w-3.5" /> Tasks
-          </Link>
-        </Button>
-
-        <nav className="hidden sm:flex items-center bg-secondary rounded-md p-0.5 border border-border">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground"
-          >
-            <LayoutGrid size={12} /> Tasks
-          </Link>
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs bg-accent text-foreground">
-            <Terminal size={12} /> Sessions
-            {orphanCount > 0 && (
-              <Badge variant="warning" className="ml-1 px-1 py-0 text-[9px]">
-                {orphanCount}
-              </Badge>
-            )}
-          </span>
-        </nav>
-
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden lg:inline text-[10px] text-muted-foreground">
             {sessions.length} session{sessions.length === 1 ? "" : "s"} · {repos.length} repo{repos.length === 1 ? "" : "s"}
@@ -217,11 +203,10 @@ function SessionsPageInner() {
             repos={repos}
             defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
             onCreate={handleCreate}
-            onReposChanged={() => api.repos().then(setRepos).catch(() => {})}
             openRef={newSessionRef}
           />
         </div>
-      </header>
+      </HeaderShell>
 
       <main className="flex-1 flex min-h-0 relative">
         {sidebarOpen && (
