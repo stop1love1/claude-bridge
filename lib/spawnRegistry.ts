@@ -55,9 +55,10 @@ export function unregisterChild(sessionId: string): void {
  * for the false case.
  *
  * Uses `treeKill` so on Windows we kill the whole descendant tree
- * (taskkill /T) instead of just the parent PID, and on POSIX we hit the
- * whole process group when the child was spawned with `detached: true`.
- * Plain `child.kill` would leave bash/git/node grandchildren alive.
+ * (taskkill /T) instead of just the parent PID. On POSIX we send the
+ * signal to the direct child — children no longer spawn with
+ * `detached: true`, so they're already in the bridge's own process
+ * group and sub-shells get cleaned up via the normal exit cascade.
  */
 export function killChild(sessionId: string): boolean {
   const child = registry.children.get(sessionId);
