@@ -14,11 +14,11 @@ export const dynamic = "force-dynamic";
  * Reaps stale `running` runs lazily on each call so the UI never
  * shows a permanently-running task whose process has long since died.
  */
-export function GET() {
+export async function GET() {
   const out: Record<string, unknown> = {};
   if (!existsSync(SESSIONS_DIR)) return NextResponse.json(out);
   for (const id of readdirSync(SESSIONS_DIR)) {
-    const meta = reapStaleRunsForDir(join(SESSIONS_DIR, id));
+    const meta = await reapStaleRunsForDir(join(SESSIONS_DIR, id));
     if (meta) out[id] = meta;
   }
   return NextResponse.json(out);
