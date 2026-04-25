@@ -40,14 +40,29 @@ function buildTree(runs: Run[]): TreeNode[] {
     runs.find((r) => !r.parentSessionId) ??
     runs[0];
 
-  const visit = (run: Run): TreeNode => ({
-    run,
-    children: runs
-      .filter((r) => r.parentSessionId && r.parentSessionId === run.sessionId)
-      .map(visit),
-  });
+  // `visited` guards against pathological meta.json where a chain of
+  // parentSessionId references forms a cycle (e.g. A → B → A). Without
+  // this check `visit` would recurse forever.
+  const visit = (run: Run, visited: Set<string>): TreeNode => {
+    if (visited.has(run.sessionId)) {
+      return { run, children: [] };
+    }
+    const next = new Set(visited);
+    next.add(run.sessionId);
+    return {
+      run,
+      children: runs
+        .filter(
+          (r) =>
+            r.parentSessionId &&
+            r.parentSessionId === run.sessionId &&
+            !next.has(r.sessionId),
+        )
+        .map((r) => visit(r, next)),
+    };
+  };
 
-  const rooted = visit(root);
+  const rooted = visit(root, new Set<string>());
 
   // Surface orphans (parentSessionId set but parent not in runs[]) as
   // siblings of root so they don't disappear from the UI.
@@ -64,7 +79,7 @@ function buildTree(runs: Run[]): TreeNode[] {
         r.parentSessionId &&
         !byId.has(r.parentSessionId),
     )
-    .map(visit);
+    .map((r) => visit(r, new Set<string>()));
 
   return [rooted, ...orphans];
 }
