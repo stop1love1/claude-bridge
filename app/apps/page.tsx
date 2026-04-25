@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Boxes, Folder, GitBranch, Trash2 } from "lucide-react";
+import { Boxes, Folder, GitBranch, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { App } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
@@ -26,6 +26,7 @@ function AppsPage() {
   const [apps, setApps] = useState<App[]>([]);
   const [repos, setRepos] = useState<RepoEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState<Set<string>>(new Set());
   const addDialogRef = useRef<(() => void) | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
@@ -43,6 +44,27 @@ function AppsPage() {
   }, [toast]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const handleScan = async (name: string) => {
+    setScanning((s) => new Set(s).add(name));
+    try {
+      const r = await api.scanApp(name);
+      if (r.scanned) {
+        toast("success", `Claude updated description for ${name}`);
+        await refresh();
+      } else {
+        toast("info", `No new description for ${name} (${r.reason ?? "scan-failed"})`);
+      }
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setScanning((s) => {
+        const next = new Set(s);
+        next.delete(name);
+        return next;
+      });
+    }
+  };
 
   const handleDelete = async (name: string) => {
     const ok = await confirm({
@@ -82,7 +104,8 @@ function AppsPage() {
             <h2 className="text-lg font-semibold">Registered apps</h2>
           </div>
           <p className="text-xs text-muted-foreground mb-6">
-            Apps live in <code className="font-mono text-foreground">sessions/init.md</code>.
+            Apps live in <code className="font-mono text-foreground">~/.claude/bridge.json</code>
+            (outside this project, so version updates can&apos;t overwrite it).
             The coordinator dispatches agents into these folders by name.
             Use <strong>Add app</strong> to register a folder by hand or <strong>Auto-detect</strong> to scan siblings of the bridge for code repos.
           </p>
@@ -146,6 +169,17 @@ function AppsPage() {
                           {app.rawPath !== app.path && ` → ${app.path}`}
                         </p>
                       </div>
+                      <Button
+                        onClick={() => handleScan(app.name)}
+                        disabled={scanning.has(app.name) || !exists}
+                        variant="ghost"
+                        size="iconSm"
+                        title={exists ? "Re-scan with Claude to refresh the description" : "Folder is missing — cannot scan"}
+                        aria-label={`Scan ${app.name} with Claude`}
+                        className="text-fg-dim hover:text-primary shrink-0"
+                      >
+                        <Sparkles size={14} className={scanning.has(app.name) ? "animate-pulse text-primary" : ""} />
+                      </Button>
                       <Button
                         onClick={() => handleDelete(app.name)}
                         variant="ghost"

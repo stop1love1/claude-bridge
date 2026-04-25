@@ -231,6 +231,22 @@ export function removeApp(name: string): boolean {
   return true;
 }
 
+/**
+ * Patch a single app's description in place. Used by the
+ * scan-with-claude flow to upgrade an auto-detected heuristic
+ * description with a model-grounded summary. Returns the updated
+ * App, or `null` if the name is unknown / invalid.
+ */
+export function updateAppDescription(name: string, description: string): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  target.description = (description ?? "").trim();
+  saveApps(apps);
+  return target;
+}
+
 const REPO_MARKERS = [
   "package.json", "pyproject.toml", "requirements.txt",
   "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts",

@@ -62,6 +62,7 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
   const submit = async () => {
     const trimmedName = name.trim();
     const trimmedPath = path.trim();
+    const trimmedDescription = description.trim();
     if (!trimmedName || !trimmedPath) {
       toast("error", "Name and path are required");
       return;
@@ -71,11 +72,32 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
       await api.addApp({
         name: trimmedName,
         path: trimmedPath,
-        description: description.trim() || undefined,
+        description: trimmedDescription || undefined,
       });
-      toast("success", `Added ${trimmedName}`);
+      // If the user didn't write a description, ask Claude to read
+      // the repo and produce one. Closing the dialog and toasting
+      // immediately keeps the form responsive — the scan runs in
+      // the background and a follow-up toast announces the result.
+      const needsScan = trimmedDescription.length === 0;
+      toast(
+        "success",
+        needsScan ? `Added ${trimmedName}. Scanning with Claude…` : `Added ${trimmedName}`,
+      );
       setOpen(false);
       onChanged?.();
+      if (needsScan) {
+        void (async () => {
+          try {
+            const r = await api.scanApp(trimmedName);
+            if (r.scanned) {
+              toast("info", `Claude described ${trimmedName}`);
+              onChanged?.();
+            }
+          } catch {
+            /* heuristic / blank description stays — no toast spam */
+          }
+        })();
+      }
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
@@ -89,11 +111,26 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
       const r = await api.autoDetectApps();
       if (r.added.length === 0) {
         toast("info", "No new apps detected");
-      } else {
-        toast(
-          "success",
-          `Detected ${r.added.length} app${r.added.length === 1 ? "" : "s"}: ${r.added.map((a) => a.name).join(", ")}`,
-        );
+        return;
+      }
+      toast(
+        "success",
+        `Detected ${r.added.length} app${r.added.length === 1 ? "" : "s"}: ${r.added.map((a) => a.name).join(", ")}. Scanning with Claude…`,
+      );
+      onChanged?.();
+
+      // Kick off model-grounded description scans in parallel. Each
+      // scan runs `claude -p` inside the app's cwd and updates
+      // bridge.json when the answer arrives. Failures are silent —
+      // the heuristic description from auto-detect remains.
+      const scanResults = await Promise.allSettled(
+        r.added.map((a) => api.scanApp(a.name)),
+      );
+      const scanned = scanResults.filter(
+        (s) => s.status === "fulfilled" && s.value.scanned,
+      ).length;
+      if (scanned > 0) {
+        toast("info", `Claude described ${scanned} of ${r.added.length} new app${r.added.length === 1 ? "" : "s"}`);
         onChanged?.();
       }
     } catch (e) {

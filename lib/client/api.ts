@@ -105,4 +105,12 @@ export const api = {
       added: Array<{ name: string; path: string; rawPath: string; description: string }>;
       skipped: Array<{ name: string; reason: "already-registered" | "not-a-repo" }>;
     }>("/apps/auto-detect", { method: "POST" }),
+  scanApp: (name: string) =>
+    req<{
+      ok: true;
+      app: { name: string; path: string; rawPath: string; description: string };
+      scanned: boolean;
+      description: string;
+      reason?: string;
+    }>(`/apps/${encodeURIComponent(name)}/scan`, { method: "POST" }),
 };
