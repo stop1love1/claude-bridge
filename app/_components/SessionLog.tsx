@@ -723,7 +723,11 @@ const LogRow = memo(function LogRow({
         const tuid = b.tool_use_id ?? "";
         const name = tuid && toolNames ? toolNames.get(tuid) : undefined;
         const suppress = name === "TodoWrite";
-        return <ToolResultView key={i} block={b} suppress={suppress} />;
+        // Stable key: tool_use_id pairs each result to its unique
+        // tool_use call. Falling back to index is fine when the model
+        // emitted a result without an id (rare malformed payloads).
+        const key = tuid || `idx-${i}`;
+        return <ToolResultView key={key} block={b} suppress={suppress} />;
       })
       .filter(Boolean);
     if (rendered.length === 0) return null;
@@ -864,6 +868,12 @@ function SessionLogInner({
 
     let stopped = false;
     let es: EventSource | null = null;
+    // SSE-driven timers we own and must clear on unmount / re-run. The
+    // `alive: false` handler schedules a delayed sweep of the live
+    // streaming buffer; without storing the handle, an unmount or a
+    // visibility flip would let the callback fire on a stale closure
+    // and clobber `partials` of the next mount (CRIT-6).
+    let aliveSweepTimer: ReturnType<typeof setTimeout> | null = null;
 
     /**
      * Apply a `{ lines, offset, lineOffsets }` payload — same merge
@@ -997,7 +1007,9 @@ function SessionLogInner({
           // couple of seconds after exit.
           if (!alive) {
             setActivity({ kind: "idle" });
-            setTimeout(() => {
+            if (aliveSweepTimer) clearTimeout(aliveSweepTimer);
+            aliveSweepTimer = setTimeout(() => {
+              aliveSweepTimer = null;
               if (stopped) return;
               setPartials((prev) => (Object.keys(prev).length ? {} : prev));
             }, 2000);
@@ -1055,6 +1067,10 @@ function SessionLogInner({
     openStream();
     return () => {
       stopped = true;
+      if (aliveSweepTimer) {
+        clearTimeout(aliveSweepTimer);
+        aliveSweepTimer = null;
+      }
       closeStream();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVis);
@@ -1406,15 +1422,33 @@ function SessionLogInner({
             <p className="text-muted-foreground italic">Waiting for session output…</p>
           ) : (
             <>
-              {visibleEntries.map((e, i) => (
-                <LogRow
-                  key={trimmed + i}
-                  entry={e}
-                  sessionId={run.sessionId}
-                  onRewindToHere={handleRewind}
-                  toolNames={toolNames}
-                />
-              ))}
+              {visibleEntries.map((e, i) => {
+                // H10: derive a STABLE key from the entry itself. The
+                // previous `trimmed + i` formulation was not stable
+                // across cap-trimming — when N front entries were
+                // dropped, the index reset while `trimmed` advanced,
+                // so unrelated entries collided on the same key. React
+                // then reused DOM nodes (and therefore each LogRow's
+                // memoised inner state, e.g. `ToolResultView`'s `open`)
+                // across entries. Anthropic JSONL always sets `uuid`
+                // per line, but we belt-and-brace to message.id and
+                // timestamp+type before falling back to a positional
+                // composite that at least no longer recycles after
+                // trim.
+                const key =
+                  e.uuid ||
+                  e.message?.id ||
+                  (e.timestamp ? `${e.timestamp}:${e.type ?? ""}` : `pos-${trimmed + i}`);
+                return (
+                  <LogRow
+                    key={key}
+                    entry={e}
+                    sessionId={run.sessionId}
+                    onRewindToHere={handleRewind}
+                    toolNames={toolNames}
+                  />
+                );
+              })}
               {Object.entries(partials).map(([id, text]) =>
                 text.trim() ? (
                   <StreamingAssistantRow key={`live-${id}`} text={text} />
