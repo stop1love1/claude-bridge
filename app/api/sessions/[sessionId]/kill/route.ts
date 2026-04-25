@@ -45,7 +45,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       const run = meta.runs.find((r) => r.sessionId === sessionId);
       if (!run) continue;
       if (run.status === "running") {
-        updateRun(dir, sessionId, {
+        await updateRun(dir, sessionId, {
           status: "failed",
           endedAt: new Date().toISOString(),
         });

@@ -110,7 +110,7 @@ export async function PATCH(
         const status = r.reason === "duplicate-name" ? 409 : r.reason === "not-found" ? 404 : 400;
         return NextResponse.json({ error: r.reason }, { status });
       }
-      migratedTasks = migrateTaskApp(currentName, desired);
+      migratedTasks = await migrateTaskApp(currentName, desired);
       currentName = desired;
     }
   }

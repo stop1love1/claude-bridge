@@ -70,12 +70,12 @@ export function wireRunLifecycle(
     }
   };
 
-  const failRun = (reason: string, exitCode: number | null) => {
+  const failRun = async (reason: string, exitCode: number | null) => {
     try {
       const meta = readMeta(sessionsDir);
       const run = meta?.runs.find((r) => r.sessionId === sessionId);
       if (run && run.status === "running") {
-        updateRun(sessionsDir, sessionId, {
+        await updateRun(sessionsDir, sessionId, {
           status: "failed",
           endedAt: new Date().toISOString(),
         });
@@ -87,7 +87,7 @@ export function wireRunLifecycle(
     tryAutoRetry(exitCode);
   };
 
-  const succeedRun = () => {
+  const succeedRun = async () => {
     let finishedRun: Run | null = null;
     let taskTitle = "";
     try {
@@ -106,7 +106,7 @@ export function wireRunLifecycle(
           vc.hasAnyVerifyCommand(verify) &&
           !vc.isAlreadyRetryRun(run.role);
         if (!willRunVerify) {
-          updateRun(sessionsDir, sessionId, {
+          await updateRun(sessionsDir, sessionId, {
             status: "done",
             endedAt: new Date().toISOString(),
           });
@@ -200,14 +200,14 @@ export function wireRunLifecycle(
       const meta = readMeta(dir);
       const r = meta?.runs.find((x) => x.sessionId === run.sessionId);
       if (r && r.status === "running") {
-        updateRun(dir, run.sessionId, {
+        await updateRun(dir, run.sessionId, {
           status: "done",
           endedAt: new Date().toISOString(),
           verify: finalVerify,
         });
       } else if (finalVerify) {
         // Status was already flipped (rare race); still attach verify.
-        updateRun(dir, run.sessionId, { verify: finalVerify });
+        await updateRun(dir, run.sessionId, { verify: finalVerify });
       }
 
       if (verifyResult && !verifyResult.passed) {
@@ -250,13 +250,13 @@ export function wireRunLifecycle(
   }
 
   child.on("error", (err) => {
-    failRun(`spawn error: ${err.message}`, null);
+    void failRun(`spawn error: ${err.message}`, null);
   });
   child.on("exit", (code) => {
     if (code === 0) {
-      succeedRun();
+      void succeedRun();
     } else if (code !== null) {
-      failRun(`exit code ${code}`, code);
+      void failRun(`exit code ${code}`, code);
     }
   });
 }
@@ -359,7 +359,9 @@ function injectRepoProfilesBlock(rendered: string): string {
   return `${rendered.slice(0, idx)}${block}\n${rendered.slice(idx)}`;
 }
 
-export function spawnCoordinatorForTask(task: Pick<Task, "id" | "title" | "body">): string | null {
+export async function spawnCoordinatorForTask(
+  task: Pick<Task, "id" | "title" | "body">,
+): Promise<string | null> {
   const sessionsDir = join(SESSIONS_DIR, task.id);
 
   // meta.json is created by `createTask` in tasksStore. If it's missing
@@ -431,7 +433,7 @@ export function spawnCoordinatorForTask(task: Pick<Task, "id" | "title" | "body"
       // permission hook is NOT attached here for the same reason.
       settings: { mode: "bypassPermissions" },
     });
-    appendRun(sessionsDir, {
+    await appendRun(sessionsDir, {
       sessionId,
       role: "coordinator",
       repo: basename(BRIDGE_ROOT),

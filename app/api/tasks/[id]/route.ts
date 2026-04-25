@@ -24,7 +24,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  const updated = updateTask(id, patch);
+  const updated = await updateTask(id, patch);
   if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(updated);
 }

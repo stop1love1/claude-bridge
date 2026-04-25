@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { resolveRepos } from "@/lib/repos";
 import { projectDirFor } from "@/lib/sessions";
-import { readMeta } from "@/lib/meta";
+import { removeSessionFromTask } from "@/lib/meta";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
 import { badRequest, isValidSessionId } from "@/lib/validate";
 
@@ -70,19 +70,22 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // Unlink from any task meta.json that references this session.
+  // Unlink from any task meta.json that references this session. We
+  // use `removeSessionFromTask` so the read-filter-write happens under
+  // the same per-task lock that protects appendRun/updateRun (H7) and
+  // through `atomicWriteJson` rather than a raw `writeFileSync`.
+  //
+  // TODO: O(N) scan over every task dir on every delete. A reverse
+  // index (sessionId → taskId) — see `buildLinkIndex` in
+  // app/api/sessions/all/route.ts — could turn this into a single
+  // lookup. Punted: factoring that helper into `lib/meta.ts` is wider
+  // than this brief.
   const unlinkedFromTasks: string[] = [];
   if (existsSync(SESSIONS_DIR)) {
     for (const taskId of readdirSync(SESSIONS_DIR)) {
       const dir = join(SESSIONS_DIR, taskId);
-      const meta = readMeta(dir);
-      if (!meta) continue;
-      const before = meta.runs.length;
-      meta.runs = meta.runs.filter((r) => r.sessionId !== sessionId);
-      if (meta.runs.length !== before) {
-        writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2) + "\n");
-        unlinkedFromTasks.push(taskId);
-      }
+      const removed = await removeSessionFromTask(dir, sessionId);
+      if (removed) unlinkedFromTasks.push(taskId);
     }
   }
 

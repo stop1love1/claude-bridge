@@ -61,7 +61,9 @@ export async function POST(req: NextRequest) {
   // Phase G: build repo profiles once before the very first coordinator
   // spawn so the prompt gets the enriched "## Repo profiles" block.
   autoInitProfilesOnce();
-  spawnCoordinatorForTask({ id: task.id, title: task.title, body: task.body });
+  // Fire-and-forget: the spawn writes the run row asynchronously under
+  // the meta lock; we don't want to block task creation on it.
+  void spawnCoordinatorForTask({ id: task.id, title: task.title, body: task.body });
 
   return NextResponse.json(task, { status: 201 });
 }

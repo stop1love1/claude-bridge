@@ -44,7 +44,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   // the run may have just transitioned to (race against the lifecycle
   // helper's exit handler).
   if (run.status === "running") {
-    updateRun(dir, sessionId, {
+    await updateRun(dir, sessionId, {
       status: "failed",
       endedAt: new Date().toISOString(),
     });

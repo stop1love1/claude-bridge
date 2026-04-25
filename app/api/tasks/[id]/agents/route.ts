@@ -251,7 +251,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 
-  appendRun(sessionsDir, {
+  await appendRun(sessionsDir, {
     sessionId,
     role,
     repo,

@@ -12,7 +12,7 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
-  const meta = reapStaleRunsForDir(join(SESSIONS_DIR, id));
+  const meta = await reapStaleRunsForDir(join(SESSIONS_DIR, id));
   if (!meta) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(meta);
 }
