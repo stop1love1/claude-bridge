@@ -52,6 +52,15 @@ function Dashboard() {
 
   const newDialogRef = useRef<(() => void) | null>(null);
 
+  // Guard against state updates after unmount — `handleToggleComplete`
+  // does an optimistic flip + rollback on PATCH failure, but the user
+  // may have navigated away by the time the network call settles.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const refreshTasks = useCallback(async () => {
     try { setTasks(await api.tasks()); }
     catch (e) { toast("error", (e as Error).message); }
@@ -176,11 +185,13 @@ function Dashboard() {
         checked: next,
         section: next ? "DONE — not yet archived" : "DOING",
       });
+      if (!mountedRef.current) return;
       toast(
         "info",
         next ? "Marked complete" : "Reopened — back to DOING",
       );
     } catch (e) {
+      if (!mountedRef.current) return;
       if (previous) {
         setTasks((list) => list.map((t) => (t.id === id ? previous : t)));
       }
