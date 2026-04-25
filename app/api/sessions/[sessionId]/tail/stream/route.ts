@@ -3,6 +3,7 @@ import { existsSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { projectDirFor, tailJsonl } from "@/lib/sessions";
 import { isAlive, subscribeSession, type PartialEvent, type StatusEvent } from "@/lib/sessionEvents";
+import { isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -118,6 +119,9 @@ function replayFrom(
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) {
+    return new Response("invalid sessionId", { status: 400 });
+  }
   const { searchParams } = new URL(req.url);
   const repoPath = searchParams.get("repo");
   const since = Number(searchParams.get("since") ?? 0) || 0;

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { projectDirFor } from "@/lib/sessions";
 import { resolveRepoCwd } from "@/lib/repos";
 import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ interface RewindBody {
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
   const body = (await req.json()) as Partial<RewindBody>;
   if (!body.repo || !body.uuid) {
     return NextResponse.json({ error: "repo and uuid required" }, { status: 400 });

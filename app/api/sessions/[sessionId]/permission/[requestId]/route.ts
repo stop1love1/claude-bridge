@@ -1,5 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { answer, consume, getPending } from "@/lib/permissionStore";
+import {
+  badRequest,
+  isValidRequestId,
+  isValidSessionId,
+} from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +18,8 @@ type Ctx = { params: Promise<{ sessionId: string; requestId: string }> };
  */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { sessionId, requestId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
+  if (!isValidRequestId(requestId)) return badRequest("invalid requestId");
   const cur = getPending(sessionId, requestId);
   if (!cur) {
     return NextResponse.json(
@@ -40,6 +47,8 @@ interface AnswerBody {
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId, requestId } = await ctx.params;
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
+  if (!isValidRequestId(requestId)) return badRequest("invalid requestId");
   const body = (await req.json()) as Partial<AnswerBody>;
   if (body.decision !== "allow" && body.decision !== "deny") {
     return NextResponse.json(

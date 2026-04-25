@@ -5,6 +5,7 @@ import { resolveRepos } from "@/lib/repos";
 import { projectDirFor } from "@/lib/sessions";
 import { readMeta } from "@/lib/meta";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
+import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  */
 export async function DELETE(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
-  if (!sessionId) return NextResponse.json({ error: "sessionId required" }, { status: 400 });
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
 
   const { searchParams } = new URL(req.url);
   const repoHint = searchParams.get("repo");

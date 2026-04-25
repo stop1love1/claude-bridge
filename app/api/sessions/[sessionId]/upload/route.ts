@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_ROOT } from "@/lib/paths";
+import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +18,10 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
-  if (!/^[a-z0-9-]{8,}$/i.test(sessionId)) {
-    return NextResponse.json({ error: "invalid sessionId" }, { status: 400 });
-  }
+  // Tighter than the previous `^[a-z0-9-]{8,}$/i` check — a session id
+  // is always a UUID v4 produced by `randomUUID()`. Routing through the
+  // shared validator keeps the gate consistent across endpoints.
+  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {
