@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRun, readMeta } from "@/lib/meta";
+import { appendRun, readMeta, updateRun } from "@/lib/meta";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
 import { resolveRepoCwd, resolveRepos } from "@/lib/repos";
 import { spawnFreeSession } from "@/lib/spawn";
@@ -210,6 +210,24 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // endpoint, consider whether to inherit / fan out the hook differently.
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
+  // Append the run BEFORE spawning so a spawn failure can never produce
+  // an alive-but-untracked child. The flow is:
+  //   1. record `queued`,
+  //   2. try spawn,
+  //   3a. success → `updateRun({status:"running", startedAt: now})`
+  //   3b. failure → `updateRun({status:"failed", endedAt: now})` and bail.
+  // wireRunLifecycle will then take over and flip running → done/failed
+  // on child exit as before.
+  appendRun(sessionsDir, {
+    sessionId,
+    role,
+    repo,
+    status: "queued",
+    startedAt: null,
+    endedAt: null,
+    parentSessionId: parentSessionId ?? null,
+  });
+
   let childHandle;
   try {
     childHandle = spawnFreeSession(
@@ -220,18 +238,29 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       sessionId,
     );
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      updateRun(sessionsDir, sessionId, {
+        status: "failed",
+        endedAt: new Date().toISOString(),
+      });
+    } catch (uErr) {
+      console.error("failed to mark queued run failed after spawn error", uErr);
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  appendRun(sessionsDir, {
-    sessionId,
-    role,
-    repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: parentSessionId ?? null,
-  });
+  // Spawn succeeded — promote queued → running and stamp startedAt now
+  // that we actually have a live child. wireRunLifecycle handles the
+  // running → done / failed transition on exit.
+  try {
+    updateRun(sessionsDir, sessionId, {
+      status: "running",
+      startedAt: new Date().toISOString(),
+    });
+  } catch (uErr) {
+    console.error("failed to promote queued → running", uErr);
+  }
 
   wireRunLifecycle(sessionsDir, sessionId, childHandle.child, `agent ${id}/${sessionId}`);
 
