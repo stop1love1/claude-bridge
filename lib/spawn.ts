@@ -211,7 +211,16 @@ function spawnClaudeWithStdin(
 ): ChildProcess {
   const child = spawn(CLAUDE_BIN, args, {
     cwd,
-    detached: true,
+    // NOTE: NOT `detached: true`. The bridge wants spawned `claude`
+    // children to die when the bridge dies (operator hits Ctrl-C, the
+    // dev server reloads, the host VM goes down). With `detached:true`
+    // + `unref()` the children survived parent exit and kept consuming
+    // the .jsonl files — orphaned, untracked, and a pain to clean up
+    // by PID. Leaving children in the bridge's own process group means
+    // a SIGTERM to the bridge propagates naturally on POSIX, and on
+    // Windows the Job-object the dev server runs in already cleans the
+    // tree on parent exit. The kill path uses `treeKill` (taskkill /T
+    // on Windows, `kill -GROUP` on POSIX) for explicit Stop-button kills.
     // stdin: pipe so we can write the prompt; stdout/stderr piped + drained.
     stdio: ["pipe", "pipe", "pipe"],
     // Force-propagate BRIDGE_PORT / BRIDGE_URL so the spawned child's
@@ -231,7 +240,6 @@ function spawnClaudeWithStdin(
     // can launch it directly without a shell on every platform.
     windowsHide: true,
   });
-  child.unref();
   if (child.stdin) {
     child.stdin.on("error", () => { /* swallow EPIPE on early child exit */ });
     child.stdin.write(stdinPayload);

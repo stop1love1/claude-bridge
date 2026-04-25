@@ -15,6 +15,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { treeKill } from "./processKill";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const SCAN_TIMEOUT_MS = 90_000;
@@ -74,9 +75,11 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
     };
 
     const timer = setTimeout(() => {
-      try { child.kill("SIGTERM"); } catch { /* ignore */ }
-      // Force kill 3 seconds after if still alive.
-      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, 3_000);
+      // treeKill walks the descendant tree on Windows (taskkill /T) and
+      // hits the process group on POSIX, so a sluggish `claude` that
+      // already shelled out to git / node doesn't leave orphans behind.
+      treeKill(child, "SIGTERM");
+      setTimeout(() => treeKill(child, "SIGKILL"), 3_000);
       console.warn(`scanApp: timed out after ${SCAN_TIMEOUT_MS}ms in ${appPath}`);
       settle(null);
     }, SCAN_TIMEOUT_MS);
