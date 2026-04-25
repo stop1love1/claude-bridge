@@ -148,6 +148,45 @@ function emit(ev: MetaChangeEvent): void {
 }
 
 /**
+ * CRIT-2: per-task-directory async mutex around the read-modify-write
+ * helpers below (`appendRun`, `updateRun`, `applyManyRuns`). Without it,
+ * two concurrent callers (e.g. coordinator spawning two children, or a
+ * `link` POST racing the lifecycle hook) both observe the same
+ * pre-mutation file, mutate, and atomically rename — the second write
+ * silently overwrites the first, losing one run.
+ *
+ * The lock is keyed by absolute task dir. The atomic file rename inside
+ * each helper still protects against partial writes; the lock just
+ * serializes the read window so back-to-back writes can't trample each
+ * other.
+ *
+ * Map-of-promises pattern: every call chains onto whatever the latest
+ * pending operation for that dir is. The chain catches errors so a
+ * failed op doesn't poison the queue for everyone behind it. We
+ * best-effort GC the entry when the chain settles, but a tiny leak is
+ * preferable to dropping the chain link mid-flight.
+ */
+const writeQueues = new Map<string, Promise<unknown>>();
+async function withTaskLock<T>(dir: string, fn: () => T | Promise<T>): Promise<T> {
+  const prev = writeQueues.get(dir) ?? Promise.resolve();
+  // Run regardless of whether `prev` resolved or rejected — one bad
+  // operation must not strand later writes for the same task.
+  const next: Promise<T> = prev.then(
+    () => fn(),
+    () => fn(),
+  );
+  // Stash a swallowed-error variant so the queue head can be awaited
+  // without re-throwing prior failures into unrelated callers.
+  const tail = next.catch(() => {});
+  writeQueues.set(dir, tail);
+  try {
+    return await next;
+  } finally {
+    if (writeQueues.get(dir) === tail) writeQueues.delete(dir);
+  }
+}
+
+/**
  * Phase D: fire a `retried` event on the per-task SSE stream after the
  * bridge auto-spawns a fix agent. The `appendRun` call for the new
  * retry run already fires `spawned`; this is a follow-up event the UI
@@ -182,33 +221,119 @@ export function writeMeta(dir: string, meta: Meta): void {
   emit({ taskId: taskIdFromDir(dir), kind: "writeMeta" });
 }
 
-export function appendRun(dir: string, run: Run): void {
-  const meta = readMeta(dir);
-  if (!meta) throw new Error(`meta.json missing at ${dir}`);
-  meta.runs.push(run);
-  atomicWriteJson(join(dir, FILE), meta);
-  emit({
-    taskId: taskIdFromDir(dir),
-    kind: "spawned",
-    sessionId: run.sessionId,
-    run,
+export async function appendRun(dir: string, run: Run): Promise<void> {
+  await withTaskLock(dir, () => {
+    const meta = readMeta(dir);
+    if (!meta) throw new Error(`meta.json missing at ${dir}`);
+    meta.runs.push(run);
+    atomicWriteJson(join(dir, FILE), meta);
+    emit({
+      taskId: taskIdFromDir(dir),
+      kind: "spawned",
+      sessionId: run.sessionId,
+      run,
+    });
   });
 }
 
-export function updateRun(dir: string, sessionId: string, patch: Partial<Run>): void {
-  const meta = readMeta(dir);
-  if (!meta) throw new Error(`meta.json missing at ${dir}`);
-  const run = meta.runs.find((r) => r.sessionId === sessionId);
-  if (!run) throw new Error(`run ${sessionId} not found`);
-  const prevStatus = run.status;
-  Object.assign(run, patch);
-  atomicWriteJson(join(dir, FILE), meta);
-  const statusChanged = patch.status !== undefined && patch.status !== prevStatus;
-  emit({
-    taskId: taskIdFromDir(dir),
-    kind: statusChanged ? "transition" : "updated",
-    sessionId,
-    run: { ...run },
-    prevStatus,
+export async function updateRun(
+  dir: string,
+  sessionId: string,
+  patch: Partial<Run>,
+): Promise<void> {
+  await withTaskLock(dir, () => {
+    const meta = readMeta(dir);
+    if (!meta) throw new Error(`meta.json missing at ${dir}`);
+    const run = meta.runs.find((r) => r.sessionId === sessionId);
+    if (!run) throw new Error(`run ${sessionId} not found`);
+    const prevStatus = run.status;
+    Object.assign(run, patch);
+    atomicWriteJson(join(dir, FILE), meta);
+    const statusChanged = patch.status !== undefined && patch.status !== prevStatus;
+    emit({
+      taskId: taskIdFromDir(dir),
+      kind: statusChanged ? "transition" : "updated",
+      sessionId,
+      run: { ...run },
+      prevStatus,
+    });
+  });
+}
+
+/**
+ * H6: batched read-modify-write for callers that need to patch many
+ * runs at once (e.g. `staleRunReaper` flipping every old `running` run
+ * to `failed` in one pass). Doing this with a loop of `updateRun` calls
+ * costs N lock cycles, N reads, and N atomic renames; this helper does
+ * 1 read + N in-memory patches + 1 write under a single lock, while
+ * still firing the same per-run `transition` / `updated` events so
+ * existing SSE consumers (the events route forwarding `transition` to
+ * the UI) keep working.
+ *
+ * Patches whose `sessionId` doesn't match any run in `meta.runs` are
+ * silently skipped — the reaper is the primary caller and a run that
+ * was deleted between the meta read and the patch list is a no-op,
+ * not an error. Returns the post-write `Meta` for the caller's
+ * convenience (the reaper hands it straight to the API response).
+ */
+export async function applyManyRuns(
+  dir: string,
+  patches: Array<{ sessionId: string; patch: Partial<Run> }>,
+): Promise<Meta | null> {
+  if (patches.length === 0) {
+    return readMeta(dir);
+  }
+  return withTaskLock(dir, () => {
+    const meta = readMeta(dir);
+    if (!meta) return null;
+    // Buffer per-run events and flush them only AFTER the atomic write
+    // so SSE subscribers never observe a `transition` event for a row
+    // that isn't yet on disk.
+    const pending: MetaChangeEvent[] = [];
+    let mutated = false;
+    for (const { sessionId, patch } of patches) {
+      const run = meta.runs.find((r) => r.sessionId === sessionId);
+      if (!run) continue;
+      const prevStatus = run.status;
+      Object.assign(run, patch);
+      mutated = true;
+      const statusChanged =
+        patch.status !== undefined && patch.status !== prevStatus;
+      pending.push({
+        taskId: taskIdFromDir(dir),
+        kind: statusChanged ? "transition" : "updated",
+        sessionId,
+        run: { ...run },
+        prevStatus,
+      });
+    }
+    if (mutated) {
+      atomicWriteJson(join(dir, FILE), meta);
+      for (const ev of pending) emit(ev);
+    }
+    return meta;
+  });
+}
+
+/**
+ * H7: helper for the DELETE /api/sessions/[sessionId] handler — filter
+ * a session out of the task's runs under the same lock that protects
+ * appendRun/updateRun. Returns true if the session was found and
+ * removed (so the caller can track which tasks were affected), false
+ * if the meta is missing or the session wasn't linked to this task.
+ */
+export async function removeSessionFromTask(
+  dir: string,
+  sessionId: string,
+): Promise<boolean> {
+  return withTaskLock(dir, () => {
+    const meta = readMeta(dir);
+    if (!meta) return false;
+    const before = meta.runs.length;
+    meta.runs = meta.runs.filter((r) => r.sessionId !== sessionId);
+    if (meta.runs.length === before) return false;
+    atomicWriteJson(join(dir, FILE), meta);
+    emit({ taskId: taskIdFromDir(dir), kind: "writeMeta" });
+    return true;
   });
 }
