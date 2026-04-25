@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/client/api";
 import {
   type App,
   type Meta,
+  type Repo,
   type SessionSummary,
   type Task,
 } from "@/lib/client/types";
@@ -27,10 +28,22 @@ import { useConfirm } from "../_components/ConfirmProvider";
 
 function Dashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const appFilter = searchParams.get("app") ?? "__all__";
+  const setAppFilter = useCallback(
+    (v: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (v === "__all__") params.delete("app");
+      else params.set("app", v);
+      const qs = params.toString();
+      router.replace(qs ? `/tasks?${qs}` : "/tasks");
+    },
+    [router, searchParams],
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [apps, setApps] = useState<App[]>([]);
-  const [appFilter, setAppFilter] = useState<string>("__all__");
+  const [repos, setRepos] = useState<Repo[]>([]);
   const [query, setQuery] = useState("");
   const [metaByTask, setMetaByTask] = useState<Map<string, Meta>>(new Map());
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -45,8 +58,11 @@ function Dashboard() {
   }, [toast]);
 
   const refreshApps = useCallback(async () => {
-    try { setApps(await api.apps()); }
-    catch { /* registry may not exist yet — ignore */ }
+    try {
+      const [a, r] = await Promise.all([api.apps(), api.repos()]);
+      setApps(a);
+      setRepos(r);
+    } catch { /* registry may not exist yet — ignore */ }
   }, []);
 
   const refreshAllMeta = useCallback(async () => {
@@ -137,6 +153,39 @@ function Dashboard() {
       await refreshTasks();
       toast("success", `Created ${t.id}`);
     } catch (e) { toast("error", (e as Error).message); }
+  };
+
+  const handleToggleComplete = async (id: string, next: boolean) => {
+    const previous = tasks.find((t) => t.id === id);
+    // Optimistic update — flip the checkbox immediately so the click feels
+    // instant; the next allMeta poll will re-converge if the PATCH fails.
+    setTasks((list) =>
+      list.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              checked: next,
+              section: next ? "DONE — not yet archived" : "DOING",
+              status: next ? "done" : "doing",
+            }
+          : t,
+      ),
+    );
+    try {
+      await api.updateTask(id, {
+        checked: next,
+        section: next ? "DONE — not yet archived" : "DOING",
+      });
+      toast(
+        "info",
+        next ? "Marked complete" : "Reopened — back to DOING",
+      );
+    } catch (e) {
+      if (previous) {
+        setTasks((list) => list.map((t) => (t.id === id ? previous : t)));
+      }
+      toast("error", (e as Error).message);
+    }
   };
 
   const handleDeleteTask = async (id: string) => {
@@ -247,7 +296,7 @@ function Dashboard() {
           >
             ⌘K
           </Button>
-          <NewTaskDialog apps={apps} onCreate={handleCreate} openRef={newDialogRef} />
+          <NewTaskDialog apps={apps} repos={repos} onCreate={handleCreate} openRef={newDialogRef} />
         </div>
       </HeaderShell>
 
@@ -264,6 +313,7 @@ function Dashboard() {
           onOpenTask={openTask}
           onQuickAdd={handleQuickAdd}
           onDeleteTask={handleDeleteTask}
+          onToggleComplete={handleToggleComplete}
         />
       </main>
 
@@ -282,5 +332,9 @@ function Dashboard() {
 }
 
 export default function Page() {
-  return <Dashboard />;
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+      <Dashboard />
+    </Suspense>
+  );
 }

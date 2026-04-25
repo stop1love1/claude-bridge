@@ -40,16 +40,56 @@ import {
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { BRIDGE_ROOT, USER_CLAUDE_DIR } from "./paths";
 
+/**
+ * Per-app git workflow settings, persisted alongside the app entry in
+ * `bridge.json`. Drives how the bridge prepares the working tree before
+ * dispatching a child agent and what it does afterwards. The defaults
+ * match the historical behavior (work on whatever branch is checked
+ * out, never auto-commit, never auto-push) so existing apps without
+ * a `git` key behave exactly as before.
+ */
+export type GitBranchMode = "current" | "fixed" | "auto-create";
+
+export interface AppGitSettings {
+  /**
+   * - `current`     — leave HEAD alone, agent works on whatever's checked out
+   * - `fixed`       — switch to / create `fixedBranch` before each task
+   * - `auto-create` — create a new task-scoped branch (e.g. `claude/<task-id>`)
+   */
+  branchMode: GitBranchMode;
+  /** Branch name when `branchMode === "fixed"`. Empty otherwise. */
+  fixedBranch: string;
+  /** Run `git commit -am` after the task wraps up. */
+  autoCommit: boolean;
+  /** Run `git push` after `autoCommit`. Implies `autoCommit`. */
+  autoPush: boolean;
+}
+
+export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
+  branchMode: "current",
+  fixedBranch: "",
+  autoCommit: false,
+  autoPush: false,
+};
+
 export interface App {
   name: string;
   path: string;          // absolute, resolved against BRIDGE_ROOT
   rawPath: string;       // exactly what the user wrote (relative or absolute)
   description: string;
+  git: AppGitSettings;
+}
+
+interface ManifestAppEntry {
+  name: string;
+  path: string;
+  description?: string;
+  git?: Partial<AppGitSettings>;
 }
 
 export interface BridgeManifest {
   version: number;
-  apps: Array<{ name: string; path: string; description?: string }>;
+  apps: ManifestAppEntry[];
   [key: string]: unknown;
 }
 
@@ -114,6 +154,34 @@ function writeManifest(manifest: BridgeManifest): void {
   atomicWrite(BRIDGE_JSON, JSON.stringify(ordered, null, 2) + "\n");
 }
 
+function normalizeGitSettings(raw: unknown): AppGitSettings {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_GIT_SETTINGS };
+  const r = raw as Partial<AppGitSettings>;
+  const branchMode: GitBranchMode =
+    r.branchMode === "fixed" || r.branchMode === "auto-create" ? r.branchMode : "current";
+  const fixedBranch = typeof r.fixedBranch === "string" ? r.fixedBranch.trim() : "";
+  const autoCommit = r.autoCommit === true || r.autoPush === true;
+  const autoPush = r.autoPush === true;
+  return { branchMode, fixedBranch, autoCommit, autoPush };
+}
+
+function serializeGitSettings(g: AppGitSettings | undefined): Partial<AppGitSettings> | undefined {
+  // Drop the key entirely when settings are at defaults so old bridge.json
+  // files stay terse and `git`-aware diffs only fire when there's real
+  // configuration to persist. Defensive against missing input so callers
+  // that fabricate App objects without the field (legacy code, tests)
+  // don't crash on serialize.
+  if (!g) return undefined;
+  const out: Partial<AppGitSettings> = {};
+  if (g.branchMode !== DEFAULT_GIT_SETTINGS.branchMode) out.branchMode = g.branchMode;
+  if (g.branchMode === "fixed" && g.fixedBranch.trim().length > 0) {
+    out.fixedBranch = g.fixedBranch.trim();
+  }
+  if (g.autoCommit) out.autoCommit = true;
+  if (g.autoPush) out.autoPush = true;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Public for tests — parse a manifest blob without touching disk. */
 export function parseApps(json: string): App[] {
   if (!json || !json.trim()) return [];
@@ -127,6 +195,7 @@ export function parseApps(json: string): App[] {
     const name = (raw as { name?: unknown }).name;
     const rawPath = (raw as { path?: unknown }).path;
     const description = (raw as { description?: unknown }).description;
+    const gitRaw = (raw as { git?: unknown }).git;
     if (!isValidAppName(name)) continue;
     if (typeof rawPath !== "string" || !rawPath.trim()) continue;
     out.push({
@@ -134,6 +203,7 @@ export function parseApps(json: string): App[] {
       rawPath,
       path: resolveAppPath(rawPath),
       description: typeof description === "string" ? description : "",
+      git: normalizeGitSettings(gitRaw),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -145,13 +215,15 @@ export function serializeApps(apps: App[]): string {
   const manifest = {
     version: SCHEMA_VERSION,
     apps: apps.map((a) => {
-      const entry: { name: string; path: string; description?: string } = {
+      const entry: ManifestAppEntry = {
         name: a.name,
         path: a.rawPath,
       };
       if (a.description.trim().length > 0) {
         entry.description = a.description.trim();
       }
+      const git = serializeGitSettings(a.git);
+      if (git) entry.git = git;
       return entry;
     }),
   };
@@ -171,11 +243,13 @@ export function loadApps(): App[] {
 export function saveApps(apps: App[]): void {
   const manifest = readManifest();
   manifest.apps = apps.map((a) => {
-    const entry: { name: string; path: string; description?: string } = {
+    const entry: ManifestAppEntry = {
       name: a.name,
       path: a.rawPath,
     };
     if (a.description.trim().length > 0) entry.description = a.description.trim();
+    const git = serializeGitSettings(a.git);
+    if (git) entry.git = git;
     return entry;
   });
   writeManifest(manifest);
@@ -215,6 +289,7 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     rawPath,
     path: resolveAppPath(rawPath),
     description: (input.description ?? "").trim(),
+    git: { ...DEFAULT_GIT_SETTINGS },
   };
   apps.push(app);
   apps.sort((a, b) => a.name.localeCompare(b.name));
@@ -245,6 +320,61 @@ export function updateAppDescription(name: string, description: string): App | n
   target.description = (description ?? "").trim();
   saveApps(apps);
   return target;
+}
+
+/**
+ * Patch a single app's git workflow settings. The caller passes a
+ * partial — fields omitted retain their current value. `autoPush`
+ * forces `autoCommit` to true (you can't push what you didn't commit).
+ */
+export function updateAppGitSettings(
+  name: string,
+  patch: Partial<AppGitSettings>,
+): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  const next: AppGitSettings = { ...target.git, ...patch };
+  if (next.branchMode !== "fixed") next.fixedBranch = "";
+  else next.fixedBranch = (next.fixedBranch ?? "").trim();
+  if (next.autoPush) next.autoCommit = true;
+  target.git = next;
+  saveApps(apps);
+  return target;
+}
+
+export type RenameAppFailure =
+  | "invalid-name"
+  | "invalid-new-name"
+  | "not-found"
+  | "duplicate-name";
+
+/**
+ * Rename an app entry in `bridge.json`. Returns the updated `App` on
+ * success or a string reason on failure. Side-effect: only the manifest
+ * is touched here. Past tasks that reference the old name are migrated
+ * separately by the API route via `tasksStore.migrateTaskApp`.
+ *
+ * No-op if `oldName === newName`.
+ */
+export function renameApp(
+  oldName: string,
+  newName: string,
+): { ok: true; app: App } | { ok: false; reason: RenameAppFailure } {
+  if (!isValidAppName(oldName)) return { ok: false, reason: "invalid-name" };
+  if (!isValidAppName(newName)) return { ok: false, reason: "invalid-new-name" };
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === oldName);
+  if (!target) return { ok: false, reason: "not-found" };
+  if (oldName === newName) return { ok: true, app: target };
+  if (apps.some((a) => a.name === newName)) {
+    return { ok: false, reason: "duplicate-name" };
+  }
+  target.name = newName;
+  apps.sort((a, b) => a.name.localeCompare(b.name));
+  saveApps(apps);
+  return { ok: true, app: target };
 }
 
 const REPO_MARKERS = [
@@ -329,6 +459,7 @@ export function autoDetectApps(): AutoDetectResult {
       rawPath,
       path: repoPath,
       description,
+      git: { ...DEFAULT_GIT_SETTINGS },
     };
     added.push(app);
     known.add(entry.name);

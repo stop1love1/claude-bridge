@@ -123,7 +123,7 @@ Run agents sequentially unless the task explicitly benefits from parallelism (in
 ### 5 · Finalize
 
 Before updating task status, aggregate the agents' reports. Read every `.md` file in `sessions/{{TASK_ID}}/reports/` (one per spawned child; directory may need creating earlier — the children `mkdir -p` it themselves). Each report follows the schema in `bridge/report-template.md` (`## Verdict`, `## Summary`, `## Changed files`, `## How to verify`, `## Risks / out-of-scope`, `## Notes for the coordinator`); parse those headers when condensing. Build the report content with this exact shape:
-- top line: overall verdict — `DONE`, `BLOCKED`, or `PARTIAL`
+- top line: overall verdict — `READY FOR REVIEW` (work shipped, awaiting user tick), `BLOCKED`, or `PARTIAL`
 - short paragraph (≤3 sentences) summarizing what shipped end-to-end (in the user's language — see the `## Language` section above)
 - one `## <role> @ <repo>` section per child report, with the report body condensed or pasted verbatim
 
@@ -134,12 +134,11 @@ Before updating task status, aggregate the agents' reports. Read every `.md` fil
 
 Keep it scannable — no raw logs, no command dumps. After you've sent the chat reply AND written summary.md, do not call any more tools — the next thing should be the run terminating cleanly.
 
-- All spawned agents succeeded → move the task to `DONE — not yet archived` and check `[x]`:
-  ```bash
-  curl -s -X PATCH {{BRIDGE_URL}}/api/tasks/{{TASK_ID}} \
-    -H 'content-type: application/json' \
-    -d '{"section":"DONE — not yet archived","checked":true}'
+- All spawned agents succeeded → **leave the task in `DOING`**. Do NOT PATCH `section` to `DONE — not yet archived` and do NOT set `checked:true` — the user has to confirm completion themselves by ticking the task in the UI. Your job is to make the work shippable and surface the report; the human decides when the task is actually done. Surface "ready for review" in the summary's top line so the user knows there's nothing more to wait on:
+  ```text
+  READY FOR REVIEW — <one-line shipping summary>
   ```
+  (No PATCH needed for the success path.)
 - One or more still failed after the fix cycle → move to `BLOCKED` and append the last failure reason to `taskBody`:
   ```bash
   curl -s -X PATCH {{BRIDGE_URL}}/api/tasks/{{TASK_ID}} \

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logo.jpg" alt="Claude Bridge" width="128" />
+  <img src="public/logo.svg" alt="Claude Bridge" width="128" />
 </p>
 
 <h1 align="center">Claude Bridge</h1>
@@ -21,7 +21,6 @@ Drop the bridge folder next to your app repos and a single dashboard handles cro
 - [Configuration](#configuration)
 - [Scripts](#scripts)
 - [Workspace Shape](#workspace-shape)
-- [Docker](#docker)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
@@ -128,7 +127,7 @@ Optional — the bridge runs with sensible defaults out of the box.
 | Variable | Default | Purpose |
 |---|---|---|
 | `BRIDGE_PORT` | `7777` | Port the dashboard + API listen on |
-| `PORT` | (falls back to `BRIDGE_PORT`) | Standard Next.js port (Docker convention) |
+| `PORT` | (falls back to `BRIDGE_PORT`) | Standard Next.js port |
 | `BRIDGE_URL` | `http://localhost:<port>` | Override origin when running behind a reverse proxy |
 | `CLAUDE_BIN` | `claude` | Override the Claude CLI binary path |
 
@@ -182,19 +181,6 @@ The bridge expects to live alongside your app repos:
 ```
 
 Sibling paths are resolved as `../<folder-name>` — there are no hardcoded absolute paths anywhere. Rename or move freely; just keep the bridge as a sibling.
-
----
-
-## Docker
-
-A multi-stage `Dockerfile` is included. The build stage uses Bun for speed; the runtime image is plain Node with the Claude CLI on `PATH`.
-
-```bash
-docker build -t claude-bridge .
-docker run -p 7777:7777 -e BRIDGE_PORT=7777 -v "$(pwd)/..:/workspace" claude-bridge
-```
-
-Mount the parent directory as `/workspace` so the bridge can reach your sibling repos from inside the container.
 
 ---
 

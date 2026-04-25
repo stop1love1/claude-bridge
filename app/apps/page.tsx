@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Boxes, Folder, GitBranch, Sparkles, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Boxes, Folder, GitBranch, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { App } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { AddAppDialog } from "../_components/AddAppDialog";
+import { AppSettingsDialog } from "../_components/AppSettingsDialog";
 import { Button } from "../_components/ui/button";
 import { useToast } from "../_components/Toasts";
 import { useConfirm } from "../_components/ConfirmProvider";
@@ -23,10 +25,12 @@ interface RepoEntry {
  * exposes Add / Auto-detect / Delete actions.
  */
 function AppsPage() {
+  const router = useRouter();
   const [apps, setApps] = useState<App[]>([]);
   const [repos, setRepos] = useState<RepoEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState<Set<string>>(new Set());
+  const [settingsApp, setSettingsApp] = useState<App | null>(null);
   const addDialogRef = useRef<(() => void) | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
@@ -129,13 +133,25 @@ function AppsPage() {
                 const meta = repoMeta(app.name);
                 const exists = meta?.exists ?? false;
                 const branch = meta?.branch ?? null;
+                const openTasks = () =>
+                  router.push(`/tasks?app=${encodeURIComponent(app.name)}`);
                 return (
                   <div
                     key={app.name}
-                    className={`rounded-lg border p-3 bg-card transition-colors ${
+                    role="link"
+                    tabIndex={0}
+                    onClick={openTasks}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openTasks();
+                      }
+                    }}
+                    title={`View tasks for ${app.name}`}
+                    className={`rounded-lg border p-3 bg-card transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${
                       exists
-                        ? "border-border hover:border-primary/40"
-                        : "border-warning/40 bg-warning/5"
+                        ? "border-border hover:border-primary/40 hover:bg-accent/40"
+                        : "border-warning/40 bg-warning/5 hover:bg-warning/10"
                     }`}
                   >
                     <div className="flex items-start gap-3">
@@ -170,7 +186,7 @@ function AppsPage() {
                         </p>
                       </div>
                       <Button
-                        onClick={() => handleScan(app.name)}
+                        onClick={(e) => { e.stopPropagation(); handleScan(app.name); }}
                         disabled={scanning.has(app.name) || !exists}
                         variant="ghost"
                         size="iconSm"
@@ -181,7 +197,21 @@ function AppsPage() {
                         <Sparkles size={14} className={scanning.has(app.name) ? "animate-pulse text-primary" : ""} />
                       </Button>
                       <Button
-                        onClick={() => handleDelete(app.name)}
+                        onClick={(e) => { e.stopPropagation(); setSettingsApp(app); }}
+                        variant="ghost"
+                        size="iconSm"
+                        title="Git workflow settings (branch, auto-commit, push)"
+                        aria-label={`Settings for ${app.name}`}
+                        className={`shrink-0 ${
+                          app.git.branchMode !== "current" || app.git.autoCommit
+                            ? "text-primary"
+                            : "text-fg-dim hover:text-primary"
+                        }`}
+                      >
+                        <Settings size={14} />
+                      </Button>
+                      <Button
+                        onClick={(e) => { e.stopPropagation(); handleDelete(app.name); }}
                         variant="ghost"
                         size="iconSm"
                         title="Remove from registry (folder on disk is kept)"
@@ -198,6 +228,15 @@ function AppsPage() {
           )}
         </div>
       </main>
+
+      <AppSettingsDialog
+        key={settingsApp?.name ?? "closed"}
+        app={settingsApp}
+        onClose={() => setSettingsApp(null)}
+        onSaved={(updated) => {
+          setApps((list) => list.map((a) => (a.name === updated.name ? updated : a)));
+        }}
+      />
     </div>
   );
 }

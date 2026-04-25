@@ -23,7 +23,7 @@ export function HeaderShell({
     <header className="h-11 shrink-0 px-3 border-b border-border bg-card flex items-center gap-3">
       <Link href="/" className="flex items-center gap-2 shrink-0" title="Home">
         <Image
-          src="/logo.jpg"
+          src="/logo.svg"
           alt="Claude Bridge"
           width={20}
           height={20}

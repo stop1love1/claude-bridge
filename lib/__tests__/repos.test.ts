@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
-import { parseApps, serializeApps, type App } from "../apps";
+import { DEFAULT_GIT_SETTINGS, parseApps, serializeApps, type App } from "../apps";
 
 describe("parseApps", () => {
   it("returns empty list when input is empty", () => {
@@ -61,8 +61,20 @@ describe("serializeApps + round-trip", () => {
     // parseApps lands on the same value on POSIX and Windows (it
     // resolves against BRIDGE_ROOT, which is `process.cwd()` here).
     const apps: App[] = [
-      { name: "app-api", path: resolve(process.cwd(), "../app-api"), rawPath: "../app-api", description: "API" },
-      { name: "app-web", path: resolve(process.cwd(), "../app-web"), rawPath: "../app-web", description: "Web" },
+      {
+        name: "app-api",
+        path: resolve(process.cwd(), "../app-api"),
+        rawPath: "../app-api",
+        description: "API",
+        git: { ...DEFAULT_GIT_SETTINGS },
+      },
+      {
+        name: "app-web",
+        path: resolve(process.cwd(), "../app-web"),
+        rawPath: "../app-web",
+        description: "Web",
+        git: { ...DEFAULT_GIT_SETTINGS },
+      },
     ];
     const json = serializeApps(apps);
     const parsedManifest = JSON.parse(json) as { version: number; apps: Array<{ name: string; path: string }> };
@@ -74,12 +86,50 @@ describe("serializeApps + round-trip", () => {
 
   it("omits description field when description is empty", () => {
     const json = serializeApps([
-      { name: "app-web", path: "/abs", rawPath: "../app-web", description: "   " },
+      {
+        name: "app-web",
+        path: "/abs",
+        rawPath: "../app-web",
+        description: "   ",
+        git: { ...DEFAULT_GIT_SETTINGS },
+      },
     ]);
     const parsed = JSON.parse(json) as { apps: Array<Record<string, unknown>> };
     expect(parsed.apps).toHaveLength(1);
     expect(parsed.apps[0].name).toBe("app-web");
     expect(parsed.apps[0].path).toBe("../app-web");
     expect(parsed.apps[0]).not.toHaveProperty("description");
+    // Default git settings should be omitted from the serialized blob
+    // so existing bridge.json files stay untouched on round-trip.
+    expect(parsed.apps[0]).not.toHaveProperty("git");
+  });
+
+  it("round-trips non-default git settings", () => {
+    const apps: App[] = [
+      {
+        name: "feature-svc",
+        path: resolve(process.cwd(), "../feature-svc"),
+        rawPath: "../feature-svc",
+        description: "",
+        git: {
+          branchMode: "fixed",
+          fixedBranch: "develop",
+          autoCommit: true,
+          autoPush: true,
+        },
+      },
+    ];
+    const json = serializeApps(apps);
+    const parsedManifest = JSON.parse(json) as {
+      apps: Array<{ git?: { branchMode?: string; fixedBranch?: string; autoCommit?: boolean; autoPush?: boolean } }>;
+    };
+    expect(parsedManifest.apps[0].git).toEqual({
+      branchMode: "fixed",
+      fixedBranch: "develop",
+      autoCommit: true,
+      autoPush: true,
+    });
+    const parsed = parseApps(json);
+    expect(parsed[0].git).toEqual(apps[0].git);
   });
 });

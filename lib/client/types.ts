@@ -61,11 +61,21 @@ export interface Repo {
   branch?: string | null;
 }
 
+export type GitBranchMode = "current" | "fixed" | "auto-create";
+
+export interface AppGitSettings {
+  branchMode: GitBranchMode;
+  fixedBranch: string;
+  autoCommit: boolean;
+  autoPush: boolean;
+}
+
 export interface App {
   name: string;
   path: string;
   rawPath: string;
   description: string;
+  git: AppGitSettings;
 }
 
 export interface SessionSummary {

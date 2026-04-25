@@ -11,6 +11,8 @@ import type { RepoProfile } from "./repoProfile";
 import { suggestRepo } from "./repoHeuristic";
 import { resolveRepos } from "./repos";
 import { BRIDGE_MD } from "./paths";
+import { getApp } from "./apps";
+import { autoCommitAndPush } from "./gitOps";
 
 /**
  * Wire `error` / `exit` lifecycle on a Claude child so its corresponding
@@ -71,6 +73,8 @@ export function wireRunLifecycle(
   };
 
   const succeedRun = () => {
+    let runForGit: { repo: string; role: string } | null = null;
+    let taskTitle = "";
     try {
       const meta = readMeta(sessionsDir);
       const run = meta?.runs.find((r) => r.sessionId === sessionId);
@@ -80,8 +84,35 @@ export function wireRunLifecycle(
           endedAt: new Date().toISOString(),
         });
       }
+      if (run && meta) {
+        runForGit = { repo: run.repo, role: run.role };
+        taskTitle = meta.taskTitle;
+      }
     } catch (e) {
       console.error("failed to mark run done for", tag, e);
+    }
+
+    // After a child run succeeds, honor the app's auto-commit / auto-push
+    // settings. Skip the coordinator (it lives in the bridge folder, not
+    // an app dir) and any run whose repo isn't a registered app. Failures
+    // are non-fatal — we log and move on so a missing upstream / dirty
+    // working tree doesn't trap the run as failed after the fact.
+    if (runForGit && runForGit.role !== "coordinator") {
+      const app = getApp(runForGit.repo);
+      if (app && (app.git.autoCommit || app.git.autoPush)) {
+        const message = `[${taskId}] ${taskTitle}`.trim();
+        autoCommitAndPush(app.path, app.git, message)
+          .then((r) => {
+            if (r.ok) {
+              console.log(`auto-git for ${tag}: ${r.message}`);
+            } else {
+              console.warn(`auto-git for ${tag}: ${r.message} — ${r.error ?? ""}`);
+            }
+          })
+          .catch((err) => {
+            console.error(`auto-git crashed for ${tag}`, err);
+          });
+      }
     }
   };
 

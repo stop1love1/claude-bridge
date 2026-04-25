@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Plus } from "lucide-react";
-import type { App } from "@/lib/client/types";
+import { GitBranch, Plus } from "lucide-react";
+import type { App, Repo } from "@/lib/client/types";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -26,13 +26,16 @@ export const APP_AUTO = "__auto__";
 
 export function NewTaskDialog({
   apps,
+  repos = [],
   onCreate,
   openRef,
 }: {
   apps: App[];
+  repos?: Repo[];
   onCreate: (t: { body: string; app: string | null }) => Promise<void>;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }) {
+  const branchByApp = new Map(repos.map((r) => [r.name, r.branch ?? null]));
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
   const [app, setApp] = useState<string>(APP_AUTO);
@@ -96,12 +99,22 @@ export function NewTaskDialog({
                   <SelectItem value={APP_AUTO}>
                     Auto (let the coordinator decide)
                   </SelectItem>
-                  {apps.map((a) => (
-                    <SelectItem key={a.name} value={a.name}>
-                      {a.name}
-                      {a.description ? ` — ${a.description}` : ""}
-                    </SelectItem>
-                  ))}
+                  {apps.map((a) => {
+                    const branch = branchByApp.get(a.name);
+                    return (
+                      <SelectItem key={a.name} value={a.name}>
+                        <span className="inline-flex items-center gap-2">
+                          <span className="font-mono">{a.name}</span>
+                          {branch && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground font-mono">
+                              <GitBranch size={10} className="opacity-70" />
+                              {branch}
+                            </span>
+                          )}
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground">

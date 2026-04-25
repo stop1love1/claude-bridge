@@ -9,6 +9,8 @@ import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
 import { resolveRepoCwd, resolveRepos } from "@/lib/repos";
 import { spawnFreeSession } from "@/lib/spawn";
 import { wireRunLifecycle } from "@/lib/coordinator";
+import { getApp } from "@/lib/apps";
+import { prepareBranch } from "@/lib/gitOps";
 import { suggestRepo } from "@/lib/repoHeuristic";
 import { loadProfiles } from "@/lib/profileStore";
 import { buildChildPrompt } from "@/lib/childPrompt";
@@ -126,6 +128,26 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const meta = readMeta(sessionsDir);
   if (!meta) {
     return NextResponse.json({ error: "task not found" }, { status: 404 });
+  }
+
+  // Per-app git workflow: if the resolved repo matches a registered
+  // app, honor its `git.branchMode` before the child sees the tree.
+  // Failures abort the spawn — we don't want a child editing the wrong
+  // branch silently.
+  const app = getApp(repo);
+  if (app && app.git.branchMode !== "current") {
+    const result = await prepareBranch(repoCwd, app.git, id);
+    if (!result.ok) {
+      return NextResponse.json(
+        {
+          error: `git branch setup failed: ${result.message}`,
+          detail: result.error ?? null,
+          repo,
+          branchMode: app.git.branchMode,
+        },
+        { status: 500 },
+      );
+    }
   }
 
   // Pre-mint the child session UUID. Same fix as coordinator: avoids the

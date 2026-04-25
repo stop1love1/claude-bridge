@@ -34,12 +34,14 @@ function GridCard({
   active,
   onOpen,
   onDelete,
+  onToggleComplete,
 }: {
   task: Task;
   meta: Meta | undefined;
   active: boolean;
   onOpen: () => void;
   onDelete: () => void;
+  onToggleComplete: (next: boolean) => void;
 }) {
   const runs = meta?.runs ?? [];
   const roleSet = Array.from(new Set(runs.map((r) => r.role)));
@@ -66,7 +68,20 @@ function GridCard({
       } ${status === "running" ? "ring-1 ring-warning/30" : ""}`}
     >
       <div className="flex items-start gap-2">
-        <h3 className="flex-1 text-sm font-medium text-foreground line-clamp-2 min-w-0">
+        <input
+          type="checkbox"
+          checked={task.checked}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => onToggleComplete(e.target.checked)}
+          aria-label={task.checked ? `Reopen task ${task.id}` : `Mark task ${task.id} complete`}
+          title={task.checked ? "Reopen — moves back to DOING" : "Mark complete — moves to DONE"}
+          className="mt-0.5 shrink-0 accent-primary cursor-pointer"
+        />
+        <h3
+          className={`flex-1 text-sm font-medium line-clamp-2 min-w-0 ${
+            task.checked ? "line-through text-muted-foreground" : "text-foreground"
+          }`}
+        >
           {task.title}
         </h3>
         <span
@@ -132,6 +147,7 @@ export function TaskGrid({
   onOpenTask,
   onQuickAdd,
   onDeleteTask,
+  onToggleComplete,
 }: {
   tasks: Task[];
   metaByTask: Map<string, Meta>;
@@ -140,6 +156,7 @@ export function TaskGrid({
   onOpenTask: (id: string) => void;
   onQuickAdd: (body: string) => void;
   onDeleteTask: (id: string) => void;
+  onToggleComplete: (id: string, next: boolean) => void;
 }) {
   const [quick, setQuick] = useState("");
 
@@ -205,6 +222,7 @@ export function TaskGrid({
                 active={activeTaskId === t.id}
                 onOpen={() => onOpenTask(t.id)}
                 onDelete={() => onDeleteTask(t.id)}
+                onToggleComplete={(next) => onToggleComplete(t.id, next)}
               />
             ))}
           </div>

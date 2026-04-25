@@ -1,4 +1,12 @@
-import type { Task, Meta, Repo, SessionSummary, ChatSettings } from "./types";
+import type {
+  Task,
+  Meta,
+  Repo,
+  SessionSummary,
+  ChatSettings,
+  App,
+  AppGitSettings,
+} from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
@@ -91,24 +99,28 @@ export const api = {
       "/sessions",
       { method: "POST", body: JSON.stringify(body) },
     ),
-  apps: () =>
-    req<Array<{ name: string; path: string; rawPath: string; description: string }>>("/apps"),
+  apps: () => req<App[]>("/apps"),
   addApp: (body: { name: string; path: string; description?: string }) =>
-    req<{ name: string; path: string; rawPath: string; description: string }>(
-      "/apps",
-      { method: "POST", body: JSON.stringify(body) },
-    ),
+    req<App>("/apps", { method: "POST", body: JSON.stringify(body) }),
   removeApp: (name: string) =>
     req<{ ok: true }>(`/apps/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  updateApp: (
+    name: string,
+    patch: { name?: string; description?: string; git?: Partial<AppGitSettings> },
+  ) =>
+    req<App & { migratedTasks?: number }>(`/apps/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
   autoDetectApps: () =>
     req<{
-      added: Array<{ name: string; path: string; rawPath: string; description: string }>;
+      added: App[];
       skipped: Array<{ name: string; reason: "already-registered" | "not-a-repo" }>;
     }>("/apps/auto-detect", { method: "POST" }),
   scanApp: (name: string) =>
     req<{
       ok: true;
-      app: { name: string; path: string; rawPath: string; description: string };
+      app: App;
       scanned: boolean;
       description: string;
       reason?: string;

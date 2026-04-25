@@ -193,3 +193,32 @@ export function deleteTask(id: string): DeleteTaskResult {
 export function isValidSection(section: string): section is TaskSection {
   return Object.prototype.hasOwnProperty.call(SECTION_STATUS, section);
 }
+
+/**
+ * Re-tag every task whose `taskApp` points at `oldName` so it points at
+ * `newName` instead. Used by the apps-rename API route to keep the
+ * task → app association intact across renames. Returns the count of
+ * meta files that were rewritten.
+ *
+ * Best-effort: a single corrupt meta.json doesn't abort the migration —
+ * we skip it and continue. The caller reports the count back to the UI
+ * as a toast so the operator can spot a partial cascade.
+ */
+export function migrateTaskApp(oldName: string, newName: string): number {
+  if (oldName === newName) return 0;
+  let migrated = 0;
+  for (const id of listMetaIds()) {
+    const dir = join(SESSIONS_DIR, id);
+    const meta = readMeta(dir);
+    if (!meta) continue;
+    if (meta.taskApp !== oldName) continue;
+    meta.taskApp = newName;
+    try {
+      writeMeta(dir, meta);
+      migrated += 1;
+    } catch (err) {
+      console.error("migrateTaskApp: failed to rewrite", id, err);
+    }
+  }
+  return migrated;
+}
