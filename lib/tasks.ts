@@ -76,6 +76,18 @@ function sectionPlaceholder(section: TaskSection): string {
   return "_(none)_";
 }
 
+/**
+ * Strict task ID format: `t_YYYYMMDD_NNN`. Used as both the slug and a
+ * trust gate before any path join under `SESSIONS_DIR` — anything that
+ * doesn't match this regex must be rejected to prevent traversal
+ * (`../`, `/`, `\`, drive letters, null bytes, …).
+ */
+const TASK_ID_RE = /^t_\d{8}_\d{3}$/;
+
+export function isValidTaskId(id: unknown): id is string {
+  return typeof id === "string" && TASK_ID_RE.test(id);
+}
+
 export function generateTaskId(now: Date, existing: string[]): string {
   const y = now.getUTCFullYear();
   const m = String(now.getUTCMonth() + 1).padStart(2, "0");

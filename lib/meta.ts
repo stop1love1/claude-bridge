@@ -1,7 +1,36 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+  existsSync,
+  unlinkSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { TaskStatus, TaskSection } from "./tasks";
+
+/**
+ * Write `meta.json` atomically: stage the new contents in a sibling
+ * tempfile, then `rename` over the destination. `rename` is atomic on
+ * POSIX and atomic-on-success on NTFS, so a crash mid-write leaves
+ * either the old file or the new one — never a half-written one. The
+ * temp file is also a per-call random suffix so two concurrent writes
+ * can't trample each other's staging.
+ */
+function atomicWriteJson(filePath: string, value: unknown): void {
+  const dir = filePath.slice(0, Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")));
+  mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n");
+  try {
+    renameSync(tmp, filePath);
+  } catch (err) {
+    // Best-effort cleanup of the staged file before re-throwing.
+    try { unlinkSync(tmp); } catch { /* ignore */ }
+    throw err;
+  }
+}
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stale";
 
@@ -131,7 +160,7 @@ export function emitRetried(taskId: string, retryRun: Run, retryOf: string): voi
 export function createMeta(dir: string, header: Omit<Meta, "runs">): void {
   mkdirSync(dir, { recursive: true });
   const meta: Meta = { ...header, runs: [] };
-  writeFileSync(join(dir, FILE), JSON.stringify(meta, null, 2) + "\n");
+  atomicWriteJson(join(dir, FILE), meta);
   emit({ taskId: taskIdFromDir(dir), kind: "writeMeta" });
 }
 
@@ -143,7 +172,7 @@ export function readMeta(dir: string): Meta | null {
 
 export function writeMeta(dir: string, meta: Meta): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, FILE), JSON.stringify(meta, null, 2) + "\n");
+  atomicWriteJson(join(dir, FILE), meta);
   emit({ taskId: taskIdFromDir(dir), kind: "writeMeta" });
 }
 
@@ -151,7 +180,7 @@ export function appendRun(dir: string, run: Run): void {
   const meta = readMeta(dir);
   if (!meta) throw new Error(`meta.json missing at ${dir}`);
   meta.runs.push(run);
-  writeFileSync(join(dir, FILE), JSON.stringify(meta, null, 2) + "\n");
+  atomicWriteJson(join(dir, FILE), meta);
   emit({
     taskId: taskIdFromDir(dir),
     kind: "spawned",
@@ -167,7 +196,7 @@ export function updateRun(dir: string, sessionId: string, patch: Partial<Run>): 
   if (!run) throw new Error(`run ${sessionId} not found`);
   const prevStatus = run.status;
   Object.assign(run, patch);
-  writeFileSync(join(dir, FILE), JSON.stringify(meta, null, 2) + "\n");
+  atomicWriteJson(join(dir, FILE), meta);
   const statusChanged = patch.status !== undefined && patch.status !== prevStatus;
   emit({
     taskId: taskIdFromDir(dir),

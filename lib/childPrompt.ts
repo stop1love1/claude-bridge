@@ -70,6 +70,20 @@ function sanitizeCoordinatorBody(body: string): string {
 }
 
 /**
+ * Strip any sequence that would terminate the fenced code block we
+ * embed `taskBody` inside (`\n```\n` at column 0, with any number of
+ * leading backticks ≥ 3). User-supplied content with a literal triple
+ * backtick on its own line would otherwise close the wrapper fence
+ * early and inject arbitrary markdown / instructions into the child
+ * prompt. We replace the fence prefix with a non-terminating variant
+ * (zero-width joiner) that the LLM still reads as backticks for
+ * intent, but the markdown parser does not treat as a fence boundary.
+ */
+export function sanitizeTaskBodyForFence(body: string): string {
+  return (body ?? "").replace(/^(\s*)(`{3,})/gm, "$1‍$2");
+}
+
+/**
  * Build the full child prompt. Pure function — no I/O.
  *
  * Output sections, in order:
@@ -100,6 +114,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
   } = opts;
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
+  const safeTaskBody = sanitizeTaskBodyForFence(taskBody);
   const profileLine = profile
     ? renderProfileLine(profile)
     : `(no profile cached — call \`GET ${BRIDGE_URL}/api/repos/profiles\` to refresh)`;
@@ -119,7 +134,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "- Original body (verbatim from the user):",
     "",
     "  ```",
-    taskBody,
+    safeTaskBody,
     "  ```",
     "",
     "## Your role",

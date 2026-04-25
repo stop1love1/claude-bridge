@@ -229,14 +229,20 @@ export function spawnCoordinatorForTask(task: Pick<Task, "id" | "title" | "body"
       /* fall back to bridge folder name */
     }
 
+    // Substitute STRUCTURAL placeholders first (template-controlled
+    // values), USER CONTENT last. If we ran user content first, a task
+    // body containing the literal `{{SESSION_ID}}` would be substituted
+    // by the next pass — leaking the real session uuid into a malicious
+    // prompt or corrupting the template. By the time `task.title` /
+    // `task.body` are inlined, no further `replaceAll` runs over them.
     const baseRendered = template
-      .replaceAll("{{TASK_ID}}", task.id)
-      .replaceAll("{{TASK_TITLE}}", task.title)
-      .replaceAll("{{TASK_BODY}}", task.body)
       .replaceAll("{{SESSION_ID}}", sessionId)
       .replaceAll("{{BRIDGE_URL}}", BRIDGE_URL)
       .replaceAll("{{BRIDGE_FOLDER}}", BRIDGE_FOLDER)
-      .replaceAll("{{EXAMPLE_REPO}}", exampleRepo);
+      .replaceAll("{{EXAMPLE_REPO}}", exampleRepo)
+      .replaceAll("{{TASK_ID}}", task.id)
+      .replaceAll("{{TASK_TITLE}}", task.title)
+      .replaceAll("{{TASK_BODY}}", task.body);
     // Phase G: prepend repo profiles. The block goes before "## Your job"
     // so the coordinator sees the contract surface of every candidate
     // repo before deciding which one to dispatch to. Failure modes are

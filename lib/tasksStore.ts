@@ -7,10 +7,22 @@ import { projectDirFor } from "./sessions";
 import { killChild } from "./spawnRegistry";
 import {
   generateTaskId as generateIdFromList,
+  isValidTaskId,
   SECTION_STATUS,
   type Task,
   type TaskSection,
 } from "./tasks";
+
+/**
+ * Resolve a task's sessions directory after asserting the id is in the
+ * canonical `t_YYYYMMDD_NNN` format. Rejects anything that could escape
+ * `SESSIONS_DIR` — separators, parent traversal, drive letters, null
+ * bytes — so callers don't have to validate at every entry point.
+ */
+function safeSessionDir(id: string): string | null {
+  if (!isValidTaskId(id)) return null;
+  return join(SESSIONS_DIR, id);
+}
 
 /**
  * meta.json is now the source of truth for tasks. This module replaces
@@ -57,7 +69,9 @@ export function listTasks(): Task[] {
 }
 
 export function getTask(id: string): Task | null {
-  const meta = readMeta(join(SESSIONS_DIR, id));
+  const dir = safeSessionDir(id);
+  if (!dir) return null;
+  const meta = readMeta(dir);
   return meta ? metaToTask(meta) : null;
 }
 
@@ -93,7 +107,8 @@ export function createTask(input: { title: string; body: string }): Task {
 type TaskPatch = Partial<Pick<Task, "title" | "body" | "section" | "status" | "checked">>;
 
 export function updateTask(id: string, patch: TaskPatch): Task | null {
-  const dir = join(SESSIONS_DIR, id);
+  const dir = safeSessionDir(id);
+  if (!dir) return null;
   const meta = readMeta(dir);
   if (!meta) return null;
   if (patch.title !== undefined) meta.taskTitle = patch.title;
@@ -128,8 +143,8 @@ export interface DeleteTaskResult {
  * .jsonl shouldn't trap the meta.json forever.
  */
 export function deleteTask(id: string): DeleteTaskResult {
-  const dir = join(SESSIONS_DIR, id);
-  if (!existsSync(dir)) return { ok: false, sessionsDeleted: 0, sessionsFailed: 0 };
+  const dir = safeSessionDir(id);
+  if (!dir || !existsSync(dir)) return { ok: false, sessionsDeleted: 0, sessionsFailed: 0 };
 
   let sessionsDeleted = 0;
   let sessionsFailed = 0;

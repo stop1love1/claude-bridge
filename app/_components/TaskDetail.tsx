@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Meta, Repo, Run, Task } from "@/lib/client/types";
 import {
-  Save,
   Hash,
   Copy,
   Check,
@@ -45,7 +44,11 @@ export function TaskDetail({
   const [continuing, setContinuing] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
-  const [summary, setSummary] = useState<string | null>(null);
+  // Synchronous flag — `setSaving(true)` only commits on the next
+  // render, so two onBlur events firing in the same tick can both
+  // observe `saving === false` and issue duplicate saves. The ref
+  // serializes them deterministically.
+  const savingRef = useRef(false);
   const toast = useToast();
   const confirm = useConfirm();
   const titleRef = useRef<HTMLInputElement>(null);
@@ -61,33 +64,18 @@ export function TaskDetail({
     setBody(task?.body ?? "");
   }, [task?.id]);
 
-  useEffect(() => {
-    const id = task?.id;
-    const section = task?.section;
-    if (!id || (section !== "DONE — not yet archived" && section !== "BLOCKED")) {
-      setSummary(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await api.summary(id);
-        if (!cancelled) setSummary(r.summary);
-      } catch {
-        if (!cancelled) setSummary(null);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [task?.id, task?.section]);
-
   const dirty = task ? (title !== task.title || body !== task.body) : false;
 
   const save = async () => {
-    if (!dirty || saving) return;
+    if (!dirty || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
-    try { await onSave({ title, body }); toast("success", "Saved"); }
+    try { await onSave({ title, body }); }
     catch (e) { toast("error", (e as Error).message); }
-    finally { setSaving(false); }
+    finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const continueTask = async () => {
@@ -154,6 +142,13 @@ export function TaskDetail({
   const runs = meta?.runs ?? [];
   const hasRuns = runs.length > 0;
   const owner = runs.find((r) => r.role === "coordinator") ?? null;
+  // Most recent coordinator run drives the Continue button: only show
+  // it when the user stopped the coordinator mid-way (killed) or the
+  // process died unexpectedly (reaper marks it stale). Hide when the
+  // coordinator is queued / running / cleanly done.
+  const lastCoordinator = [...runs].reverse().find((r) => r.role === "coordinator") ?? null;
+  const canContinue = !!lastCoordinator
+    && (lastCoordinator.status === "failed" || lastCoordinator.status === "stale");
 
   const handleKill = async (run: Run) => {
     if (!task) return;
@@ -204,6 +199,7 @@ export function TaskDetail({
           ref={titleRef}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
+          onBlur={save}
           placeholder="Task title (auto-derived from the first line)"
           className="w-full bg-transparent border-0 border-b border-border pb-2 mb-3 text-lg font-medium focus:outline-none focus:border-primary transition-colors"
         />
@@ -211,37 +207,27 @@ export function TaskDetail({
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="Description — what the assigned Claude session should do."
-          rows={8}
+          onBlur={save}
+          placeholder="Task title / short description"
+          rows={2}
           className="w-full bg-card border border-border rounded-md p-3 font-mono text-xs focus:outline-none focus:border-primary resize-y mb-4"
         />
 
-        <div className="flex gap-2 mb-6 items-center">
-          <button
-            disabled={!dirty || saving}
-            onClick={save}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-secondary border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-sm transition-colors"
-          >
-            <Save size={14} />
-            {saving ? "Saving…" : dirty ? "Save" : "Saved"}
-          </button>
-          <button
-            disabled={continuing}
-            onClick={continueTask}
-            title="Resume the coordinator if it stopped, or spawn a new one if none exists"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-secondary border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-sm transition-colors"
-          >
-            <RotateCw size={14} className={continuing ? "animate-spin" : ""} />
-            {continuing ? "Continuing…" : "Continue"}
-          </button>
-          <span className="ml-auto text-[10px] text-fg-dim">⌘S save</span>
-        </div>
-
-        {summary && (
-          <>
-            <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Summary</h3>
-            <div className="rounded-md border border-border bg-card p-3 mb-6 whitespace-pre-wrap font-mono text-xs text-foreground leading-relaxed">{summary}</div>
-          </>
+        {canContinue && (
+          <div className="flex gap-2 mb-6 items-center">
+            <button
+              disabled={continuing}
+              onClick={continueTask}
+              title="Resume the coordinator (last run was killed or died unexpectedly)"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-secondary border border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed text-sm transition-colors"
+            >
+              <RotateCw size={14} className={continuing ? "animate-spin" : ""} />
+              {continuing ? "Continuing…" : "Continue"}
+            </button>
+            <span className="text-[11px] text-fg-dim">
+              Last coordinator run ended in <span className="font-mono">{lastCoordinator?.status}</span> — pick up where it stopped.
+            </span>
+          </div>
         )}
 
         {!hasRuns && (

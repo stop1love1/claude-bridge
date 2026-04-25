@@ -50,27 +50,39 @@ export async function tailJsonl(filePath: string, fromOffset: number): Promise<T
   if (fromOffset >= size) return { lines: [], offset: size, lineOffsets: [] };
   const fd = openSync(filePath, "r");
   try {
+    // The file size we just read could shrink between stat and read (log
+    // rotation, task delete, truncation). `readSync` reports the actual
+    // bytes pulled — slice to that, never trust the original size.
     const buf = Buffer.alloc(size - fromOffset);
-    readSync(fd, buf, 0, buf.length, fromOffset);
-    const raw = buf.toString("utf8");
-    const lastNewline = raw.lastIndexOf("\n");
-    if (lastNewline === -1) return { lines: [], offset: fromOffset, lineOffsets: [] };
-    const complete = raw.slice(0, lastNewline);
-    const parts = complete.split("\n");
+    const bytesRead = readSync(fd, buf, 0, buf.length, fromOffset);
+    if (bytesRead === 0) return { lines: [], offset: fromOffset, lineOffsets: [] };
+    const data = buf.subarray(0, bytesRead);
+    // Work on raw bytes for offset bookkeeping. `\n` (0x0A) is a single
+    // byte in UTF-8 and never appears inside a multi-byte sequence, so
+    // splitting on byte boundaries is correct even if the read sliced a
+    // multi-byte char at the tail (we exclude that partial trailing line
+    // by stopping at the last `\n` byte).
+    const lastNewlineByte = data.lastIndexOf(0x0A);
+    if (lastNewlineByte === -1) return { lines: [], offset: fromOffset, lineOffsets: [] };
     const lines: unknown[] = [];
     const lineOffsets: number[] = [];
-    let cursor = fromOffset;
-    for (const l of parts) {
-      const byteLen = Buffer.byteLength(l, "utf8");
-      if (l.length > 0) {
-        try { lines.push(JSON.parse(l)); }
-        catch { lines.push({ __raw: l, __parseError: true }); }
-        lineOffsets.push(cursor);
+    let lineStart = 0;
+    for (let i = 0; i <= lastNewlineByte; i++) {
+      if (data[i] !== 0x0A) continue;
+      const lineBytes = data.subarray(lineStart, i);
+      if (lineBytes.length > 0) {
+        const text = lineBytes.toString("utf8");
+        try { lines.push(JSON.parse(text)); }
+        catch { lines.push({ __raw: text, __parseError: true }); }
+        lineOffsets.push(fromOffset + lineStart);
       }
-      // +1 for the consumed newline that `split` removed.
-      cursor += byteLen + 1;
+      lineStart = i + 1;
     }
-    return { lines, offset: fromOffset + Buffer.byteLength(complete, "utf8") + 1, lineOffsets };
+    return {
+      lines,
+      offset: fromOffset + lastNewlineByte + 1,
+      lineOffsets,
+    };
   } finally {
     closeSync(fd);
   }
@@ -111,47 +123,52 @@ export async function tailJsonlBefore(
   try {
     const len = ceiling - proposedStart;
     const buf = Buffer.alloc(len);
-    readSync(fd, buf, 0, len, proposedStart);
-    const raw = buf.toString("utf8");
+    const bytesRead = readSync(fd, buf, 0, len, proposedStart);
+    if (bytesRead === 0) {
+      return { lines: [], fromOffset: ceiling, beforeOffset: ceiling, lineOffsets: [] };
+    }
+    const data = buf.subarray(0, bytesRead);
 
-    // If we did not start at byte 0, the first line in `raw` is almost
+    // If we did not start at byte 0, the first line in `data` is almost
     // certainly the tail of a record that began before our window —
-    // skip past it. If we DID start at 0, the window is whole.
-    let trimmedHead = raw;
+    // skip past it. Operate on raw bytes so the offset stays correct
+    // when a multi-byte UTF-8 char straddles `proposedStart`.
+    let dataStart = 0;
     let startByte = proposedStart;
     if (proposedStart > 0) {
-      const firstNl = raw.indexOf("\n");
+      const firstNl = data.indexOf(0x0A);
       if (firstNl === -1) {
-        // The whole window was a partial line — nothing usable.
         return { lines: [], fromOffset: ceiling, beforeOffset: ceiling, lineOffsets: [] };
       }
-      const consumed = Buffer.byteLength(raw.slice(0, firstNl + 1), "utf8");
-      startByte = proposedStart + consumed;
-      trimmedHead = raw.slice(firstNl + 1);
+      dataStart = firstNl + 1;
+      startByte = proposedStart + dataStart;
     }
 
-    // Drop a trailing partial line — but `beforeOffset` should already
-    // be a line boundary if the caller used a previous fromOffset, so
-    // typically there's nothing to trim here.
-    const lastNl = trimmedHead.lastIndexOf("\n");
-    const complete = lastNl === -1 ? trimmedHead : trimmedHead.slice(0, lastNl);
+    // Drop a trailing partial line. With a clean `beforeOffset` from the
+    // caller this is usually a no-op, but handle it defensively.
+    const lastNl = data.lastIndexOf(0x0A);
+    const endByte = lastNl === -1 ? dataStart : lastNl;
+    if (endByte <= dataStart) {
+      return { lines: [], fromOffset: ceiling, beforeOffset: ceiling, lineOffsets: [] };
+    }
 
-    const parts = complete.split("\n");
     const lines: unknown[] = [];
     const lineOffsets: number[] = [];
-    let cursor = startByte;
-    for (const l of parts) {
-      const byteLen = Buffer.byteLength(l, "utf8");
-      if (l.length > 0) {
-        try { lines.push(JSON.parse(l)); }
-        catch { lines.push({ __raw: l, __parseError: true }); }
-        lineOffsets.push(cursor);
+    let lineStart = dataStart;
+    for (let i = dataStart; i <= endByte; i++) {
+      if (data[i] !== 0x0A) continue;
+      const lineBytes = data.subarray(lineStart, i);
+      if (lineBytes.length > 0) {
+        const text = lineBytes.toString("utf8");
+        try { lines.push(JSON.parse(text)); }
+        catch { lines.push({ __raw: text, __parseError: true }); }
+        lineOffsets.push(proposedStart + lineStart);
       }
-      cursor += byteLen + 1;
+      lineStart = i + 1;
     }
     return {
       lines,
-      fromOffset: lineOffsets[0] ?? ceiling,
+      fromOffset: lineOffsets[0] ?? startByte,
       beforeOffset: ceiling,
       lineOffsets,
     };

@@ -49,6 +49,22 @@ describe("tailJsonl", () => {
     expect(out.offset).toBe(8);
     expect(out.lineOffsets).toEqual([0]);
   });
+
+  it("offsets stay correct when lines contain multi-byte UTF-8", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sess-"));
+    const file = join(dir, "s.jsonl");
+    // "Quản lý" is 9 UTF-8 bytes (Q=1, u=1, ả=3, n=1, space=1, l=1, ý=2, =1).
+    // Wrapped in `{"v":"Quản lý"}\n`, the line is 18 bytes.
+    const line1 = `{"v":"Quản lý"}\n`;
+    const line2 = `{"v":"OK"}\n`;
+    writeFileSync(file, line1 + line2);
+    const out = await tailJsonl(file, 0);
+    expect(out.lines).toEqual([{ v: "Quản lý" }, { v: "OK" }]);
+    // First line begins at byte 0, second at the byte length of line1.
+    expect(out.lineOffsets).toEqual([0, Buffer.byteLength(line1, "utf8")]);
+    // Cursor must equal total file size on disk (no drift).
+    expect(out.offset).toBe(Buffer.byteLength(line1 + line2, "utf8"));
+  });
 });
 
 describe("tailJsonlBefore", () => {
