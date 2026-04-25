@@ -25,6 +25,12 @@ import {
 } from "@/lib/permissionStore";
 
 export const dynamic = "force-dynamic";
+// `waitForSpawnApproval` blocks for up to APPROVAL_TIMEOUT_MS (180s) when
+// the caller opted in to user mediation. Next.js' default request
+// timeout is plenty on bare-metal Node, but some serverless hosts cap
+// shorter. Be explicit and pad past the 180s ceiling so we never get
+// the 504 racing with the deny-on-timeout path.
+export const maxDuration = 200;
 
 const execFileP = promisify(execFile);
 
