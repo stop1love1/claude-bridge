@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import {
@@ -42,18 +42,18 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
   const nameRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
 
-  const triggerOpen = () => {
+  const triggerOpen = useCallback(() => {
     setName("");
     setPath("");
     setDescription("");
     setOpen(true);
-  };
+  }, []);
 
   useEffect(() => {
     if (!openRef) return;
     openRef.current = triggerOpen;
     return () => { if (openRef.current === triggerOpen) openRef.current = null; };
-  });
+  }, [openRef, triggerOpen]);
 
   useEffect(() => {
     if (open) requestAnimationFrame(() => nameRef.current?.focus());

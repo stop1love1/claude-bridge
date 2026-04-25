@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link as LinkIcon } from "lucide-react";
 import type { SessionSummary, Task } from "@/lib/client/types";
 import { Button } from "./ui/button";
@@ -38,15 +38,20 @@ export function LinkSessionDialog({
   const [role, setRole] = useState("coordinator");
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    openRef.current = (s) => {
+  const triggerOpen = useCallback(
+    (s: SessionSummary) => {
       setCurrent(s);
       setTaskId(s.link?.taskId ?? tasks[0]?.id ?? "");
       setRole(s.link?.role ?? "coordinator");
       setOpen(true);
-    };
-    return () => { if (openRef.current) openRef.current = null; };
-  });
+    },
+    [tasks],
+  );
+
+  useEffect(() => {
+    openRef.current = triggerOpen;
+    return () => { if (openRef.current === triggerOpen) openRef.current = null; };
+  }, [openRef, triggerOpen]);
 
   const submit = async () => {
     if (!current || !taskId) return;

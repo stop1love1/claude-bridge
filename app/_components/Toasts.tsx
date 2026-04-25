@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { CheckCircle2, AlertTriangle, Info, X } from "lucide-react";
 
 type ToastKind = "success" | "error" | "info";
@@ -24,14 +24,37 @@ const KIND_STYLE: Record<ToastKind, { icon: React.ComponentType<{ size?: number;
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // Track outstanding auto-dismiss timers so we can clear them on
+  // unmount (and on manual dismiss) — leaving them queued would fire
+  // setState on an unmounted provider during HMR / app-shell teardown.
+  const timersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const push = useCallback((kind: ToastKind, message: string) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, kind, message }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
+    const handle = setTimeout(() => {
+      timersRef.current.delete(id);
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+    timersRef.current.set(id, handle);
   }, []);
 
-  const dismiss = (id: number) => setToasts((prev) => prev.filter((t) => t.id !== id));
+  const dismiss = (id: number) => {
+    const handle = timersRef.current.get(id);
+    if (handle) {
+      clearTimeout(handle);
+      timersRef.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const handle of timers.values()) clearTimeout(handle);
+      timers.clear();
+    };
+  }, []);
 
   return (
     <ToastContext.Provider value={push}>

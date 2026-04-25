@@ -142,6 +142,10 @@ export function PermissionDialog({ sessionId }: { sessionId: string | null | und
     async (decision: "allow" | "deny") => {
       if (!current) return;
       if (remember) remembered.current.set(current.tool, decision);
+      // Reset the checkbox before the next pending request renders —
+      // otherwise the user's intent for request N silently carries over
+      // to request N+1.
+      setRemember(false);
       await respond(current, decision);
     },
     [current, remember, respond],

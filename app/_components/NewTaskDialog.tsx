@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GitBranch, Plus } from "lucide-react";
 import type { App, Repo } from "@/lib/client/types";
 import { Button } from "./ui/button";
@@ -42,17 +42,17 @@ export function NewTaskDialog({
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  const triggerOpen = () => {
+  const triggerOpen = useCallback(() => {
     setBody("");
     setApp(APP_AUTO);
     setOpen(true);
-  };
+  }, []);
 
   useEffect(() => {
     if (!openRef) return;
     openRef.current = triggerOpen;
     return () => { if (openRef.current === triggerOpen) openRef.current = null; };
-  });
+  }, [openRef, triggerOpen]);
 
   const submit = async () => {
     const trimmed = body.trim();

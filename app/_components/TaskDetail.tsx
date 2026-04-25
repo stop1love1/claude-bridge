@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Meta, Repo, Run, Task } from "@/lib/client/types";
 import {
   Hash,
@@ -69,7 +69,7 @@ export function TaskDetail({
 
   const dirty = task ? (title !== task.title || body !== task.body) : false;
 
-  const save = async () => {
+  const save = useCallback(async () => {
     if (!dirty || savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
@@ -79,7 +79,7 @@ export function TaskDetail({
       savingRef.current = false;
       setSaving(false);
     }
-  };
+  }, [dirty, onSave, title, body, toast]);
 
   const continueTask = async () => {
     if (!task || continuing) return;
@@ -98,7 +98,7 @@ export function TaskDetail({
     if (!saveRef) return;
     saveRef.current = save;
     return () => { if (saveRef.current === save) saveRef.current = null; };
-  });
+  }, [saveRef, save]);
 
   if (!task) {
     return (

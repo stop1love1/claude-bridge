@@ -52,6 +52,15 @@ function Dashboard() {
 
   const newDialogRef = useRef<(() => void) | null>(null);
 
+  // Guard against state updates after unmount — `handleToggleComplete`
+  // does an optimistic flip + rollback on PATCH failure, but the user
+  // may have navigated away by the time the network call settles.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const refreshTasks = useCallback(async () => {
     try { setTasks(await api.tasks()); }
     catch (e) { toast("error", (e as Error).message); }
@@ -176,11 +185,13 @@ function Dashboard() {
         checked: next,
         section: next ? "DONE — not yet archived" : "DOING",
       });
+      if (!mountedRef.current) return;
       toast(
         "info",
         next ? "Marked complete" : "Reopened — back to DOING",
       );
     } catch (e) {
+      if (!mountedRef.current) return;
       if (previous) {
         setTasks((list) => list.map((t) => (t.id === id ? previous : t)));
       }
@@ -226,8 +237,18 @@ function Dashboard() {
     };
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen(true); return; }
-      if (mod && e.key.toLowerCase() === "n") { e.preventDefault(); newDialogRef.current?.(); return; }
+      if (mod && e.key.toLowerCase() === "k") {
+        if (isTextInput(e.target)) return;
+        e.preventDefault();
+        setPaletteOpen(true);
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "n") {
+        if (isTextInput(e.target)) return;
+        e.preventDefault();
+        newDialogRef.current?.();
+        return;
+      }
       if (!isTextInput(e.target) && !paletteOpen && e.key === "/") {
         e.preventDefault();
         document.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
