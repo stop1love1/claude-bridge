@@ -39,7 +39,7 @@ function getSR(): SRCtor | null {
  * textarea grows as you talk; final commit lands when recognition ends.
  */
 export function MicButton({
-  lang = "vi-VN",
+  lang,
   onTranscript,
 }: {
   lang?: string;
@@ -48,6 +48,13 @@ export function MicButton({
   const [supported, setSupported] = useState(false);
   const [recording, setRecording] = useState(false);
   const ref = useRef<SpeechRecognition | null>(null);
+  // Lazy default — `navigator` is undefined during SSR, so resolve only
+  // on the client. The lazy initializer ensures this runs once on mount,
+  // not on every render.
+  const [defaultLang] = useState(() =>
+    typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US",
+  );
+  const effectiveLang = lang ?? defaultLang;
 
   useEffect(() => {
     setSupported(!!getSR());
@@ -64,7 +71,7 @@ export function MicButton({
     const r = new SR();
     r.continuous = true;
     r.interimResults = true;
-    r.lang = lang;
+    r.lang = effectiveLang;
     let finalBuf = "";
     r.onresult = (e) => {
       let interim = "";
@@ -84,7 +91,7 @@ export function MicButton({
     r.onend = () => { setRecording(false); ref.current = null; };
     ref.current = r;
     try { r.start(); setRecording(true); } catch { /* already started */ }
-  }, [recording, lang, onTranscript]);
+  }, [recording, effectiveLang, onTranscript]);
 
   if (!supported) return null;
 
