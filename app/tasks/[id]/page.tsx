@@ -159,6 +159,18 @@ function TaskPageInner() {
     [id, refreshTask],
   );
 
+  const handleToggleComplete = useCallback(
+    async (next: boolean) => {
+      if (!id) return;
+      await api.updateTask(id, {
+        checked: next,
+        section: next ? "DONE — not yet archived" : "DOING",
+      });
+      await refreshTask();
+    },
+    [id, refreshTask],
+  );
+
   const handleDelete = useCallback(async () => {
     if (!id || !task) return;
     const runCount = meta?.runs.length ?? 0;
@@ -291,6 +303,7 @@ function TaskPageInner() {
             onSave={handleSave}
             onDelete={handleDelete}
             onSelectRun={handleSelectRun}
+            onToggleComplete={handleToggleComplete}
             saveRef={saveRef}
           />
         </div>

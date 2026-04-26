@@ -6,6 +6,8 @@ import {
   Hash,
   Copy,
   Check,
+  CheckCircle2,
+  Circle,
   Trash2,
   Terminal,
   Crown,
@@ -30,6 +32,7 @@ export function TaskDetail({
   onSave,
   onSelectRun,
   onDelete,
+  onToggleComplete,
   saveRef,
 }: {
   task: Task | null;
@@ -39,12 +42,14 @@ export function TaskDetail({
   onSave: (patch: Partial<Task>) => Promise<void>;
   onSelectRun: (run: Run) => void;
   onDelete: () => Promise<void>;
+  onToggleComplete: (next: boolean) => Promise<void>;
   saveRef?: React.MutableRefObject<(() => void) | null>;
 }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [saving, setSaving] = useState(false);
   const [continuing, setContinuing] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   // Synchronous flag — `setSaving(true)` only commits on the next
@@ -91,6 +96,20 @@ export function TaskDetail({
       toast("error", (e as Error).message);
     } finally {
       setContinuing(false);
+    }
+  };
+
+  const toggleComplete = async () => {
+    if (!task || toggling) return;
+    const next = !task.checked;
+    setToggling(true);
+    try {
+      await onToggleComplete(next);
+      toast("info", next ? "Marked complete" : "Reopened — back to DOING");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setToggling(false);
     }
   };
 
@@ -191,6 +210,21 @@ export function TaskDetail({
             {copiedId ? <Check size={11} className="text-success" /> : <Copy size={11} className="opacity-60" />}
           </Button>
           <span className="text-fg-dim ml-auto">{relativeTime(meta?.createdAt ?? `${task.date}T00:00:00Z`)}</span>
+          <Button
+            onClick={toggleComplete}
+            disabled={toggling}
+            variant={task.checked ? "secondary" : "outline"}
+            size="xs"
+            title={task.checked ? "Reopen — moves back to DOING" : "Mark complete — moves to DONE"}
+            className="h-6 px-2 gap-1"
+          >
+            {task.checked ? (
+              <CheckCircle2 size={12} className="text-success" />
+            ) : (
+              <Circle size={12} className="opacity-70" />
+            )}
+            {task.checked ? "Completed" : "Mark complete"}
+          </Button>
           <Button
             onClick={confirmDelete}
             variant="ghost"

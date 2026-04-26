@@ -52,15 +52,6 @@ function Dashboard() {
 
   const newDialogRef = useRef<(() => void) | null>(null);
 
-  // Guard against state updates after unmount — `handleToggleComplete`
-  // does an optimistic flip + rollback on PATCH failure, but the user
-  // may have navigated away by the time the network call settles.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
   const refreshTasks = useCallback(async () => {
     try { setTasks(await api.tasks()); }
     catch (e) { toast("error", (e as Error).message); }
@@ -162,41 +153,6 @@ function Dashboard() {
       await refreshTasks();
       toast("success", `Created ${t.id}`);
     } catch (e) { toast("error", (e as Error).message); }
-  };
-
-  const handleToggleComplete = async (id: string, next: boolean) => {
-    const previous = tasks.find((t) => t.id === id);
-    // Optimistic update — flip the checkbox immediately so the click feels
-    // instant; the next allMeta poll will re-converge if the PATCH fails.
-    setTasks((list) =>
-      list.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              checked: next,
-              section: next ? "DONE — not yet archived" : "DOING",
-              status: next ? "done" : "doing",
-            }
-          : t,
-      ),
-    );
-    try {
-      await api.updateTask(id, {
-        checked: next,
-        section: next ? "DONE — not yet archived" : "DOING",
-      });
-      if (!mountedRef.current) return;
-      toast(
-        "info",
-        next ? "Marked complete" : "Reopened — back to DOING",
-      );
-    } catch (e) {
-      if (!mountedRef.current) return;
-      if (previous) {
-        setTasks((list) => list.map((t) => (t.id === id ? previous : t)));
-      }
-      toast("error", (e as Error).message);
-    }
   };
 
   const handleDeleteTask = async (id: string) => {
@@ -334,7 +290,6 @@ function Dashboard() {
           onOpenTask={openTask}
           onQuickAdd={handleQuickAdd}
           onDeleteTask={handleDeleteTask}
-          onToggleComplete={handleToggleComplete}
         />
       </main>
 
