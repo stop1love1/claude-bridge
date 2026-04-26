@@ -153,6 +153,25 @@ export function teardownTelegramNotifier(): void {
 }
 
 /**
+ * Pull the human-readable `description` field out of a Telegram error
+ * response (`{"ok":false,"error_code":403,"description":"Forbidden: …"}`),
+ * falling back to the raw body when the response wasn't JSON. Caps the
+ * result so a runaway error message can't blow out a toast.
+ */
+function extractTelegramError(body: string): string {
+  if (!body) return "(empty body)";
+  try {
+    const parsed = JSON.parse(body) as { description?: unknown };
+    if (typeof parsed.description === "string" && parsed.description.trim()) {
+      return parsed.description.trim().slice(0, 200);
+    }
+  } catch {
+    /* not JSON — fall through to raw */
+  }
+  return body.slice(0, 200);
+}
+
+/**
  * Surface the configured/health state to a `/api/telegram/test` route so
  * the user can verify their bot token + chat id without grepping logs.
  */
@@ -175,7 +194,8 @@ export async function pingTelegramTest(): Promise<{ ok: boolean; reason?: string
       signal: AbortSignal.timeout(10_000),
     });
     if (!r.ok) {
-      return { ok: false, reason: `${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}` };
+      const body = await r.text().catch(() => "");
+      return { ok: false, reason: `${r.status} ${extractTelegramError(body)}` };
     }
     return { ok: true };
   } catch (err) {

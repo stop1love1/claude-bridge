@@ -2,13 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, Folder, GitBranch, Send, Settings, Sparkles, Trash2 } from "lucide-react";
+import { Boxes, Folder, GitBranch, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { App, Meta, Task } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { AddAppDialog } from "../_components/AddAppDialog";
 import { AppSettingsDialog } from "../_components/AppSettingsDialog";
-import { TelegramSettingsDialog } from "../_components/TelegramSettingsDialog";
 import { Button } from "../_components/ui/button";
 import { useToast } from "../_components/Toasts";
 import { useConfirm } from "../_components/ConfirmProvider";
@@ -36,7 +35,6 @@ function AppsPage() {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState<Set<string>>(new Set());
   const [settingsApp, setSettingsApp] = useState<App | null>(null);
-  const [telegramOpen, setTelegramOpen] = useState(false);
   const addDialogRef = useRef<(() => void) | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
@@ -170,16 +168,6 @@ function AppsPage() {
             <span className="hidden lg:inline text-[10px] text-muted-foreground">
               {apps.length} app{apps.length === 1 ? "" : "s"} registered
             </span>
-            <Button
-              variant="ghost"
-              size="iconSm"
-              onClick={() => setTelegramOpen(true)}
-              title="Telegram notifier settings (bot token + chat id)"
-              aria-label="Telegram settings"
-              className="text-fg-dim hover:text-foreground"
-            >
-              <Send size={13} />
-            </Button>
             <AddAppDialog onChanged={refresh} openRef={addDialogRef} />
           </>
         }
@@ -353,11 +341,6 @@ function AppsPage() {
         onSaved={(updated) => {
           setApps((list) => list.map((a) => (a.name === updated.name ? updated : a)));
         }}
-      />
-
-      <TelegramSettingsDialog
-        open={telegramOpen}
-        onOpenChange={setTelegramOpen}
       />
     </div>
   );

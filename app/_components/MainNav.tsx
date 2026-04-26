@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, LayoutGrid, Terminal } from "lucide-react";
+import { Boxes, LayoutGrid, Settings as SettingsIcon, Terminal } from "lucide-react";
 
-export type MainNavSection = "apps" | "tasks" | "sessions";
+export type MainNavSection = "apps" | "tasks" | "sessions" | "settings";
 
 const ITEMS: {
   key: MainNavSection;
@@ -14,6 +14,7 @@ const ITEMS: {
   { key: "apps",     href: "/apps",     label: "Apps",     Icon: Boxes },
   { key: "tasks",    href: "/tasks",    label: "Tasks",    Icon: LayoutGrid },
   { key: "sessions", href: "/sessions", label: "Sessions", Icon: Terminal },
+  { key: "settings", href: "/settings", label: "Settings", Icon: SettingsIcon },
 ];
 
 /**

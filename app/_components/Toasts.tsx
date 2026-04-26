@@ -59,20 +59,25 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={push}>
       {children}
-      <div className="fixed top-3 right-3 z-50 flex flex-col gap-2 pointer-events-none">
+      <div className="fixed top-3 right-3 z-50 flex flex-col gap-2 pointer-events-none max-w-[calc(100vw-1.5rem)]">
         {toasts.map((t) => {
           const { icon: Icon, ring } = KIND_STYLE[t.kind];
           return (
             <div
               key={t.id}
-              className={`pointer-events-auto flex items-start gap-2 pl-3 pr-2 py-2 rounded-md border ${ring} bg-card text-sm shadow-lg w-80 animate-slide-in`}
+              className={`pointer-events-auto flex items-start gap-2 pl-3 pr-2 py-2 rounded-md border ${ring} bg-card text-sm shadow-lg w-80 max-w-full animate-slide-in`}
             >
               <Icon size={15} className={
                 t.kind === "success" ? "text-success mt-0.5 shrink-0" :
                 t.kind === "error"   ? "text-destructive mt-0.5 shrink-0" :
                 "text-primary mt-0.5 shrink-0"
               } />
-              <span className="flex-1 wrap-break-word">{t.message}</span>
+              <span
+                className="flex-1 min-w-0 whitespace-pre-wrap"
+                style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+              >
+                {t.message}
+              </span>
               <button
                 onClick={() => dismiss(t.id)}
                 className="text-muted-foreground hover:text-foreground p-0.5 rounded shrink-0"

@@ -197,6 +197,13 @@ export const api = {
       `/telegram/settings`,
       { method: "PUT", body: JSON.stringify(patch) },
     ),
+  detectSettings: () =>
+    req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`),
+  updateDetectSettings: (patch: { source: "auto" | "llm" | "heuristic" }) =>
+    req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   scanApp: (name: string) =>
     req<{
       ok: true;
