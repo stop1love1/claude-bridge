@@ -11,11 +11,18 @@ import { spawnFreeSession } from "@/lib/spawn";
 import { wireRunLifecycle } from "@/lib/coordinator";
 import { getApp } from "@/lib/apps";
 import { prepareBranch } from "@/lib/gitOps";
+import { createWorktreeForRun } from "@/lib/worktrees";
 import { suggestRepo } from "@/lib/repoHeuristic";
 import { loadProfiles } from "@/lib/profileStore";
 import { buildChildPrompt } from "@/lib/childPrompt";
 import { loadHouseRules } from "@/lib/houseRules";
+import { topMemoryEntries } from "@/lib/memory";
 import { loadPlaybook } from "@/lib/playbooks";
+import { loadPinnedFiles } from "@/lib/pinnedFiles";
+import { ensureFreshSymbolIndex } from "@/lib/symbolStore";
+import { ensureFreshStyleFingerprint } from "@/lib/styleStore";
+import { attachReferences } from "@/lib/contextAttach";
+import { buildRecentDirection } from "@/lib/recentDirection";
 import { isValidTaskId } from "@/lib/tasks";
 import { badRequest, isValidAgentRole, isValidSessionId } from "@/lib/validate";
 import {
@@ -168,8 +175,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // app, honor its `git.branchMode` before the child sees the tree.
   // Failures abort the spawn — we don't want a child editing the wrong
   // branch silently.
+  // P4/F1 — when worktreeMode is enabled, the worktree owns its
+  // branch (createWorktreeForRun runs `git worktree add -b <branch>`).
+  // Running prepareBranch in the LIVE tree first would either move HEAD
+  // unnecessarily or, worse, claim the same branch the worktree wants
+  // to check out (branches can't be checked out in two places at once).
+  // Skip prepareBranch in worktree mode — the worktree handles branch
+  // policy via `resolveTargetBranch` in `lib/worktrees.ts`.
   const app = getApp(repo);
-  if (app && app.git.branchMode !== "current") {
+  const useWorktree = !!(app && app.git.worktreeMode === "enabled");
+  if (app && app.git.branchMode !== "current" && !useWorktree) {
     const result = await prepareBranch(repoCwd, app.git, id);
     if (!result.ok) {
       return NextResponse.json(
@@ -189,11 +204,39 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // active in the same cwd.
   const sessionId = randomUUID();
 
+  // P4/F1 — when worktree mode is enabled, create a private worktree
+  // BEFORE spawning so the child's cwd is the isolated copy. We fall
+  // back to the live tree if the worktree create fails — better to ship
+  // a degraded run than to refuse the spawn entirely (the operator sees
+  // the warning in the logs, and the worktree pruner mops up partials).
+  let spawnCwd = repoCwd;
+  let worktreePath: string | null = null;
+  let worktreeBranch: string | null = null;
+  let worktreeBaseBranch: string | null = null;
+  if (useWorktree && app) {
+    const handle = await createWorktreeForRun({
+      appPath: app.path,
+      settings: app.git,
+      taskId: id,
+      sessionId,
+    });
+    if (handle) {
+      spawnCwd = handle.path;
+      worktreePath = handle.path;
+      worktreeBranch = handle.branch;
+      worktreeBaseBranch = handle.baseBranch;
+    } else {
+      console.warn(
+        `[worktree] create failed for ${app.name} task ${id} sid ${sessionId} — falling back to live tree`,
+      );
+    }
+  }
+
   // Pre-warm: cheap repo context the child can read without burning a
   // tool call. All commands fail-soft — a fresh / non-git repo simply
   // gets a fallback string. We use `execFile` (no shell) so the same
   // path works on Windows + bash + PowerShell parents.
-  const contextBlock = await buildRepoContextBlock(repoCwd);
+  const contextBlock = await buildRepoContextBlock(spawnCwd);
 
   // Wrap the coordinator-authored brief with the standard scaffolding
   // (task header, language directive, profile, context, self-register
@@ -205,8 +248,43 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // the underlying file / config is absent so existing apps without any
   // of these set behave exactly as before.
   const houseRules = loadHouseRules(app?.path ?? null);
+  const memoryEntries = topMemoryEntries(app?.path ?? null);
   const playbookBody = loadPlaybook(role);
   const verifyHint = app?.verify ?? null;
+
+  // P3a — symbol index + style fingerprint + pinned files. All gated
+  // on `app !== null` because they need the registered app's path. The
+  // `ensureFresh*` calls are lazy: cache hit if recent, else re-scan
+  // synchronously (file walks are bounded by FILE_WALK_CAP). Pinned
+  // files are read fresh per spawn (small list, cheap).
+  const symbolIndex = app
+    ? ensureFreshSymbolIndex(app.name, app.path, app.symbolDirs)
+    : null;
+  const styleFingerprint = app
+    ? ensureFreshStyleFingerprint(app.name, app.path)
+    : null;
+  const pinnedFiles = app ? loadPinnedFiles(app.path, app.pinnedFiles) : [];
+
+  // P3b — auto-attach reference files (B2) heuristically picked from
+  // the symbol index by task-body keyword overlap, plus recent-direction
+  // git log (B4) for the focus dir we infer from the same heuristic.
+  // Both gated on `app !== null` (need cwd + index). Pinned paths are
+  // excluded so we don't waste an attach slot duplicating pinned content.
+  const attachedReferences = app && symbolIndex
+    ? attachReferences({
+        appPath: app.path,
+        taskBody: meta.taskBody,
+        symbolIndex,
+        excludePaths: pinnedFiles.map((p) => p.rel),
+      })
+    : [];
+  const recentDirection = app
+    ? await buildRecentDirection({
+        appCwd: app.path,
+        taskBody: meta.taskBody,
+        symbolIndex,
+      })
+    : null;
 
   const prependedPrompt = buildChildPrompt({
     taskId: id,
@@ -216,13 +294,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     childSessionId: sessionId,
     role,
     repo,
-    repoCwd,
+    repoCwd: spawnCwd,
     contextBlock,
     coordinatorBody: prompt,
     profile: profilesMap?.[repo],
     houseRules,
     playbookBody,
     verifyHint,
+    symbolIndex,
+    styleFingerprint,
+    pinnedFiles,
+    attachedReferences,
+    recentDirection,
+    memoryEntries,
   });
 
   // User mediation. We only ask if (a) the caller didn't opt out AND
@@ -270,12 +354,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     startedAt: null,
     endedAt: null,
     parentSessionId: parentSessionId ?? null,
+    worktreePath: worktreePath ?? null,
+    worktreeBranch: worktreeBranch ?? null,
+    worktreeBaseBranch: worktreeBaseBranch ?? null,
   });
 
   let childHandle;
   try {
     childHandle = spawnFreeSession(
-      repoCwd,
+      spawnCwd,
       prependedPrompt,
       { mode: "bypassPermissions" },
       settingsPath,

@@ -12,6 +12,11 @@
  */
 import type { RepoProfile } from "./repoProfile";
 import type { AppVerify } from "./apps";
+import type { SymbolIndex, SymbolEntry } from "./symbolIndex";
+import type { StyleFingerprint } from "./styleFingerprint";
+import type { PinnedFile } from "./pinnedFiles";
+import type { ReferenceFile } from "./contextAttach";
+import type { RecentDirection } from "./recentDirection";
 import { BRIDGE_URL, BRIDGE_FOLDER } from "./paths";
 
 export interface BuildChildPromptOpts {
@@ -57,6 +62,53 @@ export interface BuildChildPromptOpts {
    * the bridge has to.
    */
   verifyHint?: AppVerify | null;
+  /**
+   * (P3a/A2) Symbol index for the target app — top-level exports
+   * extracted from `lib/`, `utils/`, `hooks/`, `components/ui/` (or
+   * the dirs the operator overrode in `bridge.json.symbolDirs`).
+   * Rendered as a `## Available helpers` section so the agent knows
+   * what already exists and reaches for it instead of writing a new
+   * util that duplicates one already in the codebase. Null/undefined
+   * = skip the section.
+   */
+  symbolIndex?: SymbolIndex | null;
+  /**
+   * (P3a/A1) Per-app style fingerprint — auto-detected indent / quote
+   * / semicolon / export / file-naming preferences. Rendered as a
+   * compact `## House style (auto-detected)` section so the agent
+   * matches the codebase's micro-style without the operator having
+   * to hand-write rules in house-rules.md. Null/undefined = skip.
+   */
+  styleFingerprint?: StyleFingerprint | null;
+  /**
+   * (P3a/B3) Pinned files declared in `bridge.json.pinnedFiles`,
+   * pre-loaded as `{ rel, content, truncated }`. Rendered as a
+   * `## Pinned context` section with each file in its own fenced
+   * code block. Empty list = skip the section.
+   */
+  pinnedFiles?: PinnedFile[];
+  /**
+   * (P3b/B2) Auto-attached reference files chosen heuristically from
+   * the symbol index using task-body keyword overlap. Rendered as
+   * `## Reference files` distinct from `## Pinned context` so the
+   * agent knows these were AI-picked vs operator-pinned. Empty list
+   * = skip the section.
+   */
+  attachedReferences?: ReferenceFile[];
+  /**
+   * (P3b/B4) Recent git activity in the focus dir the bridge inferred
+   * from the task body. Rendered as `## Recent direction` after
+   * `## Repo context` so the agent sees what's been actively
+   * changing in the area it's about to touch. Null = skip.
+   */
+  recentDirection?: RecentDirection | null;
+  /**
+   * (P5/G1) Per-app memory entries — durable learnings from prior
+   * tasks. Rendered as `## Memory` after `## House style` so the
+   * agent reads accreted rules right next to the static team
+   * constraints. Empty list = skip.
+   */
+  memoryEntries?: string[];
 }
 
 const COORDINATOR_BODY_CAP = 16 * 1024;
@@ -114,14 +166,19 @@ export function sanitizeTaskBodyForFence(body: string): string {
  *   1. Header line (role, task id, repo, cwd, dispatcher disclaimer)
  *   2. ## Language
  *   3. ## House rules                            (OPT-IN — opts.houseRules)
- *   4. ## Task
- *   5. ## Your role (playbook prepended if any, then coordinator brief)
- *   6. ## Repo profile
- *   7. ## Repo context (auto-captured by bridge)
- *   8. ## Self-register
- *   9. ## Report contract — REQUIRED
- *  10. ## Verify commands                        (OPT-IN — opts.verifyHint)
- *  11. ## Spawn-time signals
+ *   4. ## House style (auto-detected)            (OPT-IN — opts.styleFingerprint)
+ *   5. ## Task
+ *   6. ## Your role (playbook prepended if any, then coordinator brief)
+ *   7. ## Repo profile
+ *   8. ## Available helpers                      (OPT-IN — opts.symbolIndex)
+ *   9. ## Repo context (auto-captured by bridge)
+ *  10. ## Recent direction                       (OPT-IN — opts.recentDirection)
+ *  11. ## Pinned context                         (OPT-IN — opts.pinnedFiles)
+ *  12. ## Reference files                        (OPT-IN — opts.attachedReferences)
+ *  13. ## Self-register
+ *  14. ## Report contract — REQUIRED
+ *  15. ## Verify commands                        (OPT-IN — opts.verifyHint)
+ *  16. ## Spawn-time signals
  */
 export function buildChildPrompt(opts: BuildChildPromptOpts): string {
   const {
@@ -140,6 +197,12 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     houseRules,
     playbookBody,
     verifyHint,
+    symbolIndex,
+    styleFingerprint,
+    pinnedFiles,
+    attachedReferences,
+    recentDirection,
+    memoryEntries,
   } = opts;
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
@@ -166,6 +229,29 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
       "Team constraints that apply to every change in this codebase. Treat as hard requirements — violating one means the work will be rejected at review.",
       "",
       houseRulesTrimmed,
+      "",
+    );
+  }
+
+  const styleLines = renderStyleFingerprintLines(styleFingerprint);
+  if (styleLines.length > 0) {
+    lines.push(
+      "## House style (auto-detected)",
+      "",
+      "Match these conventions in any new or edited code. Auto-detected from a sample of the codebase, so they reflect what the team actually writes — not a stale style guide. Mismatches won't fail the build but will read as alien.",
+      "",
+      ...styleLines,
+      "",
+    );
+  }
+
+  if (memoryEntries && memoryEntries.length > 0) {
+    lines.push(
+      "## Memory (learnings from prior tasks in this app)",
+      "",
+      "Durable rules accreted from past tasks in this app. Treat each as a soft requirement — the team chose to remember it for a reason. Only deviate when the current task body explicitly overrides.",
+      "",
+      ...memoryEntries.map((e) => (e.startsWith("-") ? e : `- ${e}`)),
       "",
     );
   }
@@ -212,10 +298,64 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "",
     profileLine,
     "",
+  );
+
+  const symbolLines = renderSymbolIndexLines(symbolIndex);
+  if (symbolLines.length > 0) {
+    lines.push(
+      "## Available helpers",
+      "",
+      "Top-level exports already in this codebase. Reuse these instead of writing a new utility — duplicating an existing helper is the fastest way to ship code that reads as alien. Auto-extracted from `lib/`, `utils/`, `hooks/`, `components/ui/` (override via `bridge.json.symbolDirs`).",
+      "",
+      ...symbolLines,
+      "",
+    );
+  }
+
+  lines.push(
     "## Repo context (auto-captured by bridge)",
     "",
     ctx,
     "",
+  );
+
+  const recentLines = renderRecentDirectionLines(recentDirection);
+  if (recentLines.length > 0) {
+    lines.push(
+      "## Recent direction",
+      "",
+      "Last 10 commits that touched the dir the task is most likely focused on. Use this to see what conventions are being established right now (the static profile data above can lag a refactor by days).",
+      "",
+      ...recentLines,
+      "",
+    );
+  }
+
+  const pinnedLines = renderPinnedFilesLines(pinnedFiles);
+  if (pinnedLines.length > 0) {
+    lines.push(
+      "## Pinned context",
+      "",
+      "Files the operator pinned for this app — canonical examples, type files, routing manifests. Treat them as authoritative for shape and convention; if your work needs to differ, justify in your report.",
+      "",
+      ...pinnedLines,
+      "",
+    );
+  }
+
+  const referenceLines = renderReferenceFilesLines(attachedReferences);
+  if (referenceLines.length > 0) {
+    lines.push(
+      "## Reference files",
+      "",
+      "Files the bridge auto-picked based on task-body keyword overlap with the symbol index. These are the **closest examples already in the codebase** to what the task is asking for — match their patterns. Lower-priority than `## Pinned context` (operator-curated) but higher-signal than the rest of the repo.",
+      "",
+      ...referenceLines,
+      "",
+    );
+  }
+
+  lines.push(
     "## Self-register",
     "",
     `Your session UUID is \`${childSessionId}\` — already passed via \`--session-id\`. The bridge has pre-registered your run in \`meta.json\`. Confirm registration once via:`,
@@ -309,5 +449,197 @@ function renderVerifyEntries(v: AppVerify | null | undefined): string[] {
       out.push(`- **${label}** — \`${cmd.trim()}\``);
     }
   }
+  return out;
+}
+
+/**
+ * (P3a/A2) Render the symbol index as bullet lines grouped by kind.
+ * Components first (most useful for UI repos), then plain helpers.
+ * Caps at 30 entries to keep prompt token cost predictable; the
+ * `+N more` line tells the agent how many were truncated.
+ */
+const SYMBOLS_PROMPT_CAP = 30;
+function renderSymbolIndexLines(
+  index: SymbolIndex | null | undefined,
+): string[] {
+  if (!index || !index.symbols || index.symbols.length === 0) return [];
+
+  // Stable sort: components first, then by file path, then by name.
+  const sorted = [...index.symbols].sort((a, b) => {
+    const aComp = a.kind === "component" ? 0 : 1;
+    const bComp = b.kind === "component" ? 0 : 1;
+    if (aComp !== bComp) return aComp - bComp;
+    if (a.file !== b.file) return a.file.localeCompare(b.file);
+    return a.name.localeCompare(b.name);
+  });
+
+  const shown = sorted.slice(0, SYMBOLS_PROMPT_CAP);
+  const extra = sorted.length - shown.length;
+
+  const out: string[] = [];
+  let lastFile = "";
+  for (const s of shown) {
+    if (s.file !== lastFile) {
+      if (lastFile !== "") out.push("");
+      out.push(`From \`${s.file}\`:`);
+      lastFile = s.file;
+    }
+    const sigSuffix = s.signature ? ` — \`${s.signature}\`` : "";
+    out.push(`- \`${s.name}\` *(${s.kind})*${sigSuffix}`);
+  }
+  if (extra > 0) {
+    out.push("", `…and **${extra}** more — full list in \`.bridge-state/symbol-indexes.json\`.`);
+  }
+  // Quiet a possible unused-symbol warning when SymbolEntry isn't
+  // referenced by name elsewhere in this file.
+  void (null as unknown as SymbolEntry | null);
+  return out;
+}
+
+/**
+ * (P3a/A1) Render the style fingerprint as 5-7 short lines. Skips
+ * dimensions where the auto-detector returned `unknown` so we don't
+ * give the agent confidence-less guidance ("indent: unknown" is
+ * worse than no advice).
+ */
+function renderStyleFingerprintLines(
+  fp: StyleFingerprint | null | undefined,
+): string[] {
+  if (!fp) return [];
+  const out: string[] = [];
+
+  if (fp.indent.kind === "spaces") {
+    out.push(`- Indent: **${fp.indent.width} spaces**`);
+  } else if (fp.indent.kind === "tabs") {
+    out.push(`- Indent: **tabs**`);
+  }
+  if (fp.quotes !== "unknown") {
+    const label =
+      fp.quotes === "single" ? "single (`'…'`)" :
+      fp.quotes === "double" ? "double (`\"…\"`)" :
+      "mixed (no clear preference)";
+    out.push(`- String quotes: ${label}`);
+  }
+  if (fp.semicolons !== "unknown") {
+    const label =
+      fp.semicolons === "always" ? "always — terminate every statement" :
+      fp.semicolons === "never" ? "never — ASI, no trailing semicolons" :
+      "mixed (no clear preference)";
+    out.push(`- Semicolons: ${label}`);
+  }
+  if (fp.trailingComma !== "unknown") {
+    const label =
+      fp.trailingComma === "all" ? "always (multi-line lists)" :
+      fp.trailingComma === "none" ? "never" :
+      "mixed";
+    out.push(`- Trailing commas: ${label}`);
+  }
+  if (fp.exports !== "unknown") {
+    const label =
+      fp.exports === "named" ? "**named exports** preferred (default exports rare)" :
+      fp.exports === "default" ? "**default exports** preferred" :
+      "mixed (named + default both common)";
+    out.push(`- Module exports: ${label}`);
+  }
+  if (fp.fileNaming.tsx !== "unknown") {
+    out.push(`- \`.tsx\` file naming: **${fp.fileNaming.tsx}**`);
+  }
+  if (fp.fileNaming.ts !== "unknown" && fp.fileNaming.ts !== fp.fileNaming.tsx) {
+    out.push(`- \`.ts\` file naming: **${fp.fileNaming.ts}**`);
+  }
+
+  if (out.length === 0) return [];
+  out.push(
+    "",
+    `_Detected from ${fp.sampledFiles} file(s); refresh after major refactors via the apps page._`,
+  );
+  return out;
+}
+
+/**
+ * (P3a/B3) Render pinned files as fenced code blocks, one per file.
+ * The fence language is inferred from the file extension when
+ * possible — helps the LLM tokenizer treat the contents as code
+ * rather than prose. Truncated files get a trailing marker line.
+ */
+function renderPinnedFilesLines(
+  files: PinnedFile[] | null | undefined,
+): string[] {
+  if (!files || files.length === 0) return [];
+  const out: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    if (i > 0) out.push("");
+    const f = files[i];
+    const lang = inferLang(f.rel);
+    out.push(`### \`${f.rel}\``, "", "```" + lang, f.content);
+    if (f.truncated) {
+      out.push(`…(bridge: file truncated at 4 KB)`);
+    }
+    out.push("```");
+  }
+  return out;
+}
+
+function inferLang(file: string): string {
+  const dot = file.lastIndexOf(".");
+  if (dot <= 0) return "";
+  const ext = file.slice(dot + 1).toLowerCase();
+  const map: Record<string, string> = {
+    ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js",
+    json: "json", md: "md", yml: "yaml", yaml: "yaml",
+    py: "python", go: "go", rs: "rust", java: "java", rb: "ruby",
+    sh: "bash", css: "css", html: "html",
+  };
+  return map[ext] ?? "";
+}
+
+/**
+ * (P3b/B2) Render auto-attached reference files. Same fenced-block
+ * shape as `renderPinnedFilesLines` so the agent's tokenizer treats
+ * the body as code, plus a one-line score badge per file so the
+ * agent knows WHY each was attached.
+ */
+function renderReferenceFilesLines(
+  files: ReferenceFile[] | null | undefined,
+): string[] {
+  if (!files || files.length === 0) return [];
+  const out: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    if (i > 0) out.push("");
+    const f = files[i];
+    const lang = inferLang(f.rel);
+    out.push(
+      `### \`${f.rel}\` _(score ${f.score})_`,
+      "",
+      "```" + lang,
+      f.content,
+    );
+    if (f.truncated) {
+      out.push(`…(bridge: file truncated at 4 KB)`);
+    }
+    out.push("```");
+  }
+  return out;
+}
+
+/**
+ * (P3b/B4) Render the recent-direction window as a fenced diff-stat
+ * block. Single block per spawn (we always pick one focus dir, not a
+ * list).
+ */
+function renderRecentDirectionLines(
+  direction: RecentDirection | null | undefined,
+): string[] {
+  if (!direction) return [];
+  const out: string[] = [
+    `Focus dir: \`${direction.dir}\` (auto-picked from task body)`,
+    "",
+    "```",
+    direction.log,
+  ];
+  if (direction.truncated) {
+    out.push(`…(bridge: log truncated to 30 lines)`);
+  }
+  out.push("```");
   return out;
 }

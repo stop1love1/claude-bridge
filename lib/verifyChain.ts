@@ -18,7 +18,7 @@
  * sees the ground-truth error before re-reading the original brief.
  */
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { App, AppVerify } from "./apps";
@@ -27,6 +27,8 @@ import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { spawnFreeSession } from "./spawn";
 import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
+import { readOriginalPrompt } from "./promptStore";
+import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
 
 /** Canonical order — matches the `## Verify commands` section in childPrompt. */
@@ -227,13 +229,30 @@ function execStep(
 }
 
 /**
- * True iff the run is a (verify-)retry already, so the lifecycle hook
- * should NOT spawn another follow-up. Crash retries (`-retry`) and
- * verify retries (`-vretry`) both map here — neither gets a second
- * verify-driven retry.
+ * True iff the run is a retry already (any flavour), so the lifecycle
+ * hook should NOT spawn another follow-up. Five suffixes map here:
+ *
+ *   - `-retry`    crash retry from `lib/childRetry.ts`
+ *   - `-vretry`   verify-fail retry from this module
+ *   - `-cretry`   claim-vs-diff retry from `lib/verifier.ts`
+ *   - `-stretry`  style-critic retry from `lib/styleCritic.ts`
+ *   - `-svretry`  semantic-verifier retry from `lib/semanticVerifier.ts`
+ *
+ * No retry of any flavour gets a second retry of any kind — one extra
+ * attempt per failure mode is the documented cap.
+ *
+ * NOTE: `-svretry` ends in `-vretry`, so order matters in the matcher
+ * (or rather, doesn't, since either match is a retry). The literal
+ * suffix tests below tolerate both substrings safely.
  */
 export function isAlreadyRetryRun(role: string): boolean {
-  return role.endsWith("-retry") || role.endsWith(VRETRY_SUFFIX);
+  return (
+    role.endsWith("-retry") ||
+    role.endsWith(VRETRY_SUFFIX) ||
+    role.endsWith("-cretry") ||
+    role.endsWith("-stretry") ||
+    role.endsWith("-svretry")
+  );
 }
 
 /**
@@ -288,45 +307,17 @@ export function renderVerifyRetryContextBlock(verify: RunVerify): string {
 }
 
 /**
- * Locate the original prompt fed to the failed child. Same convention
- * as `childRetry.tryReadOriginalPrompt`: coordinator writes a
- * `<role>-<repo>.prompt.txt` per dispatch under `sessions/<task>/`.
- * Pick the newest matching file when several exist (rare, but possible
- * when the same role was dispatched twice across attempts).
- */
-function tryReadOriginalPrompt(taskId: string, failedRun: Run): string {
-  try {
-    const dir = join(SESSIONS_DIR, taskId);
-    if (!existsSync(dir)) return "";
-    const candidates = readdirSync(dir).filter(
-      (f) =>
-        f.endsWith(".prompt.txt") &&
-        f.startsWith(`${failedRun.role}-`),
-    );
-    candidates.sort(
-      (a, b) =>
-        statSync(join(dir, b)).mtimeMs - statSync(join(dir, a)).mtimeMs,
-    );
-    const pick = candidates[0];
-    if (!pick) return "";
-    return readFileSync(join(dir, pick), "utf8");
-  } catch {
-    return "";
-  }
-}
-
-/**
  * Spawn a verify-retry. Mirrors `childRetry.spawnRetryRun`: direct
  * `spawnFreeSession` call (no HTTP self-loop), inherits the failed
  * run's `parentSessionId` so the new run renders as a sibling under the
  * same coordinator, role gets the `-vretry` suffix to keep the retry
  * budget separate from crash retries.
  */
-export function spawnVerifyRetry(args: {
+export async function spawnVerifyRetry(args: {
   taskId: string;
   finishedRun: Run;
   verify: RunVerify;
-}): { sessionId: string; run: Run } | null {
+}): Promise<{ sessionId: string; run: Run } | null> {
   const { taskId, finishedRun, verify } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
@@ -336,11 +327,14 @@ export function spawnVerifyRetry(args: {
   } catch {
     return null;
   }
-  const repoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
-  if (!repoCwd) return null;
+  const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
+  if (!liveRepoCwd) return null;
+  // P4/F1: retries inherit the parent's worktree so they edit the same
+  // sandbox the original run started in.
+  const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
 
   const ctxBlock = renderVerifyRetryContextBlock(verify);
-  const originalPrompt = tryReadOriginalPrompt(taskId, finishedRun);
+  const originalPrompt = readOriginalPrompt(taskId, finishedRun);
   const body =
     originalPrompt.trim() ||
     "(original prompt unavailable — repo state and the failure context above are the only signals you have. Inspect the repo, infer the intent, and try to make forward progress.)";
@@ -352,7 +346,7 @@ export function spawnVerifyRetry(args: {
   let childHandle;
   try {
     childHandle = spawnFreeSession(
-      repoCwd,
+      spawnCwd,
       retryPrompt,
       { mode: "bypassPermissions" },
       settingsPath,
@@ -372,8 +366,12 @@ export function spawnVerifyRetry(args: {
     endedAt: null,
     parentSessionId: finishedRun.parentSessionId ?? null,
     retryOf: finishedRun.sessionId,
+    ...inheritWorktreeFields(finishedRun),
   };
-  appendRun(sessionsDir, retryRun);
+  // Async per-task lock: must await before wiring lifecycle so an
+  // early `exit` from the freshly-spawned child can't fire updateRun
+  // against a sessionId not yet visible in meta.json.
+  await appendRun(sessionsDir, retryRun);
   wireRunLifecycle(
     sessionsDir,
     sessionId,

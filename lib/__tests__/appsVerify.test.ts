@@ -55,8 +55,11 @@ describe("apps.verify (D1)", () => {
       path: "/abs/app-web",
       rawPath: "../app-web",
       description: "",
-      git: { branchMode: "current", fixedBranch: "", autoCommit: false, autoPush: false },
+      git: { branchMode: "current", fixedBranch: "", autoCommit: false, autoPush: false, worktreeMode: "disabled" },
+      pinnedFiles: [],
+      symbolDirs: [],
       verify: {},
+      quality: {},
     }];
     const out = serializeApps(apps);
     expect(out).not.toContain("verify");
@@ -69,8 +72,11 @@ describe("apps.verify (D1)", () => {
       path: "/abs/app-web",
       rawPath: "../app-web",
       description: "",
-      git: { branchMode: "current", fixedBranch: "", autoCommit: false, autoPush: false },
+      git: { branchMode: "current", fixedBranch: "", autoCommit: false, autoPush: false, worktreeMode: "disabled" },
+      pinnedFiles: [],
+      symbolDirs: [],
       verify: { test: "bun test", typecheck: "tsc --noEmit" },
+      quality: {},
     }];
     const parsed = JSON.parse(serializeApps(apps)) as {
       apps: Array<{ verify?: Record<string, string> }>;
@@ -87,8 +93,11 @@ describe("apps.verify (D1)", () => {
       path: "/abs/app-api",
       rawPath: "../app-api",
       description: "API",
-      git: { branchMode: "current", fixedBranch: "", autoCommit: false, autoPush: false },
+      git: { branchMode: "current", fixedBranch: "", autoCommit: false, autoPush: false, worktreeMode: "disabled" },
+      pinnedFiles: [],
+      symbolDirs: [],
       verify: { test: "bun test --reporter=verbose", lint: "eslint src/" },
+      quality: {},
     }];
     const after = parseApps(serializeApps(before));
     expect(after[0].verify).toEqual(before[0].verify);

@@ -62,12 +62,15 @@ export interface Repo {
 }
 
 export type GitBranchMode = "current" | "fixed" | "auto-create";
+export type GitWorktreeMode = "disabled" | "enabled";
 
 export interface AppGitSettings {
   branchMode: GitBranchMode;
   fixedBranch: string;
   autoCommit: boolean;
   autoPush: boolean;
+  /** (P4) `enabled` runs every spawned child in a private worktree. */
+  worktreeMode: GitWorktreeMode;
 }
 
 /**
@@ -84,6 +87,15 @@ export interface AppVerify {
   format?: string;
 }
 
+/**
+ * (P2b-2) Per-app opt-in agent-driven quality gates. Both default off
+ * because each enabled flag costs an extra LLM spawn per task.
+ */
+export interface AppQuality {
+  critic?: boolean;
+  verifier?: boolean;
+}
+
 export interface App {
   name: string;
   path: string;
@@ -91,6 +103,21 @@ export interface App {
   description: string;
   git: AppGitSettings;
   verify: AppVerify;
+  /**
+   * (P3a) Files always injected into spawned children's prompts.
+   * Paths relative to the app root.
+   */
+  pinnedFiles: string[];
+  /**
+   * (P3a) Override the default `[lib, utils, hooks, components/ui]`
+   * symbol-index scan roots. Empty = use defaults.
+   */
+  symbolDirs: string[];
+  /**
+   * (P2b-2) Opt-in agent-driven post-exit quality gates. Empty object
+   * = both gates off (the default).
+   */
+  quality: AppQuality;
 }
 
 export interface SessionSummary {

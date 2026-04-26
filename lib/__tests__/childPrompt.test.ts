@@ -193,6 +193,221 @@ describe("buildChildPrompt", () => {
     expect(out).not.toContain("**Build**");
   });
 
+  // P3a — symbol index
+  it("omits Available helpers section when symbolIndex is null/empty", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## Available helpers");
+    expect(
+      buildChildPrompt({ ...baseOpts, symbolIndex: null }),
+    ).not.toContain("## Available helpers");
+    expect(
+      buildChildPrompt({
+        ...baseOpts,
+        symbolIndex: {
+          appName: "x", refreshedAt: "now", scannedDirs: [], fileCount: 0, symbols: [],
+        },
+      }),
+    ).not.toContain("## Available helpers");
+  });
+
+  it("renders Available helpers between Repo profile and Repo context", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      symbolIndex: {
+        appName: "app-api",
+        refreshedAt: "2026-04-26T00:00:00Z",
+        scannedDirs: ["lib"],
+        fileCount: 1,
+        symbols: [
+          { name: "cn", kind: "function", file: "lib/cn.ts", signature: "(...args: ClassValue[]) => string" },
+          { name: "Button", kind: "component", file: "components/ui/Button.tsx", signature: "(props: ButtonProps) => JSX.Element" },
+        ],
+      },
+    });
+    const profile = out.indexOf("## Repo profile");
+    const helpers = out.indexOf("## Available helpers");
+    const ctx = out.indexOf("## Repo context");
+    expect(helpers).toBeGreaterThan(profile);
+    expect(ctx).toBeGreaterThan(helpers);
+    expect(out).toContain("`cn`");
+    expect(out).toContain("`Button`");
+    // Components first in the sort order
+    expect(out.indexOf("`Button`")).toBeLessThan(out.indexOf("`cn`"));
+  });
+
+  it("caps Available helpers list with a +N more line", () => {
+    const symbols = Array.from({ length: 50 }).map((_, i) => ({
+      name: `helper${i}`,
+      kind: "function" as const,
+      file: "lib/helpers.ts",
+      signature: "() => void",
+    }));
+    const out = buildChildPrompt({
+      ...baseOpts,
+      symbolIndex: {
+        appName: "x", refreshedAt: "now", scannedDirs: ["lib"], fileCount: 1, symbols,
+      },
+    });
+    expect(out).toMatch(/and \*\*\d+\*\* more/);
+  });
+
+  // P3a — style fingerprint
+  it("omits House style section when fingerprint is null/all-unknown", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## House style (auto-detected)");
+    expect(
+      buildChildPrompt({
+        ...baseOpts,
+        styleFingerprint: {
+          appName: "x",
+          refreshedAt: "now",
+          sampledFiles: 0,
+          indent: { kind: "unknown", width: 0 },
+          quotes: "unknown",
+          semicolons: "unknown",
+          trailingComma: "unknown",
+          exports: "unknown",
+          fileNaming: { tsx: "unknown", ts: "unknown" },
+        },
+      }),
+    ).not.toContain("## House style (auto-detected)");
+  });
+
+  it("renders House style after House rules", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      houseRules: "- Prefer named exports.",
+      styleFingerprint: {
+        appName: "x",
+        refreshedAt: "now",
+        sampledFiles: 12,
+        indent: { kind: "spaces", width: 2 },
+        quotes: "double",
+        semicolons: "always",
+        trailingComma: "all",
+        exports: "named",
+        fileNaming: { tsx: "PascalCase", ts: "camelCase" },
+      },
+    });
+    const houseRules = out.indexOf("## House rules");
+    const houseStyle = out.indexOf("## House style (auto-detected)");
+    const task = out.indexOf("## Task");
+    expect(houseStyle).toBeGreaterThan(houseRules);
+    expect(task).toBeGreaterThan(houseStyle);
+    expect(out).toContain("**2 spaces**");
+    expect(out).toContain("**named exports**");
+    expect(out).toContain("**PascalCase**");
+  });
+
+  // P3a — pinned files
+  it("omits Pinned context when no files are passed", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## Pinned context");
+    expect(
+      buildChildPrompt({ ...baseOpts, pinnedFiles: [] }),
+    ).not.toContain("## Pinned context");
+  });
+
+  it("renders Pinned context after Repo context, with a fenced block per file", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      pinnedFiles: [
+        { rel: "src/api.ts", content: "export const apiUrl = '/api';", truncated: false },
+        { rel: "types/user.ts", content: "export interface User { id: string }", truncated: true },
+      ],
+    });
+    const ctx = out.indexOf("## Repo context");
+    const pinned = out.indexOf("## Pinned context");
+    const selfReg = out.indexOf("## Self-register");
+    expect(pinned).toBeGreaterThan(ctx);
+    expect(selfReg).toBeGreaterThan(pinned);
+    expect(out).toContain("`src/api.ts`");
+    expect(out).toContain("apiUrl = '/api'");
+    expect(out).toContain("`types/user.ts`");
+    expect(out).toContain("file truncated at 4 KB");
+    expect(out).toContain("```ts");
+  });
+
+  // P3b — recent direction
+  it("omits Recent direction section when recentDirection is null", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## Recent direction");
+    expect(
+      buildChildPrompt({ ...baseOpts, recentDirection: null }),
+    ).not.toContain("## Recent direction");
+  });
+
+  it("renders Recent direction between Repo context and Pinned context", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      recentDirection: {
+        dir: "lib/forms",
+        log: "abc1234 First commit\ndef5678 Second commit",
+        truncated: false,
+      },
+      pinnedFiles: [
+        { rel: "src/api.ts", content: "X", truncated: false },
+      ],
+    });
+    const ctx = out.indexOf("## Repo context");
+    const recent = out.indexOf("## Recent direction");
+    const pinned = out.indexOf("## Pinned context");
+    expect(recent).toBeGreaterThan(ctx);
+    expect(pinned).toBeGreaterThan(recent);
+    expect(out).toContain("`lib/forms`");
+    expect(out).toContain("First commit");
+  });
+
+  it("appends truncation marker when recent direction log was capped", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      recentDirection: {
+        dir: "src",
+        log: "huge log",
+        truncated: true,
+      },
+    });
+    expect(out).toContain("log truncated to 30 lines");
+  });
+
+  // P3b — auto-attach reference files
+  it("omits Reference files section when no references attached", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## Reference files");
+    expect(
+      buildChildPrompt({ ...baseOpts, attachedReferences: [] }),
+    ).not.toContain("## Reference files");
+  });
+
+  it("renders Reference files after Pinned context with score badges", () => {
+    const out = buildChildPrompt({
+      ...baseOpts,
+      pinnedFiles: [
+        { rel: "src/api.ts", content: "P", truncated: false },
+      ],
+      attachedReferences: [
+        {
+          rel: "hooks/useFormState.ts",
+          content: "export function useFormState() {}",
+          truncated: false,
+          score: 4,
+        },
+        {
+          rel: "components/forms/Field.tsx",
+          content: "export const Field = () => null",
+          truncated: true,
+          score: 2,
+        },
+      ],
+    });
+    const pinned = out.indexOf("## Pinned context");
+    const refs = out.indexOf("## Reference files");
+    const selfReg = out.indexOf("## Self-register");
+    expect(refs).toBeGreaterThan(pinned);
+    expect(selfReg).toBeGreaterThan(refs);
+    expect(out).toContain("`hooks/useFormState.ts`");
+    expect(out).toContain("(score 4)");
+    expect(out).toContain("(score 2)");
+    expect(out).toContain("file truncated at 4 KB");
+    // tsx file gets the tsx language fence
+    expect(out).toContain("```tsx");
+  });
+
   it("sanitizes task body so a stray ``` cannot break out of the wrapper fence", () => {
     const malicious = [
       "Look at this:",

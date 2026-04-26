@@ -70,6 +70,53 @@ export interface Run {
    * the run was a coordinator / unregistered repo).
    */
   verify?: RunVerify | null;
+  /**
+   * P2b-1 inline verifier: after the verify chain passes, the bridge
+   * compares the child's `reports/<role>-<repo>.md` claims against the
+   * actual `git diff` to catch agent hallucinations (claimed file
+   * changes that didn't happen, or changes the agent didn't mention).
+   * Absent / null = verifier didn't run (no report file, no diff to
+   * compare, or the run was a retry-of-retry).
+   */
+  verifier?: RunVerifier | null;
+  /**
+   * P2b-2 agent-driven style critic: when `app.quality.critic` is on,
+   * after the inline verifier passes the bridge spawns a `style-critic`
+   * agent to judge whether the diff matches the codebase fingerprint /
+   * symbol index / house-rules. `alien` blocks the auto-commit and
+   * triggers a `-stretry` retry. Absent / null = gate didn't run.
+   */
+  styleCritic?: RunStyleCritic | null;
+  /**
+   * P2b-2 agent-driven semantic verifier: when `app.quality.verifier`
+   * is on, after the style critic passes the bridge spawns a
+   * `semantic-verifier` agent to judge whether the changes actually
+   * accomplish the task body (not just whether the file list matches).
+   * `broken` blocks the auto-commit and triggers a `-svretry` retry.
+   * Absent / null = gate didn't run.
+   */
+  semanticVerifier?: RunSemanticVerifier | null;
+  /**
+   * P4/F1 worktree mode: absolute path of the private git worktree this
+   * run executed in. Set when `app.git.worktreeMode === "enabled"` and
+   * the bridge created the worktree before spawn. Used by the diff
+   * endpoint and the post-exit cleanup. Absent / null = the run used
+   * the live tree (legacy / opt-out behavior).
+   */
+  worktreePath?: string | null;
+  /**
+   * P4/F1 branch the worktree was created on (the agent's working
+   * branch). Persisted so post-exit cleanup can merge it back into
+   * `worktreeBaseBranch`. Absent when `worktreePath` is absent.
+   */
+  worktreeBranch?: string | null;
+  /**
+   * P4/F1 base branch the worktree forked from. Cleanup merges the
+   * agent's branch back into this one. `null` means the worktree was
+   * created on a detached HEAD or fresh repo — cleanup will skip the
+   * merge and just remove the worktree.
+   */
+  worktreeBaseBranch?: string | null;
 }
 
 /**
@@ -102,6 +149,93 @@ export interface RunVerifyStep {
    * (default 16 KB). Truncation marker appended when capped.
    */
   output: string;
+}
+
+/**
+ * P2b-1 — outcome of the inline claim-vs-diff verifier.
+ *
+ * Verdicts:
+ *   - `pass`     — claimed files match actual diff (or both are empty
+ *                  for a read-only run)
+ *   - `drift`    — meaningful mismatch: agent claimed files it didn't
+ *                  touch, OR touched files it didn't mention. Triggers
+ *                  a `-cretry` (claim-retry) follow-up.
+ *   - `broken`   — agent claimed changes but the diff is empty (or
+ *                  vice-versa: huge diff with empty claims). Strongest
+ *                  signal of hallucination; same retry path as drift.
+ *   - `skipped`  — verifier didn't run because preconditions weren't
+ *                  met (no report file, no git repo, role is itself a
+ *                  retry, etc.). NOT a failure — commit proceeds.
+ */
+export interface RunVerifier {
+  verdict: "pass" | "drift" | "broken" | "skipped";
+  /** One-line human reason behind the verdict. */
+  reason: string;
+  /** File paths the child's report listed under `## Changed files`. */
+  claimedFiles: string[];
+  /**
+   * File paths actually touched per `git diff --name-only`. Excludes
+   * lockfiles / generated dirs by default — see verifier.ts filter.
+   */
+  actualFiles: string[];
+  /**
+   * Files claimed but not in the diff (likely hallucination — agent
+   * said it changed X but didn't).
+   */
+  unmatchedClaims: string[];
+  /**
+   * Files in the diff but not claimed (likely sloppy reporting —
+   * filtered to non-trivial paths).
+   */
+  unclaimedActual: string[];
+  durationMs: number;
+  retryScheduled?: boolean;
+}
+
+/**
+ * P2b-2 — outcome of the agent-driven style critic.
+ *
+ * Verdicts:
+ *   - `match`   — diff fits the codebase's auto-detected fingerprint,
+ *                 reuses the helpers it should, follows house-rules.
+ *   - `drift`   — minor deviations: surfaced but commit proceeds.
+ *   - `alien`   — looks foreign to this codebase. Triggers a `-stretry`
+ *                 (style-retry) follow-up; commit is blocked.
+ *   - `skipped` — gate didn't run (critic crashed, verdict file missing,
+ *                 role exempt). Commit proceeds untouched.
+ */
+export interface RunStyleCritic {
+  verdict: "match" | "drift" | "alien" | "skipped";
+  reason: string;
+  /** Specific deviations the critic flagged (max ~10 surfaced). */
+  issues: string[];
+  /** sessionId of the spawned `style-critic` agent — for UI cross-ref. */
+  criticSessionId?: string | null;
+  durationMs: number;
+  retryScheduled?: boolean;
+}
+
+/**
+ * P2b-2 — outcome of the agent-driven semantic verifier. Distinct from
+ * the inline `RunVerifier` (claim-vs-diff) — this one judges INTENT, not
+ * file-list honesty.
+ *
+ * Verdicts mirror the inline verifier shape so the UI can reuse styling:
+ *   - `pass`    — changes accomplish the task body; commit proceeds.
+ *   - `drift`   — partial / off-target progress; commit proceeds with note.
+ *   - `broken`  — clearly does not accomplish the task. Triggers a
+ *                 `-svretry` follow-up; commit blocked.
+ *   - `skipped` — gate didn't run. Commit proceeds untouched.
+ */
+export interface RunSemanticVerifier {
+  verdict: "pass" | "drift" | "broken" | "skipped";
+  reason: string;
+  /** Specific gaps the verifier identified (max ~10 surfaced). */
+  concerns: string[];
+  /** sessionId of the spawned `semantic-verifier` agent. */
+  verifierSessionId?: string | null;
+  durationMs: number;
+  retryScheduled?: boolean;
 }
 
 /**

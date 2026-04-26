@@ -68,6 +68,9 @@ describe("serializeApps + round-trip", () => {
         description: "API",
         git: { ...DEFAULT_GIT_SETTINGS },
         verify: { ...DEFAULT_VERIFY },
+        pinnedFiles: [],
+        symbolDirs: [],
+        quality: {},
       },
       {
         name: "app-web",
@@ -76,6 +79,9 @@ describe("serializeApps + round-trip", () => {
         description: "Web",
         git: { ...DEFAULT_GIT_SETTINGS },
         verify: { ...DEFAULT_VERIFY },
+        pinnedFiles: [],
+        symbolDirs: [],
+        quality: {},
       },
     ];
     const json = serializeApps(apps);
@@ -95,6 +101,9 @@ describe("serializeApps + round-trip", () => {
         description: "   ",
         git: { ...DEFAULT_GIT_SETTINGS },
         verify: { ...DEFAULT_VERIFY },
+        pinnedFiles: [],
+        symbolDirs: [],
+        quality: {},
       },
     ]);
     const parsed = JSON.parse(json) as { apps: Array<Record<string, unknown>> };
@@ -119,8 +128,12 @@ describe("serializeApps + round-trip", () => {
           fixedBranch: "develop",
           autoCommit: true,
           autoPush: true,
+          worktreeMode: "disabled",
         },
         verify: { ...DEFAULT_VERIFY },
+        pinnedFiles: [],
+        symbolDirs: [],
+        quality: {},
       },
     ];
     const json = serializeApps(apps);

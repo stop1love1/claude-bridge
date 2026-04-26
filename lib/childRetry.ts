@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { appendRun, emitRetried, readMeta, type Run } from "./meta";
@@ -7,6 +7,8 @@ import { resolveRepoCwd } from "./repos";
 import { spawnFreeSession } from "./spawn";
 import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
 import { projectDirFor } from "./sessions";
+import { readOriginalPrompt } from "./promptStore";
+import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
 
 /**
@@ -247,30 +249,6 @@ function renderRetryContextBlock(args: {
 }
 
 /**
- * Locate the original prompt fed to the failed child. The agents POST
- * route saves rendered prompts to `sessions/<task>/<role>-<repo>.prompt.txt`
- * (per coordinator convention) — but we can't rely on that file being
- * present. Fallback: just leave the original-prompt block empty and let
- * the retry agent rely on the failure context + repo state.
- */
-function tryReadOriginalPrompt(taskId: string, failedRun: Run): string {
-  try {
-    const dir = join(SESSIONS_DIR, taskId);
-    if (!existsSync(dir)) return "";
-    const candidates = readdirSync(dir).filter(
-      (f) => f.endsWith(".prompt.txt") && f.startsWith(`${failedRun.role}-`),
-    );
-    // newest wins — coordinator may rewrite the same role across attempts
-    candidates.sort((a, b) => statSync(join(dir, b)).mtimeMs - statSync(join(dir, a)).mtimeMs);
-    const pick = candidates[0];
-    if (!pick) return "";
-    return readFileSync(join(dir, pick), "utf8");
-  } catch {
-    return "";
-  }
-}
-
-/**
  * Compose the retry prompt: a structured retry-context block at the TOP
  * (so the model sees what failed before reading the original brief),
  * then the original prompt body. The retry context block is prepended
@@ -318,10 +296,15 @@ async function spawnRetryRun(args: {
   let md: string;
   try { md = readFileSync(BRIDGE_MD, "utf8"); }
   catch { return null; }
-  const repoCwd = resolveRepoCwd(md, BRIDGE_ROOT, failedRun.repo);
-  if (!repoCwd) return null;
+  const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, failedRun.repo);
+  if (!liveRepoCwd) return null;
+  // P4/F1: when the failed run executed in a worktree, the retry runs
+  // in the SAME worktree so it inherits the WIP edits. The transcript
+  // (.jsonl) lives under projectDirFor(<spawnCwd>), so we use the same
+  // cwd to locate it as we do to spawn.
+  const spawnCwd = failedRun.worktreePath ?? liveRepoCwd;
 
-  const sessionContext = readFailedSessionContext(failedRun.sessionId, repoCwd);
+  const sessionContext = readFailedSessionContext(failedRun.sessionId, spawnCwd);
   const killedByUser = looksKilledByUser(failedRun);
   const retryContextBlock = renderRetryContextBlock({
     exitCode,
@@ -329,7 +312,7 @@ async function spawnRetryRun(args: {
     recentToolUses: sessionContext.recentToolUses,
     killedByUser,
   });
-  const originalPrompt = tryReadOriginalPrompt(taskId, failedRun);
+  const originalPrompt = readOriginalPrompt(taskId, failedRun);
   const retryPrompt = buildRetryPrompt(originalPrompt, retryContextBlock);
 
   const sessionId = randomUUID();
@@ -338,7 +321,7 @@ async function spawnRetryRun(args: {
   let childHandle;
   try {
     childHandle = spawnFreeSession(
-      repoCwd,
+      spawnCwd,
       retryPrompt,
       { mode: "bypassPermissions" },
       settingsPath,
@@ -358,6 +341,7 @@ async function spawnRetryRun(args: {
     endedAt: null,
     parentSessionId: failedRun.parentSessionId ?? null,
     retryOf: failedRun.sessionId,
+    ...inheritWorktreeFields(failedRun),
   };
   await appendRun(sessionsDir, retryRun);
   wireRunLifecycle(

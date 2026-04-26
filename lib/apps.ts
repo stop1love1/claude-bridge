@@ -50,6 +50,9 @@ import { BRIDGE_ROOT, USER_CLAUDE_DIR } from "./paths";
  */
 export type GitBranchMode = "current" | "fixed" | "auto-create";
 
+/** (P4/F1) Worktree isolation policy for spawned children. */
+export type GitWorktreeMode = "disabled" | "enabled";
+
 export interface AppGitSettings {
   /**
    * - `current`     — leave HEAD alone, agent works on whatever's checked out
@@ -63,6 +66,15 @@ export interface AppGitSettings {
   autoCommit: boolean;
   /** Run `git push` after `autoCommit`. Implies `autoCommit`. */
   autoPush: boolean;
+  /**
+   * (P4/F1) `enabled` runs every spawned child in a private
+   * `.worktrees/<sessionId>` git worktree under the app's root. After
+   * the post-exit gates pass, the bridge merges the worktree branch
+   * back into the parent branch and removes the worktree. `disabled`
+   * preserves historical behavior (children edit the live tree).
+   * Defaults to `disabled` so existing apps don't change behavior.
+   */
+  worktreeMode: GitWorktreeMode;
 }
 
 export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
@@ -70,6 +82,7 @@ export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
   fixedBranch: "",
   autoCommit: false,
   autoPush: false,
+  worktreeMode: "disabled",
 };
 
 /**
@@ -92,6 +105,26 @@ export interface AppVerify {
 
 export const DEFAULT_VERIFY: AppVerify = {};
 
+/**
+ * (P2b-2) Per-app quality gates — opt-in agent-driven post-exit checks
+ * that run AFTER the inline claim-vs-diff verifier passes. Each is its
+ * own LLM spawn (~30-100K tokens), so both default OFF.
+ *
+ *   critic   — style critic, rejects diffs that look "alien" against the
+ *              codebase fingerprint + symbol index + house-rules.
+ *              Suffix `-stretry` for the retry it triggers.
+ *   verifier — semantic verifier, judges whether the claimed changes
+ *              actually accomplish the task body. Suffix `-svretry`.
+ *
+ * Empty/missing object = both off → behavior identical to pre-P2b-2.
+ */
+export interface AppQuality {
+  critic?: boolean;
+  verifier?: boolean;
+}
+
+export const DEFAULT_QUALITY: AppQuality = {};
+
 export interface App {
   name: string;
   path: string;          // absolute, resolved against BRIDGE_ROOT
@@ -99,6 +132,25 @@ export interface App {
   description: string;
   git: AppGitSettings;
   verify: AppVerify;
+  /**
+   * (P3a/B3) Files inside the app that are ALWAYS injected into every
+   * spawned child's prompt. Use for canonical examples, type files,
+   * routing manifests — anything an agent should see without burning
+   * a Read tool call to discover. Paths are relative to the app root,
+   * forward-slash separated. Empty / missing = feature off.
+   */
+  pinnedFiles: string[];
+  /**
+   * (P3a/A2) Override the default `[lib, utils, hooks, components/ui]`
+   * symbol-index scan roots. Empty / missing = use the defaults.
+   */
+  symbolDirs: string[];
+  /**
+   * (P2b-2) Opt-in agent-driven quality gates. Defaults to all-off so
+   * existing apps don't suddenly pay 2× LLM spawns per task. See
+   * `AppQuality` docs for the per-flag semantics.
+   */
+  quality: AppQuality;
 }
 
 interface ManifestAppEntry {
@@ -107,6 +159,9 @@ interface ManifestAppEntry {
   description?: string;
   git?: Partial<AppGitSettings>;
   verify?: AppVerify;
+  pinnedFiles?: string[];
+  symbolDirs?: string[];
+  quality?: AppQuality;
 }
 
 export interface BridgeManifest {
@@ -184,7 +239,9 @@ function normalizeGitSettings(raw: unknown): AppGitSettings {
   const fixedBranch = typeof r.fixedBranch === "string" ? r.fixedBranch.trim() : "";
   const autoCommit = r.autoCommit === true || r.autoPush === true;
   const autoPush = r.autoPush === true;
-  return { branchMode, fixedBranch, autoCommit, autoPush };
+  const worktreeMode: GitWorktreeMode =
+    r.worktreeMode === "enabled" ? "enabled" : "disabled";
+  return { branchMode, fixedBranch, autoCommit, autoPush, worktreeMode };
 }
 
 /**
@@ -204,6 +261,64 @@ function normalizeVerify(raw: unknown): AppVerify {
     }
   }
   return out;
+}
+
+/**
+ * Coerce arbitrary input into a string[]. Drops non-strings, blank
+ * entries, and de-dupes. Used for `pinnedFiles` and `symbolDirs` —
+ * both are lists of repo-relative path strings. We do NOT validate
+ * for path traversal here; callers (`pinnedFiles.ts`, `symbolIndex.ts`)
+ * resolve under the app root and any escape attempt simply lands on a
+ * non-existent path, which they handle as "skip silently".
+ */
+function normalizeStringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const trimmed = v.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Coerce arbitrary input into an `AppQuality`. Each flag must be the
+ * literal `true`; anything else (false, missing, non-bool) treats the
+ * gate as off. Returns `{}` when nothing is enabled.
+ */
+function normalizeQuality(raw: unknown): AppQuality {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_QUALITY };
+  const r = raw as Partial<Record<keyof AppQuality, unknown>>;
+  const out: AppQuality = {};
+  if (r.critic === true) out.critic = true;
+  if (r.verifier === true) out.verifier = true;
+  return out;
+}
+
+/**
+ * Drop the `quality` key entirely when no gates are enabled — same
+ * terse-default convention as `serializeVerify`.
+ */
+function serializeQuality(q: AppQuality | undefined): AppQuality | undefined {
+  if (!q) return undefined;
+  const out: AppQuality = {};
+  if (q.critic === true) out.critic = true;
+  if (q.verifier === true) out.verifier = true;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Mirror of `serializeGitSettings` / `serializeVerify`: drop the key
+ * entirely when the list is empty so `bridge.json` stays terse.
+ */
+function serializeStringList(arr: string[] | undefined): string[] | undefined {
+  if (!arr || arr.length === 0) return undefined;
+  const trimmed = arr.map((s) => s.trim()).filter((s) => s.length > 0);
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /**
@@ -238,6 +353,7 @@ function serializeGitSettings(g: AppGitSettings | undefined): Partial<AppGitSett
   }
   if (g.autoCommit) out.autoCommit = true;
   if (g.autoPush) out.autoPush = true;
+  if (g.worktreeMode === "enabled") out.worktreeMode = "enabled";
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -256,6 +372,9 @@ export function parseApps(json: string): App[] {
     const description = (raw as { description?: unknown }).description;
     const gitRaw = (raw as { git?: unknown }).git;
     const verifyRaw = (raw as { verify?: unknown }).verify;
+    const pinnedRaw = (raw as { pinnedFiles?: unknown }).pinnedFiles;
+    const symbolDirsRaw = (raw as { symbolDirs?: unknown }).symbolDirs;
+    const qualityRaw = (raw as { quality?: unknown }).quality;
     if (!isValidAppName(name)) continue;
     if (typeof rawPath !== "string" || !rawPath.trim()) continue;
     out.push({
@@ -265,6 +384,9 @@ export function parseApps(json: string): App[] {
       description: typeof description === "string" ? description : "",
       git: normalizeGitSettings(gitRaw),
       verify: normalizeVerify(verifyRaw),
+      pinnedFiles: normalizeStringList(pinnedRaw),
+      symbolDirs: normalizeStringList(symbolDirsRaw),
+      quality: normalizeQuality(qualityRaw),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -287,6 +409,12 @@ export function serializeApps(apps: App[]): string {
       if (git) entry.git = git;
       const verify = serializeVerify(a.verify);
       if (verify) entry.verify = verify;
+      const pinned = serializeStringList(a.pinnedFiles);
+      if (pinned) entry.pinnedFiles = pinned;
+      const symbolDirs = serializeStringList(a.symbolDirs);
+      if (symbolDirs) entry.symbolDirs = symbolDirs;
+      const quality = serializeQuality(a.quality);
+      if (quality) entry.quality = quality;
       return entry;
     }),
   };
@@ -315,6 +443,12 @@ export function saveApps(apps: App[]): void {
     if (git) entry.git = git;
     const verify = serializeVerify(a.verify);
     if (verify) entry.verify = verify;
+    const pinned = serializeStringList(a.pinnedFiles);
+    if (pinned) entry.pinnedFiles = pinned;
+    const symbolDirs = serializeStringList(a.symbolDirs);
+    if (symbolDirs) entry.symbolDirs = symbolDirs;
+    const quality = serializeQuality(a.quality);
+    if (quality) entry.quality = quality;
     return entry;
   });
   writeManifest(manifest);
@@ -356,6 +490,9 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     description: (input.description ?? "").trim(),
     git: { ...DEFAULT_GIT_SETTINGS },
     verify: { ...DEFAULT_VERIFY },
+    pinnedFiles: [],
+    symbolDirs: [],
+    quality: { ...DEFAULT_QUALITY },
   };
   apps.push(app);
   apps.sort((a, b) => a.name.localeCompare(b.name));
@@ -405,6 +542,7 @@ export function updateAppGitSettings(
   if (next.branchMode !== "fixed") next.fixedBranch = "";
   else next.fixedBranch = (next.fixedBranch ?? "").trim();
   if (next.autoPush) next.autoCommit = true;
+  if (next.worktreeMode !== "enabled") next.worktreeMode = "disabled";
   target.git = next;
   saveApps(apps);
   return target;
@@ -433,6 +571,30 @@ export function updateAppVerify(
     else delete next[key];
   }
   target.verify = next;
+  saveApps(apps);
+  return target;
+}
+
+/**
+ * Patch a single app's quality gates. Caller passes a partial — fields
+ * omitted retain their current value. Setting a flag to anything other
+ * than the literal `true` clears it (matches `normalizeQuality`).
+ */
+export function updateAppQuality(
+  name: string,
+  patch: Partial<AppQuality>,
+): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  const next: AppQuality = { ...target.quality };
+  for (const key of ["critic", "verifier"] as const) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    if (patch[key] === true) next[key] = true;
+    else delete next[key];
+  }
+  target.quality = next;
   saveApps(apps);
   return target;
 }
@@ -554,6 +716,9 @@ export function autoDetectApps(): AutoDetectResult {
       description,
       git: { ...DEFAULT_GIT_SETTINGS },
       verify: { ...DEFAULT_VERIFY },
+      pinnedFiles: [],
+      symbolDirs: [],
+      quality: { ...DEFAULT_QUALITY },
     };
     added.push(app);
     known.add(entry.name);

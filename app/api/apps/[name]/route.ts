@@ -6,8 +6,10 @@ import {
   renameApp,
   updateAppDescription,
   updateAppGitSettings,
+  updateAppQuality,
   updateAppVerify,
   type AppGitSettings,
+  type AppQuality,
   type AppVerify,
   type GitBranchMode,
 } from "@/lib/apps";
@@ -16,6 +18,7 @@ import { migrateTaskApp } from "@/lib/tasksStore";
 export const dynamic = "force-dynamic";
 
 const VALID_BRANCH_MODES: GitBranchMode[] = ["current", "fixed", "auto-create"];
+const VALID_WORKTREE_MODES: ("disabled" | "enabled")[] = ["disabled", "enabled"];
 // Restrict the fixed-branch input to git-friendly characters. Refs can't
 // contain spaces, `..`, `~`, `^`, `:`, `?`, `*`, `[`, backslashes, or end
 // in `.lock`; the regex below is conservative but covers the real-world
@@ -27,7 +30,10 @@ interface PatchBody {
   description?: string;
   git?: Partial<AppGitSettings>;
   verify?: Partial<AppVerify>;
+  quality?: Partial<AppQuality>;
 }
+
+const QUALITY_KEYS: Array<keyof AppQuality> = ["critic", "verifier"];
 
 const VERIFY_KEYS: Array<keyof AppVerify> = [
   "test", "lint", "build", "typecheck", "format",
@@ -56,9 +62,11 @@ export async function PATCH(
   const hasGit = !!gitPatch && typeof gitPatch === "object";
   const verifyPatch = body.verify;
   const hasVerify = !!verifyPatch && typeof verifyPatch === "object";
-  if (!hasName && !hasDescription && !hasGit && !hasVerify) {
+  const qualityPatch = body.quality;
+  const hasQuality = !!qualityPatch && typeof qualityPatch === "object";
+  if (!hasName && !hasDescription && !hasGit && !hasVerify && !hasQuality) {
     return NextResponse.json(
-      { error: "patch is empty (expected name, description, git, or verify)" },
+      { error: "patch is empty (expected name, description, git, verify, or quality)" },
       { status: 400 },
     );
   }
@@ -79,6 +87,12 @@ export async function PATCH(
         return NextResponse.json({ error: "fixedBranch contains invalid characters" }, { status: 400 });
       }
       gp.fixedBranch = branch;
+    }
+    if (gp.worktreeMode !== undefined && !VALID_WORKTREE_MODES.includes(gp.worktreeMode)) {
+      return NextResponse.json(
+        { error: `invalid worktreeMode: "${gp.worktreeMode}"` },
+        { status: 400 },
+      );
     }
   }
 
@@ -155,6 +169,24 @@ export async function PATCH(
       sanitized[key] = trimmed;
     }
     const updated = updateAppVerify(currentName, sanitized);
+    if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
+  if (hasQuality) {
+    const qp = qualityPatch as Partial<AppQuality>;
+    const sanitized: Partial<AppQuality> = {};
+    for (const key of QUALITY_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(qp, key)) continue;
+      const v = qp[key];
+      if (typeof v !== "boolean") {
+        return NextResponse.json(
+          { error: `quality.${key} must be a boolean` },
+          { status: 400 },
+        );
+      }
+      sanitized[key] = v;
+    }
+    const updated = updateAppQuality(currentName, sanitized);
     if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
