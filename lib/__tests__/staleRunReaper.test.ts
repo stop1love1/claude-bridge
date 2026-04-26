@@ -45,12 +45,12 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     const meta = await reapStaleRunsForDir(dir);
     expect(meta).not.toBeNull();
     const run = meta!.runs[0];
-    expect(run.status).toBe("failed");
+    expect(run.status).toBe("stale");
     expect(run.endedAt).not.toBeNull();
 
     // Confirm persisted.
     const reread = readMeta(dir);
-    expect(reread!.runs[0].status).toBe("failed");
+    expect(reread!.runs[0].status).toBe("stale");
   });
 
   it("leaves a freshly-queued run alone (within the cutoff window)", async () => {
@@ -85,7 +85,7 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     });
 
     const meta = await reapStaleRunsForDir(dir);
-    expect(meta!.runs[0].status).toBe("failed");
+    expect(meta!.runs[0].status).toBe("stale");
   });
 
   it("still reaps stale running rows alongside queued rows", async () => {
@@ -111,8 +111,8 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     });
 
     const meta = await reapStaleRunsForDir(dir);
-    expect(meta!.runs[0].status).toBe("failed");
-    expect(meta!.runs[1].status).toBe("failed");
+    expect(meta!.runs[0].status).toBe("stale");
+    expect(meta!.runs[1].status).toBe("stale");
   });
 
   it("does not touch done / failed rows", async () => {

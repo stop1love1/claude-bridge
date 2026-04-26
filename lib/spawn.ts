@@ -5,9 +5,9 @@ import { emitAlive, emitPartial, emitStatus } from "./sessionEvents";
 import { BRIDGE_PORT, BRIDGE_URL } from "./paths";
 
 /**
- * Resolve the `claude` binary once at module load. Override via
- * CLAUDE_BIN when the global CLI isn't on PATH (e.g. dev machines that
- * only have Claude Desktop / Cursor's bundled binary).
+ * `claude` binary path. Defaults to the bare command so the OS resolves
+ * it via PATH — same binary `which claude` returns in the operator's
+ * shell. `CLAUDE_BIN` overrides this when an explicit path is needed.
  */
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 

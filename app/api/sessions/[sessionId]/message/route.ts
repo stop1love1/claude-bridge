@@ -7,6 +7,7 @@ import { resumeClaude, spawnFreeSession, waitEarlyFailure, type ChatSettings } f
 import { projectDirFor } from "@/lib/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
 import { badRequest, isValidSessionId } from "@/lib/validate";
+import { findTaskBySessionId, updateTask } from "@/lib/tasksStore";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,19 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         { error: `claude exited ${failure.code}`, stderr: failure.stderr || null },
         { status: 502 },
       );
+    }
+    // Re-open a task that the user previously ticked done. The user's
+    // intent is clear: another message means there's more work to do,
+    // so the "DONE — not yet archived" pill would be lying. Flip back
+    // to DOING and untick. Best-effort: a failure here mustn't block
+    // the message itself (the spawn already succeeded).
+    try {
+      const owningTask = findTaskBySessionId(sessionId);
+      if (owningTask && (owningTask.checked || owningTask.section === "DONE — not yet archived")) {
+        await updateTask(owningTask.id, { section: "DOING", checked: false });
+      }
+    } catch (err) {
+      console.warn("re-open task on chat failed", err);
     }
     return NextResponse.json({ ok: true, sessionId });
   } catch (e) {

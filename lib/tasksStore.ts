@@ -76,6 +76,26 @@ export function getTask(id: string): Task | null {
   return meta ? metaToTask(meta) : null;
 }
 
+/**
+ * Reverse-lookup a task by any of its session ids. Used by the message
+ * route to detect when the user is chatting in a task that's been
+ * marked done — we re-open it (untick + back to DOING) so a follow-up
+ * conversation isn't trapped inside a "completed" pill.
+ *
+ * Linear scan over `listMetaIds`; messages are user-driven so this
+ * runs at human cadence, not per-tool-call.
+ */
+export function findTaskBySessionId(sessionId: string): Task | null {
+  for (const id of listMetaIds()) {
+    const meta = readMeta(join(SESSIONS_DIR, id));
+    if (!meta) continue;
+    if (meta.runs.some((r) => r.sessionId === sessionId)) {
+      return metaToTask(meta);
+    }
+  }
+  return null;
+}
+
 export function generateTaskId(now: Date): string {
   return generateIdFromList(now, listMetaIds());
 }
