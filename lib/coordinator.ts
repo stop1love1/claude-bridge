@@ -27,11 +27,11 @@ import type * as StyleCritic from "./styleCritic";
 import type * as SemanticVerifier from "./semanticVerifier";
 
 /**
- * Lazy bridges to the post-exit-flow modules. Mirrors the `childRetry`
- * lazy pattern (line 51 below) — we MUST NOT eagerly import these at
- * the top of this file because they import `wireRunLifecycle` from
- * here, and the cycle would leave one side seeing `undefined` exports
- * during init.
+ * Lazy bridges to the post-exit-flow modules. Same pattern as the
+ * `childRetry` require inside `tryAutoRetry` below — we MUST NOT eagerly
+ * import these at the top of this file because they import
+ * `wireRunLifecycle` from here, and the cycle would leave one side
+ * seeing `undefined` exports during init.
  */
 function loadVerifyChain(): typeof VerifyChain {
   // eslint-disable-next-line @typescript-eslint/no-require-imports

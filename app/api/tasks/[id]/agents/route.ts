@@ -56,9 +56,8 @@ interface AgentBody {
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * Spawn a child Claude agent for a task. Centralizes what the
- * coordinator used to do via raw `claude -p` Bash calls — see Phase B
- * in tasks.md. The bridge:
+ * Spawn a child Claude agent for a task. Centralizes what the coordinator
+ * used to do via raw `claude -p` Bash calls. The bridge:
  *
  *  1. Validates the request and resolves the target repo.
  *  2. Pre-mints the session UUID (no .jsonl race like the old path).
@@ -69,7 +68,7 @@ type Ctx = { params: Promise<{ id: string }> };
  *  5. Spawns the child via `spawnFreeSession` (which auto-registers it
  *     in the in-process spawn registry for kill / liveness checks).
  *  6. Appends a `running` run to the task's meta.json with the
- *     parent->child link captured for Phase C visualizations.
+ *     parent->child link captured so the agent tree can render it.
  *  7. Wires lifecycle so the run flips to done/failed on exit.
  *
  * Returns 201 `{ sessionId, action: "spawned" }` on success.

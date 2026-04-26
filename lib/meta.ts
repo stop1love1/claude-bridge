@@ -38,14 +38,13 @@ export type RunStatus = "queued" | "running" | "done" | "failed" | "stale";
  * A run is a single Claude Code session the coordinator spawned for a task.
  * `role` is an arbitrary label chosen by the coordinator ("coordinator",
  * "coder", "reviewer", "researcher", "fixer", ...) — not a closed enum.
- * `repo` is the folder name (from BRIDGE.md Repos table) the session runs
- * against; for orchestration runs it's the bridge folder's own basename
- * (`BRIDGE_FOLDER` from `lib/paths.ts`).
- * `parentSessionId` (Phase B+) is the coordinator session UUID that
- * spawned this run via `POST /api/tasks/<id>/agents`. `null` / absent
- * means the run was spawned directly by the bridge (the coordinator
- * itself) or by a pre-Phase-B path. Phase C uses this to draw the
- * agent tree.
+ * `repo` is the registered app name (from `~/.claude/bridge.json`) the
+ * session runs against; for orchestration runs it's the bridge folder's
+ * own basename (`BRIDGE_FOLDER` from `lib/paths.ts`).
+ * `parentSessionId` is the coordinator session UUID that spawned this run
+ * via `POST /api/tasks/<id>/agents`. `null` / absent means the run was
+ * spawned directly by the bridge (the coordinator itself). The agent
+ * tree visualizer uses this to render parent / child relationships.
  */
 export interface Run {
   sessionId: string;

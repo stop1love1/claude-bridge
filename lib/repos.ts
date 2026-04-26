@@ -6,25 +6,21 @@ export interface RepoEntry { name: string }
 export interface ResolvedRepo extends RepoEntry { path: string }
 
 /**
- * Apps registry now lives in `sessions/init.md`, owned by `lib/apps.ts`.
- * `parseReposTable` / `resolveRepos` remain as a thin wrapper so the
- * existing call sites (coordinator, profile loader, route handlers) keep
- * working without scattering `loadApps()` everywhere.
+ * The apps registry lives in `~/.claude/bridge.json` and is owned by
+ * `lib/apps.ts`. `parseReposTable` / `resolveRepos` are thin wrappers
+ * kept so existing call sites (coordinator, profile loader, route
+ * handlers) don't scatter `loadApps()` everywhere.
  *
- * BRIDGE.md is no longer parsed for the apps roster — it stays as a
- * pure human-readable notebook for cross-repo decisions / contracts.
+ * BRIDGE.md is no longer parsed for the apps roster — it stays a
+ * human-readable notebook for cross-repo decisions / contracts. The
+ * `bridgeMd` arguments below are accepted for API compatibility and
+ * intentionally ignored.
  */
 
 function appsAsRepos(): ResolvedRepo[] {
   return loadApps().map((app: App) => ({ name: app.name, path: app.path }));
 }
 
-/**
- * Kept for API compatibility. The `bridgeMd` argument is ignored; the
- * apps registry is now `sessions/init.md`. Tests still pass a fixture
- * string to assert legacy behaviour — they should migrate to seeding
- * `sessions/init.md` directly.
- */
 export function parseReposTable(_bridgeMd: string): RepoEntry[] {
   return loadApps().map((app) => ({ name: app.name }));
 }
@@ -36,13 +32,10 @@ export function resolveRepos(_bridgeMd: string, _bridgeRoot: string): ResolvedRe
 /**
  * Resolve a repo *name* to an absolute cwd. Tries, in order:
  *   1. the bridge folder itself (so `repo: "<bridge-folder>"` keeps working)
- *   2. anything declared in the apps registry (sessions/init.md)
+ *   2. anything declared in the apps registry (`~/.claude/bridge.json`)
  *   3. any sibling folder that exists next to the bridge
  *
  * Returns `null` if no match — the caller should reject the request.
- *
- * `bridgeMd` is accepted (ignored) for backwards compatibility — every
- * caller still threads it through, but the registry is no longer there.
  */
 export function resolveRepoCwd(
   _bridgeMd: string,
