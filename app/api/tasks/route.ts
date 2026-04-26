@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { listTasks, createTask } from "@/lib/tasksStore";
 import { spawnCoordinatorForTask } from "@/lib/coordinator";
 import { loadApps } from "@/lib/apps";
@@ -8,6 +9,14 @@ import {
   refreshAll,
   type RepoLike,
 } from "@/lib/profileStore";
+import {
+  getDetectSource,
+  heuristicDetector,
+  loadDetectInput,
+  writeScopeCache,
+} from "@/lib/detect";
+import { detectWithLLM } from "@/lib/detect/llm";
+import { SESSIONS_DIR } from "@/lib/paths";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +71,39 @@ export async function POST(req: NextRequest) {
   // spawn so the prompt gets the enriched "## Repo profiles" block.
   autoInitProfilesOnce();
 
+  // Detect: run the heuristic synchronously and persist BEFORE spawning
+  // the coordinator so its prompt reads a populated scope. Then, if the
+  // configured mode allows LLM, fire an upgrade in the background that
+  // overwrites the cache when complete — child agents spawning later
+  // see the upgraded scope. Heuristic-only callers (or environments
+  // without claude CLI) get the same behavior as today, just with the
+  // standardized contract.
+  try {
+    const sessionsDir = join(SESSIONS_DIR, task.id);
+    const detectInput = loadDetectInput({
+      taskBody: task.body,
+      taskTitle: task.title,
+      pinnedRepo: task.app ?? null,
+    });
+    const baseline = await heuristicDetector.detect(detectInput);
+    await writeScopeCache(sessionsDir, baseline);
+    const mode = getDetectSource();
+    if (mode === "auto" || mode === "llm") {
+      void (async () => {
+        try {
+          const upgraded = await detectWithLLM(detectInput);
+          if (upgraded) {
+            await writeScopeCache(sessionsDir, upgraded);
+          }
+        } catch (err) {
+          console.warn("[detect] background LLM upgrade failed:", err);
+        }
+      })();
+    }
+  } catch (err) {
+    console.warn("[detect] sync heuristic write failed (non-fatal):", err);
+  }
+
   // Wrap the coordinator spawn so a `claude` binary missing / fork
   // failure / etc. doesn't make the route return 500 with the task
   // already half-created on disk — that would prompt clients to retry,
@@ -79,6 +121,7 @@ export async function POST(req: NextRequest) {
       id: task.id,
       title: task.title,
       body: task.body,
+      app: task.app ?? null,
     });
     if (!sessionId) {
       spawnError = "coordinator spawn returned null (see server logs)";

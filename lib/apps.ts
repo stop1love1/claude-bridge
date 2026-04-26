@@ -151,6 +151,18 @@ export interface App {
    * `AppQuality` docs for the per-flag semantics.
    */
   quality: AppQuality;
+  /**
+   * (Detect) Free-form domain capability tags this app owns. Used by
+   * `lib/detect` to score this app against task bodies that mention
+   * the same concepts. Examples:
+   *   ["lms.course", "lms.lesson", "lms.student"]
+   *   ["auth.login", "auth.signup", "billing.subscription"]
+   *
+   * Operator-curated; auto-derived from `RepoProfile.features` on
+   * first add but freely editable. Empty / missing = the detector
+   * falls back to its built-in feature vocab + repo profile signals.
+   */
+  capabilities: string[];
 }
 
 interface ManifestAppEntry {
@@ -162,6 +174,7 @@ interface ManifestAppEntry {
   pinnedFiles?: string[];
   symbolDirs?: string[];
   quality?: AppQuality;
+  capabilities?: string[];
 }
 
 export interface BridgeManifest {
@@ -375,6 +388,7 @@ export function parseApps(json: string): App[] {
     const pinnedRaw = (raw as { pinnedFiles?: unknown }).pinnedFiles;
     const symbolDirsRaw = (raw as { symbolDirs?: unknown }).symbolDirs;
     const qualityRaw = (raw as { quality?: unknown }).quality;
+    const capabilitiesRaw = (raw as { capabilities?: unknown }).capabilities;
     if (!isValidAppName(name)) continue;
     if (typeof rawPath !== "string" || !rawPath.trim()) continue;
     out.push({
@@ -387,6 +401,7 @@ export function parseApps(json: string): App[] {
       pinnedFiles: normalizeStringList(pinnedRaw),
       symbolDirs: normalizeStringList(symbolDirsRaw),
       quality: normalizeQuality(qualityRaw),
+      capabilities: normalizeStringList(capabilitiesRaw),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -415,6 +430,8 @@ export function serializeApps(apps: App[]): string {
       if (symbolDirs) entry.symbolDirs = symbolDirs;
       const quality = serializeQuality(a.quality);
       if (quality) entry.quality = quality;
+      const capabilities = serializeStringList(a.capabilities);
+      if (capabilities) entry.capabilities = capabilities;
       return entry;
     }),
   };
@@ -449,6 +466,8 @@ export function saveApps(apps: App[]): void {
     if (symbolDirs) entry.symbolDirs = symbolDirs;
     const quality = serializeQuality(a.quality);
     if (quality) entry.quality = quality;
+    const capabilities = serializeStringList(a.capabilities);
+    if (capabilities) entry.capabilities = capabilities;
     return entry;
   });
   writeManifest(manifest);
@@ -493,6 +512,7 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     pinnedFiles: [],
     symbolDirs: [],
     quality: { ...DEFAULT_QUALITY },
+    capabilities: [],
   };
   apps.push(app);
   apps.sort((a, b) => a.name.localeCompare(b.name));
@@ -573,6 +593,125 @@ export function updateAppVerify(
   target.verify = next;
   saveApps(apps);
   return target;
+}
+
+/**
+ * Replace a single app's `capabilities` list. Used by the apps UI to
+ * curate the domain tags `lib/detect` matches against. Empty input
+ * clears the list (drops the field from `bridge.json` entirely).
+ */
+export function updateAppCapabilities(
+  name: string,
+  capabilities: string[],
+): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  target.capabilities = normalizeStringList(capabilities);
+  saveApps(apps);
+  return target;
+}
+
+/**
+ * Read the bridge-wide detect source from `bridge.json`. Lives at
+ * the manifest top level so it isn't tied to any single app — every
+ * task creation reads it once. Defaults to `auto` when missing.
+ */
+export type DetectManifestSource = "auto" | "llm" | "heuristic";
+
+export function getManifestDetectSource(): DetectManifestSource {
+  const m = readManifest();
+  const det = (m as { detect?: { source?: unknown } }).detect;
+  const s = det?.source;
+  if (s === "llm" || s === "heuristic" || s === "auto") return s;
+  return "auto";
+}
+
+/**
+ * Persist the bridge-wide detect source. Read-modify-write the whole
+ * manifest so other top-level keys (settings, experiments, …) stay
+ * intact.
+ */
+export function setManifestDetectSource(source: DetectManifestSource): void {
+  const manifest = readManifest();
+  const next = {
+    ...manifest,
+    detect: { source },
+  };
+  writeManifest(next);
+}
+
+/**
+ * Telegram notifier credentials, persisted at the bridge.json top level
+ * so the operator manages them through the bridge UI rather than a
+ * shell-scoped `.env`. Both fields are required for the notifier to
+ * actually send — empty strings disable it (matches the previous env
+ * behavior).
+ */
+export interface TelegramSettings {
+  botToken: string;
+  chatId: string;
+}
+
+export const DEFAULT_TELEGRAM_SETTINGS: TelegramSettings = {
+  botToken: "",
+  chatId: "",
+};
+
+export function getManifestTelegramSettings(): TelegramSettings {
+  const m = readManifest();
+  const tg = (m as { telegram?: { botToken?: unknown; chatId?: unknown } })
+    .telegram;
+  if (!tg || typeof tg !== "object") {
+    // Fallback to env for the legacy install path so an existing
+    // operator's `.env` keeps working until they migrate to bridge.json.
+    return {
+      botToken: (process.env.TELEGRAM_BOT_TOKEN ?? "").trim(),
+      chatId: (process.env.TELEGRAM_CHAT_ID ?? "").trim(),
+    };
+  }
+  const botToken = typeof tg.botToken === "string" ? tg.botToken.trim() : "";
+  const chatId = typeof tg.chatId === "string" ? tg.chatId.trim() : "";
+  // bridge.json takes precedence, but if EITHER field is empty we still
+  // fall through to env so partial bridge.json + complete .env keeps
+  // working (the env vars used to be the canonical source).
+  if (!botToken || !chatId) {
+    const envToken = (process.env.TELEGRAM_BOT_TOKEN ?? "").trim();
+    const envChat = (process.env.TELEGRAM_CHAT_ID ?? "").trim();
+    return {
+      botToken: botToken || envToken,
+      chatId: chatId || envChat,
+    };
+  }
+  return { botToken, chatId };
+}
+
+export function setManifestTelegramSettings(
+  patch: Partial<TelegramSettings>,
+): TelegramSettings {
+  const manifest = readManifest();
+  const current = (manifest as { telegram?: TelegramSettings }).telegram ?? {
+    ...DEFAULT_TELEGRAM_SETTINGS,
+  };
+  const next: TelegramSettings = {
+    botToken:
+      typeof patch.botToken === "string"
+        ? patch.botToken.trim()
+        : current.botToken,
+    chatId:
+      typeof patch.chatId === "string" ? patch.chatId.trim() : current.chatId,
+  };
+  // Drop the section entirely when both fields are empty so bridge.json
+  // doesn't carry a meaningless `telegram: { botToken: "", chatId: "" }`.
+  const updatedManifest: BridgeManifest = { ...manifest };
+  if (next.botToken === "" && next.chatId === "") {
+    delete (updatedManifest as { telegram?: TelegramSettings }).telegram;
+  } else {
+    (updatedManifest as { telegram?: TelegramSettings }).telegram = next;
+  }
+  writeManifest(updatedManifest);
+  return next;
 }
 
 /**
@@ -719,6 +858,7 @@ export function autoDetectApps(): AutoDetectResult {
       pinnedFiles: [],
       symbolDirs: [],
       quality: { ...DEFAULT_QUALITY },
+      capabilities: [],
     };
     added.push(app);
     known.add(entry.name);

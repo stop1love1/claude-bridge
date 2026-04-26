@@ -12,8 +12,12 @@ import { wireRunLifecycle } from "@/lib/coordinator";
 import { getApp } from "@/lib/apps";
 import { prepareBranch } from "@/lib/gitOps";
 import { createWorktreeForRun } from "@/lib/worktrees";
-import { suggestRepo } from "@/lib/repoHeuristic";
 import { loadProfiles } from "@/lib/profileStore";
+import {
+  getOrComputeScope,
+  loadDetectInput,
+  type DetectedScope,
+} from "@/lib/detect";
 import { buildChildPrompt } from "@/lib/childPrompt";
 import { loadHouseRules } from "@/lib/houseRules";
 import { topMemoryEntries } from "@/lib/memory";
@@ -131,29 +135,55 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const profileStore = loadProfiles();
   const profilesMap = profileStore?.profiles;
 
-  // Phase E: when the caller didn't pin a repo, run the keyword heuristic
-  // and fall back to that. Heuristic only sees repos declared in
-  // BRIDGE.md, so an unknown future bucket entry can't sneak in.
+  // Read the task's pre-detected scope (computed at task creation time
+  // by `app/api/tasks/route.ts`). On a cache miss (e.g. a legacy task
+  // created before the detect layer existed) we fall back to live
+  // detection on the task body, persisting the result so subsequent
+  // spawns see the same scope. Coordinator and every child read this
+  // same cache — no drift.
+  const sessionsDir = join(SESSIONS_DIR, id);
+  const meta = readMeta(sessionsDir);
+  if (!meta) {
+    return NextResponse.json({ error: "task not found" }, { status: 404 });
+  }
+  let detectedScope: DetectedScope | null = null;
+  try {
+    detectedScope = await getOrComputeScope(sessionsDir, () =>
+      loadDetectInput({
+        taskBody: meta.taskBody,
+        taskTitle: meta.taskTitle,
+        pinnedRepo: meta.taskApp ?? null,
+        repos: resolveRepos(md, BRIDGE_ROOT).map((r) => r.name),
+      }),
+    );
+  } catch (err) {
+    console.warn("[detect] agents route: scope load failed (non-fatal):", err);
+  }
+
+  // When the caller didn't pin a repo, prefer the cached scope's top
+  // pick — this is the standardized contract: detection happens once
+  // per task, not per spawn. Live re-detection per spawn would race
+  // the LLM upgrade and produce non-deterministic dispatch.
   let repo = explicitRepo;
   let autoDetected = false;
   let autoDetectReason: string | null = null;
   let autoDetectScore = 0;
   if (!repo) {
     const declaredRepos = resolveRepos(md, BRIDGE_ROOT).map((r) => r.name);
-    const suggestion = suggestRepo(prompt, declaredRepos, profilesMap);
-    if (!suggestion.repo) {
+    const top = detectedScope?.repos.find((r) => declaredRepos.includes(r.name));
+    if (!top) {
       return NextResponse.json(
         {
-          error: "no repo provided and heuristic could not infer one",
-          reason: suggestion.reason,
+          error: "no repo provided and detection could not infer one",
+          reason: detectedScope?.reason ?? "no detected scope available",
         },
         { status: 400 },
       );
     }
-    repo = suggestion.repo;
+    repo = top.name;
     autoDetected = true;
-    autoDetectReason = suggestion.reason;
-    autoDetectScore = suggestion.score;
+    autoDetectReason = `${detectedScope?.source ?? "heuristic"}: ${top.reason}`;
+    autoDetectScore = top.score;
   }
 
   const repoCwd = resolveRepoCwd(md, BRIDGE_ROOT, repo);
@@ -162,12 +192,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: `unknown repo: ${repo}` },
       { status: 400 },
     );
-  }
-
-  const sessionsDir = join(SESSIONS_DIR, id);
-  const meta = readMeta(sessionsDir);
-  if (!meta) {
-    return NextResponse.json({ error: "task not found" }, { status: 404 });
   }
 
   // Per-app git workflow: if the resolved repo matches a registered
@@ -306,6 +330,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     attachedReferences,
     recentDirection,
     memoryEntries,
+    detectedScope,
   });
 
   // User mediation. We only ask if (a) the caller didn't opt out AND

@@ -55,13 +55,16 @@ function loadSemanticVerifier(): typeof SemanticVerifier {
 }
 import type { Task } from "./tasks";
 import { loadProfiles } from "./profileStore";
-import type { RepoProfile } from "./repoProfile";
-import { suggestRepo } from "./repoHeuristic";
 import { resolveRepoCwd, resolveRepos } from "./repos";
 import { BRIDGE_MD } from "./paths";
 import { getApp } from "./apps";
 import { autoCommitAndPush } from "./gitOps";
 import { mergeAndRemoveWorktree } from "./worktrees";
+import {
+  getOrComputeScope,
+  loadDetectInput,
+  renderDetectedScope,
+} from "./detect";
 
 /**
  * Wire `error` / `exit` lifecycle on a Claude child so its corresponding
@@ -728,105 +731,54 @@ export function wireRunLifecycle(
 }
 
 /**
- * Render a single profile entry as a markdown bullet for the
- * coordinator prompt. Defensive: a profile with no stack/features still
- * produces a usable line.
- */
-function renderProfileBullet(p: RepoProfile): string {
-  const summary = p.summary?.trim() || `${p.name} — (no summary)`;
-  const stack = p.stack.length > 0 ? p.stack.join(", ") : "(unknown)";
-  const features = p.features.length > 0 ? p.features.join(", ") : "(none detected)";
-  const entrypoints = p.entrypoints.length > 0 ? p.entrypoints.slice(0, 4).join(", ") : "(unknown)";
-  return `- **${p.name}** — ${summary} Stack: ${stack}. Features: ${features}. Entrypoints: ${entrypoints}.`;
-}
-
-/**
- * Build the "## Bridge hint" block — a heuristic suggestion of which
- * repo the coordinator should target, computed from the task body via
- * `suggestRepo`. Soft signal: the coordinator is the final authority,
- * but a bridge-side first-pass usually saves it 2-3 tool calls.
+ * Build the canonical `## Detected scope` block for the coordinator.
+ * Reads the cached scope from `meta.json` (computed at task creation
+ * time by `app/api/tasks/route.ts`). On a cache miss (legacy meta /
+ * bridge upgrade mid-flight) computes a fresh scope, persists it, and
+ * uses that — the coordinator is never starved of context.
  *
- * Returns "" when there's no clear winner so the coordinator doesn't
- * mistake "no signal" for "bridge says: skip everything".
+ * Replaces the legacy `## Bridge hint` + `## Repo profiles` pair —
+ * one block, same shape children see, no drift.
  */
-function buildBridgeHintBlock(taskBody: string): string {
+async function buildDetectedScopeBlock(
+  sessionsDir: string,
+  task: Pick<Task, "id" | "title" | "body" | "app">,
+): Promise<string> {
   try {
-    const md = readFileSync(BRIDGE_MD, "utf8");
-    const repos = resolveRepos(md, BRIDGE_ROOT)
-      .filter((r) => existsSync(r.path))
-      .map((r) => r.name);
-    if (repos.length === 0) return "";
     const profiles = loadProfiles()?.profiles ?? undefined;
-    const s = suggestRepo(taskBody, repos, profiles);
-    if (!s.repo) {
-      return [
-        "## Bridge hint",
-        "",
-        `Heuristic could not infer a target repo from the task body (${s.reason}).`,
-        "Decide based on the **Repo profiles** section above and the task body itself.",
-        "",
-      ].join("\n");
-    }
+    const scope = await getOrComputeScope(sessionsDir, () =>
+      loadDetectInput({
+        taskBody: task.body,
+        taskTitle: task.title,
+        pinnedRepo: task.app ?? null,
+      }),
+    );
+    return renderDetectedScope(scope, { profiles, forCoordinator: true });
+  } catch (err) {
+    console.error("buildDetectedScopeBlock failed (non-fatal)", err);
     return [
-      "## Bridge hint",
+      "## Detected scope",
       "",
-      `Heuristic suggests **\`${s.repo}\`** (score: ${s.score}, ${s.reason}).`,
-      "Treat this as a starting recommendation — override if the task body genuinely targets a different repo, but explain the override in your final summary so the user can audit.",
+      "_(detection layer crashed — see bridge logs. Fall back to reading the task body and BRIDGE.md repos table directly.)_",
       "",
     ].join("\n");
-  } catch (err) {
-    console.error("buildBridgeHintBlock failed (non-fatal)", err);
-    return "";
   }
 }
 
 /**
- * Build the "## Repo profiles" markdown section from the cached store
- * and splice it in before the coordinator template's "## Your job"
- * heading. Falls back to a single-line note when the cache is missing
- * — the bridge auto-builds it on the next /api/repos/profiles hit.
+ * Splice the `## Detected scope` block in before the coordinator
+ * template's `## Your job` heading. Falls back to prepending when the
+ * marker is missing (template shape changed).
  */
-function injectRepoProfilesBlock(rendered: string): string {
-  let block: string;
-  try {
-    const store = loadProfiles();
-    const profiles = store?.profiles ?? null;
-    if (profiles && Object.keys(profiles).length > 0) {
-      const lines = Object.values(profiles)
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map(renderProfileBullet);
-      block = [
-        "## Repo profiles (auto-built from BRIDGE.md siblings)",
-        "",
-        ...lines,
-        "",
-        "Use these to decide which repo to target. Profile data is auto-derived; if it looks wrong, you can override.",
-        "",
-      ].join("\n");
-    } else {
-      block = [
-        "## Repo profiles",
-        "",
-        "(repo profiles not yet built — bridge will auto-init on first /api/repos/profiles call)",
-        "",
-      ].join("\n");
-    }
-  } catch (err) {
-    console.error("injectRepoProfilesBlock failed (non-fatal)", err);
-    block = "## Repo profiles\n\n(profile lookup failed — see bridge logs)\n";
-  }
-
+function spliceScopeBlock(rendered: string, block: string): string {
   const marker = "## Your job";
   const idx = rendered.indexOf(marker);
-  if (idx === -1) {
-    // Template shape changed — append at top rather than swallow.
-    return `${block}\n${rendered}`;
-  }
+  if (idx === -1) return `${block}\n${rendered}`;
   return `${rendered.slice(0, idx)}${block}\n${rendered.slice(idx)}`;
 }
 
 export async function spawnCoordinatorForTask(
-  task: Pick<Task, "id" | "title" | "body">,
+  task: Pick<Task, "id" | "title" | "body"> & { app?: string | null },
 ): Promise<string | null> {
   const sessionsDir = join(SESSIONS_DIR, task.id);
 
@@ -875,18 +827,16 @@ export async function spawnCoordinatorForTask(
       .replaceAll("{{TASK_ID}}", task.id)
       .replaceAll("{{TASK_TITLE}}", task.title)
       .replaceAll("{{TASK_BODY}}", task.body);
-    // Phase G: prepend repo profiles. The block goes before "## Your job"
-    // so the coordinator sees the contract surface of every candidate
-    // repo before deciding which one to dispatch to. Failure modes are
-    // soft: missing cache → single-line note, never blocks spawn.
-    const withProfiles = injectRepoProfilesBlock(baseRendered);
-    // Bridge hint = heuristic-driven repo suggestion based on the task
-    // body itself. Spliced after the profiles block so the coordinator
-    // sees both the contract surface AND a concrete starting bet.
-    const hintBlock = buildBridgeHintBlock(task.body);
-    const renderedPrompt = hintBlock
-      ? withProfiles.replace("## Your job", `${hintBlock}## Your job`)
-      : withProfiles;
+    // Inject the canonical `## Detected scope` block — coordinator and
+    // every spawned child see the same scope, no drift between the two.
+    // Replaces the legacy `## Repo profiles` + `## Bridge hint` pair.
+    const scopeBlock = await buildDetectedScopeBlock(sessionsDir, {
+      id: task.id,
+      title: task.title,
+      body: task.body,
+      app: task.app ?? null,
+    });
+    const renderedPrompt = spliceScopeBlock(baseRendered, scopeBlock);
 
     // Append the run BEFORE spawning — H4 orphan-window fix. If
     // `spawnClaude` throws (claude binary missing, fork EAGAIN, etc.)

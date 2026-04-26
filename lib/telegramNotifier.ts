@@ -4,7 +4,10 @@
  * Subscribes to the bridge's per-task lifecycle events and the global
  * permission-pending stream, and forwards a short Markdown message to
  * a configured Telegram chat. Disabled (no network calls) unless both
- * `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set in the env.
+ * `botToken` and `chatId` are set — read primarily from
+ * `bridge.json.telegram` (operator-managed via the bridge UI), with a
+ * fallback to the legacy `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+ * env vars so existing installs keep working until they migrate.
  *
  * The notifier installs once per process (HMR-safe) and never throws —
  * any send error is logged to the bridge's console with a brief reason.
@@ -20,6 +23,7 @@
  */
 import { subscribeMetaAll, type MetaChangeEvent } from "./meta";
 import { subscribeAllPermissions, type PendingRequest } from "./permissionStore";
+import { getManifestTelegramSettings } from "./apps";
 
 const TG_HOST = "https://api.telegram.org";
 const DEDUPE_MS = 1500;
@@ -40,11 +44,18 @@ const state: NotifierState =
   };
 G.__bridgeTelegramNotifier = state;
 
+/**
+ * Resolve the active Telegram credentials. Prefers `bridge.json.telegram`
+ * (operator-managed via the bridge UI); falls back to legacy env vars
+ * for installs that haven't migrated yet. Returns `null` when neither
+ * source has both fields filled.
+ */
 function envConfig(): { token: string; chatId: string } | null {
-  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-  const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
-  if (!token || !chatId) return null;
-  return { token, chatId };
+  const settings = getManifestTelegramSettings();
+  if (settings.botToken && settings.chatId) {
+    return { token: settings.botToken, chatId: settings.chatId };
+  }
+  return null;
 }
 
 function escapeMarkdownV2(s: string): string {
@@ -147,7 +158,12 @@ export function teardownTelegramNotifier(): void {
  */
 export async function pingTelegramTest(): Promise<{ ok: boolean; reason?: string }> {
   const cfg = envConfig();
-  if (!cfg) return { ok: false, reason: "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set" };
+  if (!cfg) {
+    return {
+      ok: false,
+      reason: "telegram.botToken / telegram.chatId not set in bridge.json (and no env fallback)",
+    };
+  }
   try {
     const r = await fetch(`${TG_HOST}/bot${encodeURIComponent(cfg.token)}/sendMessage`, {
       method: "POST",

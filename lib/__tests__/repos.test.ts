@@ -71,6 +71,7 @@ describe("serializeApps + round-trip", () => {
         pinnedFiles: [],
         symbolDirs: [],
         quality: {},
+        capabilities: [],
       },
       {
         name: "app-web",
@@ -82,6 +83,7 @@ describe("serializeApps + round-trip", () => {
         pinnedFiles: [],
         symbolDirs: [],
         quality: {},
+        capabilities: [],
       },
     ];
     const json = serializeApps(apps);
@@ -104,6 +106,7 @@ describe("serializeApps + round-trip", () => {
         pinnedFiles: [],
         symbolDirs: [],
         quality: {},
+        capabilities: [],
       },
     ]);
     const parsed = JSON.parse(json) as { apps: Array<Record<string, unknown>> };
@@ -134,6 +137,7 @@ describe("serializeApps + round-trip", () => {
         pinnedFiles: [],
         symbolDirs: [],
         quality: {},
+        capabilities: [],
       },
     ];
     const json = serializeApps(apps);

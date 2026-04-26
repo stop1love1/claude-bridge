@@ -17,6 +17,8 @@ import type { StyleFingerprint } from "./styleFingerprint";
 import type { PinnedFile } from "./pinnedFiles";
 import type { ReferenceFile } from "./contextAttach";
 import type { RecentDirection } from "./recentDirection";
+import type { DetectedScope } from "./detect/types";
+import { renderDetectedScope } from "./detect/render";
 import { BRIDGE_URL, BRIDGE_FOLDER } from "./paths";
 
 export interface BuildChildPromptOpts {
@@ -109,6 +111,14 @@ export interface BuildChildPromptOpts {
    * constraints. Empty list = skip.
    */
   memoryEntries?: string[];
+  /**
+   * (Detect) Cached `DetectedScope` for the task — same value the
+   * coordinator saw. Rendered as `## Detected scope` after `## Task`
+   * so the child can see what features / entities / files / repos the
+   * bridge identified before it dives into the role-specific brief.
+   * Null/undefined = no scope cached (legacy task / detect disabled).
+   */
+  detectedScope?: DetectedScope | null;
 }
 
 const COORDINATOR_BODY_CAP = 16 * 1024;
@@ -203,6 +213,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     attachedReferences,
     recentDirection,
     memoryEntries,
+    detectedScope,
   } = opts;
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
@@ -267,6 +278,15 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     safeTaskBody,
     "  ```",
     "",
+  );
+
+  if (detectedScope) {
+    lines.push(
+      renderDetectedScope(detectedScope, { forCoordinator: false }),
+    );
+  }
+
+  lines.push(
     "## Your role",
     "",
     `\`${role}\` in \`${repo}\`. The coordinator wrote the role-specific brief below — read it carefully:`,

@@ -188,6 +188,15 @@ export const api = {
         }
         return { ok: false, reason: e.message };
       }),
+  telegramSettings: () =>
+    req<{ botToken: string; botTokenSet: boolean; chatId: string }>(
+      `/telegram/settings`,
+    ),
+  updateTelegramSettings: (patch: { botToken?: string; chatId?: string }) =>
+    req<{ botToken: string; botTokenSet: boolean; chatId: string }>(
+      `/telegram/settings`,
+      { method: "PUT", body: JSON.stringify(patch) },
+    ),
   scanApp: (name: string) =>
     req<{
       ok: true;

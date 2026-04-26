@@ -9,6 +9,7 @@ import {
 import { basename, join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { TaskStatus, TaskSection } from "./tasks";
+import type { DetectedScopeCacheEntry } from "./detect/types";
 
 /**
  * Write `meta.json` atomically: stage the new contents in a sibling
@@ -257,6 +258,16 @@ export interface Meta {
   taskApp?: string | null;
   createdAt: string;
   runs: Run[];
+  /**
+   * Cached output of `lib/detect` for this task. Computed once at
+   * task-create time (and on explicit refresh via
+   * `POST /api/tasks/<id>/detect/refresh`), persisted here so the
+   * coordinator and every spawned child see the SAME detected scope.
+   * Absent / null = legacy meta written before the detect layer existed,
+   * OR cache was cleared. Lazy compute: callers should treat absence as
+   * "fall back to live detection".
+   */
+  detectedScope?: DetectedScopeCacheEntry | null;
 }
 
 const FILE = "meta.json";
