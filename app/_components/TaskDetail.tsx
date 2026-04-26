@@ -16,6 +16,7 @@ import {
   Download,
 } from "lucide-react";
 import { exportTaskMarkdown, downloadFile } from "@/lib/client/exportTask";
+import { TokenUsage, type TokenTotals } from "./TokenUsage";
 import { StatusDot } from "./StatusDot";
 import { relativeTime, duration } from "@/lib/client/time";
 import { useToast } from "./Toasts";
@@ -54,6 +55,7 @@ export function TaskDetail({
   const [toggling, setToggling] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
+  const [usage, setUsage] = useState<TokenTotals | null>(null);
   // Synchronous flag — `setSaving(true)` only commits on the next
   // render, so two onBlur events firing in the same tick can both
   // observe `saving === false` and issue duplicate saves. The ref
@@ -72,7 +74,21 @@ export function TaskDetail({
   useEffect(() => {
     setTitle(task?.title ?? "");
     setBody(task?.body ?? "");
+    setUsage(null);
   }, [task?.id]);
+
+  // Refetch token totals whenever the run roster changes (a new run
+  // landed, an existing one transitioned). Lightweight (one route hit)
+  // and the route reads each .jsonl off disk so we always reflect what
+  // claude actually billed.
+  useEffect(() => {
+    if (!task?.id) return;
+    let cancelled = false;
+    api.taskUsage(task.id)
+      .then((r) => { if (!cancelled) setUsage(r.total); })
+      .catch(() => { /* 404 ok if meta hasn't landed yet */ });
+    return () => { cancelled = true; };
+  }, [task?.id, meta?.runs?.length, meta?.runs]);
 
   const dirty = task ? (title !== task.title || body !== task.body) : false;
 
@@ -257,6 +273,15 @@ export function TaskDetail({
             <span className="text-success/70">
               · marked done by you. Per-run statuses below reflect each agent&apos;s last state, independent of this checkbox.
             </span>
+          </div>
+        )}
+
+        {usage && usage.turns > 0 && (
+          <div className="mb-3 rounded-md border border-border bg-secondary/40 px-3 py-2">
+            <div className="flex items-center gap-1.5 mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+              Token usage <span className="text-fg-dim normal-case font-normal">· summed across all runs</span>
+            </div>
+            <TokenUsage totals={usage} variant="detailed" />
           </div>
         )}
 

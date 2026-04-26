@@ -154,6 +154,27 @@ export const api = {
     req<{ kind: "worktree" | "live"; cwd: string; diff: string; truncated?: boolean }>(
       `/tasks/${taskId}/runs/${sessionId}/diff`,
     ),
+  taskUsage: (taskId: string) =>
+    req<{
+      taskId: string;
+      total: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheCreationTokens: number;
+        cacheReadTokens: number;
+        turns: number;
+      };
+      runs: Array<{
+        sessionId: string;
+        role: string;
+        repo: string;
+        inputTokens: number;
+        outputTokens: number;
+        cacheCreationTokens: number;
+        cacheReadTokens: number;
+        turns: number;
+      }>;
+    }>(`/tasks/${taskId}/usage`),
   telegramTest: () =>
     req<{ ok: true } | { ok: false; reason: string }>(`/telegram/test`, { method: "POST" })
       .catch((e: Error) => {

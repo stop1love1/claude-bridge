@@ -10,6 +10,7 @@ import {
   Search, X, ArrowUp, Download,
 } from "lucide-react";
 import { exportSessionMarkdown, downloadFile } from "@/lib/client/exportTask";
+import { TokenUsage, type TokenTotals } from "./TokenUsage";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useToast } from "./Toasts";
@@ -36,11 +37,24 @@ interface ContentBlock {
   is_error?: boolean;
 }
 
+interface UsageBlock {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
 interface LogEntry {
   type?: string;
   timestamp?: string;
   uuid?: string;
-  message?: { role?: string; id?: string; content?: string | ContentBlock[] };
+  message?: {
+    role?: string;
+    id?: string;
+    content?: string | ContentBlock[];
+    /** Present on assistant turns; carries per-turn token accounting. */
+    usage?: UsageBlock;
+  };
 }
 
 // .jsonl is a stream of every event; most are noise to a chat reader.
@@ -1288,6 +1302,29 @@ function SessionLogInner({
     return () => window.removeEventListener("keydown", onKey);
   }, [searchOpen]);
 
+  // Sum per-turn `message.usage` across loaded entries. The window is
+  // bounded by MAX_RENDERED, so this is a *running* total over what's
+  // currently in memory — not the full session. The number is still
+  // useful for "how big is this conversation getting?" while typing,
+  // and the task-level endpoint covers full-session totals.
+  const sessionTotals = useMemo<TokenTotals>(() => {
+    const t = {
+      inputTokens: 0, outputTokens: 0,
+      cacheCreationTokens: 0, cacheReadTokens: 0, turns: 0,
+    };
+    for (const e of entries) {
+      if (e.type !== "assistant") continue;
+      const u = e.message?.usage;
+      if (!u) continue;
+      t.inputTokens         += typeof u.input_tokens === "number" ? u.input_tokens : 0;
+      t.outputTokens        += typeof u.output_tokens === "number" ? u.output_tokens : 0;
+      t.cacheCreationTokens += typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : 0;
+      t.cacheReadTokens     += typeof u.cache_read_input_tokens === "number" ? u.cache_read_input_tokens : 0;
+      t.turns += 1;
+    }
+    return t;
+  }, [entries]);
+
   // Map every `tool_use_id` we've seen to its tool `name` so tool_result
   // blocks can look up which tool they are answering. Used for F.2
   // (suppressing TodoWrite confirmation noise).
@@ -1580,12 +1617,20 @@ function SessionLogInner({
             responding…
           </span>
         )}
+        {sessionTotals.turns > 0 && (
+          <TokenUsage
+            totals={sessionTotals}
+            variant="compact"
+            className="ml-auto"
+            title={`This window: ${sessionTotals.turns} assistant turns · in ${sessionTotals.inputTokens.toLocaleString()} · out ${sessionTotals.outputTokens.toLocaleString()} · cache read ${sessionTotals.cacheReadTokens.toLocaleString()}`}
+          />
+        )}
         <button
           onClick={() => {
             setSearchOpen(true);
             setTimeout(() => searchInputRef.current?.focus(), 0);
           }}
-          className="ml-auto inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px] transition-colors"
+          className={`${sessionTotals.turns > 0 ? "" : "ml-auto "}inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px] transition-colors`}
           title="Search this conversation (Ctrl/⌘+F)"
         >
           <Search size={10} /> Search
