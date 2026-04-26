@@ -1,9 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { GitBranch, Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GitBranch, Plus, Bookmark, BookmarkPlus, X } from "lucide-react";
 import type { App, Repo } from "@/lib/client/types";
+import {
+  type TaskTemplate,
+  allTemplates,
+  addUserTemplate,
+  removeUserTemplate,
+} from "@/lib/client/taskTemplates";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import {
   Dialog,
   DialogContent,
@@ -41,12 +48,43 @@ export function NewTaskDialog({
   const [app, setApp] = useState<string>(APP_AUTO);
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const [savingTpl, setSavingTpl] = useState(false);
+  const [tplLabel, setTplLabel] = useState("");
+
+  // Hydrate templates after mount so SSR doesn't read localStorage.
+  useEffect(() => {
+    if (open) setTemplates(allTemplates());
+  }, [open]);
+
+  const builtinTemplates = useMemo(() => templates.filter((t) => t.builtin), [templates]);
+  const userTemplates = useMemo(() => templates.filter((t) => !t.builtin), [templates]);
 
   const triggerOpen = useCallback(() => {
     setBody("");
     setApp(APP_AUTO);
     setOpen(true);
+    setSavingTpl(false);
+    setTplLabel("");
   }, []);
+
+  const applyTemplate = (t: TaskTemplate) => {
+    setBody(t.body);
+    setTimeout(() => taRef.current?.focus(), 0);
+  };
+  const handleSaveTemplate = () => {
+    const label = tplLabel.trim();
+    const text = body.trim();
+    if (!label || !text) return;
+    addUserTemplate(label, text);
+    setTemplates(allTemplates());
+    setSavingTpl(false);
+    setTplLabel("");
+  };
+  const handleDeleteTemplate = (id: string) => {
+    removeUserTemplate(id);
+    setTemplates(allTemplates());
+  };
 
   useEffect(() => {
     if (!openRef) return;
@@ -89,6 +127,80 @@ export function NewTaskDialog({
             onSubmit={(e) => { e.preventDefault(); submit(); }}
             className="grid gap-3"
           >
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground font-semibold mr-1">
+                Templates
+              </span>
+              {builtinTemplates.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => applyTemplate(t)}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-border bg-secondary hover:bg-accent text-[10.5px]"
+                  title={`Insert "${t.label}" template`}
+                >
+                  <Bookmark size={10} className="text-info" />
+                  {t.label}
+                </button>
+              ))}
+              {userTemplates.map((t) => (
+                <span
+                  key={t.id}
+                  className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full border border-border bg-secondary hover:bg-accent text-[10.5px]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => applyTemplate(t)}
+                    className="inline-flex items-center gap-1"
+                    title={`Insert "${t.label}" template`}
+                  >
+                    <Bookmark size={10} className="text-warning" />
+                    {t.label}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteTemplate(t.id)}
+                    className="ml-0.5 text-fg-dim hover:text-destructive"
+                    aria-label={`Remove template ${t.label}`}
+                    title="Remove template"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={() => setSavingTpl((v) => !v)}
+                disabled={!body.trim()}
+                className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-dashed border-border text-[10.5px] text-muted-foreground hover:text-foreground hover:border-primary disabled:opacity-40"
+                title={body.trim() ? "Save current body as a template" : "Type something first"}
+              >
+                <BookmarkPlus size={10} />
+                Save as template
+              </button>
+            </div>
+            {savingTpl && (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={tplLabel}
+                  onChange={(e) => setTplLabel(e.target.value)}
+                  placeholder="Template name"
+                  className="h-8 text-xs flex-1"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); handleSaveTemplate(); }
+                    if (e.key === "Escape") { setSavingTpl(false); setTplLabel(""); }
+                  }}
+                  autoFocus
+                />
+                <Button type="button" size="xs" onClick={handleSaveTemplate} disabled={!tplLabel.trim()}>
+                  Save
+                </Button>
+                <Button type="button" size="xs" variant="ghost" onClick={() => { setSavingTpl(false); setTplLabel(""); }}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+
             <div className="grid gap-1.5">
               <Label htmlFor="task-app">Target app</Label>
               <Select value={app} onValueChange={setApp}>

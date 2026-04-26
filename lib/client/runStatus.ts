@@ -5,11 +5,13 @@ import type { RunStatus } from "./types";
  * TaskGrid (task-level derived status) and AgentTree (per-run status)
  * import from here so a status colour change happens in one place.
  *
- * `DerivedStatus` is the task-card flavour: it adds "spawning" and
- * "idle" which are computed from a Meta, not a single Run, but the
- * colour mapping is shared with the per-run view via the same record.
+ * `DerivedStatus` is the task-card flavour: it adds "spawning",
+ * "idle", and "completed" which are computed from a Meta + Task pair,
+ * not a single Run. `completed` reflects the user-confirmed checkbox
+ * (`task.checked`) and overrides the run-derived state so the list
+ * stays in sync with the "Completed" label shown in TaskDetail.
  */
-export type DerivedStatus = "spawning" | "running" | "failed" | "done" | "idle";
+export type DerivedStatus = "spawning" | "running" | "failed" | "done" | "idle" | "completed";
 
 export interface StatusPill {
   label: string;
@@ -26,6 +28,7 @@ export const STATUS_PILL: Record<DerivedStatus, StatusPill> = {
   failed: { label: "failed", cls: "bg-destructive/20 text-destructive", pulse: false },
   done: { label: "done", cls: "bg-success/20 text-success", pulse: false },
   idle: { label: "idle", cls: "bg-fg-dim/15 text-fg-dim", pulse: false },
+  completed: { label: "completed", cls: "bg-success/40 text-success", pulse: false },
 };
 
 /**

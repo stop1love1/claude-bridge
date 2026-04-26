@@ -77,6 +77,39 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     return r.json() as Promise<{ path: string; name: string; size: number }>;
   },
+  /**
+   * XHR-backed variant that surfaces upload progress (0–1 fraction).
+   * `fetch` doesn't expose `progress` events; XHR does. We keep both
+   * helpers around so callers that don't care about progress aren't
+   * forced to wire callbacks.
+   */
+  uploadFileWithProgress: (
+    sessionId: string,
+    file: File,
+    onProgress: (fraction: number) => void,
+  ): Promise<{ path: string; name: string; size: number }> => {
+    return new Promise((resolveP, rejectP) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `/api/sessions/${sessionId}/upload`);
+      xhr.upload.addEventListener("progress", (ev) => {
+        if (!ev.lengthComputable) return;
+        onProgress(Math.min(1, ev.loaded / ev.total));
+      });
+      xhr.addEventListener("load", () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolveP(JSON.parse(xhr.responseText)); }
+          catch (e) { rejectP(e); }
+        } else {
+          rejectP(new Error(`${xhr.status} ${xhr.responseText || xhr.statusText}`));
+        }
+      });
+      xhr.addEventListener("error", () => rejectP(new Error("network error")));
+      xhr.addEventListener("abort", () => rejectP(new Error("aborted")));
+      xhr.send(fd);
+    });
+  },
   rewind: (sessionId: string, body: { repo: string; uuid: string }) =>
     req<{ ok: true; kept: number; dropped: number }>(
       `/sessions/${sessionId}/rewind`,
@@ -117,6 +150,23 @@ export const api = {
       added: App[];
       skipped: Array<{ name: string; reason: "already-registered" | "not-a-repo" }>;
     }>("/apps/auto-detect", { method: "POST" }),
+  runDiff: (taskId: string, sessionId: string) =>
+    req<{ kind: "worktree" | "live"; cwd: string; diff: string; truncated?: boolean }>(
+      `/tasks/${taskId}/runs/${sessionId}/diff`,
+    ),
+  telegramTest: () =>
+    req<{ ok: true } | { ok: false; reason: string }>(`/telegram/test`, { method: "POST" })
+      .catch((e: Error) => {
+        // The route returns 503 with a JSON body when not configured;
+        // surface that as a structured error rather than a thrown one
+        // so the caller can show the reason in a toast.
+        const m = /^503 (.+)$/.exec(e.message);
+        if (m) {
+          try { return JSON.parse(m[1]) as { ok: false; reason: string }; }
+          catch { return { ok: false, reason: e.message }; }
+        }
+        return { ok: false, reason: e.message };
+      }),
   scanApp: (name: string) =>
     req<{
       ok: true;

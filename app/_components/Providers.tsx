@@ -3,6 +3,7 @@
 import { ToastProvider } from "./Toasts";
 import { ConfirmProvider } from "./ConfirmProvider";
 import { TooltipProvider } from "./ui/tooltip";
+import { ThemeProvider } from "./ThemeProvider";
 
 /**
  * Client-side provider stack. Wraps every page once via the root layout
@@ -19,10 +20,12 @@ import { TooltipProvider } from "./ui/tooltip";
  */
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <TooltipProvider delayDuration={300}>
-      <ToastProvider>
-        <ConfirmProvider>{children}</ConfirmProvider>
-      </ToastProvider>
-    </TooltipProvider>
+    <ThemeProvider>
+      <TooltipProvider delayDuration={300}>
+        <ToastProvider>
+          <ConfirmProvider>{children}</ConfirmProvider>
+        </ToastProvider>
+      </TooltipProvider>
+    </ThemeProvider>
   );
 }

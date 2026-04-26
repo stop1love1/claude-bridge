@@ -92,6 +92,9 @@ function Dashboard() {
 
   useEffect(() => {
     if (!visible) return;
+    // Fire immediately on tab-becomes-visible so a user returning after
+    // 5+ minutes sees fresh data instead of waiting for the next tick.
+    refreshTasks();
     const h = setInterval(refreshTasks, 15_000);
     return () => clearInterval(h);
   }, [visible, refreshTasks]);
@@ -185,6 +188,46 @@ function Dashboard() {
     else router.push("/sessions");
   };
 
+  const handleBulkDelete = useCallback(async (ids: string[]) => {
+    const ok = await confirm({
+      title: `Delete ${ids.length} task${ids.length === 1 ? "" : "s"}?`,
+      description: `This also removes per-task sessions/<id>/ metadata and any linked Claude sessions.`,
+      confirmLabel: "Delete all",
+      destructive: true,
+    });
+    if (!ok) return;
+    let removed = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try { await api.deleteTask(id); removed += 1; }
+      catch { failed += 1; }
+    }
+    await refreshTasks();
+    await refreshAllMeta();
+    toast(failed > 0 ? "error" : "info",
+      `${removed} deleted${failed ? `, ${failed} failed` : ""}`);
+  }, [confirm, refreshTasks, refreshAllMeta, toast]);
+
+  const handleBulkMove = useCallback(async (ids: string[], section: import("@/lib/client/types").TaskSection) => {
+    let moved = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await api.updateTask(id, {
+          section,
+          checked: section === "DONE — not yet archived",
+        });
+        moved += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    await refreshTasks();
+    await refreshAllMeta();
+    toast(failed > 0 ? "error" : "info",
+      `${moved} moved to ${section}${failed ? `, ${failed} failed` : ""}`);
+  }, [refreshTasks, refreshAllMeta, toast]);
+
   useEffect(() => {
     const isTextInput = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
@@ -229,6 +272,29 @@ function Dashboard() {
             </span>
           ) : undefined,
         }}
+        actions={
+          <>
+            {runningCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-[11px] font-medium">
+                <span className="relative inline-flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
+                </span>
+                {runningCount}
+              </span>
+            )}
+            <Button
+              onClick={() => setPaletteOpen(true)}
+              variant="outline"
+              size="xs"
+              title="Command palette"
+              className="hidden md:inline-flex font-mono text-[10px] text-fg-dim"
+            >
+              ⌘K
+            </Button>
+            <NewTaskDialog apps={apps} repos={repos} onCreate={handleCreate} openRef={newDialogRef} />
+          </>
+        }
       >
         <Input
           type="search"
@@ -240,7 +306,7 @@ function Dashboard() {
 
         <Select value={appFilter} onValueChange={setAppFilter}>
           <SelectTrigger
-            className="h-7 px-2 text-xs gap-1 [&>span]:truncate w-[150px]"
+            className="hidden sm:flex h-7 px-2 text-xs gap-1 [&>span]:truncate w-[150px]"
             title="Filter tasks by target app"
           >
             <SelectValue />
@@ -253,28 +319,6 @@ function Dashboard() {
             ))}
           </SelectContent>
         </Select>
-
-        <div className="ml-auto flex items-center gap-2">
-          {runningCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-[11px] font-medium">
-              <span className="relative inline-flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
-              </span>
-              {runningCount}
-            </span>
-          )}
-          <Button
-            onClick={() => setPaletteOpen(true)}
-            variant="outline"
-            size="xs"
-            title="Command palette"
-            className="font-mono text-[10px] text-fg-dim h-6 px-1.5"
-          >
-            ⌘K
-          </Button>
-          <NewTaskDialog apps={apps} repos={repos} onCreate={handleCreate} openRef={newDialogRef} />
-        </div>
       </HeaderShell>
 
       <main className="flex-1 flex min-h-0">
@@ -290,6 +334,8 @@ function Dashboard() {
           onOpenTask={openTask}
           onQuickAdd={handleQuickAdd}
           onDeleteTask={handleDeleteTask}
+          onBulkDelete={handleBulkDelete}
+          onBulkMove={handleBulkMove}
         />
       </main>
 
@@ -309,7 +355,7 @@ function Dashboard() {
 
 export default function Page() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+    <Suspense fallback={<div className="p-6 space-y-3"><div className="h-4 w-32 rounded bg-muted/60 animate-pulse" /><div className="h-3 w-2/3 rounded bg-muted/60 animate-pulse" /></div>}>
       <Dashboard />
     </Suspense>
   );

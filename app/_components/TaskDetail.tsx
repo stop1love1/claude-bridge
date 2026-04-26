@@ -13,7 +13,9 @@ import {
   Crown,
   GitBranch,
   RotateCw,
+  Download,
 } from "lucide-react";
+import { exportTaskMarkdown, downloadFile } from "@/lib/client/exportTask";
 import { StatusDot } from "./StatusDot";
 import { relativeTime, duration } from "@/lib/client/time";
 import { useToast } from "./Toasts";
@@ -197,7 +199,7 @@ export function TaskDetail({
 
   return (
     <section className="flex-1 min-w-0 overflow-y-auto border-r border-border">
-      <div className="p-6 max-w-3xl mx-auto">
+      <div className="p-4 sm:p-6 max-w-3xl mx-auto">
         <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
           <Button
             onClick={copyId}
@@ -226,6 +228,15 @@ export function TaskDetail({
             {task.checked ? "Completed" : "Mark complete"}
           </Button>
           <Button
+            onClick={() => downloadFile(`${task.id}.md`, exportTaskMarkdown(task, meta))}
+            variant="ghost"
+            size="iconSm"
+            title="Export task summary as Markdown"
+            className="text-fg-dim hover:text-foreground h-6 w-6"
+          >
+            <Download size={13} />
+          </Button>
+          <Button
             onClick={confirmDelete}
             variant="ghost"
             size="iconSm"
@@ -236,13 +247,28 @@ export function TaskDetail({
           </Button>
         </div>
 
+        {task.checked && (
+          <div
+            className="mb-3 flex items-center gap-2 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+            role="status"
+          >
+            <CheckCircle2 size={14} className="shrink-0" />
+            <span className="font-medium">Task completed</span>
+            <span className="text-success/70">
+              · marked done by you. Per-run statuses below reflect each agent&apos;s last state, independent of this checkbox.
+            </span>
+          </div>
+        )}
+
         <Input
           ref={titleRef}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={save}
           placeholder="Task title (auto-derived from the first line)"
-          className="bg-transparent border-0 border-b border-border rounded-none px-0 pb-2 mb-3 text-lg font-medium h-auto focus-visible:ring-0 focus-visible:border-primary"
+          className={`bg-transparent border-0 border-b border-border rounded-none px-0 pb-2 mb-3 text-lg font-medium h-auto focus-visible:ring-0 focus-visible:border-primary ${
+            task.checked ? "line-through text-muted-foreground" : ""
+          }`}
         />
 
         <Textarea
@@ -337,6 +363,7 @@ export function TaskDetail({
         {hasRuns ? (
           <AgentTree
             meta={meta}
+            taskId={task.id}
             activeSessionId={activeRunId}
             onSelectRun={onSelectRun}
             onKill={handleKill}

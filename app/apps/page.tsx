@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Boxes, Folder, GitBranch, Settings, Sparkles, Trash2 } from "lucide-react";
+import { Boxes, Folder, GitBranch, Send, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { App, Meta, Task } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
@@ -11,6 +11,8 @@ import { AppSettingsDialog } from "../_components/AppSettingsDialog";
 import { Button } from "../_components/ui/button";
 import { useToast } from "../_components/Toasts";
 import { useConfirm } from "../_components/ConfirmProvider";
+import { ListSkeleton } from "../_components/ui/skeleton";
+import { EmptyState } from "../_components/ui/empty-state";
 
 interface RepoEntry {
   name: string;
@@ -59,6 +61,19 @@ function AppsPage() {
 
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => { refreshStats(); }, [refreshStats]);
+
+  // Refresh both lists immediately when the user comes back to the tab —
+  // otherwise stats can be stale for up to 15s after a long absence.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        refresh();
+        refreshStats();
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [refresh, refreshStats]);
 
   // Live-ish stats: poll faster while any run is active, slower otherwise.
   const metaRef = useRef(metaByTask);
@@ -146,14 +161,31 @@ function AppsPage() {
 
   return (
     <div className="flex flex-col h-screen">
-      <HeaderShell active="apps">
-        <div className="ml-auto flex items-center gap-2">
-          <span className="hidden lg:inline text-[10px] text-muted-foreground">
-            {apps.length} app{apps.length === 1 ? "" : "s"} registered
-          </span>
-          <AddAppDialog onChanged={refresh} openRef={addDialogRef} />
-        </div>
-      </HeaderShell>
+      <HeaderShell
+        active="apps"
+        actions={
+          <>
+            <span className="hidden lg:inline text-[10px] text-muted-foreground">
+              {apps.length} app{apps.length === 1 ? "" : "s"} registered
+            </span>
+            <Button
+              variant="ghost"
+              size="iconSm"
+              onClick={async () => {
+                const r = await api.telegramTest();
+                if (r.ok) toast("success", "Telegram message sent");
+                else toast("error", `Telegram: ${r.reason}`);
+              }}
+              title="Send test message to the configured Telegram bot"
+              aria-label="Telegram test"
+              className="text-fg-dim hover:text-foreground"
+            >
+              <Send size={13} />
+            </Button>
+            <AddAppDialog onChanged={refresh} openRef={addDialogRef} />
+          </>
+        }
+      />
 
       <main className="flex-1 overflow-y-auto">
         <div className="p-6 max-w-4xl mx-auto">
@@ -169,18 +201,18 @@ function AppsPage() {
           </p>
 
           {loading ? (
-            <p className="text-sm text-muted-foreground italic">Loading…</p>
+            <ListSkeleton rows={4} />
           ) : apps.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border p-8 text-center bg-card">
-              <Boxes size={28} className="mx-auto mb-3 opacity-40" />
-              <p className="text-sm font-medium mb-1">No apps registered yet</p>
-              <p className="text-xs text-muted-foreground mb-4">
-                Click <strong>Add app</strong> in the header, or <strong>Auto-detect</strong> to scan the parent directory.
-              </p>
-              <Button onClick={() => addDialogRef.current?.()} size="sm">
-                Add your first app
-              </Button>
-            </div>
+            <EmptyState
+              icon={Boxes}
+              title="No apps registered yet"
+              hint="Click Add app in the header, or Auto-detect to scan the parent directory."
+              action={
+                <Button onClick={() => addDialogRef.current?.()} size="sm">
+                  Add your first app
+                </Button>
+              }
+            />
           ) : (
             <div className="grid gap-2">
               {apps.map((app) => {

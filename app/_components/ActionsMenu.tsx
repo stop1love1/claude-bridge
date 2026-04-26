@@ -25,7 +25,7 @@ interface ActionItem {
 }
 
 const ACTIONS: ActionItem[] = [
-  { id: "attach",       label: "Attach file…",                    group: "Context", icon: Paperclip },
+  { id: "attach",       label: "Attach file… (max 25 MB)",        group: "Context", icon: Paperclip },
   { id: "mention",      label: "Mention file from this project…", group: "Context", icon: AtSign },
   { id: "clear",        label: "Clear conversation",              group: "Context", icon: Trash2 },
   { id: "rewind",       label: "Rewind…",                         group: "Context", icon: Undo2 },

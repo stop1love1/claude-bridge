@@ -39,17 +39,22 @@ export function MainNav({
         const cls = isActive
           ? "bg-accent text-foreground"
           : "text-muted-foreground hover:text-foreground";
-        const inner = (
-          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs ${cls}`}>
+        // Even the active section is rendered as a Link so the user can
+        // always click it to navigate up — e.g. on /tasks/<id>, clicking
+        // the highlighted "Tasks" tab returns to the task list. This is
+        // the canonical "back to section" affordance; no extra Back
+        // button needed in sub-page headers.
+        return (
+          <Link
+            key={key}
+            href={href}
+            aria-current={isActive ? "page" : undefined}
+            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs ${cls}`}
+          >
             <Icon size={12} />
             {label}
             {badges?.[key]}
-          </span>
-        );
-        return isActive ? (
-          <span key={key}>{inner}</span>
-        ) : (
-          <Link key={key} href={href}>{inner}</Link>
+          </Link>
         );
       })}
     </nav>

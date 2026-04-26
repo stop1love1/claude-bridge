@@ -4,9 +4,10 @@ import { useState } from "react";
 import type { SessionSummary } from "@/lib/client/types";
 import {
   ChevronDown, ChevronRight, FolderClosed, FolderOpen, GitBranch,
-  Link as LinkIcon, Link2Off, Search, X, Trash2,
+  Link as LinkIcon, Link2Off, Search, X, Trash2, Terminal,
 } from "lucide-react";
 import { relativeTime } from "@/lib/client/time";
+import { EmptyState } from "./ui/empty-state";
 
 /**
  * Render an absolute path the way VS Code does in its sessions panel:
@@ -89,9 +90,12 @@ export function SessionsBrowser({
 
       <div className="p-2 flex-1">
         {filtered.length === 0 ? (
-          <div className="text-center text-xs text-fg-dim py-8">
-            {q ? "No matches" : "No sessions yet"}
-          </div>
+          <EmptyState
+            icon={Terminal}
+            title={q ? "No matches" : "No sessions yet"}
+            hint={q ? "Try a different search term." : "Click New session to start a Claude chat in any registered repo."}
+            className="mt-4"
+          />
         ) : (
           groups.map(([path, list]) => {
             const isCollapsed = !!collapsed[path];

@@ -7,7 +7,9 @@ import {
   Terminal, Copy, Check, ArrowDown,
   Wrench, FileText, Brain, ChevronDown, ChevronRight, AlertCircle,
   Undo2, ListTodo, Square, CheckSquare, Asterisk,
+  Search, X, ArrowUp, Download,
 } from "lucide-react";
+import { exportSessionMarkdown, downloadFile } from "@/lib/client/exportTask";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useToast } from "./Toasts";
@@ -252,19 +254,46 @@ function MarkdownText({ text }: { text: string }) {
   );
 }
 
-function ThinkingBlockView({ text }: { text: string }) {
+function formatThoughtSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds - m * 60);
+  return s ? `${m}m ${s}s` : `${m}m`;
+}
+
+function ThinkingBlockView({
+  text,
+  durationSec,
+}: {
+  text: string;
+  durationSec?: number;
+}) {
   const [open, setOpen] = useState(false);
-  if (!text) return null;
+  const hasContent = text.trim().length > 0;
+  const durLabel = durationSec ? formatThoughtSeconds(durationSec) : "";
+  const headLabel = durLabel ? `Thought for ${durLabel}` : "Thought";
+  const hint = hasContent
+    ? `${text.length.toLocaleString()} chars`
+    : "redacted";
   return (
     <div className="my-1">
       <button
-        onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[10.5px] text-fg-dim hover:text-foreground italic"
+        onClick={() => hasContent && setOpen((v) => !v)}
+        className={`inline-flex items-center gap-1 text-[10.5px] text-fg-dim italic ${
+          hasContent ? "hover:text-foreground cursor-pointer" : "cursor-default"
+        }`}
+        title={hasContent ? "Toggle chain-of-thought" : "Thinking content is not available"}
       >
-        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        <Brain size={11} /> {open ? "Hide thinking" : "Show thinking"}
+        {hasContent
+          ? (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />)
+          : <span className="inline-block w-[11px]" />}
+        <Brain size={11} className="text-info" />
+        <span className="font-medium not-italic text-fg-dim">{headLabel}</span>
+        <span className="opacity-60">· {hint}</span>
       </button>
-      {open && (
+      {open && hasContent && (
         <pre className="mt-1 px-2 py-1.5 rounded bg-background border border-border text-[11px] text-muted-foreground whitespace-pre-wrap wrap-break-word">
           {text}
         </pre>
@@ -410,30 +439,60 @@ function extractImagePaths(text: string): string[] {
   return [...out].filter((p) => !/^https?:\/\//i.test(p));
 }
 
-function ImageRefLink({ path }: { path: string }) {
+function ImageRefLink({ path, repo }: { path: string; repo?: string }) {
   const [open, setOpen] = useState(false);
+  const [errored, setErrored] = useState(false);
   const name = path.split(/[\\/]/).pop() ?? path;
+  const url = repo
+    ? `/api/repos/${encodeURIComponent(repo)}/raw?path=${encodeURIComponent(path)}`
+    : null;
   return (
     <div className="ml-5 my-1">
       <button
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline font-mono"
-        title="Image referenced by tool"
+        title={url ? "Toggle preview" : "Image referenced by tool"}
       >
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         <FileText size={10} />
         {name}
       </button>
       {open && (
-        <pre className="mt-1 px-2 py-1 rounded bg-muted/40 text-[10.5px] text-muted-foreground font-mono wrap-break-word whitespace-pre-wrap">
-          {path}
-        </pre>
+        url && !errored ? (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block mt-1 max-w-md"
+            title="Open full size in a new tab"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt={name}
+              onError={() => setErrored(true)}
+              className="max-h-72 max-w-full rounded-md border border-border bg-background object-contain hover:border-primary transition-colors"
+            />
+            <div className="mt-1 text-[10px] text-muted-foreground font-mono break-all">
+              {path}
+            </div>
+          </a>
+        ) : (
+          <pre className="mt-1 px-2 py-1 rounded bg-muted/40 text-[10.5px] text-muted-foreground font-mono wrap-break-word whitespace-pre-wrap">
+            {path}
+            {errored && (
+              <span className="block mt-1 text-destructive/80">
+                Could not load preview (file may be outside the repo or unsupported).
+              </span>
+            )}
+          </pre>
+        )
       )}
     </div>
   );
 }
 
-function ToolResultView({ block, suppress }: { block: ContentBlock; suppress?: boolean }) {
+function ToolResultView({ block, suppress, repo }: { block: ContentBlock; suppress?: boolean; repo?: string }) {
   const [open, setOpen] = useState(false);
   if (suppress) return null;
   const rawText = stringifyResult(block.content);
@@ -466,7 +525,7 @@ function ToolResultView({ block, suppress }: { block: ContentBlock; suppress?: b
         </div>
       )}
       {images.map((p, i) => (
-        <ImageRefLink key={i} path={p} />
+        <ImageRefLink key={i} path={p} repo={repo} />
       ))}
     </div>
   );
@@ -658,11 +717,15 @@ const LogRow = memo(function LogRow({
   sessionId,
   onRewindToHere,
   toolNames,
+  repo,
+  prevTimestamp,
 }: {
   entry: LogEntry;
   sessionId: string;
   onRewindToHere?: (uuid: string) => void;
   toolNames?: Map<string, string>;
+  repo?: string;
+  prevTimestamp?: string;
 }) {
   const kind = classify(entry);
   if (kind === "hidden") return null;
@@ -727,7 +790,7 @@ const LogRow = memo(function LogRow({
         // tool_use call. Falling back to index is fine when the model
         // emitted a result without an id (rare malformed payloads).
         const key = tuid || `idx-${i}`;
-        return <ToolResultView key={key} block={b} suppress={suppress} />;
+        return <ToolResultView key={key} block={b} suppress={suppress} repo={repo} />;
       })
       .filter(Boolean);
     if (rendered.length === 0) return null;
@@ -759,11 +822,23 @@ const LogRow = memo(function LogRow({
       merged.push({ kind: "tool_use", block: b });
     }
   }
+  // Approximate the model's thinking duration as the wall-clock gap
+  // between the prior entry (typically the user message that triggered
+  // this turn) and this assistant entry. It rolls in any tool wait
+  // time too, but for a single-turn thought it's the closest signal we
+  // have without per-token stream timing.
+  const thoughtDurationSec = (() => {
+    if (!prevTimestamp || !entry.timestamp) return undefined;
+    const a = Date.parse(prevTimestamp);
+    const b = Date.parse(entry.timestamp);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return undefined;
+    return (b - a) / 1000;
+  })();
   return (
     <div className="my-2 space-y-1">
       {merged.map((m, i) => {
         if (m.kind === "text") return <TextBlockView key={i} text={m.text} role="assistant" />;
-        if (m.kind === "thinking") return <ThinkingBlockView key={i} text={m.text} />;
+        if (m.kind === "thinking") return <ThinkingBlockView key={i} text={m.text} durationSec={thoughtDurationSec} />;
         return <ToolUseView key={i} block={m.block} />;
       })}
     </div>
@@ -777,6 +852,8 @@ const LogRow = memo(function LogRow({
   if (prev.entry !== next.entry) return false;
   if (prev.sessionId !== next.sessionId) return false;
   if (prev.onRewindToHere !== next.onRewindToHere) return false;
+  if (prev.repo !== next.repo) return false;
+  if (prev.prevTimestamp !== next.prevTimestamp) return false;
   // Pull tool_use_ids that this entry's tool_result blocks point at and
   // compare their resolved names. If the entry doesn't have any, the
   // toolNames prop is irrelevant.
@@ -1143,6 +1220,74 @@ function SessionLogInner({
     [entries, showTools],
   );
 
+  // -- Chat search (Cmd/Ctrl+F) --
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [matchIdx, setMatchIdx] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const entryKey = useCallback((e: LogEntry, fallback: number): string => {
+    return (
+      e.uuid ||
+      e.message?.id ||
+      (e.timestamp ? `${e.timestamp}:${e.type ?? ""}` : `pos-${fallback}`)
+    );
+  }, []);
+
+  const matchedKeys = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [] as string[];
+    const keys: string[] = [];
+    visibleEntries.forEach((e, i) => {
+      const c = e.message?.content;
+      // Cheap text scan: stringify the content blob and substring-test.
+      // JSON.stringify is enough since content blocks are JSON-serializable.
+      const text = (typeof c === "string" ? c : JSON.stringify(c ?? "")).toLowerCase();
+      if (text.includes(q)) keys.push(entryKey(e, i));
+    });
+    return keys;
+  }, [searchQuery, visibleEntries, entryKey]);
+
+  useEffect(() => { setMatchIdx(0); }, [searchQuery]);
+
+  const scrollToMatch = useCallback((idx: number) => {
+    const k = matchedKeys[idx];
+    if (!k) return;
+    const sel = `[data-entry-key="${(typeof CSS !== "undefined" && CSS.escape ? CSS.escape(k) : k)}"]`;
+    const el = logRef.current?.querySelector(sel) as HTMLElement | null;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-warning/60");
+    setTimeout(() => el.classList.remove("ring-2", "ring-warning/60"), 1400);
+  }, [matchedKeys]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    if (matchedKeys.length === 0) return;
+    scrollToMatch(matchIdx);
+  }, [matchIdx, matchedKeys, scrollToMatch, searchOpen]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "f") {
+        // Only intercept when the chat panel is in the visible viewport
+        // (ignore when user is in another part of the app).
+        if (!logRef.current) return;
+        const r = logRef.current.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return;
+        e.preventDefault();
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 0);
+      }
+      if (e.key === "Escape" && searchOpen) {
+        setSearchOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen]);
+
   // Map every `tool_use_id` we've seen to its tool `name` so tool_result
   // blocks can look up which tool they are answering. Used for F.2
   // (suppressing TodoWrite confirmation noise).
@@ -1362,6 +1507,66 @@ function SessionLogInner({
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-card relative">
+      {searchOpen && (
+        <div className="absolute top-2 right-3 z-30 flex items-center gap-1 rounded-md border border-border bg-card shadow-lg px-2 py-1.5 text-xs">
+          <Search size={12} className="text-fg-dim shrink-0" />
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (matchedKeys.length === 0) return;
+                setMatchIdx((i) => (e.shiftKey
+                  ? (i - 1 + matchedKeys.length) % matchedKeys.length
+                  : (i + 1) % matchedKeys.length));
+              } else if (e.key === "Escape") {
+                setSearchOpen(false);
+              }
+            }}
+            placeholder="Search conversation"
+            className="bg-transparent border-0 outline-none text-xs w-44 placeholder:text-fg-dim"
+            aria-label="Search conversation"
+          />
+          <span className="text-[10px] text-fg-dim tabular-nums shrink-0 min-w-[44px] text-right">
+            {searchQuery
+              ? matchedKeys.length === 0
+                ? "no matches"
+                : `${matchIdx + 1}/${matchedKeys.length}`
+              : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => matchedKeys.length && setMatchIdx((i) => (i - 1 + matchedKeys.length) % matchedKeys.length)}
+            disabled={matchedKeys.length === 0}
+            className="p-1 rounded text-fg-dim hover:text-foreground disabled:opacity-40"
+            title="Previous match (Shift+Enter)"
+            aria-label="Previous match"
+          >
+            <ArrowUp size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() => matchedKeys.length && setMatchIdx((i) => (i + 1) % matchedKeys.length)}
+            disabled={matchedKeys.length === 0}
+            className="p-1 rounded text-fg-dim hover:text-foreground disabled:opacity-40"
+            title="Next match (Enter)"
+            aria-label="Next match"
+          >
+            <ArrowDown size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setSearchOpen(false)}
+            className="p-1 rounded text-fg-dim hover:text-foreground"
+            title="Close (Esc)"
+            aria-label="Close search"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
       <header className="px-3 py-2 border-b border-border flex items-center gap-2 text-xs">
         <Terminal size={13} className="text-muted-foreground" />
         <span className="font-medium">{run.role}</span>
@@ -1376,8 +1581,18 @@ function SessionLogInner({
           </span>
         )}
         <button
+          onClick={() => {
+            setSearchOpen(true);
+            setTimeout(() => searchInputRef.current?.focus(), 0);
+          }}
+          className="ml-auto inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px] transition-colors"
+          title="Search this conversation (Ctrl/⌘+F)"
+        >
+          <Search size={10} /> Search
+        </button>
+        <button
           onClick={() => setShowTools((v) => !v)}
-          className={`ml-auto inline-flex items-center gap-1 px-1.5 h-6 rounded-md border text-[10px] transition-colors ${
+          className={`inline-flex items-center gap-1 px-1.5 h-6 rounded-md border text-[10px] transition-colors ${
             showTools
               ? "border-border bg-secondary text-foreground"
               : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -1385,6 +1600,21 @@ function SessionLogInner({
           title="Toggle tool results"
         >
           <Wrench size={10} /> {showTools ? "tools" : "no tools"}
+        </button>
+        <button
+          onClick={() => {
+            const md = exportSessionMarkdown(visibleEntries, {
+              title: `Session ${run.sessionId.slice(0, 8)}`,
+              sessionId: run.sessionId,
+              repo: run.repo,
+              role: run.role,
+            });
+            downloadFile(`session-${run.sessionId.slice(0, 8)}.md`, md);
+          }}
+          className="inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
+          title="Export this conversation as Markdown"
+        >
+          <Download size={10} /> Export
         </button>
         <button
           onClick={copySessionId}
@@ -1440,13 +1670,16 @@ function SessionLogInner({
                   e.message?.id ||
                   (e.timestamp ? `${e.timestamp}:${e.type ?? ""}` : `pos-${trimmed + i}`);
                 return (
-                  <LogRow
-                    key={key}
-                    entry={e}
-                    sessionId={run.sessionId}
-                    onRewindToHere={handleRewind}
-                    toolNames={toolNames}
-                  />
+                  <div key={key} data-entry-key={key} className="rounded-md transition-shadow">
+                    <LogRow
+                      entry={e}
+                      sessionId={run.sessionId}
+                      onRewindToHere={handleRewind}
+                      toolNames={toolNames}
+                      repo={run.repo}
+                      prevTimestamp={visibleEntries[i - 1]?.timestamp}
+                    />
+                  </div>
                 );
               })}
               {Object.entries(partials).map(([id, text]) =>

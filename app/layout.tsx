@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "./_components/Providers";
+import { NO_FLASH_SCRIPT } from "./_components/ThemeProvider";
 
 export const metadata: Metadata = {
   title: "Claude Bridge",
@@ -9,7 +10,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="h-full antialiased">
+    <html lang="en" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        {/* Bootstraps `data-theme` on <html> before paint so the saved
+            preference (or system default) takes effect without a
+            dark-to-light flash on every navigation. The script is a
+            small self-contained IIFE — see ThemeProvider for the source. */}
+        <script dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }} />
+      </head>
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <Providers>{children}</Providers>
       </body>

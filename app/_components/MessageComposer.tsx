@@ -49,17 +49,34 @@ function readImageDimensions(file: File): Promise<{ w: number; h: number } | nul
   });
 }
 
-function loadSettings(): ChatSettings {
+function settingsKey(taskId?: string): string {
+  // Per-task settings live under their own key so a task-specific
+  // override (e.g. `effort: max` for a heavy refactor) doesn't leak
+  // into a sibling task. Free-form sessions keep the legacy key so
+  // existing prefs survive the upgrade.
+  return taskId ? `${STORAGE_KEY}.task.${taskId}` : STORAGE_KEY;
+}
+
+function loadSettings(taskId?: string): ChatSettings {
   if (typeof window === "undefined") return {};
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as ChatSettings) : {};
+    const raw = localStorage.getItem(settingsKey(taskId));
+    if (raw) return JSON.parse(raw) as ChatSettings;
+    if (taskId) {
+      // First time we open a task with no per-task override: seed from
+      // the global default so the user's "Plan mode + max effort"
+      // baseline doesn't reset on every new task. They can then tweak
+      // and the override is captured under the per-task key.
+      const fallback = localStorage.getItem(STORAGE_KEY);
+      return fallback ? (JSON.parse(fallback) as ChatSettings) : {};
+    }
+    return {};
   } catch { return {}; }
 }
 
-function saveSettings(s: ChatSettings) {
+function saveSettings(s: ChatSettings, taskId?: string) {
   if (typeof window === "undefined") return;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch { /* quota */ }
+  try { localStorage.setItem(settingsKey(taskId), JSON.stringify(s)); } catch { /* quota */ }
 }
 
 function MessageComposerInner({
@@ -93,9 +110,10 @@ function MessageComposerInner({
   // *after* mount — reading localStorage in the initial state would
   // render different icons on server vs client (hydration mismatch).
   const [settings, setSettingsState] = useState<ChatSettings>({});
-  useEffect(() => { setSettingsState(loadSettings()); }, []);
+  useEffect(() => { setSettingsState(loadSettings(taskId)); }, [taskId]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; pct: number } | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [interim, setInterim] = useState("");
   const lastSentRef = useRef<string>("");
@@ -105,8 +123,8 @@ function MessageComposerInner({
 
   const setSettings = useCallback((next: ChatSettings) => {
     setSettingsState(next);
-    saveSettings(next);
-  }, []);
+    saveSettings(next, taskId);
+  }, [taskId]);
 
   // Stop the in-flight claude subprocess for this session. 404 ("no
   // live process") is benign — the run finished a moment ago and the
@@ -187,15 +205,23 @@ function MessageComposerInner({
   }, []);
 
   // -- File attach --
+  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
   const onPickFile = () => fileRef.current?.click();
   const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
+    if (f.size > MAX_UPLOAD_BYTES) {
+      toast("error", `File too large (${(f.size / 1024 / 1024).toFixed(1)} MB) — max 25 MB`);
+      return;
+    }
     setUploading(true);
+    setUploadProgress({ name: f.name, pct: 0 });
     try {
       const [r, dims] = await Promise.all([
-        api.uploadFile(sessionId, f),
+        api.uploadFileWithProgress(sessionId, f, (p) =>
+          setUploadProgress({ name: f.name, pct: Math.round(p * 100) }),
+        ),
         readImageDimensions(f),
       ]);
       setAttachments((prev) => [
@@ -214,6 +240,7 @@ function MessageComposerInner({
       toast("error", (err as Error).message);
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -318,6 +345,24 @@ function MessageComposerInner({
         className="hidden"
         onChange={onFileChange}
       />
+
+      {/* In-flight upload progress strip — surfaces percent + name so the
+          user knows the file is going up, not silently lost. */}
+      {uploadProgress && (
+        <div className="mb-2 rounded-md border border-border bg-secondary px-2 py-1.5">
+          <div className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground mb-1">
+            <Loader2 size={11} className="animate-spin text-primary" />
+            <span className="font-medium truncate flex-1 min-w-0">{uploadProgress.name}</span>
+            <span className="tabular-nums shrink-0">{uploadProgress.pct}%</span>
+          </div>
+          <div className="h-1 rounded-full overflow-hidden bg-background">
+            <div
+              className="h-full bg-primary transition-[width] duration-150"
+              style={{ width: `${uploadProgress.pct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Attachment chips above the textarea — image dimensions inline,
           like Claude's composer. */}

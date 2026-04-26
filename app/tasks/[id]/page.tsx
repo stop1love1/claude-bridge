@@ -10,7 +10,6 @@ import { TaskDetail } from "@/app/_components/TaskDetail";
 import { SessionLog } from "@/app/_components/SessionLog";
 import { useToast } from "@/app/_components/Toasts";
 import { useConfirm } from "@/app/_components/ConfirmProvider";
-import { Button } from "@/app/_components/ui/button";
 
 type ActiveRun = {
   sessionId: string;
@@ -102,6 +101,9 @@ function TaskPageInner() {
     // tends to drop SSE connections, so we keep a low-frequency
     // polling safety net to recover from a missed event.
     loadMeta();
+    // Also refresh the task itself (title/body/checked may have been
+    // edited in another tab while this one was hidden).
+    refreshTask();
     const h = setInterval(loadMeta, 5000);
 
     // Lifecycle SSE: on `snapshot` we hydrate meta directly (no extra
@@ -133,7 +135,7 @@ function TaskPageInner() {
       clearInterval(h);
       es.close();
     };
-  }, [visible, id, loadMeta]);
+  }, [visible, id, loadMeta, refreshTask]);
 
   // If no `?sid=` is in the URL yet, default to the coordinator's session
   // by writing it to the URL — that opens the chat panel immediately AND
@@ -243,7 +245,7 @@ function TaskPageInner() {
       }
       if (e.key === "Escape" && !isTextInput(e.target)) {
         e.preventDefault();
-        router.push("/");
+        router.push("/tasks");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -252,8 +254,15 @@ function TaskPageInner() {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-screen items-center justify-center text-fg-dim text-sm">
-        Loading task…
+      <div className="flex flex-col h-screen">
+        <div className="h-11 shrink-0 border-b border-border bg-card" />
+        <div className="flex-1 p-6 max-w-3xl mx-auto w-full space-y-3">
+          <div className="h-3 w-32 rounded bg-muted/60 animate-pulse" />
+          <div className="h-6 w-2/3 rounded bg-muted/60 animate-pulse" />
+          <div className="h-4 w-full rounded bg-muted/60 animate-pulse" />
+          <div className="h-4 w-5/6 rounded bg-muted/60 animate-pulse" />
+          <div className="mt-8 h-10 w-full rounded bg-muted/60 animate-pulse" />
+        </div>
       </div>
     );
   }
@@ -276,21 +285,23 @@ function TaskPageInner() {
 
   return (
     <div className="flex flex-col h-screen">
-      <HeaderShell active="tasks">
-        <div className="flex-1 min-w-0 flex items-center gap-2">
-          <span className="font-mono text-xs text-fg-dim shrink-0">{task.id}</span>
-          <span className="text-fg-dim shrink-0">·</span>
-          <span className="text-sm font-medium truncate">{task.title}</span>
-        </div>
-
-        <div className="ml-auto flex items-center gap-2 shrink-0">
-          <kbd className="text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border">
-            ⌘S save
-          </kbd>
-          <kbd className="text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border">
-            Esc back
-          </kbd>
-        </div>
+      <HeaderShell
+        active="tasks"
+        actions={
+          <>
+            <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border">
+              ⌘S save
+            </kbd>
+            <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border">
+              Esc back
+            </kbd>
+          </>
+        }
+      >
+        <span className="text-fg-dim shrink-0">/</span>
+        <span className="hidden sm:inline font-mono text-xs text-fg-dim shrink-0">{task.id}</span>
+        <span className="hidden sm:inline text-fg-dim shrink-0">·</span>
+        <span className="text-sm font-medium truncate">{task.title}</span>
       </HeaderShell>
 
       <main className="flex-1 flex flex-col lg:flex-row min-h-0">
@@ -322,7 +333,7 @@ function TaskPageInner() {
 
 export default function TaskPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+    <Suspense fallback={<div className="p-6 space-y-3"><div className="h-4 w-32 rounded bg-muted/60 animate-pulse" /><div className="h-3 w-2/3 rounded bg-muted/60 animate-pulse" /></div>}>
       <TaskPageInner />
     </Suspense>
   );

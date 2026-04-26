@@ -48,8 +48,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
+# env files (the .example template is shareable — the rest aren't)
 .env*
+!.env.example
 
 # vercel
 .vercel

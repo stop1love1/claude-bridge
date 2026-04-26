@@ -88,18 +88,44 @@ function SessionsPageInner() {
 
   useEffect(() => {
     if (!visible) return;
+    // Fire immediately on tab-becomes-visible so returning users see
+    // fresh data instead of waiting up to a poll interval.
+    refreshSessions();
     const h = setInterval(refreshSessions, 5_000);
     return () => clearInterval(h);
   }, [visible, refreshSessions]);
 
   // Hide sidebar by default on small screens once we know the viewport.
+  // On larger screens, restore the user's last collapsed/open preference
+  // from localStorage so a refresh doesn't yank the panel back.
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 768px)");
-    const onChange = () => setSidebarOpen(!mq.matches);
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
+    const SIDEBAR_KEY = "bridge.sessions.sidebarOpen";
+    const apply = () => {
+      if (mq.matches) {
+        setSidebarOpen(false);
+      } else {
+        try {
+          const stored = window.localStorage.getItem(SIDEBAR_KEY);
+          setSidebarOpen(stored === null ? true : stored === "1");
+        } catch {
+          setSidebarOpen(true);
+        }
+      }
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
   }, []);
+
+  // Persist desktop sidebar preference. Skipped on mobile so toggling
+  // the panel while on a phone doesn't override the desktop default.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.matchMedia("(max-width: 768px)").matches) return;
+    try { window.localStorage.setItem("bridge.sessions.sidebarOpen", sidebarOpen ? "1" : "0"); }
+    catch { /* ignore */ }
+  }, [sidebarOpen]);
 
   const handleSelectSession = useCallback(
     (s: SessionSummary) => {
@@ -184,6 +210,19 @@ function SessionsPageInner() {
             </Badge>
           ) : undefined,
         }}
+        actions={
+          <>
+            <span className="hidden lg:inline text-[10px] text-muted-foreground">
+              {sessions.length} session{sessions.length === 1 ? "" : "s"} · {repos.length} repo{repos.length === 1 ? "" : "s"}
+            </span>
+            <NewSessionDialog
+              repos={repos}
+              defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
+              onCreate={handleCreate}
+              openRef={newSessionRef}
+            />
+          </>
+        }
       >
         <Button
           variant="ghost"
@@ -194,18 +233,6 @@ function SessionsPageInner() {
         >
           {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
         </Button>
-
-        <div className="ml-auto flex items-center gap-2">
-          <span className="hidden lg:inline text-[10px] text-muted-foreground">
-            {sessions.length} session{sessions.length === 1 ? "" : "s"} · {repos.length} repo{repos.length === 1 ? "" : "s"}
-          </span>
-          <NewSessionDialog
-            repos={repos}
-            defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
-            onCreate={handleCreate}
-            openRef={newSessionRef}
-          />
-        </div>
       </HeaderShell>
 
       <main className="flex-1 flex min-h-0 relative">
@@ -248,7 +275,7 @@ function SessionsPageInner() {
 
 export default function SessionsPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+    <Suspense fallback={<div className="p-6 space-y-3"><div className="h-4 w-32 rounded bg-muted/60 animate-pulse" /><div className="h-3 w-2/3 rounded bg-muted/60 animate-pulse" /></div>}>
       <SessionsPageInner />
     </Suspense>
   );

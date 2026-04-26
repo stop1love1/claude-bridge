@@ -2,45 +2,87 @@
 @import "tw-animate-css";
 
 /**
- * shadcn-flavoured token schema, dark theme. Token names follow shadcn
- * conventions (background / foreground / card / popover / primary /
- * secondary / muted / accent / destructive / border / input / ring); a
- * few bridge-only customs (success / warning / info / fg-dim) are kept
+ * shadcn-flavoured token schema. Token names follow shadcn conventions
+ * (background / foreground / card / popover / primary / secondary /
+ * muted / accent / destructive / border / input / ring); a few
+ * bridge-only customs (success / warning / info / fg-dim) are kept
  * alongside since shadcn doesn't define them.
+ *
+ * Two themes: dark (default) and light. The ThemeProvider toggles
+ * `data-theme="light"` on the <html> element to swap palettes; we
+ * never assume a specific theme in component code, only the tokens.
  */
-:root {
-  /* Surface */
-  --background:           #0b0d12;
-  --foreground:           #e3e6ec;
-  --card:                 #12151c;
-  --card-foreground:      #e3e6ec;
-  --popover:              #12151c;
-  --popover-foreground:   #e3e6ec;
-  --secondary:            #1a1e27;
-  --secondary-foreground: #e3e6ec;
-  --muted:                #1a1e27;
-  --muted-foreground:     #8b92a0;
-  --accent:               #21262f;
-  --accent-foreground:    #e3e6ec;
+/* Palette declarations live in `@layer base` so Tailwind v4's
+ * generated utility layer can't accidentally shadow them. The selector
+ * pair handles both:
+ *   - default dark: `:root` OR `:root[data-theme="dark"]`
+ *   - explicit light: `:root[data-theme="light"]`
+ * Using `:root` qualifier on the attr selector bumps specificity to
+ * (0,2,0) so both palettes outrank any plain `:root { ... }` Tailwind
+ * may emit (which is (0,1,0)). The no-flash script in <head> ALWAYS
+ * sets data-theme to either "dark" or "light", so we never rely on
+ * the default fallback at runtime. */
+@layer base {
+  :root,
+  :root[data-theme="dark"] {
+    --background:           #0b0d12;
+    --foreground:           #e3e6ec;
+    --card:                 #12151c;
+    --card-foreground:      #e3e6ec;
+    --popover:              #12151c;
+    --popover-foreground:   #e3e6ec;
+    --secondary:            #1a1e27;
+    --secondary-foreground: #e3e6ec;
+    --muted:                #1a1e27;
+    --muted-foreground:     #8b92a0;
+    --accent:               #21262f;
+    --accent-foreground:    #e3e6ec;
 
-  /* Brand & semantics */
-  --primary:                #6aa8ff;
-  --primary-foreground:     #0b0d12;
-  --destructive:            #e27070;
-  --destructive-foreground: #0b0d12;
+    --primary:                #6aa8ff;
+    --primary-foreground:     #0b0d12;
+    --destructive:            #e27070;
+    --destructive-foreground: #0b0d12;
 
-  /* Edges & focus */
-  --border: #262b35;
-  --input:  #333944;
-  --ring:   #6aa8ff;
+    --border: #262b35;
+    --input:  #333944;
+    --ring:   #6aa8ff;
 
-  /* Bridge-only extras (not part of shadcn's standard schema) */
-  --success: #65c58c;
-  --warning: #e3b95a;
-  --info:    #b17ad8;
-  --fg-dim:  #636a78;
+    --success: #65c58c;
+    --warning: #e3b95a;
+    --info:    #b17ad8;
+    --fg-dim:  #636a78;
 
-  --radius: 0.625rem;
+    --radius: 0.625rem;
+  }
+
+  :root[data-theme="light"] {
+    --background:           #f7f8fb;
+    --foreground:           #14181f;
+    --card:                 #ffffff;
+    --card-foreground:      #14181f;
+    --popover:              #ffffff;
+    --popover-foreground:   #14181f;
+    --secondary:            #eef0f5;
+    --secondary-foreground: #14181f;
+    --muted:                #eef0f5;
+    --muted-foreground:     #5a6372;
+    --accent:               #e3e7ee;
+    --accent-foreground:    #14181f;
+
+    --primary:                #2563eb;
+    --primary-foreground:     #ffffff;
+    --destructive:            #c8423a;
+    --destructive-foreground: #ffffff;
+
+    --border: #d8dde6;
+    --input:  #c4cad6;
+    --ring:   #2563eb;
+
+    --success: #1f9d59;
+    --warning: #b58200;
+    --info:    #7d3aac;
+    --fg-dim:  #8a92a0;
+  }
 }
 
 @theme inline {

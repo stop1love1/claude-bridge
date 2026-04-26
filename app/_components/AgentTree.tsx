@@ -1,10 +1,11 @@
 "use client";
 
-import { memo, useMemo } from "react";
-import { Crown, Sparkles, X, GitBranch } from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { Crown, Sparkles, X, GitBranch, GitCompare } from "lucide-react";
 import type { Meta, Run } from "@/lib/client/types";
 import { duration } from "@/lib/client/time";
 import { RUN_STATUS_PILL } from "@/lib/client/runStatus";
+import { DiffViewer } from "./DiffViewer";
 
 const ROLE_ICON: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   coordinator: Crown,
@@ -107,6 +108,7 @@ function AgentNode({
   activeSessionId,
   onSelectRun,
   onKill,
+  onDiff,
   branchByRepo,
 }: {
   node: TreeNode;
@@ -114,6 +116,7 @@ function AgentNode({
   activeSessionId: string | null;
   onSelectRun: (run: Run) => void;
   onKill?: (run: Run) => void;
+  onDiff?: (run: Run) => void;
   branchByRepo?: Record<string, string | null>;
 }) {
   const { run } = node;
@@ -153,6 +156,19 @@ function AgentNode({
             <StatusPill run={run} />
           </span>
         </button>
+        <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/node:flex items-center gap-0.5">
+          {onDiff && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDiff(run); }}
+              className="p-1 rounded bg-card border border-border text-fg-dim hover:text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              aria-label={`View diff for ${run.role}`}
+              title="View diff"
+            >
+              <GitCompare size={10} />
+            </button>
+          )}
+        </div>
         {canKill && (
           <button
             type="button"
@@ -179,6 +195,7 @@ function AgentNode({
               activeSessionId={activeSessionId}
               onSelectRun={onSelectRun}
               onKill={onKill}
+              onDiff={onDiff}
               branchByRepo={branchByRepo}
             />
           ))}
@@ -203,18 +220,24 @@ function AgentNode({
  */
 function AgentTreeInner({
   meta,
+  taskId,
   activeSessionId,
   onSelectRun,
   onKill,
   branchByRepo,
 }: {
   meta: Meta | null;
+  taskId?: string;
   activeSessionId: string | null;
   onSelectRun: (run: Run) => void;
   onKill?: (run: Run) => void;
   branchByRepo?: Record<string, string | null>;
 }) {
   const tree = useMemo(() => buildTree(meta?.runs ?? []), [meta?.runs]);
+  const [diffRun, setDiffRun] = useState<Run | null>(null);
+  // Diff endpoint requires a task id to look up meta — without it we
+  // suppress the inline diff button entirely instead of failing later.
+  const onDiff = taskId ? (run: Run) => setDiffRun(run) : undefined;
 
   if (tree.length === 0) {
     return (
@@ -223,19 +246,31 @@ function AgentTreeInner({
   }
 
   return (
-    <ul className="space-y-1.5">
-      {tree.map((n) => (
-        <AgentNode
-          key={n.run.sessionId}
-          node={n}
-          depth={0}
-          activeSessionId={activeSessionId}
-          onSelectRun={onSelectRun}
-          onKill={onKill}
-          branchByRepo={branchByRepo}
+    <>
+      <ul className="space-y-1.5">
+        {tree.map((n) => (
+          <AgentNode
+            key={n.run.sessionId}
+            node={n}
+            depth={0}
+            activeSessionId={activeSessionId}
+            onSelectRun={onSelectRun}
+            onKill={onKill}
+            onDiff={onDiff}
+            branchByRepo={branchByRepo}
+          />
+        ))}
+      </ul>
+      {taskId && diffRun && (
+        <DiffViewer
+          taskId={taskId}
+          sessionId={diffRun.sessionId}
+          role={diffRun.role}
+          open={!!diffRun}
+          onClose={() => setDiffRun(null)}
         />
-      ))}
-    </ul>
+      )}
+    </>
   );
 }
 

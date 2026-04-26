@@ -93,9 +93,9 @@ export function NewSessionDialog({
     ));
 
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="flex items-center gap-1.5">
       <Select value={repo} onValueChange={setRepo}>
-        <SelectTrigger className="h-7 px-2 text-[11px] gap-1 [&>span]:truncate max-w-[160px]">
+        <SelectTrigger className="h-7 px-2 text-[11px] gap-1 [&>span]:truncate w-[140px] shrink-0">
           <SelectValue placeholder="Pick a repo" />
         </SelectTrigger>
         <SelectContent>

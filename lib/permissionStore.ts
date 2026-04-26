@@ -84,6 +84,21 @@ export function listPending(sessionId: string): PendingRequest[] {
   return out;
 }
 
+/**
+ * Subscribe to every newly-announced permission request, regardless of
+ * which session it belongs to. Used by the Telegram notifier (and any
+ * future cross-session pager). Returns an unsubscribe handle.
+ */
+export function subscribeAllPermissions(
+  cb: (req: PendingRequest) => void,
+): () => void {
+  const handler = (req: PendingRequest) => {
+    try { cb(req); } catch { /* swallow — never crash the emitter */ }
+  };
+  store.globalEmitter.on("pending", handler);
+  return () => store.globalEmitter.off("pending", handler);
+}
+
 /** Phase C: every still-pending request, across every session. */
 export function listAllPending(): PendingRequest[] {
   const out: PendingRequest[] = [];

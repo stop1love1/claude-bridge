@@ -306,6 +306,21 @@ export function subscribeMeta(
 }
 
 /**
+ * Subscribe to every task's lifecycle event regardless of taskId. Used
+ * by cross-task aggregators (e.g. the Telegram notifier) where filtering
+ * to a specific task at the subscriber level is the wrong shape.
+ */
+export function subscribeMetaAll(
+  cb: (ev: MetaChangeEvent) => void,
+): () => void {
+  const handler = (ev: MetaChangeEvent) => {
+    try { cb(ev); } catch { /* never crash the emitter */ }
+  };
+  events.emitter.on("meta:changed", handler);
+  return () => events.emitter.off("meta:changed", handler);
+}
+
+/**
  * Resolve a task id from the sessions directory we were handed. Every
  * call site uses `join(SESSIONS_DIR, taskId)`, so the basename is the
  * task id. Cheap and avoids threading the id through every helper.
