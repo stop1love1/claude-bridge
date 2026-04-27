@@ -2,17 +2,15 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftOpen } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { Repo, SessionSummary, Task } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { SessionLog } from "../_components/SessionLog";
 import { SessionsBrowser } from "../_components/SessionsBrowser";
 import { LinkSessionDialog } from "../_components/LinkSessionDialog";
-import { NewSessionDialog } from "../_components/NewSessionDialog";
 import { useToast } from "../_components/Toasts";
 import { useConfirm } from "../_components/ConfirmProvider";
-import { Button } from "../_components/ui/button";
 import { Badge } from "../_components/ui/badge";
 
 type ActiveRun = {
@@ -210,32 +208,25 @@ function SessionsPageInner() {
             </Badge>
           ) : undefined,
         }}
-        actions={
-          <>
-            <span className="hidden lg:inline text-[10px] text-muted-foreground">
-              {sessions.length} session{sessions.length === 1 ? "" : "s"} · {repos.length} repo{repos.length === 1 ? "" : "s"}
-            </span>
-            <NewSessionDialog
-              repos={repos}
-              defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
-              onCreate={handleCreate}
-              openRef={newSessionRef}
-            />
-          </>
-        }
-      >
-        <Button
-          variant="ghost"
-          size="iconSm"
-          className="md:hidden"
-          onClick={() => setSidebarOpen((v) => !v)}
-          aria-label={sidebarOpen ? "Hide sessions" : "Show sessions"}
-        >
-          {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
-        </Button>
-      </HeaderShell>
+      />
 
       <main className="flex-1 flex min-h-0 relative">
+        {/* Mobile-only floating "Show sessions" affordance — the sidebar
+            houses the new-session button + search + list, so when the
+            user has dismissed it on a phone we still need a one-tap way
+            to bring it back. On md+ the sidebar is always docked, so
+            this never renders. */}
+        {!sidebarOpen && (
+          <button
+            type="button"
+            aria-label="Show sessions"
+            onClick={() => setSidebarOpen(true)}
+            className="md:hidden absolute top-2 left-2 z-20 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-card border border-border shadow-sm text-xs text-foreground hover:bg-accent"
+          >
+            <PanelLeftOpen className="h-3.5 w-3.5" />
+            Sessions
+          </button>
+        )}
         {sidebarOpen && (
           <>
             {/* Backdrop on small screens — taps it close the sidebar */}
@@ -254,6 +245,10 @@ function SessionsPageInner() {
                 onSelect={handleSelectSession}
                 onLink={(s) => linkDialogRef.current?.(s)}
                 onDelete={handleDelete}
+                repos={repos}
+                defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
+                onCreateSession={handleCreate}
+                newSessionRef={newSessionRef}
               />
             </div>
           </>

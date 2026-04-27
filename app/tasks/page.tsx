@@ -272,41 +272,22 @@ function Dashboard() {
             </span>
           ) : undefined,
         }}
-        actions={
-          <>
-            {runningCount > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-[11px] font-medium">
-                <span className="relative inline-flex h-1.5 w-1.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
-                </span>
-                {runningCount}
-              </span>
-            )}
-            <Button
-              onClick={() => setPaletteOpen(true)}
-              variant="outline"
-              size="xs"
-              title="Command palette"
-              className="hidden md:inline-flex font-mono text-[10px] text-fg-dim"
-            >
-              ⌘K
-            </Button>
-            <NewTaskDialog apps={apps} repos={repos} onCreate={handleCreate} openRef={newDialogRef} />
-          </>
-        }
-      >
+      />
+
+      {/* Page sub-toolbar — search, filter, and CTAs that used to live
+          in the global header. Wraps to a second row on narrow viewports
+          so nothing gets pushed off-screen. */}
+      <div className="shrink-0 px-3 py-2 border-b border-border bg-background flex items-center gap-2 flex-wrap">
         <Input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search tasks"
-          className="flex-1 max-w-sm h-7 text-xs"
+          className="flex-1 min-w-[160px] max-w-sm h-7 text-xs"
         />
-
         <Select value={appFilter} onValueChange={setAppFilter}>
           <SelectTrigger
-            className="hidden sm:flex h-7 px-2 text-xs gap-1 [&>span]:truncate w-[150px]"
+            className="h-7 px-2 text-xs gap-1 [&>span]:truncate w-[120px] sm:w-[150px]"
             title="Filter tasks by target app"
           >
             <SelectValue />
@@ -319,7 +300,27 @@ function Dashboard() {
             ))}
           </SelectContent>
         </Select>
-      </HeaderShell>
+        <div className="flex-1" />
+        {runningCount > 0 && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-[11px] font-medium">
+            <span className="relative inline-flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
+            </span>
+            {runningCount}
+          </span>
+        )}
+        <Button
+          onClick={() => setPaletteOpen(true)}
+          variant="outline"
+          size="xs"
+          title="Command palette"
+          className="hidden md:inline-flex font-mono text-[10px] text-fg-dim"
+        >
+          ⌘K
+        </Button>
+        <NewTaskDialog apps={apps} repos={repos} onCreate={handleCreate} openRef={newDialogRef} />
+      </div>
 
       <main className="flex-1 flex min-h-0">
         <TaskGrid

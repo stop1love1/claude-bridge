@@ -161,23 +161,19 @@ function AppsPage() {
 
   return (
     <div className="flex flex-col h-screen">
-      <HeaderShell
-        active="apps"
-        actions={
-          <>
-            <span className="hidden lg:inline text-[10px] text-muted-foreground">
-              {apps.length} app{apps.length === 1 ? "" : "s"} registered
-            </span>
-            <AddAppDialog onChanged={refresh} openRef={addDialogRef} />
-          </>
-        }
-      />
+      <HeaderShell active="apps" />
 
       <main className="flex-1 overflow-y-auto">
-        <div className="p-6 max-w-4xl mx-auto">
-          <div className="flex items-center gap-2 mb-4">
-            <Boxes size={18} className="text-primary" />
-            <h2 className="text-lg font-semibold">Registered apps</h2>
+        <div className="p-4 sm:p-6 max-w-4xl mx-auto">
+          <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Boxes size={18} className="text-primary" />
+              <h2 className="text-lg font-semibold">Registered apps</h2>
+              <span className="text-[10px] text-muted-foreground">
+                {apps.length} app{apps.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <AddAppDialog onChanged={refresh} openRef={addDialogRef} />
           </div>
           <p className="text-xs text-muted-foreground mb-6">
             Apps live in <code className="font-mono text-foreground">~/.claude/bridge.json</code>

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import type { SessionSummary } from "@/lib/client/types";
+import type { Repo, SessionSummary } from "@/lib/client/types";
 import {
   ChevronDown, ChevronRight, FolderClosed, FolderOpen, GitBranch,
   Link as LinkIcon, Link2Off, Search, X, Trash2, Terminal,
 } from "lucide-react";
 import { relativeTime } from "@/lib/client/time";
 import { EmptyState } from "./ui/empty-state";
+import { NewSessionDialog } from "./NewSessionDialog";
 
 /**
  * Render an absolute path the way VS Code does in its sessions panel:
@@ -27,6 +28,10 @@ export function SessionsBrowser({
   onSelect,
   onLink,
   onDelete,
+  repos,
+  defaultRepo,
+  onCreateSession,
+  newSessionRef,
 }: {
   sessions: SessionSummary[];
   query: string;
@@ -35,6 +40,10 @@ export function SessionsBrowser({
   onSelect: (s: SessionSummary) => void;
   onLink: (s: SessionSummary) => void;
   onDelete?: (s: SessionSummary) => void;
+  repos: Repo[];
+  defaultRepo?: string;
+  onCreateSession: (args: { repo: string }) => void;
+  newSessionRef?: React.MutableRefObject<(() => void) | null>;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -67,7 +76,13 @@ export function SessionsBrowser({
 
   return (
     <aside className="w-80 shrink-0 border-r border-border bg-card overflow-y-auto flex flex-col">
-      <div className="p-2 border-b border-border sticky top-0 bg-card z-10">
+      <div className="p-2 border-b border-border sticky top-0 bg-card z-10 space-y-2">
+        <NewSessionDialog
+          repos={repos}
+          defaultRepo={defaultRepo}
+          onCreate={onCreateSession}
+          openRef={newSessionRef}
+        />
         <div className="relative">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-dim" />
           <input

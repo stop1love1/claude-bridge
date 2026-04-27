@@ -285,24 +285,23 @@ function TaskPageInner() {
 
   return (
     <div className="flex flex-col h-screen">
-      <HeaderShell
-        active="tasks"
-        actions={
-          <>
-            <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border">
-              ⌘S save
-            </kbd>
-            <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border">
-              Esc back
-            </kbd>
-          </>
-        }
-      >
+      <HeaderShell active="tasks" />
+
+      {/* Page sub-toolbar — breadcrumb + keyboard hints out of the global
+          header. truncate + min-w-0 keep long titles from breaking row
+          wrap on narrow viewports. */}
+      <div className="shrink-0 px-3 py-2 border-b border-border bg-background flex items-center gap-2 min-w-0">
         <span className="text-fg-dim shrink-0">/</span>
         <span className="hidden sm:inline font-mono text-xs text-fg-dim shrink-0">{task.id}</span>
         <span className="hidden sm:inline text-fg-dim shrink-0">·</span>
-        <span className="text-sm font-medium truncate">{task.title}</span>
-      </HeaderShell>
+        <span className="text-sm font-medium truncate flex-1 min-w-0">{task.title}</span>
+        <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border shrink-0">
+          ⌘S save
+        </kbd>
+        <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border shrink-0">
+          Esc back
+        </kbd>
+      </div>
 
       <main className="flex-1 flex flex-col lg:flex-row min-h-0">
         <div className="lg:flex-1 lg:min-w-0 lg:max-w-2xl xl:max-w-3xl border-b lg:border-b-0 lg:border-r border-border flex max-h-[40vh] lg:max-h-none">
