@@ -16,17 +16,7 @@ type Item =
   | { kind: "task"; task: Task; run: () => void }
   | { kind: "session"; session: SessionSummary; run: () => void };
 
-export function CommandPalette({
-  open,
-  tasks,
-  sessions,
-  onClose,
-  onOpenTask,
-  onCreateTask,
-  onNavigate,
-  onSelectSession,
-}: {
-  open: boolean;
+interface PaletteProps {
   tasks: Task[];
   sessions: SessionSummary[];
   onClose: () => void;
@@ -34,18 +24,36 @@ export function CommandPalette({
   onCreateTask: () => void;
   onNavigate: (path: string) => void;
   onSelectSession: (s: SessionSummary) => void;
-}) {
+}
+
+// Outer mounts the inner only while the palette is open. That makes
+// every "open" a fresh mount, so search query + cursor state reset
+// for free without a `useEffect` that calls `setQ`/`setCursor`. Keeps
+// the React 19 `set-state-in-effect` rule happy.
+export function CommandPalette({ open, ...rest }: PaletteProps & { open: boolean }) {
+  if (!open) return null;
+  return <CommandPaletteInner {...rest} />;
+}
+
+function CommandPaletteInner({
+  tasks,
+  sessions,
+  onClose,
+  onOpenTask,
+  onCreateTask,
+  onNavigate,
+  onSelectSession,
+}: PaletteProps) {
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Focus the input on mount. setTimeout(0) lets the dialog finish
+  // its enter animation / commit before we steal focus.
   useEffect(() => {
-    if (open) {
-      setQ("");
-      setCursor(0);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-  }, [open]);
+    const id = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(id);
+  }, []);
 
   const items: Item[] = useMemo(() => {
     const actions: Item[] = [
@@ -81,16 +89,18 @@ export function CommandPalette({
     });
   }, [q, tasks, sessions, onCreateTask, onNavigate, onOpenTask, onSelectSession, onClose]);
 
-  useEffect(() => {
-    if (cursor >= items.length) setCursor(Math.max(0, items.length - 1));
-  }, [items.length, cursor]);
+  // Clamp at render-time instead of via an effect that calls
+  // setCursor — `cursor` may temporarily exceed `items.length` after
+  // the user filters down, but every event handler reads `effCursor`
+  // and we never index out of bounds.
+  const effCursor = items.length === 0 ? 0 : Math.min(cursor, items.length - 1);
 
   const ROLE_ICON: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
     coordinator: Crown,
   };
 
   const renderItem = (it: Item, idx: number) => {
-    const active = idx === cursor;
+    const active = idx === effCursor;
     const base = `flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
       active ? "bg-primary/15" : "hover:bg-accent"
     }`;
@@ -138,13 +148,11 @@ export function CommandPalette({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => Math.min(items.length - 1, c + 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => Math.max(0, c - 1)); }
-    else if (e.key === "Enter") { e.preventDefault(); items[cursor]?.run(); }
+    if (e.key === "ArrowDown") { e.preventDefault(); setCursor(Math.min(items.length - 1, effCursor + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setCursor(Math.max(0, effCursor - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); items[effCursor]?.run(); }
     else if (e.key === "Escape") { e.preventDefault(); onClose(); }
   };
-
-  if (!open) return null;
 
   const groupedCount = {
     actions: items.filter((i) => i.kind === "action").length,

@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Mic, MicOff } from "lucide-react";
 
 interface SpeechRecognitionResult {
@@ -33,6 +39,14 @@ function getSR(): SRCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+// Browser-API capability detection via `useSyncExternalStore` so the
+// hydration flip from "false" (SSR / first paint) to "true / false"
+// (real client value) doesn't need a `useState + setState in effect`
+// pair that the React 19 hooks linter rejects.
+function noopSubscribe() { return () => {}; }
+function getSupportedClient(): boolean { return !!getSR(); }
+function getSupportedServer(): boolean { return false; }
+
 /**
  * Browser-side voice input using the Web Speech API. No server roundtrip,
  * no extra deps. Streams interim transcripts via `onTranscript` so the
@@ -45,7 +59,11 @@ export function MicButton({
   lang?: string;
   onTranscript: (text: string, isFinal: boolean) => void;
 }) {
-  const [supported, setSupported] = useState(false);
+  const supported = useSyncExternalStore(
+    noopSubscribe,
+    getSupportedClient,
+    getSupportedServer,
+  );
   const [recording, setRecording] = useState(false);
   const ref = useRef<SpeechRecognition | null>(null);
   // Lazy default — `navigator` is undefined during SSR, so resolve only
@@ -56,8 +74,9 @@ export function MicButton({
   );
   const effectiveLang = lang ?? defaultLang;
 
+  // Cleanup any in-flight recognition on unmount. (Browser API
+  // detection moved to `useSyncExternalStore` above.)
   useEffect(() => {
-    setSupported(!!getSR());
     return () => { try { ref.current?.abort(); } catch { /* noop */ } };
   }, []);
 

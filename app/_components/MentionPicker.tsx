@@ -22,14 +22,32 @@ export function MentionPicker({
   const [cursor, setCursor] = useState(0);
   const reqRef = useRef(0);
 
+  // Flip `loading` to true synchronously during render whenever the
+  // (repo, query) tuple changes — the React-docs "previous-render
+  // snapshot" pattern. That keeps `loading` consistent with the
+  // about-to-fire fetch *without* a `setLoading(true)` call inside
+  // the effect body (which the React 19 hooks linter flags).
+  const [prevDeps, setPrevDeps] = useState({ repo, query });
+  if (prevDeps.repo !== repo || prevDeps.query !== query) {
+    setPrevDeps({ repo, query });
+    setLoading(true);
+  }
+
   useEffect(() => {
     if (!repo) return;
     const id = ++reqRef.current;
-    setLoading(true);
     api.files(repo, query)
-      .then((r) => { if (id === reqRef.current) { setMatches(r); setCursor(0); } })
-      .catch(() => { if (id === reqRef.current) setMatches([]); })
-      .finally(() => { if (id === reqRef.current) setLoading(false); });
+      .then((r) => {
+        if (id !== reqRef.current) return;
+        setMatches(r);
+        setCursor(0);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (id !== reqRef.current) return;
+        setMatches([]);
+        setLoading(false);
+      });
   }, [repo, query]);
 
   useEffect(() => {

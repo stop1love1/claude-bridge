@@ -7,15 +7,33 @@ import { duration } from "@/lib/client/time";
 import { RUN_STATUS_PILL } from "@/lib/client/runStatus";
 import { DiffViewer } from "./DiffViewer";
 
-const ROLE_ICON: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
-  coordinator: Crown,
-};
 const ROLE_COLOR: Record<string, string> = {
   coordinator: "text-warning",
 };
 
-function roleIcon(role: string) { return ROLE_ICON[role] ?? Sparkles; }
 function roleColor(role: string) { return ROLE_COLOR[role] ?? "text-muted-foreground"; }
+
+// Stable wrapper around the lucide icon picked from `role`. Switch
+// instead of a `roleIcon(role)` lookup that returns a component —
+// React 19's `static-components` rule rejects rendering a component
+// referenced via a function-returned variable because static analysis
+// can't prove the result is stable across renders.
+function RoleIcon({
+  role,
+  size,
+  className,
+}: {
+  role: string;
+  size?: number;
+  className?: string;
+}) {
+  switch (role) {
+    case "coordinator":
+      return <Crown size={size} className={className} />;
+    default:
+      return <Sparkles size={size} className={className} />;
+  }
+}
 
 interface TreeNode {
   run: Run;
@@ -120,7 +138,6 @@ function AgentNode({
   branchByRepo?: Record<string, string | null>;
 }) {
   const { run } = node;
-  const Icon = roleIcon(run.role);
   const iconCls = roleColor(run.role);
   const dur = duration(run.startedAt, run.endedAt);
   const active = activeSessionId === run.sessionId;
@@ -139,7 +156,7 @@ function AgentNode({
           }`}
           title={`${run.role} @ ${run.repo}${branch ? ` (${branch})` : ""}\n${run.sessionId}`}
         >
-          <Icon size={12} className={`${iconCls} shrink-0`} />
+          <RoleIcon role={run.role} size={12} className={`${iconCls} shrink-0`} />
           <span className="text-foreground font-semibold shrink-0">{run.role}</span>
           <span className="text-fg-dim truncate">@ {run.repo}</span>
           {branch && (

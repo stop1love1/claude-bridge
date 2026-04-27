@@ -81,7 +81,10 @@ function TaskPageInner() {
 
   useEffect(() => {
     api.repos().then(setRepos).catch(() => {});
-    refreshTask();
+    // Microtask-defer the setState-bearing fetch — calling
+    // `refreshTask()` synchronously in an effect body trips
+    // `react-hooks/set-state-in-effect`.
+    void Promise.resolve().then(refreshTask);
   }, [refreshTask]);
 
   // Visibility-paused meta polling, mirrors the pattern in app/page.tsx.
@@ -110,10 +113,10 @@ function TaskPageInner() {
     // below should drive the bulk of updates, but Next dev-server HMR
     // tends to drop SSE connections, so we keep a low-frequency
     // polling safety net to recover from a missed event.
-    loadMeta();
+    void Promise.resolve().then(loadMeta);
     // Also refresh the task itself (title/body/checked may have been
     // edited in another tab while this one was hidden).
-    refreshTask();
+    void Promise.resolve().then(refreshTask);
     const h = setInterval(loadMeta, 5000);
 
     // Lifecycle SSE: on `snapshot` we hydrate meta directly (no extra

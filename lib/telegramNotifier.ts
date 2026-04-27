@@ -382,7 +382,6 @@ export function ensureTelegramNotifier(): void {
   // the setting takes effect on the next `spawned` event without a
   // teardown / reinstall cycle.
   ensureTelegramChatForwarder();
-  // eslint-disable-next-line no-console
   console.info(
     `[telegram] notifier installed (bot=${hasBot}, user=${hasUser})`,
   );

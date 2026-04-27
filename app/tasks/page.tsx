@@ -87,14 +87,17 @@ function Dashboard() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
-  useEffect(() => { refreshTasks(); }, [refreshTasks]);
-  useEffect(() => { refreshApps(); }, [refreshApps]);
+  // Mount-time fetches are deferred to a microtask so the setState
+  // calls inside `refreshTasks` / `refreshApps` happen *after* the
+  // effect body returns, satisfying `react-hooks/set-state-in-effect`.
+  useEffect(() => { void Promise.resolve().then(refreshTasks); }, [refreshTasks]);
+  useEffect(() => { void Promise.resolve().then(refreshApps); }, [refreshApps]);
 
   useEffect(() => {
     if (!visible) return;
     // Fire immediately on tab-becomes-visible so a user returning after
     // 5+ minutes sees fresh data instead of waiting for the next tick.
-    refreshTasks();
+    void Promise.resolve().then(refreshTasks);
     const h = setInterval(refreshTasks, 15_000);
     return () => clearInterval(h);
   }, [visible, refreshTasks]);
@@ -114,7 +117,7 @@ function Dashboard() {
 
   useEffect(() => {
     if (!visible || tasks.length === 0) return;
-    refreshAllMeta();
+    void Promise.resolve().then(refreshAllMeta);
     const tick = () => {
       const anyRunning = Array.from(metaByTaskRef.current.values()).some((m) =>
         m.runs.some((r) => r.status === "running"),
@@ -133,7 +136,7 @@ function Dashboard() {
 
   // Only fetch sessions when the palette opens — saves disk scans on idle.
   useEffect(() => {
-    if (paletteOpen) refreshSessions();
+    if (paletteOpen) void Promise.resolve().then(refreshSessions);
   }, [paletteOpen, refreshSessions]);
 
   const openTask = useCallback(

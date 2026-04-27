@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { GitBranch, RotateCw, Copy, Check, AlertCircle } from "lucide-react";
 import { api } from "@/lib/client/api";
 import { Button } from "./ui/button";
@@ -41,42 +41,70 @@ function colorizeLine(line: string): { cls: string; text: string } {
   return { cls: "text-foreground/80", text: line };
 }
 
-export function DiffViewer({
-  taskId,
-  sessionId,
-  role,
-  open,
-  onClose,
-}: {
+interface DiffViewerProps {
   taskId: string;
   sessionId: string;
   role: string;
   open: boolean;
   onClose: () => void;
-}) {
+}
+
+/**
+ * Outer wrapper — only mounts the body component while the dialog is
+ * open so the inner state initializes fresh on every reopen and we
+ * don't need a `setState`-in-effect to reset it.
+ */
+export function DiffViewer({ open, onClose, ...rest }: DiffViewerProps) {
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      {open && <DiffViewerBody onClose={onClose} {...rest} />}
+    </Dialog>
+  );
+}
+
+function DiffViewerBody({
+  taskId,
+  sessionId,
+  role,
+  onClose,
+}: Omit<DiffViewerProps, "open">) {
   const [data, setData] = useState<DiffPayload | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Bump to force the fetch effect to re-run without touching the
+  // underlying (taskId, sessionId) identity (refresh button).
+  const [attempt, setAttempt] = useState(0);
   const toast = useToast();
 
-  const load = async () => {
+  // The actual fetch lives in an effect. `setLoading(true)` is *not*
+  // called in the effect body — it's already true on first mount and
+  // the refresh handler bumps it back to true *before* it bumps the
+  // attempt counter. Setters inside `.then` / `.catch` callbacks fire
+  // asynchronously, which the React 19 hooks linter accepts.
+  useEffect(() => {
+    let cancelled = false;
+    api.runDiff(taskId, sessionId)
+      .then((r) => {
+        if (cancelled) return;
+        setData(r);
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError((e as Error).message);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId, sessionId, attempt]);
+
+  const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
-    try {
-      const r = await api.runDiff(taskId, sessionId);
-      setData(r);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (open) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, taskId, sessionId]);
+    setAttempt((a) => a + 1);
+  }, []);
 
   const copyAll = async () => {
     if (!data?.diff) return;
@@ -93,7 +121,7 @@ export function DiffViewer({
   const isEmpty = !loading && !error && data && data.diff.trim().length === 0;
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <>
       <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -152,7 +180,7 @@ export function DiffViewer({
               ⚠ truncated at 256 KB
             </span>
           )}
-          <Button variant="ghost" size="sm" onClick={load} disabled={loading} title="Re-fetch diff">
+          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading} title="Re-fetch diff">
             <RotateCw size={13} className={loading ? "animate-spin" : ""} />
             Refresh
           </Button>
@@ -163,6 +191,6 @@ export function DiffViewer({
           <Button size="sm" onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>
-    </Dialog>
+    </>
   );
 }

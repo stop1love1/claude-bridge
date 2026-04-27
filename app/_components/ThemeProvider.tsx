@@ -6,7 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useState,
+  useSyncExternalStore,
 } from "react";
 
 /**
@@ -53,42 +53,66 @@ function applyDom(t: ThemeResolved) {
  */
 export const NO_FLASH_SCRIPT = `(function(){try{var k='${STORAGE_KEY}';var s=localStorage.getItem(k);var t;if(s==='dark'||s==='light'){t=s;}else{t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}var d=document.documentElement;d.setAttribute('data-theme',t);d.style.colorScheme=t;}catch(e){}})();`;
 
+// External-store adapters — let `useSyncExternalStore` handle SSR
+// hydration without a `useState` + `useEffect(setX)` ladder, which
+// would trip React 19's `set-state-in-effect` rule. Each adapter
+// returns the current snapshot from the browser API and subscribes
+// to native change events; the *server* snapshot is the SSR default.
+
+function subscribePref(cb: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === STORAGE_KEY || e.key === null) cb();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+}
+function getPrefSnapshot(): ThemePref {
+  try {
+    const v = window.localStorage.getItem(STORAGE_KEY);
+    if (v === "dark" || v === "light" || v === "system") return v;
+  } catch { /* ignore */ }
+  return "system";
+}
+function getPrefServerSnapshot(): ThemePref { return "system"; }
+
+function subscribeSystem(cb: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const mq = window.matchMedia("(prefers-color-scheme: light)");
+  mq.addEventListener("change", cb);
+  return () => mq.removeEventListener("change", cb);
+}
+function getSystemSnapshot(): ThemeResolved {
+  return window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
+}
+function getSystemServerSnapshot(): ThemeResolved { return "dark"; }
+
+// "Has React handed control over to the client yet?" — the canonical
+// SSR-safe trick. Server snapshot is `false`; client snapshot is
+// `true`; no subscribe needed because the value never changes after
+// hydration.
+function noopSubscribe() { return () => {}; }
+function getMountedClient(): boolean { return true; }
+function getMountedServer(): boolean { return false; }
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // SSR-safe defaults: NEVER read localStorage / matchMedia in the
-  // initializer. The server has neither, and a useState initializer
-  // that returns different values on server vs client guarantees a
-  // hydration mismatch the moment any consumer renders the icon.
-  // The real preference is loaded after mount; the no-flash script
-  // (in <head>) handles the visual side until then.
-  const [pref, setPrefState] = useState<ThemePref>("system");
-  const [system, setSystem] = useState<ThemeResolved>("dark");
-  const [mounted, setMounted] = useState(false);
-
-  // Mount-time hydration of the real values from the browser. We do
-  // both reads in one effect so consumers flip from "placeholder" to
-  // "actual" in a single render pass.
-  useEffect(() => {
-    let nextPref: ThemePref = "system";
-    try {
-      const v = window.localStorage.getItem(STORAGE_KEY);
-      if (v === "dark" || v === "light" || v === "system") nextPref = v;
-    } catch { /* ignore */ }
-    const mq = window.matchMedia("(prefers-color-scheme: light)");
-    const nextSystem: ThemeResolved = mq.matches ? "light" : "dark";
-    setPrefState(nextPref);
-    setSystem(nextSystem);
-    setMounted(true);
-  }, []);
-
-  // Track OS theme changes after mount so a user toggling their system
-  // dark mode while pref="system" sees the bridge re-render.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(prefers-color-scheme: light)");
-    const onChange = () => setSystem(mq.matches ? "light" : "dark");
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
+  const pref = useSyncExternalStore(
+    subscribePref,
+    getPrefSnapshot,
+    getPrefServerSnapshot,
+  );
+  const system = useSyncExternalStore(
+    subscribeSystem,
+    getSystemSnapshot,
+    getSystemServerSnapshot,
+  );
+  const mounted = useSyncExternalStore(
+    noopSubscribe,
+    getMountedClient,
+    getMountedServer,
+  );
 
   const resolved: ThemeResolved = pref === "system" ? system : pref;
 
@@ -100,25 +124,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     applyDom(resolved);
   }, [mounted, resolved]);
 
-  // Cross-tab sync: another tab's pref change mirrors here.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORAGE_KEY) return;
-      const v = e.newValue;
-      if (v === "dark" || v === "light" || v === "system") setPrefState(v);
-      else if (v === null) setPrefState("system");
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
   const setPref = useCallback((p: ThemePref) => {
-    setPrefState(p);
     try {
       if (p === "system") window.localStorage.removeItem(STORAGE_KEY);
       else window.localStorage.setItem(STORAGE_KEY, p);
     } catch { /* ignore */ }
+    // Manual writes don't fire `storage` (that event is cross-tab
+    // only), so dispatch one ourselves to nudge the
+    // `useSyncExternalStore` subscribers in this tab.
+    try {
+      window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+    } catch { /* older browsers */ }
   }, []);
 
   const value = useMemo(

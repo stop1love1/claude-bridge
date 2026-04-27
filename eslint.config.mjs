@@ -12,7 +12,25 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Lint output buffer used during fix sessions.
+    "lint-out.txt",
   ]),
+  {
+    rules: {
+      // Underscore-prefix convention for intentionally-unused params
+      // and bindings (e.g. function params kept for API compatibility,
+      // destructure-and-discard patterns in tests).
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

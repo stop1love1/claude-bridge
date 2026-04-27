@@ -59,16 +59,24 @@ function AppsPage() {
     } catch { /* stats are best-effort */ }
   }, []);
 
-  useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => { refreshStats(); }, [refreshStats]);
+  // Mount-time fetch: scheduled as a microtask so the setState calls
+  // inside `refresh` / `refreshStats` happen after the effect body
+  // returns. Calling them synchronously here would trip
+  // `react-hooks/set-state-in-effect`.
+  useEffect(() => {
+    void Promise.resolve().then(refresh);
+  }, [refresh]);
+  useEffect(() => {
+    void Promise.resolve().then(refreshStats);
+  }, [refreshStats]);
 
   // Refresh both lists immediately when the user comes back to the tab —
   // otherwise stats can be stale for up to 15s after a long absence.
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === "visible") {
-        refresh();
-        refreshStats();
+        void refresh();
+        void refreshStats();
       }
     };
     document.addEventListener("visibilitychange", onVis);
@@ -84,7 +92,7 @@ function AppsPage() {
       const anyRunning = Array.from(metaRef.current.values()).some((m) =>
         m.runs.some((r) => r.status === "running"),
       );
-      refreshStats();
+      void refreshStats();
       h = setTimeout(tick, anyRunning ? 4_000 : 15_000);
     };
     h = setTimeout(tick, 4_000);

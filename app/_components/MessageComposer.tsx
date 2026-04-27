@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Send, Loader2, Square, Image as ImageIcon, FileText, X } from "lucide-react";
 import { api } from "@/lib/client/api";
+import { useLocalStorage } from "@/lib/client/useLocalStorage";
 import { useToast } from "./Toasts";
 import { ChatSettingsMenu } from "./ChatSettingsMenu";
 import { ActionsMenu, type ActionId } from "./ActionsMenu";
@@ -13,6 +14,8 @@ import type { ChatSettings } from "@/lib/client/types";
 const MIN_H = 34;
 const MAX_H = 220;
 const STORAGE_KEY = "bridge.chat.settings";
+const EMPTY_SETTINGS: ChatSettings = {};
+const dumpSettings = (s: ChatSettings) => JSON.stringify(s);
 
 interface Attachment {
   name: string;
@@ -57,32 +60,12 @@ function settingsKey(taskId?: string): string {
   return taskId ? `${STORAGE_KEY}.task.${taskId}` : STORAGE_KEY;
 }
 
-function loadSettings(taskId?: string): ChatSettings {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(settingsKey(taskId));
-    if (raw) return JSON.parse(raw) as ChatSettings;
-    if (taskId) {
-      // First time we open a task with no per-task override: seed from
-      // the global default so the user's "Plan mode + max effort"
-      // baseline doesn't reset on every new task. They can then tweak
-      // and the override is captured under the per-task key.
-      const fallback = localStorage.getItem(STORAGE_KEY);
-      return fallback ? (JSON.parse(fallback) as ChatSettings) : {};
-    }
-    return {};
-  } catch { return {}; }
-}
-
-function saveSettings(s: ChatSettings, taskId?: string) {
-  if (typeof window === "undefined") return;
-  try { localStorage.setItem(settingsKey(taskId), JSON.stringify(s)); } catch { /* quota */ }
-}
-
 function MessageComposerInner({
   sessionId,
   repo,
-  repoPath,
+  // Kept in the prop signature so the parent can pass it for future
+  // features (e.g. context-aware mention completion); not consumed yet.
+  repoPath: _repoPath,
   role,
   taskId,
   isResponding = false,
@@ -106,11 +89,33 @@ function MessageComposerInner({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
-  // Settings start blank on the server and rehydrate from localStorage
-  // *after* mount — reading localStorage in the initial state would
-  // render different icons on server vs client (hydration mismatch).
-  const [settings, setSettingsState] = useState<ChatSettings>({});
-  useEffect(() => { setSettingsState(loadSettings(taskId)); }, [taskId]);
+  // Settings come from localStorage via `useSyncExternalStore` so the
+  // SSR snapshot ({}) and the client snapshot (real prefs) align
+  // through React's external-store machinery — no `useState +
+  // useEffect(setX)` pair to trigger React 19's set-state-in-effect
+  // rule. The custom loader honours the legacy "fall back to the
+  // global key on first render of a brand-new task" behaviour.
+  const loadComposerSettings = useCallback(
+    (raw: string | null): ChatSettings => {
+      if (raw) {
+        try { return JSON.parse(raw) as ChatSettings; } catch { /* fallthrough */ }
+      }
+      if (taskId && typeof window !== "undefined") {
+        try {
+          const fallback = window.localStorage.getItem(STORAGE_KEY);
+          if (fallback) return JSON.parse(fallback) as ChatSettings;
+        } catch { /* fallthrough */ }
+      }
+      return EMPTY_SETTINGS;
+    },
+    [taskId],
+  );
+  const [settings, setSettings] = useLocalStorage<ChatSettings>(
+    settingsKey(taskId),
+    loadComposerSettings,
+    EMPTY_SETTINGS,
+    dumpSettings,
+  );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ name: string; pct: number } | null>(null);
@@ -120,11 +125,6 @@ function MessageComposerInner({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
-
-  const setSettings = useCallback((next: ChatSettings) => {
-    setSettingsState(next);
-    saveSettings(next, taskId);
-  }, [taskId]);
 
   // Stop the in-flight claude subprocess for this session. 404 ("no
   // live process") is benign — the run finished a moment ago and the
@@ -141,13 +141,6 @@ function MessageComposerInner({
       setStopping(false);
     }
   }, [sessionId, stopping, toast]);
-
-  useEffect(() => {
-    setDraft("");
-    setAttachments([]);
-    setMention(null);
-    setInterim("");
-  }, [sessionId]);
 
   const resize = useCallback(() => {
     const el = taRef.current;
@@ -507,4 +500,16 @@ function MessageComposerInner({
   );
 }
 
-export const MessageComposer = memo(MessageComposerInner);
+// Outer wrapper keys the inner by `sessionId` so switching to a
+// different session naturally remounts the composer — clearing the
+// draft / attachments / mention / interim state without an effect
+// that calls setState on prop change (which the React 19 hooks rule
+// rejects for legitimate reasons: it's a recipe for cascading
+// renders when the component happens to render twice for unrelated
+// reasons).
+function MessageComposerOuter(
+  props: React.ComponentProps<typeof MessageComposerInner>,
+) {
+  return <MessageComposerInner key={props.sessionId} {...props} />;
+}
+export const MessageComposer = memo(MessageComposerOuter);

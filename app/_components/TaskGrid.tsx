@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { Meta, Task, TaskSection } from "@/lib/client/types";
 import { SECTION_ORDER, SECTION_LABEL } from "@/lib/client/types";
 import {
@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { relativeTime } from "@/lib/client/time";
 import { STATUS_PILL, type DerivedStatus } from "@/lib/client/runStatus";
+import { useLocalStorage } from "@/lib/client/useLocalStorage";
 import { EmptyState } from "./ui/empty-state";
 import { Button } from "./ui/button";
 import {
@@ -26,6 +27,10 @@ const ROLE_COLOR: Record<string, string> = {
 };
 
 const LAYOUT_KEY = "bridge.tasks.layout";
+type Layout = "grid" | "kanban";
+const loadLayout = (raw: string | null): Layout =>
+  raw === "kanban" ? "kanban" : "grid";
+const dumpLayout = (v: Layout) => v;
 
 function roleIcon(role: string) { return ROLE_ICON[role] ?? Sparkles; }
 function roleColor(role: string) { return ROLE_COLOR[role] ?? "text-muted-foreground"; }
@@ -216,26 +221,21 @@ export function TaskGrid({
   onMoveTask?: (id: string, section: TaskSection) => Promise<void> | void;
 }) {
   const [quick, setQuick] = useState("");
-  const [layout, setLayout] = useState<"grid" | "kanban">("grid");
+  // Layout pref hydrates through `useSyncExternalStore` (the
+  // `useLocalStorage` hook), which gives us SSR safety without an
+  // effect that calls `setLayout`.
+  const [layout, setLayoutPersist] = useLocalStorage<Layout>(
+    LAYOUT_KEY,
+    loadLayout,
+    "grid",
+    dumpLayout,
+  );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   // Tracks which Kanban column is currently the drop target so we can
   // highlight it and which task is being dragged so we can dim it.
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverSection, setDragOverSection] = useState<TaskSection | null>(null);
-
-  // Hydrate layout pref after mount so SSR doesn't flash a different
-  // arrangement than the user's last choice.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(LAYOUT_KEY);
-      if (stored === "grid" || stored === "kanban") setLayout(stored);
-    } catch { /* ignore */ }
-  }, []);
-  const setLayoutPersist = (next: "grid" | "kanban") => {
-    setLayout(next);
-    try { window.localStorage.setItem(LAYOUT_KEY, next); } catch { /* ignore */ }
-  };
 
   const q = query.trim().toLowerCase();
   const filtered = useMemo(() => {
@@ -258,18 +258,23 @@ export function TaskGrid({
   );
 
   // Drop selected ids that no longer exist (e.g. after a delete).
-  useEffect(() => {
-    setSelected((prev) => {
-      const visible = new Set(sorted.map((t) => t.id));
-      let changed = false;
-      const next = new Set<string>();
-      for (const id of prev) {
-        if (visible.has(id)) next.add(id);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [sorted]);
+  // Done via the React-docs "previous-render snapshot" trick — when
+  // `sorted` changes between renders, recompute the cleaned set
+  // synchronously during render and call `setSelected` *only* if it
+  // really shrank. React eats the render and re-runs without
+  // cascading.
+  const [prevSorted, setPrevSorted] = useState(sorted);
+  if (sorted !== prevSorted) {
+    setPrevSorted(sorted);
+    const visible = new Set(sorted.map((t) => t.id));
+    let changed = false;
+    const next = new Set<string>();
+    for (const id of selected) {
+      if (visible.has(id)) next.add(id);
+      else changed = true;
+    }
+    if (changed) setSelected(next);
+  }
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {

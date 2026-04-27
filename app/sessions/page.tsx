@@ -77,14 +77,17 @@ function SessionsPageInner() {
 
   useEffect(() => {
     api.repos().then(setRepos).catch(() => {});
-    refreshSessions();
+    // Schedule the setState-bearing fetch as a microtask so we don't
+    // call it synchronously inside the effect body (which the React
+    // 19 hooks linter flags as a cascading-render risk).
+    void Promise.resolve().then(refreshSessions);
   }, [refreshSessions]);
 
   useEffect(() => {
     if (!visible) return;
     // Fire immediately on tab-becomes-visible so returning users see
     // fresh data instead of waiting up to a poll interval.
-    refreshSessions();
+    void Promise.resolve().then(refreshSessions);
     const h = setInterval(refreshSessions, 5_000);
     return () => clearInterval(h);
   }, [visible, refreshSessions]);

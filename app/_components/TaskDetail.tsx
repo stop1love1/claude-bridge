@@ -27,17 +27,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 
-export function TaskDetail({
-  task,
-  meta,
-  repos,
-  activeRunId,
-  onSave,
-  onSelectRun,
-  onDelete,
-  onToggleComplete,
-  saveRef,
-}: {
+interface TaskDetailProps {
   task: Task | null;
   meta: Meta | null;
   repos: Repo[];
@@ -47,19 +37,49 @@ export function TaskDetail({
   onDelete: () => Promise<void>;
   onToggleComplete: (next: boolean) => Promise<void>;
   saveRef?: React.MutableRefObject<(() => void) | null>;
-}) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [saving, setSaving] = useState(false);
+}
+
+// Outer keys the inner by task.id so switching between tasks
+// remounts the inner — title / body / usage state is reinitialised
+// from the new task without the reset effect that React 19's
+// `set-state-in-effect` rule (correctly) flags as a derived-state
+// anti-pattern.
+export function TaskDetail(props: TaskDetailProps) {
+  return (
+    <TaskDetailInner
+      key={props.task?.id ?? "__none__"}
+      {...props}
+    />
+  );
+}
+
+function TaskDetailInner({
+  task,
+  meta,
+  repos,
+  activeRunId,
+  onSave,
+  onSelectRun,
+  onDelete,
+  onToggleComplete,
+  saveRef,
+}: TaskDetailProps) {
+  // Mount-time initial values pulled from the (snapshot of the) task
+  // we were given. Subsequent task changes are handled by the outer
+  // remount, so these initialisers only ever run for *this* task.
+  const [title, setTitle] = useState(task?.title ?? "");
+  const [body, setBody] = useState(task?.body ?? "");
   const [continuing, setContinuing] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [usage, setUsage] = useState<TokenTotals | null>(null);
-  // Synchronous flag — `setSaving(true)` only commits on the next
-  // render, so two onBlur events firing in the same tick can both
-  // observe `saving === false` and issue duplicate saves. The ref
-  // serializes them deterministically.
+  // Synchronous flag — a useState `saving` would only commit on the
+  // next render, so two onBlur events firing in the same tick could
+  // both observe `saving === false` and issue duplicate saves. The
+  // ref serializes them deterministically. Nothing in the UI needs
+  // to read the saving state, so we don't keep a parallel useState
+  // alongside this ref.
   const savingRef = useRef(false);
   const toast = useToast();
   const confirm = useConfirm();
@@ -70,12 +90,6 @@ export function TaskDetail({
     for (const r of repos) map[r.name] = r.branch ?? null;
     return map;
   }, [repos]);
-
-  useEffect(() => {
-    setTitle(task?.title ?? "");
-    setBody(task?.body ?? "");
-    setUsage(null);
-  }, [task?.id]);
 
   // Refetch token totals whenever the run roster changes (a new run
   // landed, an existing one transitioned). Lightweight (one route hit)
@@ -95,12 +109,10 @@ export function TaskDetail({
   const save = useCallback(async () => {
     if (!dirty || savingRef.current) return;
     savingRef.current = true;
-    setSaving(true);
     try { await onSave({ title, body }); }
     catch (e) { toast("error", (e as Error).message); }
     finally {
       savingRef.current = false;
-      setSaving(false);
     }
   }, [dirty, onSave, title, body, toast]);
 

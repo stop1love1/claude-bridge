@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import type { Repo } from "@/lib/client/types";
+import { useLocalStorage } from "@/lib/client/useLocalStorage";
 import { Button } from "./ui/button";
 import {
   Select,
@@ -15,6 +16,8 @@ import {
 } from "./ui/select";
 
 const REPO_KEY = "bridge.newSession.repo";
+const loadStoredRepo = (raw: string | null): string => raw ?? "";
+const dumpStoredRepo = (s: string): string => s;
 
 /**
  * "New session" trigger. One click → fresh chat surface for a brand-new
@@ -37,24 +40,32 @@ export function NewSessionDialog({
   onCreate: (args: { repo: string }) => Promise<void> | void;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }) {
-  // Hydrate from localStorage *after* mount so SSR doesn't flash a
-  // different default than what the user actually picked last time.
-  const [repo, setRepo] = useState(defaultRepo ?? repos[0]?.name ?? "");
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem(REPO_KEY);
-    if (stored && repos.some((r) => r.name === stored && r.exists)) {
-      setRepo(stored);
-    }
-  }, [repos]);
+  // The persisted repo lives in localStorage and is hydrated through
+  // `useSyncExternalStore` (no SSR-vs-CSR mismatch, no
+  // setState-in-effect). `override` captures the user's *current
+  // session* pick before they click Create — once Create fires the
+  // override is written through to localStorage too.
+  const [storedRepo, setStoredRepo] = useLocalStorage<string>(
+    REPO_KEY,
+    loadStoredRepo,
+    "",
+    dumpStoredRepo,
+  );
+  const [override, setOverride] = useState<string | null>(null);
 
-  // Keep a sane fallback if the previously-picked repo disappears from
-  // BRIDGE.md or the parent dir.
-  useEffect(() => {
-    if (repo && repos.some((r) => r.name === repo && r.exists)) return;
-    const fb = defaultRepo ?? repos[0]?.name ?? "";
-    if (fb) setRepo(fb);
-  }, [repo, repos, defaultRepo]);
+  // Render-time validity fallback: if the requested pick is gone /
+  // doesn't exist anymore, drop back through (defaultRepo → first
+  // existing repo). No effect needed, no setState cascade.
+  const requested = override ?? storedRepo;
+  const repo = useMemo(() => {
+    if (requested && repos.some((r) => r.name === requested && r.exists)) {
+      return requested;
+    }
+    if (defaultRepo && repos.some((r) => r.name === defaultRepo && r.exists)) {
+      return defaultRepo;
+    }
+    return repos.find((r) => r.exists)?.name ?? "";
+  }, [requested, repos, defaultRepo]);
 
   const groups = useMemo(() => {
     // `declared === true && !isBridge` are apps registered in
@@ -69,9 +80,8 @@ export function NewSessionDialog({
 
   const create = () => {
     if (!repo) return;
-    if (typeof window !== "undefined") {
-      try { window.localStorage.setItem(REPO_KEY, repo); } catch { /* quota */ }
-    }
+    setStoredRepo(repo);
+    setOverride(null);
     void onCreate({ repo });
   };
 
@@ -94,7 +104,7 @@ export function NewSessionDialog({
 
   return (
     <div className="flex items-center gap-1.5">
-      <Select value={repo} onValueChange={setRepo}>
+      <Select value={repo} onValueChange={setOverride}>
         <SelectTrigger className="flex-1 h-7 px-2 text-[11px] gap-1 [&>span]:truncate min-w-0">
           <SelectValue placeholder="Pick a repo" />
         </SelectTrigger>

@@ -977,21 +977,18 @@ function SessionLogInner({
   const confirm = useConfirm();
 
   useEffect(() => {
+    // Note: state resets are handled by remounting via the `key={sessionId}`
+    // wrapper in `SessionLog` (see export below) — calling setEntries([])
+    // etc. synchronously here would trip
+    // `react-hooks/set-state-in-effect`. Refs are local and we still
+    // reset them, since they survive the same-instance re-runs that
+    // would happen if the parent re-renders without changing the key.
     offsetRef.current = 0;
     firstOffsetRef.current = null;
     entryOffsetsRef.current = [];
     loadedOlderCountRef.current = 0;
     inFlightOlderRef.current = false;
     pendingScrollRestoreRef.current = null;
-    setEntries([]);
-    setTrimmed(0);
-    setAutoScroll(true);
-    setLastTs(0);
-    setPinnedUserUuid(null);
-    setLoadingOlder(false);
-    setPartials({});
-    setAliveSse(null);
-    setActivity({ kind: "idle" });
     if (!run) return;
 
     let stopped = false;
@@ -1246,8 +1243,11 @@ function SessionLogInner({
     }
   }, [run]);
 
-  // "responding…" if a new entry landed in the last 4s.
-  const [now, setNow] = useState(Date.now());
+  // "responding…" if a new entry landed in the last 4s. Lazy
+  // initializer so React's purity rule (`Date.now()` is impure) is
+  // satisfied — the wall clock is read once on mount, then ticked by
+  // the effect below.
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
@@ -1275,6 +1275,15 @@ function SessionLogInner({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [matchIdx, setMatchIdx] = useState(0);
+  // Reset matchIdx whenever the search query changes — done as a
+  // "previous-snapshot" compare during render (per React docs §
+  // "storing information from previous renders") so we don't trip the
+  // `set-state-in-effect` rule with `useEffect(setMatchIdx)`.
+  const [matchSeed, setMatchSeed] = useState(searchQuery);
+  if (matchSeed !== searchQuery) {
+    setMatchSeed(searchQuery);
+    setMatchIdx(0);
+  }
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const entryKey = useCallback((e: LogEntry, fallback: number): string => {
@@ -1298,8 +1307,6 @@ function SessionLogInner({
     });
     return keys;
   }, [searchQuery, visibleEntries, entryKey]);
-
-  useEffect(() => { setMatchIdx(0); }, [searchQuery]);
 
   const scrollToMatch = useCallback((idx: number) => {
     const k = matchedKeys[idx];
@@ -1859,7 +1866,7 @@ function SessionLogInner({
   );
 }
 
-export const SessionLog = memo(
+const SessionLogMemo = memo(
   SessionLogInner,
   (prev, next) =>
     prev.run?.sessionId === next.run?.sessionId &&
@@ -1870,3 +1877,21 @@ export const SessionLog = memo(
     prev.taskId === next.taskId &&
     prev.onClearConversation === next.onClearConversation,
 );
+
+/**
+ * Outer wrapper that keys the memo'd inner on the active session
+ * identity. Switching to a different session forces a full remount
+ * — every `useState` re-runs its initializer and every `useRef`
+ * gets a fresh slot — so we don't need a `setEntries([])`-style
+ * state-reset prologue in `useEffect` (which the React 19 hooks
+ * linter flags as a cascading-render risk).
+ */
+export function SessionLog(props: {
+  run: ActiveRun | null;
+  repos: Repo[];
+  taskId?: string;
+  onClearConversation?: () => void;
+}) {
+  const k = `${props.run?.sessionId ?? "__none__"}|${props.run?.repoPath ?? ""}`;
+  return <SessionLogMemo key={k} {...props} />;
+}
