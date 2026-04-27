@@ -3,8 +3,10 @@ import {
   COOKIE_NAME,
   loadAuthConfig,
   revokeTrustedDevice,
+  sessionCookieOptions,
   verifySession,
 } from "@/lib/auth";
+import { checkCsrf } from "@/lib/csrf";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +20,13 @@ export const dynamic = "force-dynamic";
  * idempotent.
  */
 export function POST(req: NextRequest) {
+  const csrf = checkCsrf(req);
+  if (!csrf.ok) {
+    return NextResponse.json(
+      { error: "csrf check failed", reason: csrf.reason ?? null },
+      { status: 403 },
+    );
+  }
   const cfg = loadAuthConfig();
   const token = req.cookies.get(COOKIE_NAME)?.value;
   if (token && cfg) {
@@ -28,12 +37,8 @@ export function POST(req: NextRequest) {
     }
   }
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(COOKIE_NAME, "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: false,
-    path: "/",
-    maxAge: 0,
-  });
+  // maxAge: 0 ⇒ immediate clear. Reuse the same secure/sameSite/path
+  // attributes the cookie was set with so browsers actually drop it.
+  res.cookies.set(COOKIE_NAME, "", sessionCookieOptions(0));
   return res;
 }

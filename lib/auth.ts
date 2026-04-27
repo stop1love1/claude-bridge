@@ -38,24 +38,42 @@ import {
   timingSafeEqual,
   createHmac,
 } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { USER_CLAUDE_DIR } from "./paths";
 
+interface ScryptOpts {
+  N?: number;
+  r?: number;
+  p?: number;
+  maxmem?: number;
+}
 const scrypt = promisify(scryptCb) as (
   password: string | Buffer,
   salt: Buffer,
   keylen: number,
+  opts?: ScryptOpts,
 ) => Promise<Buffer>;
 
 const BRIDGE_JSON = join(USER_CLAUDE_DIR, "bridge.json");
 
-const SCRYPT_N = 16384;
+// Tightened from N=16384 to N=131072 (2^17) — matches OWASP 2024+
+// recommendation for server-side scrypt. ~150ms verify on a modern
+// laptop, ~10x harder to bruteforce a leaked hash. Backward compat is
+// preserved: `verifyPassword` parses N/r/p from the stored hash, so
+// pre-existing 16384 hashes keep working until the operator next runs
+// `set-password` (which always re-hashes with the current params).
+const SCRYPT_N = 131072;
 const SCRYPT_r = 8;
 const SCRYPT_p = 1;
 const SCRYPT_KEYLEN = 64;
 const SALT_BYTES = 16;
+/** Sane upper bound on stored N to refuse pathological hashes. */
+const SCRYPT_MAX_N = 1 << 20;
+
+/** Lower-bound for any new password set via the bridge UI / CLI. */
+export const MIN_PASSWORD_LENGTH = 12;
 
 export const COOKIE_NAME = "bridge_session";
 /** Default session TTL when "Trust this device" is OFF — 12 hours. */
@@ -64,6 +82,35 @@ export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const TRUSTED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Internal header child agents send so middleware can bypass auth. */
 export const INTERNAL_TOKEN_HEADER = "x-bridge-internal-token";
+
+/**
+ * Centralized cookie attribute set so every auth route — login, setup,
+ * pending-approval, logout — agrees on flags. `secure` flips on under
+ * `NODE_ENV === "production"` because the bridge is now meant to be
+ * runnable behind a public TLS terminator (`.env.production` shows the
+ * deployed `claude.stop1love1.online` origin), not just localhost. Dev
+ * stays insecure-cookie OK because `next dev` listens on plain HTTP.
+ *
+ * Caller passes `maxAgeMs` (or 0 for an immediate clear). `path: "/"`
+ * + `httpOnly: true` + `sameSite: "lax"` are constants — every cookie
+ * the bridge issues uses the same path so logout reliably clears
+ * whatever was set by login / setup / pending-approval.
+ */
+export function sessionCookieOptions(maxAgeMs: number): {
+  httpOnly: true;
+  sameSite: "lax";
+  secure: boolean;
+  path: "/";
+  maxAge: number;
+} {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: Math.floor(maxAgeMs / 1000),
+  };
+}
 
 // -----------------------------------------------------------------------------
 // bridge.json IO (auth-section-aware, preserves all other top-level keys)
@@ -110,9 +157,20 @@ function readManifest(): RawManifest {
 function atomicWrite(path: string, contents: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  writeFileSync(tmp, contents);
+  // `mode: 0o600` — bridge.json holds the HMAC secret, internal-bypass
+  // token, password hash, and (optionally) Telegram credentials. On
+  // POSIX without 0600 a colocated user could `cat` it; on Windows the
+  // mode is ignored by the FS but the call still succeeds. `renameSync`
+  // preserves the temp file's mode, so the live file ends up locked-
+  // down even on first creation.
+  writeFileSync(tmp, contents, { mode: 0o600 });
   try { renameSync(tmp, path); }
   catch (err) { try { unlinkSync(tmp); } catch { /* ignore */ } throw err; }
+  // If the file pre-existed with a wider mode (e.g. 0644 from before
+  // this fix) `renameSync` keeps the temp's mode on Linux but on macOS
+  // some filesystems retain the destination inode's metadata. Force
+  // 0600 explicitly — best-effort on POSIX, no-op on Windows.
+  try { chmodSync(path, 0o600); } catch { /* ignore (windows) */ }
 }
 
 function writeManifest(m: RawManifest): void {
@@ -172,7 +230,15 @@ export async function hashPassword(plain: string): Promise<string> {
     throw new Error("password must be a non-empty string");
   }
   const salt = randomBytes(SALT_BYTES);
-  const hash = await scrypt(plain, salt, SCRYPT_KEYLEN);
+  // Match the maxmem we use for verifyPassword so N=131072 doesn't trip
+  // Node's default 32 MiB ceiling.
+  const maxmem = 256 * SCRYPT_N * SCRYPT_r;
+  const hash = await scrypt(plain, salt, SCRYPT_KEYLEN, {
+    N: SCRYPT_N,
+    r: SCRYPT_r,
+    p: SCRYPT_p,
+    maxmem,
+  });
   return [
     "scrypt",
     String(SCRYPT_N),
@@ -190,17 +256,25 @@ export async function verifyPassword(plain: string, stored: string): Promise<boo
   const N = Number(parts[1]);
   const r = Number(parts[2]);
   const p = Number(parts[3]);
-  if (!Number.isFinite(N) || !Number.isFinite(r) || !Number.isFinite(p)) return false;
+  if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p)) return false;
+  // Refuse pathological / hostile params: a leaked bridge.json that's
+  // been tampered with shouldn't be able to coerce us into a multi-
+  // gigabyte scrypt call. Lower bound mirrors the historical N=16384.
+  if (N < 16384 || N > SCRYPT_MAX_N || r < 1 || r > 32 || p < 1 || p > 16) return false;
+  // N must be a power of two — required by the scrypt spec.
+  if ((N & (N - 1)) !== 0) return false;
   let salt: Buffer; let expected: Buffer;
   try {
     salt = Buffer.from(parts[4], "base64");
     expected = Buffer.from(parts[5], "base64");
   } catch { return false; }
-  // We always hash with the canonical params; older blobs would need a
-  // bespoke `scrypt(..., {N,r,p})` call. For now if the params drift from
-  // the canonical set we treat the hash as invalid — a re-set fixes it.
-  if (N !== SCRYPT_N || r !== SCRYPT_r || p !== SCRYPT_p) return false;
-  const actual = await scrypt(plain, salt, expected.length);
+  // Use the params from the stored hash — this is what makes the
+  // SCRYPT_N bump backward-compatible. Older 16384 hashes still
+  // verify; a future `set-password` call rolls them forward to the
+  // current SCRYPT_N. Pass `maxmem` because Node enforces a default
+  // 32 MiB ceiling that N=131072 (~128 MiB) blows past.
+  const maxmem = 256 * N * r;
+  const actual = await scrypt(plain, salt, expected.length, { N, r, p, maxmem });
   if (actual.length !== expected.length) return false;
   return timingSafeEqual(actual, expected);
 }
@@ -346,8 +420,8 @@ export async function setOperatorCredentials(
   const trimmed = (emailOrUsername || "").trim();
   if (!trimmed) throw new Error("email required");
   if (!isValidEmail(trimmed)) throw new Error("email format is invalid");
-  if (!plainPassword || plainPassword.length < 8) {
-    throw new Error("password must be at least 8 characters");
+  if (!plainPassword || plainPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters`);
   }
   const passwordHash = await hashPassword(plainPassword);
   const existing = loadAuthConfig();

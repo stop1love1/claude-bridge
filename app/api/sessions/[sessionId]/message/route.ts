@@ -6,8 +6,9 @@ import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
 import { resumeClaude, spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/lib/spawn";
 import { projectDirFor } from "@/lib/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
-import { badRequest, isValidSessionId } from "@/lib/validate";
+import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/lib/validate";
 import { findTaskBySessionId, updateTask } from "@/lib/tasksStore";
+import { isValidAppName } from "@/lib/apps";
 
 export const dynamic = "force-dynamic";
 
@@ -25,10 +26,13 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  *   - settings: optional per-turn overrides for permission-mode / effort
  *     / model, mirroring the picker shown in the composer.
  *
- * Permission default is `bypassPermissions` — tool calls run without
- * asking the user. Pass `settings.mode = "default"` explicitly to
- * re-enable the per-tool Allow/Deny popup; we attach the PreToolUse
- * hook via `--settings` only in that case.
+ * Permission default is `default` — tool calls trigger the per-tool
+ * Allow/Deny popup. The composer's mode picker only exposes safe
+ * options (`default` / `acceptEdits` / `plan` / `auto`), so this
+ * matches the UI label "Ask before edits". Callers that genuinely
+ * want headless / bypass mode (coordinator children, scripted task
+ * continuation) construct ChatSettings with `mode: "bypassPermissions"`
+ * explicitly — the relevant routes are gated by the internal token.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
@@ -36,20 +40,34 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const body = (await req.json()) as { message?: string; repo?: string; settings?: ChatSettings };
   const { message, repo, settings } = body;
   if (!message?.trim()) return NextResponse.json({ error: "message required" }, { status: 400 });
-  if (!repo)           return NextResponse.json({ error: "repo required" },    { status: 400 });
+  if (!isValidAppName(repo)) return badRequest("invalid repo");
+  if (settings != null && typeof settings !== "object") {
+    return badRequest("invalid settings");
+  }
+  if (settings?.mode !== undefined && !isValidUserPermissionMode(settings.mode)) {
+    return badRequest("invalid settings.mode");
+  }
 
   const md = readFileSync(BRIDGE_MD, "utf8");
-  const cwd = resolveRepoCwd(md, BRIDGE_ROOT, repo);
-  if (!cwd) return NextResponse.json({ error: `unknown repo: ${repo}` }, { status: 400 });
+  const cwd = resolveRepoCwd(md, BRIDGE_ROOT, repo!);
+  // L4: don't echo the rejected `repo` value back. A 400 reply is
+  // enough — including the input string makes log-poisoning easier
+  // and offers nothing useful to a legitimate caller.
+  if (!cwd) return NextResponse.json({ error: "unknown repo" }, { status: 400 });
 
   try {
-    const wantsPopup = settings?.mode === "default";
-    const effectiveSettings: ChatSettings = wantsPopup
-      ? settings!
-      : { ...(settings ?? {}), mode: "bypassPermissions" };
-    const settingsPath = wantsPopup
-      ? writeSessionSettings(freeSessionSettingsPath(sessionId))
-      : undefined;
+    // The user-facing mode picker only ever sends one of
+    // {default, acceptEdits, plan, auto}. We default to `default` (the
+    // permission popup) when the body omitted `mode`, so opening the
+    // composer and hitting Enter behaves the way the dropdown label
+    // ("Ask before edits") promises. Bypass mode is reachable only via
+    // the internal-token-gated agent / continuation routes — never
+    // from this endpoint.
+    const effectiveSettings: ChatSettings = {
+      ...(settings ?? {}),
+      mode: settings?.mode ?? "default",
+    };
+    const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
     // "Create-on-first-send": when the UI generates a UUID locally (no
     // up-front spawn), the .jsonl doesn't exist yet on the first message.
     // Treat that as a fresh session start instead of a resume — same

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyRequestAuthOrInternal } from "@/lib/auth";
+import { checkCsrf } from "@/lib/csrf";
 import { answerPendingLogin } from "@/lib/loginApprovals";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,16 @@ type Ctx = { params: Promise<{ id: string }> };
  * `GET /api/auth/login/pending/[id]` and then signs in if approved.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  // /api/auth/* is excluded from the proxy matcher, so the CSRF check
+  // doesn't run automatically. checkCsrf still allows internal-token
+  // callers (the CLI approve script), so the bypass path is intact.
+  const csrf = checkCsrf(req);
+  if (!csrf.ok) {
+    return NextResponse.json(
+      { error: "csrf check failed", reason: csrf.reason ?? null },
+      { status: 403 },
+    );
+  }
   // Accept either browser cookie (UI-mounted LoginApprovalDialog) OR
   // the per-install internal-bypass token (terminal CLI script
   // `bun scripts/approve-login.ts`). The CLI path reads the token

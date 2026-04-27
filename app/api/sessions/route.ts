@@ -6,7 +6,7 @@ import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
 import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/lib/spawn";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
 import { isValidAppName } from "@/lib/apps";
-import { badRequest, isValidPermissionMode } from "@/lib/validate";
+import { badRequest, isValidUserPermissionMode } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -33,10 +33,12 @@ const MAX_PROMPT_CHARS = 50_000;
  *
  * Body: { repo: string, prompt: string, settings?: ChatSettings }
  *
- * Permission default is `bypassPermissions` — every tool call runs
- * without asking. Set `settings.mode = "default"` explicitly in the
- * body to opt back into the per-tool Allow/Deny popup (we register
- * the PreToolUse hook only in that case).
+ * Permission default is `default` — every tool call triggers the
+ * Allow/Deny popup. The composer's mode picker only exposes
+ * non-privileged modes (`default` / `acceptEdits` / `plan` / `auto`),
+ * matching `isValidUserPermissionMode`. Bypass mode stays reachable
+ * for server-side callers (coordinator / agents) that construct
+ * ChatSettings directly inside an internal-token-gated handler.
  *
  * H2 hardening: every body field is now validated up-front so a caller
  * can't (a) inject a path-traversal `repo`, (b) coerce
@@ -72,24 +74,27 @@ export async function POST(req: NextRequest) {
   }
   if (
     body.settings?.mode !== undefined &&
-    !isValidPermissionMode(body.settings.mode)
+    !isValidUserPermissionMode(body.settings.mode)
   ) {
     return badRequest("invalid settings.mode");
   }
 
   const md = readFileSync(BRIDGE_MD, "utf8");
   const cwd = resolveRepoCwd(md, BRIDGE_ROOT, body.repo);
-  if (!cwd) return NextResponse.json({ error: `unknown repo: ${body.repo}` }, { status: 400 });
+  // L4: keep the rejected name out of the response body — the caller
+  // already knows what they sent.
+  if (!cwd) return NextResponse.json({ error: "unknown repo" }, { status: 400 });
 
   try {
     const sessionId = randomUUID();
-    const wantsPopup = body.settings?.mode === "default";
-    const effectiveSettings: ChatSettings = wantsPopup
-      ? body.settings!
-      : { ...(body.settings ?? {}), mode: "bypassPermissions" };
-    const settingsPath = wantsPopup
-      ? writeSessionSettings(freeSessionSettingsPath(sessionId))
-      : undefined;
+    // Default to the popup-driven `default` mode. The body cannot
+    // request `bypassPermissions` because `isValidUserPermissionMode`
+    // rejects it above.
+    const effectiveSettings: ChatSettings = {
+      ...(body.settings ?? {}),
+      mode: body.settings?.mode ?? "default",
+    };
+    const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
     const { child } = spawnFreeSession(cwd, body.prompt.trim(), effectiveSettings, settingsPath, sessionId);
     const failure = await waitEarlyFailure(child, 1500);
     if (failure) {

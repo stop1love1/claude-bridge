@@ -1,5 +1,4 @@
-import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { loadApps, type App } from "./apps";
 
 export interface RepoEntry { name: string }
@@ -33,9 +32,17 @@ export function resolveRepos(_bridgeMd: string, _bridgeRoot: string): ResolvedRe
  * Resolve a repo *name* to an absolute cwd. Tries, in order:
  *   1. the bridge folder itself (so `repo: "<bridge-folder>"` keeps working)
  *   2. anything declared in the apps registry (`~/.claude/bridge.json`)
- *   3. any sibling folder that exists next to the bridge
  *
  * Returns `null` if no match — the caller should reject the request.
+ *
+ * Security: we used to fall back to ANY sibling directory of the bridge
+ * root when no app declared that name. That meant the operator's
+ * `~/work/secret-stuff/` (or whatever else lived next to the bridge)
+ * was a valid `repo:` argument and a freshly-spawned `claude` would
+ * happily read/write files there. Removed — only registered apps and
+ * the bridge folder itself are reachable now. Operators who want a new
+ * app must register it explicitly via the UI ("Add app" / "Auto-detect")
+ * which is the documented path anyway.
  */
 export function resolveRepoCwd(
   _bridgeMd: string,
@@ -47,7 +54,5 @@ export function resolveRepoCwd(
   if (name === basename(root)) return root;
   const declared = appsAsRepos().find((r) => r.name === name);
   if (declared) return declared.path;
-  const sibling = join(dirname(root), name);
-  if (existsSync(sibling)) return sibling;
   return null;
 }

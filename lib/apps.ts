@@ -29,6 +29,7 @@
  */
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -200,13 +201,17 @@ function atomicWrite(path: string, contents: string): void {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  writeFileSync(tmp, contents);
+  // bridge.json holds verify-command shell strings, app paths, and the
+  // shared HMAC secret (auth section). Mode 0600 keeps colocated POSIX
+  // users from reading it. No-op on Windows; benign on macOS / Linux.
+  writeFileSync(tmp, contents, { mode: 0o600 });
   try {
     renameSync(tmp, path);
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* ignore */ }
     throw err;
   }
+  try { chmodSync(path, 0o600); } catch { /* ignore (windows) */ }
 }
 
 /**

@@ -42,6 +42,20 @@ const VERIFY_KEYS: Array<keyof AppVerify> = [
 // shell-line bound so a runaway paste can't blow up later exec calls.
 const VERIFY_CMD_MAX = 1024;
 
+/**
+ * When the deployment opts into `BRIDGE_LOCK_VERIFY=1`, every
+ * verify-command edit through the API is rejected. The operator can
+ * still seed verify commands at deploy time by editing
+ * `~/.claude/bridge.json` directly (file is mode 0600, only the
+ * deploying user can write it). This locks the post-auth RCE surface
+ * — a hijacked browser cookie can no longer rewrite shell strings the
+ * verify chain will execute.
+ *
+ * Defaults to OFF so existing local-only installs keep their UX. The
+ * production deployment guide should set this to "1".
+ */
+const VERIFY_LOCKED = process.env.BRIDGE_LOCK_VERIFY === "1";
+
 export async function PATCH(
   req: Request,
   ctx: { params: Promise<{ name: string }> },
@@ -62,6 +76,15 @@ export async function PATCH(
   const hasGit = !!gitPatch && typeof gitPatch === "object";
   const verifyPatch = body.verify;
   const hasVerify = !!verifyPatch && typeof verifyPatch === "object";
+  if (hasVerify && VERIFY_LOCKED) {
+    return NextResponse.json(
+      {
+        error: "verify edits are locked",
+        hint: "BRIDGE_LOCK_VERIFY=1 — edit `~/.claude/bridge.json` on the host to change verify commands",
+      },
+      { status: 403 },
+    );
+  }
   const qualityPatch = body.quality;
   const hasQuality = !!qualityPatch && typeof qualityPatch === "object";
   if (!hasName && !hasDescription && !hasGit && !hasVerify && !hasQuality) {

@@ -7,6 +7,7 @@ import {
   isValidEmail,
   loadAuthConfig,
   pruneExpired,
+  sessionCookieOptions,
   signSession,
   verifyPassword,
 } from "@/lib/auth";
@@ -14,8 +15,30 @@ import {
   APPROVAL_TTL_MS,
   createPendingLogin,
 } from "@/lib/loginApprovals";
+import { getClientIp } from "@/lib/clientIp";
+import { checkCsrf } from "@/lib/csrf";
+import { rateLimit, rateLimitClear } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Brute-force defense. The bridge is a single-user system, so a
+ * legitimate operator should never need more than ~5 attempts in a
+ * 10-minute window. Two parallel limiters because IP-only and
+ * email-only each have failure modes:
+ *
+ *  - IP-only: NAT'd LAN means everyone in the office shares one
+ *    bucket. Tighter limit + per-email backup keeps that workable.
+ *  - Email-only: an attacker rotating IPs (Tor, residential proxy
+ *    pool) defeats per-IP. Per-email locks the account out
+ *    regardless of source.
+ *
+ * On a successful login we clear BOTH buckets so a typo-prone user
+ * isn't punished after they finally type the right password.
+ */
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_LIMIT_PER_IP = 10;
+const LOGIN_LIMIT_PER_EMAIL = 5;
 
 interface LoginBody {
   email?: string;
@@ -39,6 +62,18 @@ interface LoginBody {
  * found" leak).
  */
 export async function POST(req: NextRequest) {
+  // /api/auth/* is excluded from the proxy's CSRF check, so we
+  // perform it inline. Doing this before the rate-limit bucket
+  // increment avoids letting a CSRF attempt burn the operator's
+  // login budget.
+  const csrf = checkCsrf(req);
+  if (!csrf.ok) {
+    return NextResponse.json(
+      { error: "csrf check failed", reason: csrf.reason ?? null },
+      { status: 403 },
+    );
+  }
+
   const cfg = loadAuthConfig();
   if (!cfg) {
     return NextResponse.json(
@@ -63,6 +98,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid email format" }, { status: 400 });
   }
 
+  // Rate-limit BEFORE we run scrypt — otherwise a hostile client
+  // forces ~150ms of CPU per request and DoS's us. Keying the email
+  // bucket on lowercase form prevents a trivial bypass via casing.
+  const ip = getClientIp(req.headers);
+  const ipCheck = rateLimit("login:ip", ip, LOGIN_LIMIT_PER_IP, LOGIN_WINDOW_MS);
+  const emailCheck = rateLimit(
+    "login:email",
+    email.toLowerCase(),
+    LOGIN_LIMIT_PER_EMAIL,
+    LOGIN_WINDOW_MS,
+  );
+  if (!ipCheck.ok || !emailCheck.ok) {
+    const retryAfterMs = Math.max(ipCheck.retryAfterMs, emailCheck.retryAfterMs);
+    return NextResponse.json(
+      {
+        error: "too many login attempts",
+        hint: "wait a few minutes before retrying",
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) },
+      },
+    );
+  }
+
   // Always run the scrypt verify even when the email doesn't match,
   // so timing doesn't leak whether the operator exists. Single-user
   // install means this is mostly cosmetic — but cheap to do right.
@@ -71,6 +131,11 @@ export async function POST(req: NextRequest) {
   if (!emailOk || !passOk) {
     return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
   }
+
+  // Successful auth — wipe both buckets so a typo'd password earlier
+  // in the window doesn't keep counting against the operator.
+  rateLimitClear("login:ip", ip);
+  rateLimitClear("login:email", email.toLowerCase());
 
   const trust = body.trust === true;
   const now = Date.now();
@@ -86,10 +151,9 @@ export async function POST(req: NextRequest) {
   const liveTrusted = pruneExpired(cfg.trustedDevices);
   if (liveTrusted.length > 0) {
     const label = pickDeviceLabel(req, body.label);
-    const remoteIp =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      "unknown";
+    // M2: only trust XFF / X-Real-IP when BRIDGE_TRUSTED_PROXY=1, else
+    // fall back to whatever Next exposes. See lib/clientIp.ts.
+    const remoteIp = ip;
     const userAgent = req.headers.get("user-agent") ?? "";
     const pending = createPendingLogin({
       email: cfg.email,
@@ -127,16 +191,7 @@ export async function POST(req: NextRequest) {
     user: { email: cfg.email },
     trusted: trust,
   });
-  res.cookies.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    // No `secure` flag in dev — the bridge runs on http://localhost.
-    // In production behind TLS this should be true; since the bridge
-    // is meant for localhost-only use we leave it off.
-    secure: false,
-    path: "/",
-    maxAge: Math.floor(ttl / 1000),
-  });
+  res.cookies.set(COOKIE_NAME, token, sessionCookieOptions(ttl));
   return res;
 }
 

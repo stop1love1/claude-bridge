@@ -23,6 +23,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { randomBytes } from "node:crypto";
 import {
+  MIN_PASSWORD_LENGTH,
   loadAuthConfig,
   saveAuthConfig,
   setOperatorCredentials,
@@ -96,9 +97,9 @@ async function main() {
     process.exit(1);
   }
 
-  const password = await askPassword("Password (min 8 chars)");
-  if (!password || password.length < 8) {
-    console.error("Password must be at least 8 characters.");
+  const password = await askPassword(`Password (min ${MIN_PASSWORD_LENGTH} chars)`);
+  if (!password || password.length < MIN_PASSWORD_LENGTH) {
+    console.error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
     process.exit(1);
   }
   const confirm = await askPassword("Confirm password");

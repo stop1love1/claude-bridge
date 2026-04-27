@@ -5,6 +5,7 @@ import {
   TRUSTED_TTL_MS,
   addTrustedDevice,
   loadAuthConfig,
+  sessionCookieOptions,
   signSession,
 } from "@/lib/auth";
 import {
@@ -98,12 +99,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     user: { email: entry.email },
     trusted: entry.trust,
   });
-  res.cookies.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: false,
-    path: "/",
-    maxAge: Math.floor(ttl / 1000),
-  });
+  res.cookies.set(COOKIE_NAME, token, sessionCookieOptions(ttl));
   return res;
 }

@@ -7,6 +7,7 @@ import {
   touchTrustedDevice,
   verifySession,
 } from "@/lib/auth";
+import { checkCsrf } from "@/lib/csrf";
 
 // Next.js 16 runs `proxy.ts` on the Node runtime by default, so we no
 // longer declare `runtime: "nodejs"` here — Next rejects route-segment
@@ -43,6 +44,22 @@ export const config = {
 export function proxy(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   const cfg = loadAuthConfig();
+
+  // CSRF gate runs ahead of the auth check so a hostile cross-origin
+  // POST is rejected even when the operator's cookie is valid. GETs
+  // and internal-token requests pass through (see lib/csrf.ts for
+  // the rationale). The matcher excludes /api/auth/, so /api/auth/login
+  // / /api/auth/setup add their own checkCsrf call inline.
+  const csrf = checkCsrf(req);
+  if (!csrf.ok) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { error: "csrf check failed", reason: csrf.reason ?? null },
+        { status: 403 },
+      );
+    }
+    return new NextResponse("Forbidden", { status: 403 });
+  }
 
   // First-run: no password set yet. Force every browser request to
   // `/login?setup=1` so the operator sees the setup form. API calls

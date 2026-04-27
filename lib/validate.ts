@@ -50,6 +50,23 @@ const PERMISSION_MODES = [
 ] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
+/**
+ * Subset of `PERMISSION_MODES` that the operator UI exposes — the
+ * composer's mode dropdown only offers these four. The public chat
+ * routes accept user-typed messages, so they MUST reject
+ * `bypassPermissions` / `dontAsk` (which would let an attacker who
+ * landed an XSS or a CSRF skip the permission popup entirely). The
+ * coordinator / agents routes that genuinely need bypass mode pass
+ * `mode: "bypassPermissions"` from server-side code, never relayed
+ * from the request body.
+ */
+const USER_SAFE_PERMISSION_MODES = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "auto",
+] as const;
+
 export function isValidSessionId(s: unknown): s is string {
   return typeof s === "string" && UUID_RE.test(s);
 }
@@ -87,6 +104,20 @@ export function isValidPermissionMode(s: unknown): s is PermissionMode {
   return (
     typeof s === "string" &&
     (PERMISSION_MODES as readonly string[]).includes(s)
+  );
+}
+
+/**
+ * Stricter variant for routes that accept user-typed input. Rejects
+ * the privileged modes (`bypassPermissions`, `dontAsk`) so a hostile
+ * body can't claim them. Use this in any route the browser composer
+ * talks to; use `isValidPermissionMode` only on routes that are
+ * authenticated by `INTERNAL_TOKEN_HEADER` and explicitly trusted.
+ */
+export function isValidUserPermissionMode(s: unknown): s is PermissionMode {
+  return (
+    typeof s === "string" &&
+    (USER_SAFE_PERMISSION_MODES as readonly string[]).includes(s)
   );
 }
 

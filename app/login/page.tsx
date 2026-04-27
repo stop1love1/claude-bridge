@@ -284,8 +284,8 @@ function SetupForm({ onDone }: { onDone(): void }) {
       setError("Passwords do not match");
       return;
     }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+    if (password.length < 12) {
+      setError("Password must be at least 12 characters");
       return;
     }
     setSubmitting(true);
@@ -373,12 +373,12 @@ function SetupForm({ onDone }: { onDone(): void }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           autoComplete="new-password"
-          minLength={8}
+          minLength={12}
           required
           disabled={submitting}
         />
         <p className="text-[10px] text-muted-foreground">
-          Minimum 8 characters. Stored as scrypt hash in{" "}
+          Minimum 12 characters. Stored as scrypt hash in{" "}
           <code className="font-mono">~/.claude/bridge.json</code>.
         </p>
       </div>

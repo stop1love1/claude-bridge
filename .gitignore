@@ -27,7 +27,9 @@ node_modules/
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-bun.lock
+# bun.lock is intentionally COMMITTED so production installs are
+# reproducible. The historical project template ignored every lockfile
+# variant; we only need our own.
 bun.lockb
 package-lock.json
 pnpm-lock.yaml

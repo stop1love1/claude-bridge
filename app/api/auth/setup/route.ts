@@ -1,14 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
   COOKIE_NAME,
+  MIN_PASSWORD_LENGTH,
   TRUSTED_TTL_MS,
   addTrustedDevice,
   isAuthConfigured,
   isValidEmail,
   loadAuthConfig,
+  sessionCookieOptions,
   setOperatorCredentials,
   signSession,
 } from "@/lib/auth";
+import { checkCsrf } from "@/lib/csrf";
 import { clearSetupToken, verifySetupToken } from "@/lib/setupToken";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +61,14 @@ const SETUP_TOKEN_HEADER = "x-bridge-setup-token";
  * i.e., never, after a successful first run).
  */
 export async function POST(req: NextRequest) {
+  const csrf = checkCsrf(req);
+  if (!csrf.ok) {
+    return NextResponse.json(
+      { error: "csrf check failed", reason: csrf.reason ?? null },
+      { status: 403 },
+    );
+  }
+
   if (isAuthConfigured()) {
     return NextResponse.json(
       {
@@ -111,9 +122,9 @@ export async function POST(req: NextRequest) {
   if (!isValidEmail(email)) {
     return NextResponse.json({ error: "invalid email format" }, { status: 400 });
   }
-  if (password.length < 8) {
+  if (password.length < MIN_PASSWORD_LENGTH) {
     return NextResponse.json(
-      { error: "password must be at least 8 characters" },
+      { error: `password must be at least ${MIN_PASSWORD_LENGTH} characters` },
       { status: 400 },
     );
   }
@@ -150,13 +161,7 @@ export async function POST(req: NextRequest) {
   const token = signSession({ sub: cfg.email, exp, did: device.id }, cfg.secret);
 
   const res = NextResponse.json({ ok: true, user: { email: cfg.email } });
-  res.cookies.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: false,
-    path: "/",
-    maxAge: Math.floor(TRUSTED_TTL_MS / 1000),
-  });
+  res.cookies.set(COOKIE_NAME, token, sessionCookieOptions(TRUSTED_TTL_MS));
   return res;
 }
 

@@ -24,11 +24,14 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  * device names, and surrounding `.` / space tricks (see
  * `lib/uploadGuards.ts`) to keep that boundary safe.
  *
- * TODO: `request.formData()` buffers the entire body into memory before
- * we ever check `file.size`. The size cap is therefore advisory, not a
- * hard ceiling on memory use. A future pass should switch to streaming
- * (e.g. `request.body` + a `Busboy`-style parser) so we can reject
- * oversized payloads before allocation.
+ * `request.formData()` still buffers the body into memory before
+ * `file.size` is reachable, but we now refuse the request up-front
+ * when the `Content-Length` header alone exceeds the cap (`MAX_UPLOAD_BYTES`
+ * + a generous slack for multipart boundary overhead). That closes
+ * the trivial DoS where a hostile client streams gigabytes of "uploads"
+ * just to make us allocate. A switch to streaming multipart parsing
+ * (Busboy) is still the proper long-term fix for chunked / unknown-
+ * length requests.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
@@ -36,6 +39,22 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // is always a UUID v4 produced by `randomUUID()`. Routing through the
   // shared validator keeps the gate consistent across endpoints.
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
+
+  // M1 pre-check: short-circuit oversized uploads on the header alone
+  // so we never allocate the buffer for the 10 GiB body case. We add
+  // a 64 KiB slack to MAX_UPLOAD_BYTES because multipart/form-data
+  // wraps the file in boundary lines, headers, and trailing CRLFs.
+  const lenHeader = req.headers.get("content-length");
+  if (lenHeader) {
+    const declared = Number(lenHeader);
+    if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES + 64 * 1024) {
+      return NextResponse.json(
+        { error: `file too large (max ${MAX_UPLOAD_BYTES} bytes)` },
+        { status: 413 },
+      );
+    }
+  }
+
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {

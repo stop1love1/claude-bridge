@@ -8,6 +8,7 @@ import {
   revokeTrustedDevice,
   verifySession,
 } from "@/lib/auth";
+import { checkCsrf } from "@/lib/csrf";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,13 @@ export function GET(req: NextRequest) {
 }
 
 export function DELETE(req: NextRequest) {
+  const csrf = checkCsrf(req);
+  if (!csrf.ok) {
+    return NextResponse.json(
+      { error: "csrf check failed", reason: csrf.reason ?? null },
+      { status: 403 },
+    );
+  }
   const auth = requireAuth(req);
   if (auth.denied) return auth.denied;
   const id = req.nextUrl.searchParams.get("id");
