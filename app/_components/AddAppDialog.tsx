@@ -143,8 +143,9 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
   return (
     <>
       <div className="flex items-center gap-1.5">
-        <Button onClick={triggerOpen} size="sm" variant="outline">
-          <Plus className="h-3.5 w-3.5" /> Add app
+        <Button onClick={triggerOpen} size="sm" variant="outline" title="Add app">
+          <Plus className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Add app</span>
         </Button>
         <Button
           onClick={autoDetect}
@@ -154,7 +155,7 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
           title="Scan the parent directory for sibling code repos and register any not already added"
         >
           <Sparkles className={`h-3.5 w-3.5 ${detecting ? "animate-pulse" : ""}`} />
-          {detecting ? "Detecting…" : "Auto-detect"}
+          <span className="hidden sm:inline">{detecting ? "Detecting…" : "Auto-detect"}</span>
         </Button>
       </div>
 

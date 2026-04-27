@@ -320,7 +320,7 @@ export function TaskGrid({
           placeholder="Quick add — press Enter"
           className="flex-1 bg-transparent text-xs placeholder:text-fg-dim focus:outline-none"
         />
-        <div className="hidden sm:flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5">
+        <div className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5 shrink-0">
           <button
             type="button"
             onClick={() => setLayoutPersist("grid")}
@@ -333,7 +333,7 @@ export function TaskGrid({
             }`}
           >
             <LayoutGrid size={11} />
-            Grid
+            <span className="hidden sm:inline">Grid</span>
           </button>
           <button
             type="button"
@@ -347,7 +347,7 @@ export function TaskGrid({
             }`}
           >
             <Columns size={11} />
-            Kanban
+            <span className="hidden sm:inline">Kanban</span>
           </button>
         </div>
       </div>

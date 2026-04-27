@@ -48,7 +48,7 @@ export function HeaderShell({
       ? `Theme: system (currently ${resolved})`
       : `Theme: ${pref}`;
   return (
-    <header className="h-11 shrink-0 px-3 border-b border-border bg-card flex items-center gap-3">
+    <header className="h-11 shrink-0 px-2 sm:px-3 border-b border-border bg-card flex items-center gap-1.5 sm:gap-3 overflow-hidden">
       <Link href="/" className="flex items-center gap-2 shrink-0" title="Home">
         <Image
           src="/logo.svg"
@@ -61,8 +61,8 @@ export function HeaderShell({
         <h1 className="hidden md:inline text-sm font-semibold">Claude Bridge</h1>
       </Link>
       <MainNav active={active} badges={badges} />
-      <div className="flex-1 flex items-center gap-2 min-w-0">{children}</div>
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex-1 flex items-center gap-1.5 sm:gap-2 min-w-0">{children}</div>
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
         {actions}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

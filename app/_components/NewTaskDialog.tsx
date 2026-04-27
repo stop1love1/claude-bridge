@@ -109,8 +109,9 @@ export function NewTaskDialog({
 
   return (
     <>
-      <Button onClick={triggerOpen}>
-        <Plus className="h-3.5 w-3.5" /> New task
+      <Button onClick={triggerOpen} title="New task">
+        <Plus className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">New task</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>

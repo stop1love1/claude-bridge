@@ -95,7 +95,12 @@ export function NewSessionDialog({
   return (
     <div className="flex items-center gap-1.5">
       <Select value={repo} onValueChange={setRepo}>
-        <SelectTrigger className="h-7 px-2 text-[11px] gap-1 [&>span]:truncate w-[140px] shrink-0">
+        {/* Hide the inline repo picker on mobile — the header is too
+            narrow to fit it. The button still creates a session in the
+            currently-selected repo (defaults to the bridge or first
+            registered app), and the user can change it from a wider
+            viewport or by passing a query param. */}
+        <SelectTrigger className="hidden sm:flex h-7 px-2 text-[11px] gap-1 [&>span]:truncate w-[140px] shrink-0">
           <SelectValue placeholder="Pick a repo" />
         </SelectTrigger>
         <SelectContent>
@@ -119,8 +124,9 @@ export function NewSessionDialog({
           )}
         </SelectContent>
       </Select>
-      <Button onClick={create} disabled={!repo} size="sm">
-        <Plus className="h-3.5 w-3.5" /> New session
+      <Button onClick={create} disabled={!repo} size="sm" title={repo ? `New session in ${repo}` : "Pick a repo first"}>
+        <Plus className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">New session</span>
       </Button>
     </div>
   );
