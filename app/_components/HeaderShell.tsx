@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { MainNav, type MainNavSection } from "./MainNav";
 import { useTheme, type ThemePref } from "./ThemeProvider";
+import { UserMenu } from "./UserMenu";
 import { Button } from "./ui/button";
 import {
   DropdownMenu,
@@ -98,6 +99,7 @@ export function HeaderShell({
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+        <UserMenu />
       </div>
     </header>
   );

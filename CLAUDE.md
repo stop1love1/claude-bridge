@@ -31,9 +31,12 @@ A child agent must therefore **not** run `git checkout`, `git commit`, or `git p
 SLUG=$(pwd | sed 's#[\\/:.]#-#g')
 ls -t ~/.claude/projects/${SLUG}/*.jsonl | head -1
 
-# 2. POST to the bridge (idempotent, updates in place if already registered)
+# 2. POST to the bridge (idempotent, updates in place if already registered).
+#    The `x-bridge-internal-token` header lets spawned children bypass the
+#    web UI's auth middleware — it's already in the env as $BRIDGE_INTERNAL_TOKEN.
 curl -s -X POST http://localhost:7777/api/tasks/<task-id>/link \
   -H "content-type: application/json" \
+  -H "x-bridge-internal-token: $BRIDGE_INTERNAL_TOKEN" \
   -d "$(jq -n --arg sid '<uuid-from-step-1>' --arg repo "$(basename "$PWD")" \
     '{sessionId:$sid, role:"coordinator", repo:$repo, status:"running"}')"
 ```

@@ -12,21 +12,28 @@ export const dynamic = "force-dynamic";
 interface LinkInfo { taskId: string; role: string }
 
 /**
- * Build an index of session-id → {taskId, role} by scanning every
- * sessions/<task-id>/meta.json on disk.
+ * Build an index of session-id → {taskId, role} AND a parallel index
+ * of taskId → taskTitle so the route can override session previews with
+ * the task title (in the operator's language) when the session is a
+ * child agent of a known task. Without this, child sessions show their
+ * system prompt's first line — invariably English ("You are a `coder`
+ * agent…") — even when the task body is Vietnamese, which made the
+ * sessions list desync from the tasks board.
  */
-function buildLinkIndex(): Map<string, LinkInfo> {
-  const idx = new Map<string, LinkInfo>();
-  if (!existsSync(SESSIONS_DIR)) return idx;
+function buildLinkIndex(): { links: Map<string, LinkInfo>; taskTitles: Map<string, string> } {
+  const links = new Map<string, LinkInfo>();
+  const taskTitles = new Map<string, string>();
+  if (!existsSync(SESSIONS_DIR)) return { links, taskTitles };
   for (const entry of readdirSync(SESSIONS_DIR)) {
     const dir = join(SESSIONS_DIR, entry);
     const meta = readMeta(dir);
     if (!meta) continue;
+    if (meta.taskTitle) taskTitles.set(meta.taskId, meta.taskTitle);
     for (const run of meta.runs) {
-      idx.set(run.sessionId, { taskId: meta.taskId, role: run.role });
+      links.set(run.sessionId, { taskId: meta.taskId, role: run.role });
     }
   }
-  return idx;
+  return { links, taskTitles };
 }
 
 /**
@@ -43,7 +50,7 @@ function buildLinkIndex(): Map<string, LinkInfo> {
  */
 export function GET() {
   const md = readFileSync(BRIDGE_MD, "utf8");
-  const links = buildLinkIndex();
+  const { links, taskTitles } = buildLinkIndex();
 
   const seen = new Set<string>();
   const repos: Array<{ name: string; path: string; isBridge: boolean }> = [];
@@ -85,6 +92,13 @@ export function GET() {
   for (const r of repos) {
     const projectDir = projectDirFor(r.path);
     for (const s of listSessions(projectDir)) {
+      const link = links.get(s.sessionId) ?? null;
+      // For sessions linked to a task, prefer the task title (in the
+      // operator's language) over the .jsonl preview (which is the
+      // system prompt's first line — always English). Free-chat /
+      // orphan sessions keep their preview.
+      const linkedTitle = link ? taskTitles.get(link.taskId) : undefined;
+      const preview = linkedTitle?.trim() ? linkedTitle : s.preview;
       out.push({
         sessionId: s.sessionId,
         repo: r.name,
@@ -93,8 +107,8 @@ export function GET() {
         isBridge: r.isBridge,
         mtime: s.mtime,
         size: s.size,
-        preview: s.preview,
-        link: links.get(s.sessionId) ?? null,
+        preview,
+        link,
       });
     }
   }

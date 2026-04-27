@@ -23,11 +23,12 @@ Decide the smallest, most appropriate agent team for this task, then orchestrate
 
 The bridge UI tracks every agent run in `sessions/<task-id>/meta.json`. **Your session ID is `{{SESSION_ID}}`** — the bridge passed it via `--session-id`, your transcript is being written to `~/.claude/projects/<slug-of-cwd>/{{SESSION_ID}}.jsonl`, and the bridge has already pre-registered a run with this exact uuid + `status: "running"` in `sessions/{{TASK_ID}}/meta.json`. **Do not** invent a new uuid or hunt for one in `~/.claude/projects/...` — use `{{SESSION_ID}}` literally below.
 
-Confirm registration (idempotent — if you're already in `meta.json` it just updates in place):
+Confirm registration (idempotent — if you're already in `meta.json` it just updates in place). The `x-bridge-internal-token` header is the per-install bypass for the bridge's auth middleware; it's already in your env as `$BRIDGE_INTERNAL_TOKEN`:
 
 ```bash
 curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/link \
   -H "content-type: application/json" \
+  -H "x-bridge-internal-token: $BRIDGE_INTERNAL_TOKEN" \
   -d '{"sessionId":"{{SESSION_ID}}","role":"coordinator","repo":"{{BRIDGE_FOLDER}}","status":"running"}'
 ```
 
@@ -36,6 +37,7 @@ When you finish, PATCH yourself to `done` (or `failed`) by re-POSTing the same b
 ```bash
 curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/link \
   -H "content-type: application/json" \
+  -H "x-bridge-internal-token: $BRIDGE_INTERNAL_TOKEN" \
   -d '{"sessionId":"{{SESSION_ID}}","role":"coordinator","repo":"{{BRIDGE_FOLDER}}","status":"done"}'
 ```
 

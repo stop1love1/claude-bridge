@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e .env next dev",
+    "dev": "bun scripts/run.ts development next dev",
     "build": "next build",
-    "start": "next start --port 7777",
-    "serve": "next build && next start --port 7777",
+    "start": "bun scripts/run.ts production next start",
+    "serve": "next build && bun run start",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "telegram:login": "bun scripts/telegram-login.ts"
+    "telegram:login": "bun scripts/telegram-login.ts",
+    "set:password": "bun scripts/set-password.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -38,7 +39,6 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "dotenv-cli": "^11.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",

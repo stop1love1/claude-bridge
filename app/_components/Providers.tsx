@@ -4,6 +4,7 @@ import { ToastProvider } from "./Toasts";
 import { ConfirmProvider } from "./ConfirmProvider";
 import { TooltipProvider } from "./ui/tooltip";
 import { ThemeProvider } from "./ThemeProvider";
+import { LoginApprovalDialog } from "./LoginApprovalDialog";
 
 /**
  * Client-side provider stack. Wraps every page once via the root layout
@@ -23,7 +24,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider>
       <TooltipProvider delayDuration={300}>
         <ToastProvider>
-          <ConfirmProvider>{children}</ConfirmProvider>
+          <ConfirmProvider>
+            {children}
+            {/* Polls /api/auth/approvals every ~3s and surfaces a
+                modal whenever ANOTHER device tries to sign in. Mounted
+                here (above ConfirmProvider's children) so it triggers
+                regardless of which page the operator is on. The
+                component itself returns null for unauthenticated
+                callers — the polled endpoint 401s, dialog never opens. */}
+            <LoginApprovalDialog />
+          </ConfirmProvider>
         </ToastProvider>
       </TooltipProvider>
     </ThemeProvider>

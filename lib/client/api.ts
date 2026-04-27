@@ -253,4 +253,20 @@ export const api = {
       description: string;
       reason?: string;
     }>(`/apps/${encodeURIComponent(name)}/scan`, { method: "POST" }),
+  authDevices: () =>
+    req<{
+      currentDeviceId: string | null;
+      devices: Array<{
+        id: string;
+        label: string | null;
+        createdAt: string;
+        lastSeenAt: string;
+        expiresAt: string;
+        isCurrent: boolean;
+      }>;
+    }>(`/auth/devices`),
+  revokeAuthDevice: (id: string) =>
+    req<{ ok: boolean }>(`/auth/devices?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 };

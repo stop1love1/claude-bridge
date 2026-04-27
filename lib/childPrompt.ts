@@ -383,6 +383,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "```bash",
     `curl -s -X POST ${BRIDGE_URL}/api/tasks/${taskId}/link \\`,
     `  -H "content-type: application/json" \\`,
+    `  -H "x-bridge-internal-token: $BRIDGE_INTERNAL_TOKEN" \\`,
     `  -d '{"sessionId":"${childSessionId}","role":"${role}","repo":"${repo}","status":"running"}'`,
     "```",
     "",

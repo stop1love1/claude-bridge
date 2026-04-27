@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { registerChild } from "./spawnRegistry";
 import { emitAlive, emitPartial, emitStatus } from "./sessionEvents";
 import { BRIDGE_PORT, BRIDGE_URL } from "./paths";
+import { getOrCreateInternalToken } from "./auth";
 
 /**
  * `claude` binary path. Defaults to the bare command so the OS resolves
@@ -258,10 +259,16 @@ function spawnClaudeWithStdin(
     env: (() => {
       const { BRIDGE_AUTO_APPROVE: _drop, ...rest } = process.env;
       void _drop;
+      // BRIDGE_INTERNAL_TOKEN: lets the child's permission hook + the
+      // coordinator template's self-register curl bypass the auth
+      // middleware without a browser cookie. Empty string when auth
+      // isn't configured yet (the middleware short-circuits in that
+      // case anyway, so children don't need to authenticate).
       return {
         ...rest,
         BRIDGE_PORT: String(BRIDGE_PORT),
         BRIDGE_URL,
+        BRIDGE_INTERNAL_TOKEN: getOrCreateInternalToken(),
         ...autoApproveEnv(settings),
       };
     })(),

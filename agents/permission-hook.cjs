@@ -35,6 +35,15 @@ const BRIDGE_HOST = process.env.BRIDGE_HOST ?? "127.0.0.1";
 const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 7777);
 const POLL_INTERVAL_MS = 500;
 const TOTAL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes — matches hook timeout in settings.json (360s safety margin).
+// Spawn-time bypass token. The bridge's auth middleware accepts this in
+// `x-bridge-internal-token` so child agents never need a browser cookie
+// to reach the API. When unset (auth is not configured), the middleware
+// allows requests anyway so the empty header is harmless.
+const INTERNAL_TOKEN = process.env.BRIDGE_INTERNAL_TOKEN ?? "";
+
+function authHeaders() {
+  return INTERNAL_TOKEN ? { "x-bridge-internal-token": INTERNAL_TOKEN } : {};
+}
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -59,6 +68,7 @@ function postJson(path, body) {
         headers: {
           "content-type": "application/json",
           "content-length": payload.length,
+          ...authHeaders(),
         },
         timeout: 5000,
       },
@@ -84,6 +94,7 @@ function getJson(path) {
         port: BRIDGE_PORT,
         method: "GET",
         path,
+        headers: { ...authHeaders() },
         timeout: 5000,
       },
       (res) => {

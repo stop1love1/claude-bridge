@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Send, Settings as SettingsIcon, Sparkles, User } from "lucide-react";
+import { Send, Settings as SettingsIcon, ShieldCheck, Sparkles, Trash2, User } from "lucide-react";
 import { api } from "@/lib/client/api";
 import { HeaderShell } from "../_components/HeaderShell";
 import { Button } from "../_components/ui/button";
@@ -61,6 +61,7 @@ function SettingsPage() {
           </p>
 
           <DetectSettingsSection />
+          <TrustedDevicesSection />
           <TelegramSettingsSection />
           <TelegramUserSection />
         </div>
@@ -574,6 +575,145 @@ function TelegramUserSection() {
               Clear
             </Button>
           </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface TrustedDeviceRow {
+  id: string;
+  label: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  /** True when this row matches the cookie the operator is signed in with. */
+  isCurrent?: boolean;
+}
+
+function TrustedDevicesSection() {
+  const [devices, setDevices] = useState<TrustedDeviceRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const toast = useToast();
+
+  const reload = async () => {
+    try {
+      const r = await api.authDevices();
+      setDevices(r.devices);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await api.authDevices();
+        if (!cancelled) setDevices(r.devices);
+      } catch (e) {
+        if (!cancelled) toast("error", (e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [toast]);
+
+  const revoke = async (id: string) => {
+    // Defensive: the trash button is already hidden for the current
+    // device, but a stale list could still let one slip through.
+    // Refusing here matches the server-side guard so the UX is
+    // consistent regardless of which path raced.
+    const target = devices.find((d) => d.id === id);
+    if (target?.isCurrent) {
+      toast(
+        "error",
+        "Can't revoke the current device — use Sign Out instead.",
+      );
+      return;
+    }
+    setRevoking(id);
+    try {
+      await api.revokeAuthDevice(id);
+      toast("info", "Device revoked. Its next page load will redirect to login.");
+      await reload();
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setRevoking(null);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <ShieldCheck size={14} className="text-primary" />
+        <h3 className="text-sm font-semibold">Trusted devices</h3>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-4">
+        Browsers where you ticked &ldquo;Trust this device&rdquo; at sign-in.
+        Each entry holds a 30-day session cookie. Revoke any you don&apos;t
+        recognize — the next request from that device will be rejected
+        and bounced back to <code className="font-mono">/login</code>.
+      </p>
+
+      {loading ? (
+        <ListSkeleton rows={2} />
+      ) : devices.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">
+          No trusted devices. Tick &ldquo;Trust this device&rdquo; on the
+          login page to remember a browser.
+        </p>
+      ) : (
+        <div className="grid gap-2">
+          {devices.map((d) => (
+            <div
+              key={d.id}
+              className={`rounded-md border px-3 py-2 flex items-center gap-3 ${
+                d.isCurrent
+                  ? "border-primary/40 bg-primary/5"
+                  : "border-border bg-background"
+              }`}
+            >
+              <ShieldCheck size={14} className="text-primary shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-medium truncate">
+                    {d.label ?? "Unnamed device"}
+                  </span>
+                  {d.isCurrent ? (
+                    <span className="inline-flex items-center px-1.5 py-px rounded-full bg-primary/15 text-primary text-[9px] font-medium uppercase tracking-wide">
+                      This device
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  Last seen {new Date(d.lastSeenAt).toLocaleString()} · expires{" "}
+                  {new Date(d.expiresAt).toLocaleDateString()}
+                </div>
+              </div>
+              {d.isCurrent ? null : (
+                // Suppress the trash entirely for the current device — clicking
+                // it would either 400 (server guard) or, before that landed,
+                // kick off a /login → / reload loop. The "This device" badge
+                // beside the label is enough to signal why no trash icon.
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  onClick={() => revoke(d.id)}
+                  disabled={revoking === d.id}
+                  title="Revoke this device"
+                  className="text-fg-dim hover:text-destructive"
+                >
+                  <Trash2 size={13} />
+                </Button>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </section>
