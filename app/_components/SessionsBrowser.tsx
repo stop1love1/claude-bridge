@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { Repo, SessionSummary } from "@/lib/client/types";
 import {
   ChevronDown, ChevronRight, FolderClosed, FolderOpen, GitBranch,
-  Link as LinkIcon, Link2Off, Search, X, Trash2, Terminal,
+  Search, X, Trash2, Terminal, CheckSquare,
 } from "lucide-react";
 import { relativeTime } from "@/lib/client/time";
 import { EmptyState } from "./ui/empty-state";
@@ -26,8 +26,8 @@ export function SessionsBrowser({
   activeSessionId,
   onQueryChange,
   onSelect,
-  onLink,
   onDelete,
+  onBulkDelete,
   repos,
   defaultRepo,
   onCreateSession,
@@ -38,14 +38,19 @@ export function SessionsBrowser({
   activeSessionId: string | null;
   onQueryChange: (q: string) => void;
   onSelect: (s: SessionSummary) => void;
-  onLink: (s: SessionSummary) => void;
   onDelete?: (s: SessionSummary) => void;
+  onBulkDelete?: (sessions: SessionSummary[]) => void;
   repos: Repo[];
   defaultRepo?: string;
   onCreateSession: (args: { repo: string }) => void;
   newSessionRef?: React.MutableRefObject<(() => void) | null>;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Bulk-delete mode is opt-in: the operator clicks the toolbar toggle
+  // to reveal checkboxes + the action bar. Default view stays clean
+  // with per-row delete buttons only.
+  const [deleteMode, setDeleteMode] = useState(false);
 
   const q = query.trim().toLowerCase();
   const filtered = q
@@ -74,6 +79,31 @@ export function SessionsBrowser({
   const toggleGroup = (path: string) =>
     setCollapsed((prev) => ({ ...prev, [path]: !prev[path] }));
 
+  const toggleOne = (sessionId: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+
+  const setGroupSelected = (groupSessions: SessionSummary[], on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const s of groupSessions) {
+        if (on) next.add(s.sessionId);
+        else next.delete(s.sessionId);
+      }
+      return next;
+    });
+
+  const exitDeleteMode = () => {
+    setDeleteMode(false);
+    setSelected(new Set());
+  };
+
+  const selectedSessions = sessions.filter((s) => selected.has(s.sessionId));
+
   return (
     <aside className="w-80 shrink-0 border-r border-border bg-card overflow-y-auto flex flex-col">
       <div className="p-2 border-b border-border sticky top-0 bg-card z-10 space-y-2">
@@ -83,25 +113,68 @@ export function SessionsBrowser({
           onCreate={onCreateSession}
           openRef={newSessionRef}
         />
-        <div className="relative">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-dim" />
-          <input
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            placeholder="Search sessions…"
-            className="w-full bg-background border border-border rounded-md pl-8 pr-7 py-1.5 text-xs focus:outline-none focus:border-primary"
-          />
-          {query && (
+        <div className="flex items-center gap-1.5">
+          <div className="relative flex-1 min-w-0">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-dim" />
+            <input
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              placeholder="Search sessions…"
+              className="w-full bg-background border border-border rounded-md pl-8 pr-7 py-1.5 text-xs focus:outline-none focus:border-primary"
+            />
+            {query && (
+              <button
+                onClick={() => onQueryChange("")}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground p-0.5"
+                aria-label="Clear"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          {onBulkDelete && (
             <button
-              onClick={() => onQueryChange("")}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground p-0.5"
-              aria-label="Clear"
+              type="button"
+              onClick={() => deleteMode ? exitDeleteMode() : setDeleteMode(true)}
+              className={`shrink-0 inline-flex items-center justify-center h-[30px] w-[30px] rounded-md border text-xs ${
+                deleteMode
+                  ? "border-destructive/50 bg-destructive/10 text-destructive"
+                  : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+              }`}
+              title={deleteMode ? "Exit bulk-delete mode" : "Bulk delete"}
+              aria-label={deleteMode ? "Exit bulk-delete mode" : "Enter bulk-delete mode"}
+              aria-pressed={deleteMode}
             >
-              <X size={12} />
+              <CheckSquare size={13} />
             </button>
           )}
         </div>
       </div>
+
+      {deleteMode && onBulkDelete && (
+        <div className="px-2 py-1.5 border-b border-border bg-destructive/5 flex items-center gap-2 text-xs sticky top-[88px] z-10">
+          <CheckSquare size={12} className="text-destructive shrink-0" />
+          <span className="text-foreground tabular-nums">
+            {selected.size} selected
+          </span>
+          <button
+            type="button"
+            onClick={() => onBulkDelete(selectedSessions)}
+            disabled={selected.size === 0}
+            className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            title="Delete selected sessions"
+          >
+            <Trash2 size={11} /> Delete
+          </button>
+          <button
+            type="button"
+            onClick={exitDeleteMode}
+            className="px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-accent"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       <div className="p-2 flex-1">
         {filtered.length === 0 ? (
@@ -117,32 +190,53 @@ export function SessionsBrowser({
             const Folder = isCollapsed ? FolderClosed : FolderOpen;
             const Chevron = isCollapsed ? ChevronRight : ChevronDown;
             const branch = list[0]?.branch ?? null;
+            const groupSelectedCount = list.reduce(
+              (n, s) => n + (selected.has(s.sessionId) ? 1 : 0),
+              0,
+            );
+            const allSelected = groupSelectedCount === list.length;
+            const someSelected = groupSelectedCount > 0 && !allSelected;
             return (
             <div key={path} className="mb-2">
-              <button
-                type="button"
-                onClick={() => toggleGroup(path)}
-                className="w-full flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-accent text-left"
+              <div
+                className="group/header w-full flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-accent"
                 title={branch ? `${path}\n\non branch ${branch}` : path}
               >
-                <Chevron size={11} className="text-fg-dim shrink-0" />
-                <Folder size={11} className="text-primary shrink-0" />
-                <span className="flex-1 min-w-0 font-mono text-[10.5px] text-muted-foreground truncate">
-                  {displayPath(path)}
-                </span>
-                {branch && (
-                  <span
-                    className="inline-flex items-center gap-0.5 text-[9.5px] text-info font-mono shrink-0 max-w-[80px] truncate"
-                    title={`branch: ${branch}`}
-                  >
-                    <GitBranch size={9} />
-                    {branch}
-                  </span>
+                {deleteMode && onBulkDelete && (
+                  <input
+                    type="checkbox"
+                    aria-label={allSelected ? "Deselect all in group" : "Select all in group"}
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setGroupSelected(list, e.target.checked)}
+                    className="h-3 w-3 accent-destructive cursor-pointer shrink-0"
+                  />
                 )}
-                <span className="text-[10px] text-fg-dim tabular-nums shrink-0">
-                  {list.length}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(path)}
+                  className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
+                >
+                  <Chevron size={11} className="text-fg-dim shrink-0" />
+                  <Folder size={11} className="text-primary shrink-0" />
+                  <span className="flex-1 min-w-0 font-mono text-[10.5px] text-muted-foreground truncate">
+                    {displayPath(path)}
+                  </span>
+                  {branch && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-[9.5px] text-info font-mono shrink-0 max-w-[80px] truncate"
+                      title={`branch: ${branch}`}
+                    >
+                      <GitBranch size={9} />
+                      {branch}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-fg-dim tabular-nums shrink-0">
+                    {list.length}
+                  </span>
+                </button>
+              </div>
               {!isCollapsed && (
               <ul className="pl-3 mt-0.5">
                 {list.map((s) => (
@@ -154,8 +248,18 @@ export function SessionsBrowser({
                           : "border border-transparent hover:bg-accent"
                       }`}
                     >
+                      {deleteMode && onBulkDelete && (
+                        <input
+                          type="checkbox"
+                          aria-label="Select session"
+                          checked={selected.has(s.sessionId)}
+                          onChange={() => toggleOne(s.sessionId)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-3 w-3 accent-destructive cursor-pointer shrink-0 ml-1.5"
+                        />
+                      )}
                       <button
-                        onClick={() => onSelect(s)}
+                        onClick={() => deleteMode ? toggleOne(s.sessionId) : onSelect(s)}
                         className="flex-1 text-left px-2 py-1 min-w-0"
                       >
                         <div className="text-xs text-foreground line-clamp-1">
@@ -183,16 +287,8 @@ export function SessionsBrowser({
                           </span>
                         </div>
                       </button>
-                      <div className="flex items-center gap-0.5 pr-1 shrink-0">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onLink(s); }}
-                          className="p-1 rounded text-fg-dim hover:text-primary hover:bg-primary/10"
-                          title={s.link ? "Re-link" : "Link to task"}
-                          aria-label={s.link ? "Re-link session" : "Link session to task"}
-                        >
-                          {s.link ? <Link2Off size={11} /> : <LinkIcon size={11} />}
-                        </button>
-                        {onDelete && (
+                      {!deleteMode && onDelete && (
+                        <div className="flex items-center gap-0.5 pr-1 shrink-0">
                           <button
                             onClick={(e) => { e.stopPropagation(); onDelete(s); }}
                             className="p-1 rounded text-fg-dim hover:text-destructive hover:bg-destructive/10"
@@ -201,8 +297,8 @@ export function SessionsBrowser({
                           >
                             <Trash2 size={11} />
                           </button>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   </li>
                 ))}

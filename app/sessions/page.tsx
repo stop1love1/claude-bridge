@@ -4,11 +4,10 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { PanelLeftOpen } from "lucide-react";
 import { api } from "@/lib/client/api";
-import type { Repo, SessionSummary, Task } from "@/lib/client/types";
+import type { Repo, SessionSummary } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { SessionLog } from "../_components/SessionLog";
 import { SessionsBrowser } from "../_components/SessionsBrowser";
-import { LinkSessionDialog } from "../_components/LinkSessionDialog";
 import { useToast } from "../_components/Toasts";
 import { useConfirm } from "../_components/ConfirmProvider";
 import { Badge } from "../_components/ui/badge";
@@ -27,12 +26,10 @@ function SessionsPageInner() {
   const confirm = useConfirm();
 
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  const linkDialogRef = useRef<((s: SessionSummary) => void) | null>(null);
   const newSessionRef = useRef<(() => void) | null>(null);
 
   // The active run is reconstructed from URL params on every render so a
@@ -80,7 +77,6 @@ function SessionsPageInner() {
 
   useEffect(() => {
     api.repos().then(setRepos).catch(() => {});
-    api.tasks().then(setTasks).catch(() => {});
     refreshSessions();
   }, [refreshSessions]);
 
@@ -144,17 +140,39 @@ function SessionsPageInner() {
     [repos, router, setActiveRun],
   );
 
-  const handleLink = async (args: {
-    taskId: string; sessionId: string; repo: string; role: string;
-  }) => {
-    try {
-      await api.linkSessionToTask(args.taskId, {
-        sessionId: args.sessionId, role: args.role, repo: args.repo,
-      });
-      toast("success", `Linked to ${args.taskId}`);
-      await refreshSessions();
-    } catch (e) { toast("error", (e as Error).message); throw e; }
-  };
+  const handleBulkDelete = useCallback(async (list: SessionSummary[]) => {
+    if (list.length === 0) return;
+    const linkedCount = list.filter((s) => s.link).length;
+    const linkedNote = linkedCount > 0
+      ? `${linkedCount} of these are linked to tasks — links will be removed.\n\n`
+      : "";
+    const ok = await confirm({
+      title: `Delete ${list.length} session${list.length > 1 ? "s" : ""}?`,
+      description: `${linkedNote}The .jsonl files are removed from ~/.claude/projects/. Bridge task entries stay.`,
+      confirmLabel: `Delete ${list.length}`,
+      destructive: true,
+    });
+    if (!ok) return;
+    // Run deletes in parallel — each hits a different .jsonl on disk so
+    // there's no contention. allSettled so a single failure doesn't
+    // strand the rest of the batch.
+    const results = await Promise.allSettled(
+      list.map((s) => api.deleteSession(s.sessionId, s.repo)),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    const succeeded = results.length - failed;
+    if (failed === 0) {
+      toast("info", `Deleted ${succeeded} session${succeeded > 1 ? "s" : ""}`);
+    } else if (succeeded === 0) {
+      toast("error", `Failed to delete ${failed} session${failed > 1 ? "s" : ""}`);
+    } else {
+      toast("error", `Deleted ${succeeded}, ${failed} failed`);
+    }
+    if (activeRun && list.some((s) => s.sessionId === activeRun.sessionId)) {
+      setActiveRun(null);
+    }
+    await refreshSessions();
+  }, [activeRun, refreshSessions, toast, confirm, setActiveRun]);
 
   const handleDelete = useCallback(async (s: SessionSummary) => {
     const linkedNote = s.link ? `Currently linked to ${s.link.taskId} (${s.link.role}). The link will be removed.\n\n` : "";
@@ -243,8 +261,8 @@ function SessionsPageInner() {
                 activeSessionId={activeRun?.sessionId ?? null}
                 onQueryChange={setQuery}
                 onSelect={handleSelectSession}
-                onLink={(s) => linkDialogRef.current?.(s)}
                 onDelete={handleDelete}
+                onBulkDelete={handleBulkDelete}
                 repos={repos}
                 defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
                 onCreateSession={handleCreate}
@@ -257,13 +275,6 @@ function SessionsPageInner() {
           <SessionLog run={activeRun} repos={repos} />
         </div>
       </main>
-
-      <LinkSessionDialog
-        session={null}
-        tasks={tasks}
-        openRef={linkDialogRef}
-        onLink={handleLink}
-      />
     </div>
   );
 }

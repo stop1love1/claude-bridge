@@ -208,6 +208,38 @@ function Dashboard() {
       `${removed} deleted${failed ? `, ${failed} failed` : ""}`);
   }, [confirm, refreshTasks, refreshAllMeta, toast]);
 
+  const handleMoveTask = useCallback(
+    async (id: string, section: import("@/lib/client/types").TaskSection) => {
+      // Optimistic update so the card visibly snaps into the new column
+      // before the network round-trip lands; refreshTasks() reconciles
+      // a few hundred ms later.
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                section,
+                checked: section === "DONE — not yet archived",
+              }
+            : t,
+        ),
+      );
+      try {
+        await api.updateTask(id, {
+          section,
+          checked: section === "DONE — not yet archived",
+        });
+        await refreshTasks();
+        await refreshAllMeta();
+      } catch (e) {
+        // Roll back by re-fetching the canonical state.
+        await refreshTasks();
+        toast("error", (e as Error).message);
+      }
+    },
+    [refreshTasks, refreshAllMeta, toast],
+  );
+
   const handleBulkMove = useCallback(async (ids: string[], section: import("@/lib/client/types").TaskSection) => {
     let moved = 0;
     let failed = 0;
@@ -337,6 +369,7 @@ function Dashboard() {
           onDeleteTask={handleDeleteTask}
           onBulkDelete={handleBulkDelete}
           onBulkMove={handleBulkMove}
+          onMoveTask={handleMoveTask}
         />
       </main>
 

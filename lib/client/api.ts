@@ -58,14 +58,6 @@ export const api = {
       `/sessions/${sessionId}/kill`,
       { method: "POST" },
     ),
-  linkSessionToTask: (
-    taskId: string,
-    body: { sessionId: string; role: string; repo: string },
-  ) =>
-    req<{ ok: true }>(`/tasks/${taskId}/link`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
   files: (repo: string, query: string) =>
     req<Array<{ rel: string; path: string }>>(
       `/repos/${encodeURIComponent(repo)}/files?q=${encodeURIComponent(query)}`,

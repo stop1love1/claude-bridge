@@ -48,17 +48,23 @@ function GridCard({
   meta,
   active,
   selected,
+  draggable,
   onOpen,
   onDelete,
   onToggleSelect,
+  onDragStart,
+  onDragEnd,
 }: {
   task: Task;
   meta: Meta | undefined;
   active: boolean;
   selected: boolean;
+  draggable?: boolean;
   onOpen: () => void;
   onDelete: () => void;
   onToggleSelect: () => void;
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
   const runs = meta?.runs ?? [];
   const roleSet = Array.from(new Set(runs.map((r) => r.role)));
@@ -75,7 +81,12 @@ function GridCard({
   return (
     <div
       onClick={onOpen}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       className={`group relative rounded-lg border p-3 cursor-pointer transition-all bg-card ${
+        draggable ? "active:cursor-grabbing" : ""
+      } ${
         selected
           ? "border-primary/70 ring-1 ring-primary/40"
           : active
@@ -166,6 +177,21 @@ const SECTION_ACCENT: Record<TaskSection, string> = {
   "DONE — not yet archived": "border-success/40",
 };
 
+// Per-section copy for empty Kanban columns. Generic "empty" reads the
+// same in all four states; tailored hints make TODO and BLOCKED feel
+// purposeful and tell the operator what dropping a card here means.
+const SECTION_EMPTY: Record<TaskSection, { title: string; hint: string }> = {
+  TODO:    { title: "Nothing queued",  hint: "Drag a card here, or quick-add above." },
+  DOING:   { title: "Idle",            hint: "Drag a card here to mark it in-progress." },
+  BLOCKED: { title: "Nothing blocked", hint: "Drag a card here when work can't proceed." },
+  "DONE — not yet archived": {
+    title: "Nothing shipped yet",
+    hint: "Tick the checkbox on a card to land it here.",
+  },
+};
+
+const DND_MIME = "application/x-bridge-task-id";
+
 export function TaskGrid({
   tasks,
   metaByTask,
@@ -176,6 +202,7 @@ export function TaskGrid({
   onDeleteTask,
   onBulkDelete,
   onBulkMove,
+  onMoveTask,
 }: {
   tasks: Task[];
   metaByTask: Map<string, Meta>;
@@ -186,11 +213,16 @@ export function TaskGrid({
   onDeleteTask: (id: string) => void;
   onBulkDelete?: (ids: string[]) => Promise<void> | void;
   onBulkMove?: (ids: string[], section: TaskSection) => Promise<void> | void;
+  onMoveTask?: (id: string, section: TaskSection) => Promise<void> | void;
 }) {
   const [quick, setQuick] = useState("");
   const [layout, setLayout] = useState<"grid" | "kanban">("grid");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Tracks which Kanban column is currently the drop target so we can
+  // highlight it and which task is being dragged so we can dim it.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverSection, setDragOverSection] = useState<TaskSection | null>(null);
 
   // Hydrate layout pref after mount so SSR doesn't flash a different
   // arrangement than the user's last choice.
@@ -266,18 +298,39 @@ export function TaskGrid({
     setQuick("");
   };
 
-  const renderCard = (t: Task) => (
-    <GridCard
-      key={t.id}
-      task={t}
-      meta={metaByTask.get(t.id)}
-      active={activeTaskId === t.id}
-      selected={selected.has(t.id)}
-      onOpen={() => onOpenTask(t.id)}
-      onDelete={() => onDeleteTask(t.id)}
-      onToggleSelect={() => toggleSelect(t.id)}
-    />
-  );
+  const handleCardDragStart = (id: string) => (e: React.DragEvent<HTMLDivElement>) => {
+    e.dataTransfer.setData(DND_MIME, id);
+    e.dataTransfer.effectAllowed = "move";
+    setDraggingId(id);
+  };
+  const handleCardDragEnd = () => {
+    setDraggingId(null);
+    setDragOverSection(null);
+  };
+
+  const renderCard = (t: Task, opts?: { kanban?: boolean }) => {
+    const isDragging = draggingId === t.id;
+    const draggable = !!(opts?.kanban && onMoveTask);
+    return (
+      <div
+        key={t.id}
+        className={isDragging ? "opacity-40" : ""}
+      >
+        <GridCard
+          task={t}
+          meta={metaByTask.get(t.id)}
+          active={activeTaskId === t.id}
+          selected={selected.has(t.id)}
+          draggable={draggable}
+          onOpen={() => onOpenTask(t.id)}
+          onDelete={() => onDeleteTask(t.id)}
+          onToggleSelect={() => toggleSelect(t.id)}
+          onDragStart={draggable ? handleCardDragStart(t.id) : undefined}
+          onDragEnd={draggable ? handleCardDragEnd : undefined}
+        />
+      </div>
+    );
+  };
 
   const handleBulkMove = async (section: TaskSection) => {
     if (!onBulkMove || selected.size === 0) return;
@@ -364,14 +417,53 @@ export function TaskGrid({
           </div>
         ) : layout === "grid" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-4">
-            {sorted.map(renderCard)}
+            {sorted.map((t) => renderCard(t))}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 p-4">
             {SECTION_ORDER.map((section) => {
               const list = groups.get(section) ?? [];
+              const isDropTarget = dragOverSection === section;
+              const empty = SECTION_EMPTY[section];
+              const onDragOver = onMoveTask
+                ? (e: React.DragEvent<HTMLDivElement>) => {
+                    if (!e.dataTransfer.types.includes(DND_MIME)) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dragOverSection !== section) setDragOverSection(section);
+                  }
+                : undefined;
+              const onDragLeave = onMoveTask
+                ? (e: React.DragEvent<HTMLDivElement>) => {
+                    // dragleave fires every time the cursor enters a child;
+                    // only clear the hover when the cursor truly leaves
+                    // the column wrapper.
+                    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+                    if (dragOverSection === section) setDragOverSection(null);
+                  }
+                : undefined;
+              const onDrop = onMoveTask
+                ? (e: React.DragEvent<HTMLDivElement>) => {
+                    e.preventDefault();
+                    const id = e.dataTransfer.getData(DND_MIME);
+                    setDragOverSection(null);
+                    setDraggingId(null);
+                    if (!id) return;
+                    const t = tasks.find((x) => x.id === id);
+                    if (!t || t.section === section) return;
+                    void onMoveTask(id, section);
+                  }
+                : undefined;
               return (
-                <div key={section} className={`flex flex-col rounded-lg border ${SECTION_ACCENT[section]} bg-secondary/30 min-h-[160px]`}>
+                <div
+                  key={section}
+                  onDragOver={onDragOver}
+                  onDragLeave={onDragLeave}
+                  onDrop={onDrop}
+                  className={`flex flex-col rounded-lg border-2 ${
+                    isDropTarget ? "border-primary bg-primary/10" : `${SECTION_ACCENT[section]} bg-secondary/30`
+                  } min-h-[160px] transition-colors`}
+                >
                   <div className="flex items-center justify-between px-3 py-2 border-b border-border/60">
                     <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground font-semibold">
                       {SECTION_LABEL[section]}
@@ -380,9 +472,12 @@ export function TaskGrid({
                   </div>
                   <div className="flex-1 p-2 space-y-2">
                     {list.length === 0 ? (
-                      <p className="text-[11px] text-fg-dim italic px-1 py-2 text-center">empty</p>
+                      <div className="px-2 py-6 text-center pointer-events-none select-none">
+                        <p className="text-[11px] font-medium text-muted-foreground">{empty.title}</p>
+                        <p className="text-[10px] text-fg-dim mt-0.5">{empty.hint}</p>
+                      </div>
                     ) : (
-                      list.map(renderCard)
+                      list.map((t) => renderCard(t, { kanban: true }))
                     )}
                   </div>
                 </div>
