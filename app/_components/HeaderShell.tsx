@@ -57,8 +57,11 @@ export function HeaderShell({
         />
         <h1 className="hidden md:inline text-sm font-semibold">Claude Bridge</h1>
       </Link>
-      <MainNav active={active} badges={badges} />
-      <div className="flex-1" />
+      {/* min-w-0 lets the scrollable nav shrink instead of pushing the
+          theme/user buttons off-screen on narrow viewports. */}
+      <div className="flex-1 min-w-0">
+        <MainNav active={active} badges={badges} />
+      </div>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button

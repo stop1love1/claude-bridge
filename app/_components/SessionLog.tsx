@@ -235,9 +235,13 @@ const MD_COMPONENTS = {
     // we just need to style the <code> inside.
     const lang = /language-([\w-]+)/.exec(className ?? "")?.[1];
     if (!lang) {
+      // `[overflow-wrap:anywhere]` lets long unbreakable paths
+      // (e.g. `apps/center/app/[locale]/finance/...tsx`) break at any
+      // character so they wrap inside the message bubble instead of
+      // shoving the chat scroll area wider than the mobile viewport.
       return (
         <code
-          className="px-1 py-px rounded bg-secondary border border-border text-[11px] font-mono"
+          className="px-1 py-px rounded bg-secondary border border-border text-[11px] font-mono [overflow-wrap:anywhere]"
           {...rest}
         >
           {children}
@@ -612,10 +616,30 @@ function ActivityRow({
  * react-markdown handles unterminated fences / links gracefully.
  */
 function StreamingAssistantRow({ text }: { text: string }) {
+  // Same scaffolding-tag suppression as the settled `TextBlockView`.
+  // Streaming text may be mid-tag (e.g. just `<task-no…`) — strip what
+  // we can and fall through; the final settled message will be cleaned
+  // again with the now-complete buffer.
+  const cleaned = stripSystemTags(text);
+  if (!cleaned.trim()) {
+    // Render only the caret while the buffer is pure scaffolding so the
+    // user sees the assistant is still typing without staring at raw
+    // protocol bytes.
+    return (
+      <div className="my-2 space-y-1">
+        <div className="leading-relaxed">
+          <span
+            className="inline-block w-1.5 h-3 align-text-bottom bg-foreground/70 animate-pulse"
+            aria-hidden="true"
+          />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="my-2 space-y-1">
       <div className="leading-relaxed">
-        <MarkdownText text={text} />
+        <MarkdownText text={cleaned} />
         <span
           className="inline-block w-1.5 h-3 ml-0.5 align-text-bottom bg-foreground/70 animate-pulse"
           aria-hidden="true"
@@ -630,9 +654,16 @@ function TextBlockView({ text, role }: { text: string; role: "user" | "assistant
   if (role === "user") {
     return <div className="whitespace-pre-wrap wrap-break-word">{text}</div>;
   }
+  // Assistants sometimes echo bridge scaffolding (e.g.
+  // `<task-notification><task-id>…</task-id>…</task-notification>` when
+  // they paraphrase a Monitor event the bridge fed them). Strip those
+  // before handing to MarkdownText so the user sees prose, not the
+  // protocol envelope. Only well-known tag names are stripped.
+  const cleaned = stripSystemTags(text);
+  if (!cleaned.trim()) return null;
   return (
     <div className="leading-relaxed">
-      <MarkdownText text={text} />
+      <MarkdownText text={cleaned} />
     </div>
   );
 }
@@ -1725,11 +1756,20 @@ function SessionLogInner({
           </DropdownMenu>
         </div>
       </header>
-      <div
-        ref={logRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto font-sans text-xs leading-relaxed"
-      >
+      {/* Wrapper holds the chat scroller AND its floating "Jump to latest"
+          pill. Anchoring the pill here (instead of on the outer section)
+          keeps it above the activity / composer rows below — otherwise
+          its `bottom-N` lands on top of the ActivityRow's `border-t`
+          and looks like a strikethrough. `overflow-x-hidden` is the
+          belt to inline-code's suspenders: even if a renderer-quirk
+          slips a non-wrapping span through, it gets clipped instead of
+          forcing the whole pane to scroll sideways on mobile. */}
+      <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+        <div
+          ref={logRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto overflow-x-hidden font-sans text-xs leading-relaxed"
+        >
         {pinnedUserText && (
           <div className="sticky top-0 z-10 backdrop-blur supports-backdrop-filter:bg-card/85 border-b border-border px-3 py-1.5">
             <p className="text-[11.5px] text-foreground line-clamp-2 wrap-break-word">
@@ -1790,15 +1830,16 @@ function SessionLogInner({
             </>
           )}
         </div>
+        </div>
+        {!autoScroll && visibleEntries.length > 0 && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-3 right-4 z-20 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary text-primary-foreground text-[11px] font-medium shadow-lg hover:bg-primary/90 animate-slide-in"
+          >
+            <ArrowDown size={11} /> Jump to latest
+          </button>
+        )}
       </div>
-      {!autoScroll && visibleEntries.length > 0 && (
-        <button
-          onClick={scrollToBottom}
-          className="absolute bottom-20 right-4 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary text-primary-foreground text-[11px] font-medium shadow-lg hover:bg-primary/90 animate-slide-in"
-        >
-          <ArrowDown size={11} /> Jump to latest
-        </button>
-      )}
 
       <ActivityRow activity={activity} />
 

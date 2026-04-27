@@ -8,10 +8,21 @@ The wrapper in `lib/childPrompt.ts` (function `buildChildPrompt`) already inject
 # <role> @ <repo>
 
 ## Verdict
-DONE | BLOCKED | PARTIAL — one line, no extra prose. If BLOCKED, the next section MUST start with `BLOCK: <reason>` so the bridge auto-retry path can read it.
+DONE | BLOCKED | PARTIAL | NEEDS-DECISION — one line, no extra prose.
+- `BLOCKED` → next section MUST start with `BLOCK: <reason>` so the bridge auto-retry path can read it.
+- `NEEDS-DECISION` → use this when the task body is ambiguous, you face a multi-option choice, or you need approval before proceeding. **Do NOT guess your way past it** — exit with this verdict, fill `## Questions for the user`, and let the coordinator escalate. Skip `## Changed files` / `## How to verify` (write `(none — awaiting decision)`).
 
 ## Summary
 2–4 sentences in the user's language describing what shipped end-to-end. No raw logs.
+
+## Questions for the user
+(Only required when verdict is `NEEDS-DECISION`. Otherwise omit, or write `(none)`.)
+For each open decision, one bullet group:
+- **Q1:** the question in one sentence.
+  - Context: 1–2 lines on why it matters / what depends on it.
+  - Options: `(a) …` `(b) …` `(c) …` (concrete, mutually exclusive).
+  - Recommendation: which option you'd pick and why, in one sentence.
+The coordinator pastes these verbatim into the task summary so the user can answer in the bridge UI.
 
 ## Changed files
 - `<path>` — one-line description of the change.
@@ -26,7 +37,7 @@ Concrete steps a human can run to confirm the work: a curl, a test command, a sc
 (Either bullet list, or write `(none)` for both.)
 
 ## Notes for the coordinator
-Anything the coordinator should know when aggregating: cross-repo dependencies surfaced (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks worth filing.
+Anything the coordinator should know when aggregating: cross-repo dependencies surfaced (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks worth filing. If the verdict is `NEEDS-DECISION`, also note which question(s) are blocking the most work so the coordinator can prioritize.
 ```
 
 After writing the report, the child does NOT call any more tools. The last assistant message mirrors the report's `## Summary` section so the user sees it in the chat too.

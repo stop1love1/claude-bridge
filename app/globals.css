@@ -188,3 +188,9 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(4px); 
   to   { opacity: 1; transform: translateY(0); }
 }
 .animate-slide-in { animation: slide-in 0.18s ease-out; }
+
+/* Horizontal scroller without a visible scrollbar. Used by the mobile
+ * MainNav row so the nav can overflow sideways without the bar
+ * intruding on the 40px-tall header. */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

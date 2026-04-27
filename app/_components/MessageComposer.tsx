@@ -334,10 +334,16 @@ function MessageComposerInner({
   const composedMessage = draft + (interim ? (draft ? " " : "") + interim : "");
   const canSend = !!composedMessage.trim() || attachments.length > 0;
 
+  // Focus state lifts the composer's outer ring so the user sees a
+  // single bordered "card" instead of two stacked rectangles
+  // (textarea border + form border-t). When focused we also dim the
+  // top border so the card visually merges with the chat above.
+  const [focused, setFocused] = useState(false);
+
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); submit(); }}
-      className="border-t border-border p-2 relative"
+      className="px-2 pt-1.5 pb-2 relative bg-card"
     >
       <input
         ref={fileRef}
@@ -364,65 +370,128 @@ function MessageComposerInner({
         </div>
       )}
 
-      {/* Attachment chips above the textarea — image dimensions inline,
-          like Claude's composer. */}
-      {attachments.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5 mb-2">
-          {attachments.map((a) => (
-            <li
-              key={a.path}
-              className="group inline-flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-md bg-secondary border border-border text-[10.5px]"
-            >
-              {a.isImage ? (
-                <ImageIcon size={11} className="text-success" />
-              ) : (
-                <FileText size={11} className="text-muted-foreground" />
-              )}
-              <span className="font-medium truncate max-w-[180px]">{a.name}</span>
-              {a.isImage && a.width && a.height ? (
-                <span className="text-muted-foreground tabular-nums">
-                  {a.width}×{a.height}
-                </span>
-              ) : (
-                <span className="text-muted-foreground tabular-nums">
-                  {(a.size / 1024).toFixed(1)} KB
-                </span>
-              )}
+      {/* Composer card: textarea + chips + action row live inside one
+          rounded surface so the composer reads as a single control,
+          not three stacked widgets. Border lifts on focus. */}
+      <div
+        className={`rounded-xl border bg-background transition-colors ${
+          focused
+            ? "border-primary/60 shadow-[0_0_0_3px_rgba(106,168,255,0.12)]"
+            : "border-border"
+        }`}
+      >
+        {/* Attachment chips inside the card — image dimensions inline,
+            like Claude's composer. */}
+        {attachments.length > 0 && (
+          <ul className="flex flex-wrap gap-1.5 px-2 pt-2">
+            {attachments.map((a) => (
+              <li
+                key={a.path}
+                className="group inline-flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-md bg-secondary border border-border text-[10.5px]"
+              >
+                {a.isImage ? (
+                  <ImageIcon size={11} className="text-success" />
+                ) : (
+                  <FileText size={11} className="text-muted-foreground" />
+                )}
+                <span className="font-medium truncate max-w-[180px]">{a.name}</span>
+                {a.isImage && a.width && a.height ? (
+                  <span className="text-muted-foreground tabular-nums">
+                    {a.width}×{a.height}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground tabular-nums">
+                    {(a.size / 1024).toFixed(1)} KB
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.path)}
+                  className="text-muted-foreground hover:text-destructive p-0.5 rounded"
+                  aria-label="Remove attachment"
+                >
+                  <X size={10} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* Textarea with mic anchored at top-right corner, Claude-style. */}
+        <div className="relative">
+          <textarea
+            ref={taRef}
+            value={composedMessage}
+            onChange={(e) => { setInterim(""); setDraft(e.target.value); }}
+            onKeyDown={onKeyDown}
+            onSelect={detectMention}
+            onClick={detectMention}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            placeholder={
+              sending
+                ? "Queue another message…"
+                : `Message ${role}${repo ? ` @ ${repo}` : ""}…`
+            }
+            rows={1}
+            className={`w-full bg-transparent border-0 rounded-t-xl pl-3 pr-9 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none leading-relaxed placeholder:text-muted-foreground/70 ${
+              interim ? "italic text-muted-foreground" : ""
+            }`}
+            style={{ minHeight: `${MIN_H}px`, maxHeight: `${MAX_H}px` }}
+          />
+          <div className="absolute right-1.5 top-1.5">
+            <MicButton onTranscript={handleTranscript} />
+          </div>
+        </div>
+
+        {/* Action row inside the card so the whole control reads as one
+            surface. Subtle top divider only when content above is
+            non-trivial (textarea always is). */}
+        <div className="flex items-center gap-1.5 px-1.5 pb-1.5 pt-1">
+          <ActionsMenu
+            onPick={onActionPick}
+            disabled={{
+              clear: !onClearConversation,
+              rewind: !onRewindRequest,
+            }}
+          />
+          {uploading && <Loader2 size={12} className="text-muted-foreground animate-spin" />}
+
+          {/* Hint sits between the action menus and the send button on
+              wider viewports; hidden on mobile to keep the row tidy. */}
+          <span
+            className="hidden sm:inline text-[10px] text-muted-foreground/60 ml-1 truncate"
+            aria-hidden="true"
+          >
+            Enter to send · Shift+Enter newline · @ mention
+          </span>
+
+          {/* Mode pill + Send live on the right edge, like Claude. */}
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            <ChatSettingsMenu value={settings} onChange={setSettings} />
+            {isResponding ? (
               <button
                 type="button"
-                onClick={() => removeAttachment(a.path)}
-                className="text-muted-foreground hover:text-destructive p-0.5 rounded"
-                aria-label="Remove attachment"
+                onClick={handleStop}
+                disabled={stopping}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
+                title={stopping ? "Stopping…" : "Stop response"}
+                aria-label="Stop"
               >
-                <X size={10} />
+                {stopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} fill="currentColor" />}
               </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Textarea with mic anchored at top-right corner, Claude-style. */}
-      <div className="relative">
-        <textarea
-          ref={taRef}
-          value={composedMessage}
-          onChange={(e) => { setInterim(""); setDraft(e.target.value); }}
-          onKeyDown={onKeyDown}
-          onSelect={detectMention}
-          onClick={detectMention}
-          placeholder={
-            sending
-              ? "Queue another message…"
-              : `Message ${role}${repo ? ` @ ${repo}` : ""}…  (Enter send · Shift+Enter newline · @ mention)`
-          }
-          rows={1}
-          className={`w-full bg-background border border-border rounded-md pl-3 pr-9 py-1.5 text-xs resize-none focus:outline-none focus:border-primary leading-snug ${
-            interim ? "italic text-muted-foreground" : ""
-          }`}
-          style={{ minHeight: `${MIN_H}px`, maxHeight: `${MAX_H}px` }}
-        />
-        <div className="absolute right-1.5 top-1.5">
-          <MicButton onTranscript={handleTranscript} />
+            ) : (
+              <button
+                type="submit"
+                disabled={!canSend || sending}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
+                title={sending ? "Sending…" : "Send (Enter)"}
+                aria-label="Send"
+              >
+                {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -434,44 +503,6 @@ function MessageComposerInner({
           onClose={() => setMention(null)}
         />
       )}
-
-      <div className="flex items-center gap-1.5 mt-2">
-        <ActionsMenu
-          onPick={onActionPick}
-          disabled={{
-            clear: !onClearConversation,
-            rewind: !onRewindRequest,
-          }}
-        />
-        {uploading && <Loader2 size={12} className="text-muted-foreground animate-spin" />}
-
-        {/* Mode pill + Send live on the right edge, like Claude. */}
-        <div className="ml-auto flex items-center gap-1.5 shrink-0">
-          <ChatSettingsMenu value={settings} onChange={setSettings} />
-          {isResponding ? (
-            <button
-              type="button"
-              onClick={handleStop}
-              disabled={stopping}
-              className="inline-flex items-center justify-center h-7 w-7 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-              title={stopping ? "Stopping…" : "Stop response"}
-              aria-label="Stop"
-            >
-              {stopping ? <Loader2 size={12} className="animate-spin" /> : <Square size={12} fill="currentColor" />}
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!canSend || sending}
-              className="inline-flex items-center justify-center h-7 w-7 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-              title={sending ? "Sending…" : "Send (Enter)"}
-              aria-label="Send"
-            >
-              {sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-            </button>
-          )}
-        </div>
-      </div>
     </form>
   );
 }
