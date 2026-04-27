@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { verifyRequestAuth } from "@/lib/auth";
+import { verifyRequestAuthOrInternal } from "@/lib/auth";
 import { answerPendingLogin } from "@/lib/loginApprovals";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,12 @@ type Ctx = { params: Promise<{ id: string }> };
  * `GET /api/auth/login/pending/[id]` and then signs in if approved.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
-  if (!verifyRequestAuth(req)) {
+  // Accept either browser cookie (UI-mounted LoginApprovalDialog) OR
+  // the per-install internal-bypass token (terminal CLI script
+  // `bun scripts/approve-login.ts`). The CLI path reads the token
+  // straight from the local bridge.json — the operator never has to
+  // copy or expose the bypass secret.
+  if (!verifyRequestAuthOrInternal(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const { id } = await ctx.params;

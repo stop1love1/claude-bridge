@@ -179,6 +179,7 @@ export default function LoginPage() {
           />
         ) : pending ? (
           <PendingApprovalNotice
+            pendingId={pending.id}
             deviceLabel={pending.deviceLabel}
             expiresAt={pending.expiresAt}
             onCancel={() => {
@@ -378,13 +379,20 @@ function SetupForm({ onDone }: { onDone(): void }) {
 
 /**
  * Rendered while the new device is waiting for an existing trusted
- * device to approve the login request. Live countdown + cancel button.
+ * device to approve the login request. Shows:
+ *   - live countdown until the 3-min approval window expires
+ *   - the device label that was registered
+ *   - a copyable CLI command (`bun run approve:login <id>`) so the
+ *     operator can authorize from a terminal on the bridge host
+ *     without needing another browser session
  */
 function PendingApprovalNotice({
+  pendingId,
   deviceLabel,
   expiresAt,
   onCancel,
 }: {
+  pendingId: string;
   deviceLabel: string;
   expiresAt: string;
   onCancel(): void;
@@ -392,12 +400,25 @@ function PendingApprovalNotice({
   const [secondsLeft, setSecondsLeft] = useState<number>(() =>
     Math.max(0, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000)),
   );
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
     const handle = setInterval(() => {
       setSecondsLeft((s) => Math.max(0, s - 1));
     }, 1000);
     return () => clearInterval(handle);
   }, []);
+
+  const cliCommand = `bun run approve:login ${pendingId}`;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(cliCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard API may be unavailable on http: — fall through, the
+      // command stays selectable in the <code> block.
+    }
+  };
 
   return (
     <div className="grid gap-3 text-xs text-muted-foreground">
@@ -406,8 +427,8 @@ function PendingApprovalNotice({
         <div>
           <p className="font-medium">Waiting for approval</p>
           <p className="text-[11px] text-muted-foreground mt-1">
-            We sent the request to your already-signed-in device. Open Claude
-            Bridge there and tap <strong>Approve</strong>.
+            Either tap <strong>Approve</strong> on a signed-in device, OR run
+            the CLI below in a terminal on the bridge host.
           </p>
         </div>
       </div>
@@ -425,6 +446,28 @@ function PendingApprovalNotice({
             {(secondsLeft % 60).toString().padStart(2, "0")}
           </span>
         </div>
+      </div>
+      <div className="grid gap-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground/80">
+            Approve from terminal
+          </span>
+          <button
+            type="button"
+            onClick={copy}
+            className="text-[10px] text-primary hover:underline"
+          >
+            {copied ? "copied" : "copy"}
+          </button>
+        </div>
+        <code className="block w-full rounded border border-border bg-background px-2 py-1.5 font-mono text-[11px] text-foreground break-all select-all">
+          {cliCommand}
+        </code>
+        <p className="text-[10px] text-muted-foreground">
+          Add <code className="font-mono">--deny</code> to reject. Reads
+          the bypass token from{" "}
+          <code className="font-mono">~/.claude/bridge.json</code>.
+        </p>
       </div>
       <Button variant="outline" onClick={onCancel}>
         Cancel and try again

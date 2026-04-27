@@ -46,7 +46,19 @@ if (!mode || rest.length === 0) {
  */
 function loadEnv(file: string): void {
   if (!existsSync(file)) return;
-  const text = readFileSync(file, "utf8");
+  const buf = readFileSync(file);
+  // Strip a BOM if a Windows editor / PowerShell saved the file as
+  // UTF-16 LE / UTF-8 BOM. Without this, the first line parses as
+  // garbage like `﻿PORT=…` and silently fails to expose PORT
+  // to the spawned child.
+  let text: string;
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    text = buf.toString("utf16le").replace(/^﻿/, "");
+  } else if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    text = buf.toString("utf8").replace(/^﻿/, "");
+  } else {
+    text = buf.toString("utf8");
+  }
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;

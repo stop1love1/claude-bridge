@@ -376,6 +376,7 @@ export async function setOperatorCredentials(
  */
 export interface RequestLike {
   cookies: { get(name: string): { value: string } | undefined };
+  headers?: { get(name: string): string | null };
 }
 export function verifyRequestAuth(req: RequestLike): SessionPayload | null {
   const cfg = loadAuthConfig();
@@ -389,6 +390,59 @@ export function verifyRequestAuth(req: RequestLike): SessionPayload | null {
   // proxy uses.
   if (payload.did && !findTrustedDevice(payload.did)) return null;
   return payload;
+}
+
+/**
+ * Like `verifyRequestAuth` but ALSO honors the per-install internal
+ * bypass token (`INTERNAL_TOKEN_HEADER`). Use on routes a CLI helper
+ * needs to hit — `scripts/approve-login.ts` reads the token directly
+ * from `~/.claude/bridge.json#auth.internalToken` and calls back to
+ * the running bridge with it, so a terminal user can approve a
+ * pending device login without having a browser cookie.
+ *
+ * Same return shape as `verifyRequestAuth`. The internal-token path
+ * returns a synthetic payload (`sub: cfg.email, exp: ∞`) so callers
+ * that read `payload.sub` keep working uniformly.
+ */
+export function verifyRequestAuthOrInternal(
+  req: RequestLike,
+): SessionPayload | null {
+  const cookieAuthed = verifyRequestAuth(req);
+  if (cookieAuthed) return cookieAuthed;
+  const cfg = loadAuthConfig();
+  if (!cfg || !cfg.internalToken) return null;
+  const internal = req.headers?.get(INTERNAL_TOKEN_HEADER);
+  if (!internal || internal !== cfg.internalToken) return null;
+  return {
+    sub: cfg.email,
+    exp: Number.MAX_SAFE_INTEGER,
+  };
+}
+
+/**
+ * Persist the live bridge's HTTP origin into `bridge.json#runtime` so
+ * CLI scripts (`scripts/approve-login.ts` etc.) can find the running
+ * server without the operator having to remember which port `bun
+ * dev` vs `bun start` bound to. Called once per startup from
+ * `instrumentation.ts`.
+ *
+ * Failures are swallowed — this is metadata for convenience, not
+ * load-bearing config. If we can't write it, the script falls back to
+ * BRIDGE_URL / PORT env vars.
+ */
+export function writeRuntimeMeta(args: { url: string; port: number }): void {
+  try {
+    const m = readManifest();
+    (m as { runtime?: unknown }).runtime = {
+      url: args.url,
+      port: args.port,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+    };
+    writeManifest(m);
+  } catch (err) {
+    console.warn("[bridge] writeRuntimeMeta failed (non-fatal):", err);
+  }
 }
 
 /**

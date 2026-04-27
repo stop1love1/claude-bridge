@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "telegram:login": "bun scripts/telegram-login.ts",
-    "set:password": "bun scripts/set-password.ts"
+    "set:password": "bun scripts/set-password.ts",
+    "approve:login": "bun scripts/approve-login.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",

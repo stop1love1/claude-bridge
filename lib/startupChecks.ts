@@ -15,7 +15,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { loadAuthConfig, pruneExpired } from "./auth";
+import { loadAuthConfig, pruneExpired, writeRuntimeMeta } from "./auth";
 import {
   getManifestTelegramSettings,
   loadApps,
@@ -243,6 +243,12 @@ export async function runStartupChecks(): Promise<CheckResult[]> {
   console.info(
     `[bridge] starting up — port=${BRIDGE_PORT} url=${BRIDGE_URL}`,
   );
+
+  // Drop the live URL into bridge.json#runtime so CLI helpers (the
+  // `bun run approve:login` flow in particular) can locate the running
+  // server without the operator having to know whether dev or prod is
+  // up, or what port either bound to.
+  writeRuntimeMeta({ url: BRIDGE_URL, port: BRIDGE_PORT });
 
   // Synchronous checks first (instant), async ones in parallel after.
   const sync: CheckResult[] = [checkAuth(), checkApps(), checkTelegramUserClient()];
