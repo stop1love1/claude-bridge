@@ -7,7 +7,7 @@ import {
   Terminal, Copy, Check, ArrowDown,
   Wrench, FileText, Brain, ChevronDown, ChevronRight, AlertCircle,
   Undo2, ListTodo, Square, CheckSquare, Asterisk,
-  Search, X, ArrowUp, Download,
+  Search, X, ArrowUp, Download, MoreVertical,
 } from "lucide-react";
 import { exportSessionMarkdown, downloadFile } from "@/lib/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
@@ -17,6 +17,12 @@ import { useToast } from "./Toasts";
 import { useConfirm } from "./ConfirmProvider";
 import { MessageComposer } from "./MessageComposer";
 import { InlinePermissionRequests } from "./InlinePermissionRequests";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
 type ActiveRun = {
   sessionId: string;
@@ -1604,12 +1610,14 @@ function SessionLogInner({
           </button>
         </div>
       )}
-      <header className="px-3 py-2 border-b border-border flex items-center gap-2 text-xs">
-        <Terminal size={13} className="text-muted-foreground" />
-        <span className="font-medium">{run.role}</span>
-        {repo && <span className="text-muted-foreground">@ {repo.name}</span>}
+      <header className="px-3 py-2 border-b border-border flex items-center gap-2 text-xs min-w-0">
+        <Terminal size={13} className="text-muted-foreground shrink-0" />
+        <span className="font-medium whitespace-nowrap shrink-0">{run.role}</span>
+        {repo && (
+          <span className="text-muted-foreground truncate min-w-0">@ {repo.name}</span>
+        )}
         {isResponding && (
-          <span className="inline-flex items-center gap-1 text-warning text-[10.5px]">
+          <span className="inline-flex items-center gap-1 text-warning text-[10.5px] whitespace-nowrap shrink-0">
             <span className="relative inline-flex h-1.5 w-1.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
               <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
@@ -1617,58 +1625,105 @@ function SessionLogInner({
             responding…
           </span>
         )}
-        {sessionTotals.turns > 0 && (
-          <TokenUsage
-            totals={sessionTotals}
-            variant="compact"
-            className="ml-auto"
-            title={`This window: ${sessionTotals.turns} assistant turns · in ${sessionTotals.inputTokens.toLocaleString()} · out ${sessionTotals.outputTokens.toLocaleString()} · cache read ${sessionTotals.cacheReadTokens.toLocaleString()}`}
-          />
-        )}
-        <button
-          onClick={() => {
-            setSearchOpen(true);
-            setTimeout(() => searchInputRef.current?.focus(), 0);
-          }}
-          className={`${sessionTotals.turns > 0 ? "" : "ml-auto "}inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px] transition-colors`}
-          title="Search this conversation (Ctrl/⌘+F)"
-        >
-          <Search size={10} /> Search
-        </button>
-        <button
-          onClick={() => setShowTools((v) => !v)}
-          className={`inline-flex items-center gap-1 px-1.5 h-6 rounded-md border text-[10px] transition-colors ${
-            showTools
-              ? "border-border bg-secondary text-foreground"
-              : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
-          }`}
-          title="Toggle tool results"
-        >
-          <Wrench size={10} /> {showTools ? "tools" : "no tools"}
-        </button>
-        <button
-          onClick={() => {
-            const md = exportSessionMarkdown(visibleEntries, {
-              title: `Session ${run.sessionId.slice(0, 8)}`,
-              sessionId: run.sessionId,
-              repo: run.repo,
-              role: run.role,
-            });
-            downloadFile(`session-${run.sessionId.slice(0, 8)}.md`, md);
-          }}
-          className="inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
-          title="Export this conversation as Markdown"
-        >
-          <Download size={10} /> Export
-        </button>
-        <button
-          onClick={copySessionId}
-          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground font-mono text-[11px]"
-          title="Copy session ID"
-        >
-          {run.sessionId.slice(0, 8)}…
-          {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
-        </button>
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          {sessionTotals.turns > 0 && (
+            <TokenUsage
+              totals={sessionTotals}
+              variant="compact"
+              title={`This window: ${sessionTotals.turns} assistant turns · in ${sessionTotals.inputTokens.toLocaleString()} · out ${sessionTotals.outputTokens.toLocaleString()} · cache read ${sessionTotals.cacheReadTokens.toLocaleString()}`}
+            />
+          )}
+          {/* Search — visible on every viewport. Icon-only on mobile to
+              save space; label appears from md+. h-7 / w-7 keeps a
+              comfortable touch target on phones. */}
+          <button
+            onClick={() => {
+              setSearchOpen(true);
+              setTimeout(() => searchInputRef.current?.focus(), 0);
+            }}
+            className="inline-flex items-center gap-1 h-7 w-7 md:w-auto md:px-1.5 md:h-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px] transition-colors"
+            title="Search this conversation (Ctrl/⌘+F)"
+            aria-label="Search conversation"
+          >
+            <Search size={11} />
+            <span className="hidden md:inline">Search</span>
+          </button>
+          {/* md+ — secondary actions inline. On mobile they collapse
+              into the kebab below to keep the header on one line. */}
+          <button
+            onClick={() => setShowTools((v) => !v)}
+            className={`hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border text-[10px] transition-colors ${
+              showTools
+                ? "border-border bg-secondary text-foreground"
+                : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+            }`}
+            title="Toggle tool results"
+          >
+            <Wrench size={10} /> {showTools ? "tools" : "no tools"}
+          </button>
+          <button
+            onClick={() => {
+              const md = exportSessionMarkdown(visibleEntries, {
+                title: `Session ${run.sessionId.slice(0, 8)}`,
+                sessionId: run.sessionId,
+                repo: run.repo,
+                role: run.role,
+              });
+              downloadFile(`session-${run.sessionId.slice(0, 8)}.md`, md);
+            }}
+            className="hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
+            title="Export this conversation as Markdown"
+          >
+            <Download size={10} /> Export
+          </button>
+          <button
+            onClick={copySessionId}
+            className="hidden md:inline-flex items-center gap-1 text-muted-foreground hover:text-foreground font-mono text-[11px]"
+            title="Copy session ID"
+          >
+            {run.sessionId.slice(0, 8)}…
+            {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+          </button>
+          {/* Mobile-only kebab — bundles Tools toggle, Export, and Copy
+              session ID so the header stays one line on phones. h-7/w-7
+              gives a finger-friendly tap target. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="md:hidden inline-flex items-center justify-center h-7 w-7 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+                title="More actions"
+                aria-label="More actions"
+              >
+                <MoreVertical size={14} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => setShowTools((v) => !v)}>
+                <Wrench size={12} />
+                {showTools ? "Hide tool results" : "Show tool results"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => {
+                  const md = exportSessionMarkdown(visibleEntries, {
+                    title: `Session ${run.sessionId.slice(0, 8)}`,
+                    sessionId: run.sessionId,
+                    repo: run.repo,
+                    role: run.role,
+                  });
+                  downloadFile(`session-${run.sessionId.slice(0, 8)}.md`, md);
+                }}
+              >
+                <Download size={12} />
+                Export Markdown
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={copySessionId}>
+                {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+                <span className="font-mono">{run.sessionId.slice(0, 8)}…</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </header>
       <div
         ref={logRef}

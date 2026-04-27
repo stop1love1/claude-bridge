@@ -29,6 +29,16 @@ function TaskPageInner() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loading, setLoading] = useState(true);
+  // Mobile (< lg) shows ONE of TaskDetail / SessionLog at full height
+  // via a tab bar; lg+ keeps the side-by-side split. Lazy initializer
+  // so a deep-link with `?sid=` (e.g. from /sessions) lands directly
+  // in the chat without a manual tap; bare task URLs default to
+  // "detail" so the user picks an agent first.
+  const [mobileTab, setMobileTab] = useState<"detail" | "chat">(() =>
+    typeof window !== "undefined" && new URL(window.location.href).searchParams.get("sid")
+      ? "chat"
+      : "detail",
+  );
 
   // Active run is reconstructed from the URL (`?sid=…`) so reloading or
   // sharing the URL keeps the same chat selected. It also cooperates
@@ -207,6 +217,10 @@ function TaskPageInner() {
         role: run.role,
         repo: run.repo,
       });
+      // Auto-flip to chat on mobile — the user just clicked an agent
+      // expecting to read its output, mirroring desktop where the right
+      // pane updates inline.
+      setMobileTab("chat");
     },
     [repos, setActiveRun],
   );
@@ -303,8 +317,43 @@ function TaskPageInner() {
         </kbd>
       </div>
 
+      {/* Mobile-only tab bar — picks which panel takes the full height
+          below. Hidden on lg+ where both panels render side-by-side. */}
+      <div className="lg:hidden shrink-0 flex border-b border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setMobileTab("detail")}
+          aria-pressed={mobileTab === "detail"}
+          className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors ${
+            mobileTab === "detail"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Detail
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab("chat")}
+          aria-pressed={mobileTab === "chat"}
+          className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors ${
+            mobileTab === "chat"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Chat{activeRun ? ` · ${activeRun.role}` : ""}
+        </button>
+      </div>
+
       <main className="flex-1 flex flex-col lg:flex-row min-h-0">
-        <div className="lg:flex-1 lg:min-w-0 lg:max-w-2xl xl:max-w-3xl border-b lg:border-b-0 lg:border-r border-border flex max-h-[40vh] lg:max-h-none">
+        {/* Both panels stay mounted (display:none vs flex) so editor
+            state and scroll position survive a tab switch. */}
+        <div
+          className={`flex-1 min-h-0 lg:flex lg:flex-1 lg:min-w-0 lg:max-w-2xl xl:max-w-3xl lg:border-r border-border ${
+            mobileTab === "detail" ? "flex" : "hidden"
+          }`}
+        >
           <TaskDetail
             task={task}
             meta={meta}
@@ -317,7 +366,11 @@ function TaskPageInner() {
             saveRef={saveRef}
           />
         </div>
-        <div className="flex-1 min-w-0 min-h-0 flex">
+        <div
+          className={`flex-1 min-w-0 min-h-0 lg:flex ${
+            mobileTab === "chat" ? "flex" : "hidden"
+          }`}
+        >
           <SessionLog
             run={activeRun}
             repos={repos}

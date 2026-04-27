@@ -130,6 +130,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/**
+ * iOS Safari auto-zooms when a focused <input> / <textarea> has
+ * `font-size < 16px`, which is annoying given the dense `text-xs`
+ * styling across this app. Force the editable controls to 16px on
+ * narrow viewports so tapping the composer or a search box doesn't
+ * scale the page. Wider viewports keep the design's compact 12-13px
+ * sizing.
+ */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 ::selection {
   background: color-mix(in oklab, var(--primary) 35%, transparent);
   color: var(--foreground);

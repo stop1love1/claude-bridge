@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Providers } from "./_components/Providers";
 import { NO_FLASH_SCRIPT } from "./_components/ThemeProvider";
@@ -6,6 +6,14 @@ import { NO_FLASH_SCRIPT } from "./_components/ThemeProvider";
 export const metadata: Metadata = {
   title: "Claude Bridge",
   description: "Owner dashboard for dispatching cross-repo tasks to a Claude agent team.",
+};
+
+// Explicit viewport so iOS Safari behaves: `initial-scale=1` keeps
+// the page at 100% on first paint, and we leave pinch-to-zoom enabled
+// (no `maximum-scale=1`) for accessibility.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
