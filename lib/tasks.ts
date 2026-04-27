@@ -23,8 +23,14 @@ const ALL_SECTIONS = Object.keys(SECTION_STATUS) as TaskSection[];
 
 export function parseTasks(md: string): Task[] {
   const tasks: Task[] = [];
-  const footerIdx = md.indexOf("\n---\n");
-  const active = footerIdx === -1 ? md : md.slice(0, footerIdx);
+  // Normalize CRLF → LF so regex patterns built around `\n` work
+  // uniformly regardless of which OS wrote the file. JS's `.` excludes
+  // both `\n` and `\r`, and `indexOf("\n---\n")` would miss a CRLF
+  // footer entirely — that bug used to leak the whole post-footer
+  // tail into the last DONE task's body.
+  const src = md.replace(/\r\n/g, "\n");
+  const footerIdx = src.indexOf("\n---\n");
+  const active = footerIdx === -1 ? src : src.slice(0, footerIdx);
   // Section header: must be one of the 4 exact labels, end of line
   const sectionRe = /^## (TODO|DOING|BLOCKED|DONE — not yet archived)\s*$/gm;
   const matches = [...active.matchAll(sectionRe)];
@@ -33,7 +39,13 @@ export function parseTasks(md: string): Task[] {
     const start = matches[i].index! + matches[i][0].length;
     const nextStart = i + 1 < matches.length ? matches[i + 1].index! : active.length;
     const block = active.slice(start, nextStart);
-    const itemRe = /^- \[([ x])\]\s+\*\*(\d{4}-\d{2}-\d{2})\*\*\s+(.+?)\s*<!--\s*task-id:\s*(t_\d{8}_\d{3})\s*-->\s*\n((?:(?!^- \[|^## ).*\n)*)/gm;
+    // Body capture uses `[^\n]*\n` instead of `.*\n` so CRLF inputs
+    // round-trip too: in JS `.` excludes both `\n` AND `\r`, so on a
+    // file with `\r\n` line endings `.*\n` always fails (the `\r`
+    // before `\n` isn't matched by `.` and isn't matched by the
+    // literal `\n`). `[^\n]*` happily eats the `\r` as part of the
+    // line, then `\n` matches the LF.
+    const itemRe = /^- \[([ x])\]\s+\*\*(\d{4}-\d{2}-\d{2})\*\*\s+(.+?)\s*<!--\s*task-id:\s*(t_\d{8}_\d{3})\s*-->\s*\n((?:(?!^- \[|^## )[^\n]*\n)*)/gm;
     for (const m of block.matchAll(itemRe)) {
       tasks.push({
         id: m[4],
@@ -56,7 +68,10 @@ function renderTask(t: Task): string {
 }
 
 export function serializeTasks(originalMd: string, tasks: Task[]): string {
-  let out = originalMd;
+  // Same CRLF normalization as `parseTasks` — the section-replace
+  // regex below uses `\n` boundaries, so a CRLF input would silently
+  // skip every section past the first one.
+  let out = originalMd.replace(/\r\n/g, "\n");
   for (const section of ALL_SECTIONS) {
     const escaped = section.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
     const re = new RegExp(

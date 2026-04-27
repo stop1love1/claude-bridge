@@ -644,11 +644,21 @@ export function wireRunLifecycle(
     // base branch gets the dedicated push pass below so the operator's
     // expectation that `autoPush=true` puts reviewed commits on the
     // remote actually holds.
+    //
+    // SAFETY: in worktree mode we ALWAYS auto-commit, even when the
+    // operator left `autoCommit=false`. The worktree's whole purpose is
+    // to merge back into the base branch on cleanup, and a merge only
+    // carries committed changes — uncommitted edits would be silently
+    // erased by `git worktree remove --force`. Honoring the
+    // operator's `autoCommit=false` here would mean shipping a
+    // configuration whose only outcome is data loss, so we override
+    // the flag (autoPush stays bound to the operator's setting via
+    // the post-merge live-tree push below).
     const useWorktree = !!run.worktreePath;
     const commitCwd = run.worktreePath ?? app?.path ?? null;
     const commitSettings = app
       ? useWorktree
-        ? { ...app.git, autoPush: false }
+        ? { ...app.git, autoCommit: true, autoPush: false }
         : app.git
       : null;
     const message = `[${tid}] ${title}`.trim();

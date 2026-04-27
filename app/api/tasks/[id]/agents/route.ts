@@ -268,10 +268,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const sessionId = randomUUID();
 
   // P4/F1 — when worktree mode is enabled, create a private worktree
-  // BEFORE spawning so the child's cwd is the isolated copy. We fall
-  // back to the live tree if the worktree create fails — better to ship
-  // a degraded run than to refuse the spawn entirely (the operator sees
-  // the warning in the logs, and the worktree pruner mops up partials).
+  // BEFORE spawning so the child's cwd is the isolated copy.
+  //
+  // SAFETY: when `worktreeMode === "enabled"` we must NOT silently
+  // fall back to the live tree on create failure — that would let an
+  // agent edit the operator's working copy in spite of the explicit
+  // isolation contract. Instead, surface a 500 with the failure detail
+  // so the operator notices and can investigate (stale `.worktrees/`
+  // leftovers, locked file handles on Windows, etc.). The pruner mops
+  // up any partial state on the next API hit.
   let spawnCwd = repoCwd;
   let worktreePath: string | null = null;
   let worktreeBranch: string | null = null;
@@ -289,8 +294,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       worktreeBranch = handle.branch;
       worktreeBaseBranch = handle.baseBranch;
     } else {
-      console.warn(
-        `[worktree] create failed for ${app.name} task ${id} sid ${sessionId} — falling back to live tree`,
+      console.error(
+        `[worktree] create failed for ${app.name} task ${id} sid ${sessionId}`,
+      );
+      return NextResponse.json(
+        {
+          error: "worktree create failed",
+          reason:
+            "the app has worktreeMode=enabled but the bridge could not create a private worktree for this run; refusing to fall back to the live tree to preserve the isolation contract",
+          repo,
+          appPath: app.path,
+        },
+        { status: 500 },
       );
     }
   }

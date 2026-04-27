@@ -254,8 +254,11 @@ export default function LoginPage() {
 /**
  * First-run setup form rendered when `auth` isn't yet configured in
  * bridge.json. POSTs to `/api/auth/setup` which:
- *   - refuses if the bridge is reached over a non-loopback host
- *     (e.g. someone on the LAN),
+ *   - requires the one-time setup token printed in the bridge boot
+ *     banner (defends against Host-header spoofing on LAN-bound
+ *     bridges — see `lib/setupToken.ts`),
+ *   - keeps the loopback Host check as defense-in-depth so the LAN
+ *     case is awkward even before a token is acquired,
  *   - refuses to overwrite an existing `auth` block (to rotate the
  *     password the operator must run `bun scripts/set-password.ts`),
  *   - hashes the password with scrypt + signs a 30-day cookie so the
@@ -265,6 +268,7 @@ function SetupForm({ onDone }: { onDone(): void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -272,6 +276,10 @@ function SetupForm({ onDone }: { onDone(): void }) {
     e.preventDefault();
     if (submitting) return;
     setError(null);
+    if (!setupToken.trim()) {
+      setError("Setup token is required (see the bridge terminal banner).");
+      return;
+    }
     if (password !== confirm) {
       setError("Passwords do not match");
       return;
@@ -285,7 +293,12 @@ function SetupForm({ onDone }: { onDone(): void }) {
       const r = await fetch("/api/auth/setup", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password, confirmPassword: confirm }),
+        body: JSON.stringify({
+          email,
+          password,
+          confirmPassword: confirm,
+          setupToken: setupToken.trim(),
+        }),
       });
       if (!r.ok) {
         const text = await r.text();
@@ -316,6 +329,27 @@ function SetupForm({ onDone }: { onDone(): void }) {
           No credentials set yet. Create the operator account below — this
           is a <strong>one-time</strong> setup. To rotate later you&apos;ll need{" "}
           <code className="font-mono">bun scripts/set-password.ts</code>.
+        </p>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="setup-token">Setup token</Label>
+        <Input
+          id="setup-token"
+          type="text"
+          value={setupToken}
+          onChange={(e) => setSetupToken(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+          required
+          disabled={submitting}
+          placeholder="Paste from the bridge terminal banner"
+        />
+        <p className="text-[10px] text-muted-foreground">
+          Look for{" "}
+          <code className="font-mono">[bridge] auth MISSING …</code> in the
+          terminal where you ran <code className="font-mono">bun dev</code> /{" "}
+          <code className="font-mono">bun start</code>. The token guards
+          first-run setup against LAN visitors.
         </p>
       </div>
       <div className="grid gap-1.5">

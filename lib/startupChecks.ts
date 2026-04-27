@@ -21,6 +21,7 @@ import {
   loadApps,
 } from "./apps";
 import { BRIDGE_PORT, BRIDGE_URL } from "./paths";
+import { clearSetupToken, ensureSetupToken } from "./setupToken";
 
 type CheckStatus = "ok" | "configured" | "missing" | "warn" | "error";
 
@@ -192,12 +193,30 @@ function checkTelegramUserClient(): CheckResult {
 function checkAuth(): CheckResult {
   const cfg = loadAuthConfig();
   if (!cfg) {
+    // Mint a one-time setup token and surface it in the banner so the
+    // operator can paste it into the first-run setup form. Without
+    // the token, the setup endpoint refuses — that's what closes the
+    // Host-header spoofing hole the previous loopback-only check
+    // could not.
+    let setupToken = "";
+    try {
+      setupToken = ensureSetupToken();
+    } catch (err) {
+      console.warn("[bridge] failed to mint setup token (non-fatal):", err);
+    }
+    const tokenHint = setupToken
+      ? ` — paste setup token \`${setupToken}\` from this terminal into the form`
+      : "";
     return {
       name: "auth",
       status: "missing",
-      detail: `no operator account — open ${BRIDGE_URL}/login on this machine to set one`,
+      detail: `no operator account — open ${BRIDGE_URL}/login on this machine to set one${tokenHint}`,
     };
   }
+  // Auth already configured — make sure no stale setup token file
+  // lingers from a previous incomplete setup attempt. Cheap idempotent
+  // unlink; password rotation must use the CLI from here on.
+  clearSetupToken();
   const live = pruneExpired(cfg.trustedDevices);
   return {
     name: "auth",
