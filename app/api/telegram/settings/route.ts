@@ -4,6 +4,10 @@ import {
   setManifestTelegramSettings,
   type TelegramSettings,
 } from "@/lib/apps";
+import {
+  ensureTelegramNotifier,
+  teardownTelegramNotifier,
+} from "@/lib/telegramNotifier";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +50,22 @@ export async function PUT(req: NextRequest) {
   if (typeof body.chatId === "string") patch.chatId = body.chatId;
 
   const next = setManifestTelegramSettings(patch);
+
+  // Install (or re-install) the notifier subscription right now —
+  // without this the operator has to restart `bun dev` for new
+  // credentials to take effect, since `instrumentation.ts` only runs
+  // once per server boot. Tear down first so a token / chat id swap
+  // doesn't leave the old subscribers attached.
+  if (next.botToken && next.chatId) {
+    teardownTelegramNotifier();
+    ensureTelegramNotifier();
+  } else {
+    // Cleared both fields → unsubscribe so we don't leave dead
+    // listeners feeding `sendTelegram` (which would short-circuit on
+    // missing creds anyway, but the channel cost is wasteful).
+    teardownTelegramNotifier();
+  }
+
   return NextResponse.json({
     botToken: next.botToken ? maskToken(next.botToken) : "",
     botTokenSet: next.botToken.length > 0,

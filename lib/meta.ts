@@ -285,14 +285,23 @@ const FILE = "meta.json";
  *   - `"writeMeta"` — full writeMeta (no per-run signal — task header changed)
  *   - `"retried"` — Phase D: auto-retry kicked off for a failed child;
  *     `run` is the NEW retry run, `retryOf` is the failed run's sessionId
+ *   - `"task-section"` — `tasksStore.updateTask` moved a task between
+ *     sections (TODO/DOING/BLOCKED/DONE). `prevSection` + `nextSection`
+ *     describe the transition; `taskTitle` is included so notifier
+ *     subscribers don't have to round-trip readMeta. Fires AFTER the
+ *     `writeMeta` for the same call so on-disk state is settled.
  */
 export interface MetaChangeEvent {
   taskId: string;
-  kind: "spawned" | "transition" | "updated" | "writeMeta" | "retried";
+  kind: "spawned" | "transition" | "updated" | "writeMeta" | "retried" | "task-section";
   sessionId?: string;
   run?: Run;
   prevStatus?: RunStatus;
   retryOf?: string;
+  prevSection?: TaskSection;
+  nextSection?: TaskSection;
+  taskTitle?: string;
+  taskChecked?: boolean;
 }
 
 interface MetaEvents {
@@ -404,6 +413,32 @@ export function emitRetried(taskId: string, retryRun: Run, retryOf: string): voi
     sessionId: retryRun.sessionId,
     run: retryRun,
     retryOf,
+  });
+}
+
+/**
+ * Fire a `task-section` event when a task moves between sections via
+ * `tasksStore.updateTask`. Called after the underlying `writeMeta`
+ * settles so subscribers reading the file see the new state.
+ *
+ * Skip the call when `prevSection === nextSection` — no-op writes
+ * (e.g. just renaming the title) shouldn't ping the notifier.
+ */
+export function emitTaskSection(args: {
+  taskId: string;
+  prevSection: TaskSection;
+  nextSection: TaskSection;
+  taskTitle: string;
+  taskChecked: boolean;
+}): void {
+  if (args.prevSection === args.nextSection) return;
+  emit({
+    taskId: args.taskId,
+    kind: "task-section",
+    prevSection: args.prevSection,
+    nextSection: args.nextSection,
+    taskTitle: args.taskTitle,
+    taskChecked: args.taskChecked,
   });
 }
 

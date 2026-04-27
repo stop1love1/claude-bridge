@@ -24,6 +24,16 @@
 import { subscribeMetaAll, type MetaChangeEvent } from "./meta";
 import { subscribeAllPermissions, type PendingRequest } from "./permissionStore";
 import { getManifestTelegramSettings } from "./apps";
+import {
+  startTelegramCommandPoller,
+  startTelegramUserCommandListener,
+  stopTelegramCommandPoller,
+  stopTelegramUserCommandListener,
+} from "./telegramCommands";
+import {
+  isUserClientConfigured,
+  sendUserMessage,
+} from "./telegramUserClient";
 
 const TG_HOST = "https://api.telegram.org";
 const DEDUPE_MS = 1500;
@@ -64,9 +74,45 @@ function escapeMarkdownV2(s: string): string {
   return s.replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
 
+/**
+ * Send a notification text. The bridge always tries BOTH channels in
+ * parallel when configured:
+ *
+ *   - Bot API     — fast HTTP, MarkdownV2 formatting, native fallbacks.
+ *   - User-client — gram-js MTProto, posts as the operator's account so
+ *                   it sidesteps Bot API's "bot can't message bot" /
+ *                   group-privacy limits.
+ *
+ * Either-or-both work: a configured user-client means notifications
+ * keep flowing even if the bot is restricted, and vice versa. Failures
+ * on one side log a warning and don't block the other.
+ *
+ * The user-client receives the same `text` but stripped of MarkdownV2
+ * escapes, since gram-js posts as plain text by default — operators
+ * can switch to HTML / Markdown formatting per-call if they need it.
+ */
 async function sendTelegram(text: string): Promise<void> {
   const cfg = envConfig();
-  if (!cfg) return;
+  const tasks: Promise<void>[] = [];
+
+  if (cfg) {
+    tasks.push(sendViaBot(cfg, text));
+  }
+  if (isUserClientConfigured()) {
+    tasks.push(sendViaUserClient(text));
+  }
+
+  if (tasks.length === 0) return;
+  // Run in parallel; never reject the outer promise (handlers below
+  // swallow per-channel errors so one dead channel doesn't kill the
+  // sibling).
+  await Promise.allSettled(tasks);
+}
+
+async function sendViaBot(
+  cfg: { token: string; chatId: string },
+  text: string,
+): Promise<void> {
   const truncated = text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "…" : text;
   const url = `${TG_HOST}/bot${encodeURIComponent(cfg.token)}/sendMessage`;
   try {
@@ -92,6 +138,19 @@ async function sendTelegram(text: string): Promise<void> {
   }
 }
 
+async function sendViaUserClient(text: string): Promise<void> {
+  // gram-js posts plain text by default; un-escape the MarkdownV2
+  // syntax we added for the bot side so the user-account version
+  // reads naturally instead of `\.\!\(...`.
+  const plain = text.replace(/\\([_*[\]()~`>#+\-=|{}.!\\])/g, "$1");
+  const truncated = plain.length > MAX_TEXT ? plain.slice(0, MAX_TEXT) + "…" : plain;
+  try {
+    await sendUserMessage(truncated);
+  } catch (err) {
+    console.warn(`[telegram-user] send error: ${(err as Error).message}`);
+  }
+}
+
 function shouldSend(key: string): boolean {
   const now = Date.now();
   const last = state.recent.get(key) ?? 0;
@@ -108,20 +167,63 @@ function shouldSend(key: string): boolean {
 }
 
 function onMetaChange(ev: MetaChangeEvent): void {
-  if (ev.kind !== "transition" || !ev.run) return;
-  const next = ev.run.status;
-  if (next !== "done" && next !== "failed") return;
-  const dedupeKey = `meta:${ev.taskId}:${ev.sessionId}:${next}`;
-  if (!shouldSend(dedupeKey)) return;
-  const role = escapeMarkdownV2(ev.run.role);
-  const repo = escapeMarkdownV2(ev.run.repo);
-  const taskId = escapeMarkdownV2(ev.taskId);
-  const icon = next === "done" ? "✅" : "⚠️";
-  const verb = next === "done" ? "completed" : "failed";
-  const text =
-    `${icon} *${role}* ${verb}\n` +
-    `task \`${taskId}\` · repo \`${repo}\``;
-  void sendTelegram(text);
+  // Run lifecycle: child / coordinator finished or crashed.
+  if (ev.kind === "transition" && ev.run) {
+    const next = ev.run.status;
+    if (next !== "done" && next !== "failed") return;
+    const dedupeKey = `meta:${ev.taskId}:${ev.sessionId}:${next}`;
+    if (!shouldSend(dedupeKey)) return;
+    const role = escapeMarkdownV2(ev.run.role);
+    const repo = escapeMarkdownV2(ev.run.repo);
+    const taskId = escapeMarkdownV2(ev.taskId);
+    const icon = next === "done" ? "✅" : "⚠️";
+    const verb = next === "done" ? "completed" : "failed";
+    const text =
+      `${icon} *${role}* ${verb}\n` +
+      `task \`${taskId}\` · repo \`${repo}\``;
+    void sendTelegram(text);
+    return;
+  }
+  // User-initiated section transitions: UI tick the complete checkbox,
+  // or move TODO ↔ DOING / BLOCKED via the kanban board / API.
+  if (ev.kind === "task-section" && ev.nextSection) {
+    const dedupeKey = `task-section:${ev.taskId}:${ev.nextSection}:${ev.taskChecked}`;
+    if (!shouldSend(dedupeKey)) return;
+    const taskId = escapeMarkdownV2(ev.taskId);
+    const title = escapeMarkdownV2(
+      (ev.taskTitle ?? "").slice(0, 120) || "(untitled)",
+    );
+    const icon = sectionIcon(ev.nextSection);
+    const verb = sectionVerb(ev.prevSection, ev.nextSection, ev.taskChecked);
+    const text =
+      `${icon} *${verb}*\n` +
+      `task \`${taskId}\` — ${title}`;
+    void sendTelegram(text);
+    return;
+  }
+}
+
+function sectionIcon(section: string): string {
+  switch (section) {
+    case "TODO": return "⚪";
+    case "DOING": return "🟡";
+    case "BLOCKED": return "🔴";
+    case "DONE — not yet archived": return "🎉";
+    default: return "📌";
+  }
+}
+
+function sectionVerb(
+  prev: string | undefined,
+  next: string,
+  checked: boolean | undefined,
+): string {
+  if (next === "DONE — not yet archived" && checked) return "Marked complete";
+  if (next === "DONE — not yet archived") return "Moved to done";
+  if (next === "BLOCKED") return "Blocked";
+  if (next === "DOING") return prev === "TODO" ? "Started" : "Resumed";
+  if (next === "TODO") return "Reset to TODO";
+  return `Section: ${next}`;
 }
 
 function onPermission(req: PendingRequest): void {
@@ -129,26 +231,56 @@ function onPermission(req: PendingRequest): void {
   if (!shouldSend(dedupeKey)) return;
   const tool = escapeMarkdownV2(req.tool);
   const sid = escapeMarkdownV2(req.sessionId.slice(0, 8));
+  // Surface the first 8 chars of the requestId so the operator can
+  // reply with `/allow <prefix>` or `/deny <prefix>` from chat — the
+  // command handler accepts any prefix ≥6 chars and looks up the full
+  // request across all pending. Backticks let mobile Telegram tap-to-
+  // copy the prefix without selecting surrounding text.
+  const reqPrefix = escapeMarkdownV2(req.requestId.slice(0, 8));
   const text =
     `🔐 *Permission needed*\n` +
-    `tool \`${tool}\` · session \`${sid}\``;
+    `tool \`${tool}\` · session \`${sid}\`\n` +
+    `req \`${reqPrefix}\` — reply \`/allow ${reqPrefix}\` or \`/deny ${reqPrefix}\``;
   void sendTelegram(text);
 }
 
 export function ensureTelegramNotifier(): void {
   if (state.installed) return;
-  if (!envConfig()) return;
+  // Either channel being configured is enough to light up notifier —
+  // outbound `sendTelegram` will fan-out to whichever one(s) actually
+  // have credentials at send time.
+  const hasBot = envConfig() !== null;
+  const hasUser = isUserClientConfigured();
+  if (!hasBot && !hasUser) return;
   state.installed = true;
   state.unsubscribers.push(subscribeMetaAll(onMetaChange));
   state.unsubscribers.push(subscribeAllPermissions(onPermission));
+  // Inbound side: long-poll Telegram for slash commands so the operator
+  // can run `/tasks`, `/done <id>`, etc. from their phone. The poller
+  // checks for bot creds itself and is a no-op when only the
+  // user-client is configured; user-client inbound is wired separately
+  // below.
+  if (hasBot) startTelegramCommandPoller();
+  if (hasUser) {
+    void startTelegramUserCommandListener().catch((err) => {
+      console.warn(
+        "[telegram-user] inbound listener failed to start:",
+        (err as Error).message,
+      );
+    });
+  }
   // eslint-disable-next-line no-console
-  console.info("[telegram] notifier installed");
+  console.info(
+    `[telegram] notifier installed (bot=${hasBot}, user=${hasUser})`,
+  );
 }
 
 export function teardownTelegramNotifier(): void {
   for (const fn of state.unsubscribers.splice(0)) {
     try { fn(); } catch { /* ignore */ }
   }
+  stopTelegramCommandPoller();
+  void stopTelegramUserCommandListener();
   state.installed = false;
 }
 

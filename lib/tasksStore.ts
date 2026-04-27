@@ -1,7 +1,14 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_MD, BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR } from "./paths";
-import { createMeta, readMeta, withTaskLock, writeMeta, type Meta } from "./meta";
+import {
+  createMeta,
+  emitTaskSection,
+  readMeta,
+  withTaskLock,
+  writeMeta,
+  type Meta,
+} from "./meta";
 import { resolveRepoCwd } from "./repos";
 import { projectDirFor } from "./sessions";
 import { killChild } from "./spawnRegistry";
@@ -146,6 +153,7 @@ export async function updateTask(id: string, patch: TaskPatch): Promise<Task | n
   return withTaskLock(dir, () => {
     const meta = readMeta(dir);
     if (!meta) return null;
+    const prevSection = meta.taskSection;
     if (patch.title !== undefined) meta.taskTitle = patch.title;
     if (patch.body !== undefined) meta.taskBody = patch.body;
     if (patch.checked !== undefined) meta.taskChecked = patch.checked;
@@ -156,6 +164,18 @@ export async function updateTask(id: string, patch: TaskPatch): Promise<Task | n
       meta.taskStatus = patch.status;
     }
     writeMeta(dir, meta);
+    // Surface section changes (TODO/DOING/BLOCKED → DONE etc.) on the
+    // meta event bus so the Telegram notifier can ping when the user
+    // ticks the "complete" checkbox in the UI. The emitter no-ops
+    // when prevSection === nextSection, so a pure title/body edit
+    // doesn't fire a spurious notification.
+    emitTaskSection({
+      taskId: id,
+      prevSection,
+      nextSection: meta.taskSection,
+      taskTitle: meta.taskTitle,
+      taskChecked: meta.taskChecked,
+    });
     return metaToTask(meta);
   });
 }

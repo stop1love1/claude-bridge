@@ -197,6 +197,47 @@ export const api = {
       `/telegram/settings`,
       { method: "PUT", body: JSON.stringify(patch) },
     ),
+  telegramUserSettings: () =>
+    req<{
+      apiId: number;
+      apiHash: string;
+      apiHashSet: boolean;
+      session: string;
+      sessionSet: boolean;
+      targetChatId: string;
+    }>(`/telegram/user/settings`),
+  updateTelegramUserSettings: (
+    patch: { apiId?: number; apiHash?: string; session?: string; targetChatId?: string },
+  ) =>
+    req<{
+      apiId: number;
+      apiHash: string;
+      apiHashSet: boolean;
+      session: string;
+      sessionSet: boolean;
+      targetChatId: string;
+    }>(`/telegram/user/settings`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  clearTelegramUserSettings: () =>
+    req<{ ok: true }>(`/telegram/user/settings`, { method: "DELETE" }),
+  telegramUserTest: (): Promise<
+    | { ok: true; me: { id: string; username: string; firstName: string; phone: string } }
+    | { ok: false; reason: string }
+  > =>
+    req<
+      | { ok: true; me: { id: string; username: string; firstName: string; phone: string } }
+      | { ok: false; reason: string }
+    >(`/telegram/user/test`, { method: "POST" })
+      .catch((e: Error): { ok: false; reason: string } => {
+        const m = /^503 (.+)$/.exec(e.message);
+        if (m) {
+          try { return JSON.parse(m[1]) as { ok: false; reason: string }; }
+          catch { return { ok: false, reason: e.message }; }
+        }
+        return { ok: false, reason: e.message };
+      }),
   detectSettings: () =>
     req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`),
   updateDetectSettings: (patch: { source: "auto" | "llm" | "heuristic" }) =>
