@@ -681,16 +681,45 @@ export const DEFAULT_TELEGRAM_USER_SETTINGS: TelegramUserSettings = {
   targetChatId: "",
 };
 
+/**
+ * Chat-forwarding policy. Controls whether assistant messages from
+ * spawned Claude sessions are mirrored to Telegram in addition to the
+ * default lifecycle / permission events.
+ *
+ *   "off"               — never forward chat (default; matches legacy behavior)
+ *   "coordinator-only"  — forward messages from `role: "coordinator"`
+ *                          sessions only. The most useful default — the
+ *                          coordinator is the human-readable summary
+ *                          surface; child runs are noisy.
+ *   "all"               — forward every spawned run's assistant text.
+ *                          Use for low-traffic deployments / debugging.
+ */
+export type TelegramForwardChat = "off" | "coordinator-only" | "all";
+
+export const DEFAULT_FORWARD_CHAT: TelegramForwardChat = "off";
+export const DEFAULT_FORWARD_CHAT_MIN_CHARS = 40;
+
 export interface TelegramSettings {
   botToken: string;
   chatId: string;
   user: TelegramUserSettings;
+  /** See `TelegramForwardChat`. Default `"off"`. */
+  forwardChat: TelegramForwardChat;
+  /**
+   * Minimum length (in characters, after trim) for an assistant message
+   * to be forwarded. Filters trivial replies like "OK", "Done.", "Got
+   * it." that would otherwise spam the chat. Default 40. Ignored when
+   * `forwardChat === "off"`.
+   */
+  forwardChatMinChars: number;
 }
 
 export const DEFAULT_TELEGRAM_SETTINGS: TelegramSettings = {
   botToken: "",
   chatId: "",
   user: { ...DEFAULT_TELEGRAM_USER_SETTINGS },
+  forwardChat: DEFAULT_FORWARD_CHAT,
+  forwardChatMinChars: DEFAULT_FORWARD_CHAT_MIN_CHARS,
 };
 
 /**
@@ -711,6 +740,23 @@ function normalizeTelegramUserSettings(raw: unknown): TelegramUserSettings {
   return { apiId, apiHash, session, targetChatId };
 }
 
+function normalizeForwardChat(raw: unknown): TelegramForwardChat {
+  if (raw === "coordinator-only" || raw === "all" || raw === "off") return raw;
+  return DEFAULT_FORWARD_CHAT;
+}
+
+function normalizeForwardChatMinChars(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_FORWARD_CHAT_MIN_CHARS;
+  }
+  // Clamp to a sane range so a footgun value (negative, 100k) doesn't
+  // either disable filtering entirely or mute every message.
+  const v = Math.floor(raw);
+  if (v < 0) return 0;
+  if (v > 5000) return 5000;
+  return v;
+}
+
 export function getManifestTelegramSettings(): TelegramSettings {
   const m = readManifest();
   const tg = (m as {
@@ -718,6 +764,8 @@ export function getManifestTelegramSettings(): TelegramSettings {
       botToken?: unknown;
       chatId?: unknown;
       user?: unknown;
+      forwardChat?: unknown;
+      forwardChatMinChars?: unknown;
     };
   }).telegram;
   if (!tg || typeof tg !== "object") {
@@ -727,11 +775,15 @@ export function getManifestTelegramSettings(): TelegramSettings {
       botToken: (process.env.TELEGRAM_BOT_TOKEN ?? "").trim(),
       chatId: (process.env.TELEGRAM_CHAT_ID ?? "").trim(),
       user: { ...DEFAULT_TELEGRAM_USER_SETTINGS },
+      forwardChat: DEFAULT_FORWARD_CHAT,
+      forwardChatMinChars: DEFAULT_FORWARD_CHAT_MIN_CHARS,
     };
   }
   const botToken = typeof tg.botToken === "string" ? tg.botToken.trim() : "";
   const chatId = typeof tg.chatId === "string" ? tg.chatId.trim() : "";
   const user = normalizeTelegramUserSettings(tg.user);
+  const forwardChat = normalizeForwardChat(tg.forwardChat);
+  const forwardChatMinChars = normalizeForwardChatMinChars(tg.forwardChatMinChars);
   // bridge.json takes precedence, but if EITHER bot field is empty we
   // still fall through to env for those (the user-client side has no
   // env fallback — it's strictly bridge.json).
@@ -742,9 +794,11 @@ export function getManifestTelegramSettings(): TelegramSettings {
       botToken: botToken || envToken,
       chatId: chatId || envChat,
       user,
+      forwardChat,
+      forwardChatMinChars,
     };
   }
-  return { botToken, chatId, user };
+  return { botToken, chatId, user, forwardChat, forwardChatMinChars };
 }
 
 export function setManifestTelegramSettings(
@@ -752,6 +806,8 @@ export function setManifestTelegramSettings(
     botToken?: string;
     chatId?: string;
     user?: Partial<TelegramUserSettings>;
+    forwardChat?: TelegramForwardChat;
+    forwardChatMinChars?: number;
   },
 ): TelegramSettings {
   const current = getManifestTelegramSettings();
@@ -784,6 +840,14 @@ export function setManifestTelegramSettings(
     chatId:
       typeof patch.chatId === "string" ? patch.chatId.trim() : current.chatId,
     user: nextUser,
+    forwardChat:
+      patch.forwardChat !== undefined
+        ? normalizeForwardChat(patch.forwardChat)
+        : current.forwardChat,
+    forwardChatMinChars:
+      patch.forwardChatMinChars !== undefined
+        ? normalizeForwardChatMinChars(patch.forwardChatMinChars)
+        : current.forwardChatMinChars,
   };
   // Drop the section entirely when EVERY field is empty so bridge.json
   // doesn't carry a meaningless `telegram: { ... }`.
@@ -792,20 +856,37 @@ export function setManifestTelegramSettings(
     next.user.apiHash === "" &&
     next.user.session === "" &&
     next.user.targetChatId === "";
-  const allEmpty = next.botToken === "" && next.chatId === "" && userEmpty;
+  const forwardChatDefault =
+    next.forwardChat === DEFAULT_FORWARD_CHAT &&
+    next.forwardChatMinChars === DEFAULT_FORWARD_CHAT_MIN_CHARS;
+  const allEmpty =
+    next.botToken === "" && next.chatId === "" && userEmpty && forwardChatDefault;
   const manifest = readManifest();
   const updatedManifest: BridgeManifest = { ...manifest };
   if (allEmpty) {
     delete (updatedManifest as { telegram?: TelegramSettings }).telegram;
-  } else if (userEmpty) {
-    // Strip the `user` sub-key when nothing in it is set so the JSON
-    // stays terse for bot-only operators.
-    (updatedManifest as { telegram?: { botToken: string; chatId: string } }).telegram = {
+  } else {
+    // Build a terse on-disk shape: omit `user` when empty, and omit the
+    // forwardChat fields when they're at default values, so bot-only
+    // operators don't see noise in their manifest.
+    const persisted: {
+      botToken: string;
+      chatId: string;
+      user?: TelegramUserSettings;
+      forwardChat?: TelegramForwardChat;
+      forwardChatMinChars?: number;
+    } = {
       botToken: next.botToken,
       chatId: next.chatId,
     };
-  } else {
-    (updatedManifest as { telegram?: TelegramSettings }).telegram = next;
+    if (!userEmpty) persisted.user = next.user;
+    if (next.forwardChat !== DEFAULT_FORWARD_CHAT) {
+      persisted.forwardChat = next.forwardChat;
+    }
+    if (next.forwardChatMinChars !== DEFAULT_FORWARD_CHAT_MIN_CHARS) {
+      persisted.forwardChatMinChars = next.forwardChatMinChars;
+    }
+    (updatedManifest as { telegram?: typeof persisted }).telegram = persisted;
   }
   writeManifest(updatedManifest);
   return next;

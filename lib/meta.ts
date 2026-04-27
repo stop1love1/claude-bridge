@@ -476,6 +476,44 @@ export async function appendRun(dir: string, run: Run): Promise<void> {
   });
 }
 
+/**
+ * Atomic dedup-then-append. If `isDuplicate` returns true for any
+ * existing run in `meta.runs`, return that run as `existing` and DO
+ * NOT append. Otherwise append `run` and emit `spawned`. Whole operation
+ * runs inside the per-task lock, so two concurrent callers (e.g. a
+ * coordinator that retried its POST) can't both pass the dedup check
+ * and double-spawn the same (parentSessionId, role, repo) child.
+ *
+ * Used by `app/api/tasks/[id]/agents/route.ts` to short-circuit when
+ * an active sibling run for the same target already exists. The
+ * predicate is supplied by the caller so the dedup criteria stay
+ * scoped to that route — meta.ts itself doesn't need to know about
+ * "queued" vs "running" being the active set.
+ */
+export async function appendRunIfNotDuplicate(
+  dir: string,
+  run: Run,
+  isDuplicate: (existing: Run) => boolean,
+): Promise<{ inserted: true; run: Run } | { inserted: false; existing: Run }> {
+  return withTaskLock(dir, () => {
+    const meta = readMeta(dir);
+    if (!meta) throw new Error(`meta.json missing at ${dir}`);
+    const existing = meta.runs.find((r) => isDuplicate(r));
+    if (existing) {
+      return { inserted: false as const, existing };
+    }
+    meta.runs.push(run);
+    atomicWriteJson(join(dir, FILE), meta);
+    emit({
+      taskId: taskIdFromDir(dir),
+      kind: "spawned",
+      sessionId: run.sessionId,
+      run,
+    });
+    return { inserted: true as const, run };
+  });
+}
+
 export async function updateRun(
   dir: string,
   sessionId: string,

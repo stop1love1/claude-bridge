@@ -34,6 +34,10 @@ import {
   isUserClientConfigured,
   sendUserMessage,
 } from "./telegramUserClient";
+import {
+  ensureTelegramChatForwarder,
+  teardownTelegramChatForwarder,
+} from "./telegramChatForwarder";
 
 const TG_HOST = "https://api.telegram.org";
 const DEDUPE_MS = 1500;
@@ -91,6 +95,18 @@ function escapeMarkdownV2(s: string): string {
  * escapes, since gram-js posts as plain text by default — operators
  * can switch to HTML / Markdown formatting per-call if they need it.
  */
+/**
+ * Public counterpart of `sendTelegram` for callers outside this module
+ * (e.g. `telegramChatForwarder.ts`). Same fan-out semantics: tries Bot
+ * API + user-client in parallel when configured, swallows per-channel
+ * errors. Exported so the chat forwarder doesn't have to duplicate the
+ * fan-out logic — and so any future caller pipes through the same
+ * truncation / formatting / dedup behavior.
+ */
+export async function sendTelegramRaw(text: string): Promise<void> {
+  return sendTelegram(text);
+}
+
 async function sendTelegram(text: string): Promise<void> {
   const cfg = envConfig();
   const tasks: Promise<void>[] = [];
@@ -269,6 +285,12 @@ export function ensureTelegramNotifier(): void {
       );
     });
   }
+  // Chat forwarder mirrors assistant prose from spawned sessions.
+  // Self-gates on `forwardChat` per-event, so installing it here is
+  // safe even when the operator hasn't enabled forwarding yet — flipping
+  // the setting takes effect on the next `spawned` event without a
+  // teardown / reinstall cycle.
+  ensureTelegramChatForwarder();
   // eslint-disable-next-line no-console
   console.info(
     `[telegram] notifier installed (bot=${hasBot}, user=${hasUser})`,
@@ -281,6 +303,7 @@ export function teardownTelegramNotifier(): void {
   }
   stopTelegramCommandPoller();
   void stopTelegramUserCommandListener();
+  teardownTelegramChatForwarder();
   state.installed = false;
 }
 

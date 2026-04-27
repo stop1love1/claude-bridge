@@ -189,14 +189,26 @@ export const api = {
         return { ok: false, reason: e.message };
       }),
   telegramSettings: () =>
-    req<{ botToken: string; botTokenSet: boolean; chatId: string }>(
-      `/telegram/settings`,
-    ),
-  updateTelegramSettings: (patch: { botToken?: string; chatId?: string }) =>
-    req<{ botToken: string; botTokenSet: boolean; chatId: string }>(
-      `/telegram/settings`,
-      { method: "PUT", body: JSON.stringify(patch) },
-    ),
+    req<{
+      botToken: string;
+      botTokenSet: boolean;
+      chatId: string;
+      forwardChat: "off" | "coordinator-only" | "all";
+      forwardChatMinChars: number;
+    }>(`/telegram/settings`),
+  updateTelegramSettings: (patch: {
+    botToken?: string;
+    chatId?: string;
+    forwardChat?: "off" | "coordinator-only" | "all";
+    forwardChatMinChars?: number;
+  }) =>
+    req<{
+      botToken: string;
+      botTokenSet: boolean;
+      chatId: string;
+      forwardChat: "off" | "coordinator-only" | "all";
+      forwardChatMinChars: number;
+    }>(`/telegram/settings`, { method: "PUT", body: JSON.stringify(patch) }),
   telegramUserSettings: () =>
     req<{
       apiId: number;

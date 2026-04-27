@@ -4,14 +4,14 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRun, readMeta, updateRun } from "@/lib/meta";
+import { appendRunIfNotDuplicate, readMeta, updateRun } from "@/lib/meta";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
 import { resolveRepoCwd, resolveRepos } from "@/lib/repos";
 import { spawnFreeSession } from "@/lib/spawn";
 import { wireRunLifecycle } from "@/lib/coordinator";
 import { getApp } from "@/lib/apps";
 import { prepareBranch } from "@/lib/gitOps";
-import { createWorktreeForRun } from "@/lib/worktrees";
+import { createWorktreeForRun, removeWorktree } from "@/lib/worktrees";
 import { loadProfiles } from "@/lib/profileStore";
 import {
   getOrComputeScope,
@@ -55,6 +55,15 @@ interface AgentBody {
   prompt: string;
   parentSessionId?: string;
   requireUserApproval?: boolean;
+  /**
+   * Escape hatch for the (parentSessionId, role, repo) dedup check.
+   * Default `false` → if the same coordinator already has an active
+   * (queued/running) child with the same role + repo, the spawn is
+   * rejected with 409. Set to `true` for the rare case where two
+   * agents really should target the same repo with the same role
+   * (caller must have a good reason — usually it's a coordinator bug).
+   */
+  allowDuplicate?: boolean;
 }
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -106,6 +115,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // a parent session id implicitly skip it too, since there's nowhere
   // to surface the dialog.
   const requireUserApproval = body.requireUserApproval === true;
+  const allowDuplicate = body.allowDuplicate === true;
 
   if (!role) {
     return NextResponse.json({ error: "role is required" }, { status: 400 });
@@ -192,6 +202,36 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: `unknown repo: ${repo}` },
       { status: 400 },
     );
+  }
+
+  // Early dedup fast-path: rejects the common "coordinator double-POSTed
+  // the same agent in one turn" case BEFORE we allocate a worktree, write
+  // a per-session settings file, or build the prompt context. The
+  // canonical, race-safe check still runs inside the per-task lock at
+  // `appendRunIfNotDuplicate` further down — this is a pure optimization
+  // to avoid wasted work for the overwhelmingly common case.
+  if (!allowDuplicate) {
+    const dup = meta.runs.find(
+      (r) =>
+        (r.parentSessionId ?? null) === (parentSessionId ?? null) &&
+        r.role === role &&
+        r.repo === repo &&
+        (r.status === "queued" || r.status === "running"),
+    );
+    if (dup) {
+      return NextResponse.json(
+        {
+          error: "duplicate spawn",
+          reason:
+            "an active (queued/running) child with the same parentSessionId, role, and repo already exists for this task",
+          existingSessionId: dup.sessionId,
+          existingStatus: dup.status,
+          repo,
+          role,
+        },
+        { status: 409 },
+      );
+    }
   }
 
   // Per-app git workflow: if the resolved repo matches a registered
@@ -364,24 +404,72 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   // Append the run BEFORE spawning so a spawn failure can never produce
   // an alive-but-untracked child. The flow is:
-  //   1. record `queued`,
+  //   1. record `queued` (with dedup check against active siblings),
   //   2. try spawn,
   //   3a. success → `updateRun({status:"running", startedAt: now})`
   //   3b. failure → `updateRun({status:"failed", endedAt: now})` and bail.
   // wireRunLifecycle will then take over and flip running → done/failed
   // on child exit as before.
-  await appendRun(sessionsDir, {
-    sessionId,
+  //
+  // Dedup: same (parentSessionId, role, repo) where status is queued or
+  // running → reject with 409. Coordinators occasionally retry their
+  // spawn POST in the same turn (LLM lapses, network hiccup); without
+  // this check both calls succeed and the user sees two children doing
+  // the same job. `allowDuplicate: true` is the escape hatch.
+  const dedupKey = {
+    parentSessionId: parentSessionId ?? null,
     role,
     repo,
-    status: "queued",
-    startedAt: null,
-    endedAt: null,
-    parentSessionId: parentSessionId ?? null,
-    worktreePath: worktreePath ?? null,
-    worktreeBranch: worktreeBranch ?? null,
-    worktreeBaseBranch: worktreeBaseBranch ?? null,
-  });
+  };
+  const dedupResult = await appendRunIfNotDuplicate(
+    sessionsDir,
+    {
+      sessionId,
+      role,
+      repo,
+      status: "queued",
+      startedAt: null,
+      endedAt: null,
+      parentSessionId: parentSessionId ?? null,
+      worktreePath: worktreePath ?? null,
+      worktreeBranch: worktreeBranch ?? null,
+      worktreeBaseBranch: worktreeBaseBranch ?? null,
+    },
+    (existing) =>
+      !allowDuplicate &&
+      (existing.parentSessionId ?? null) === dedupKey.parentSessionId &&
+      existing.role === dedupKey.role &&
+      existing.repo === dedupKey.repo &&
+      (existing.status === "queued" || existing.status === "running"),
+  );
+  if (!dedupResult.inserted) {
+    // Race: the early fast-path check passed but a sibling POST raced
+    // ahead of us and won the lock. Clean up the worktree we just
+    // created so we don't leak. (Settings file is fine to leave; the
+    // session never started, so no .jsonl exists alongside it.)
+    if (worktreePath && app) {
+      try {
+        await removeWorktree({ appPath: app.path, worktreePath });
+      } catch (cleanupErr) {
+        console.warn(
+          `[dedup-race] worktree cleanup failed for ${worktreePath}:`,
+          cleanupErr,
+        );
+      }
+    }
+    return NextResponse.json(
+      {
+        error: "duplicate spawn",
+        reason:
+          "an active (queued/running) child with the same parentSessionId, role, and repo already exists for this task",
+        existingSessionId: dedupResult.existing.sessionId,
+        existingStatus: dedupResult.existing.status,
+        repo,
+        role,
+      },
+      { status: 409 },
+    );
+  }
 
   let childHandle;
   try {

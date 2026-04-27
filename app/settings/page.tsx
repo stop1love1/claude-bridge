@@ -31,6 +31,21 @@ const DETECT_OPTIONS: { value: DetectSource; label: string; hint: string }[] = [
 ];
 
 /**
+ * Coerce the user-typed forward-chat min-length input into a valid
+ * integer in the [0, 5000] range. Empty / NaN inputs default to 40 to
+ * match the bridge's server-side default — that way "save with the
+ * field blank" still produces sane behavior.
+ */
+function clampMinChars(input: string): number {
+  const n = Number(input);
+  if (!Number.isFinite(n)) return 40;
+  const i = Math.floor(n);
+  if (i < 0) return 0;
+  if (i > 5000) return 5000;
+  return i;
+}
+
+/**
  * Bridge-wide settings page. Currently houses:
  *
  *   - **Telegram notifier** — bot token + chat id for the lifecycle
@@ -170,6 +185,10 @@ function TelegramSettingsSection() {
   const [chatId, setChatId] = useState("");
   const [maskedToken, setMaskedToken] = useState("");
   const [tokenAlreadySet, setTokenAlreadySet] = useState(false);
+  const [forwardChat, setForwardChat] = useState<
+    "off" | "coordinator-only" | "all"
+  >("off");
+  const [forwardChatMinChars, setForwardChatMinChars] = useState<string>("40");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -184,6 +203,8 @@ function TelegramSettingsSection() {
         setMaskedToken(s.botToken);
         setTokenAlreadySet(s.botTokenSet);
         setChatId(s.chatId);
+        setForwardChat(s.forwardChat);
+        setForwardChatMinChars(String(s.forwardChatMinChars));
       } catch (e) {
         if (!cancelled) toast("error", (e as Error).message);
       } finally {
@@ -201,8 +222,15 @@ function TelegramSettingsSection() {
       // Empty token field = keep the existing one (don't blank it).
       // Empty chat id field = blank it (chat ids aren't sensitive
       // enough to need the "leave blank to keep" UX).
-      const patch: { botToken?: string; chatId?: string } = {
+      const patch: {
+        botToken?: string;
+        chatId?: string;
+        forwardChat: "off" | "coordinator-only" | "all";
+        forwardChatMinChars: number;
+      } = {
         chatId: chatId.trim(),
+        forwardChat,
+        forwardChatMinChars: clampMinChars(forwardChatMinChars),
       };
       if (botToken.trim().length > 0) patch.botToken = botToken.trim();
       const next = await api.updateTelegramSettings(patch);
@@ -210,6 +238,8 @@ function TelegramSettingsSection() {
       setMaskedToken(next.botToken);
       setTokenAlreadySet(next.botTokenSet);
       setChatId(next.chatId);
+      setForwardChat(next.forwardChat);
+      setForwardChatMinChars(String(next.forwardChatMinChars));
       toast("success", "Telegram settings saved");
     } catch (e) {
       toast("error", (e as Error).message);
@@ -232,11 +262,18 @@ function TelegramSettingsSection() {
   const clear = async () => {
     setSaving(true);
     try {
-      const next = await api.updateTelegramSettings({ botToken: "", chatId: "" });
+      const next = await api.updateTelegramSettings({
+        botToken: "",
+        chatId: "",
+        forwardChat: "off",
+        forwardChatMinChars: 40,
+      });
       setBotToken("");
       setMaskedToken(next.botToken);
       setTokenAlreadySet(next.botTokenSet);
       setChatId(next.chatId);
+      setForwardChat(next.forwardChat);
+      setForwardChatMinChars(String(next.forwardChatMinChars));
       toast("info", "Telegram settings cleared");
     } catch (e) {
       toast("error", (e as Error).message);
@@ -299,6 +336,46 @@ function TelegramSettingsSection() {
             />
             <p className="text-[11px] text-muted-foreground">
               The numeric chat id where the bot should post.
+            </p>
+          </div>
+          <div className="grid gap-1.5 pt-1 border-t border-border/60 mt-1">
+            <Label htmlFor="tg-forward">Forward chat to Telegram</Label>
+            <select
+              id="tg-forward"
+              className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+              value={forwardChat}
+              onChange={(e) =>
+                setForwardChat(
+                  e.target.value as "off" | "coordinator-only" | "all",
+                )
+              }
+            >
+              <option value="off">Off — lifecycle events only (default)</option>
+              <option value="coordinator-only">
+                Coordinator only — mirror coordinator chat
+              </option>
+              <option value="all">All — mirror every spawned agent&apos;s chat</option>
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              Mirrors assistant prose from spawned Claude sessions to your
+              Telegram chat. Quality-gate runs (style-critic, semantic-verifier)
+              are always skipped.
+            </p>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="tg-forward-min">Minimum length (chars)</Label>
+            <Input
+              id="tg-forward-min"
+              type="number"
+              min={0}
+              max={5000}
+              value={forwardChatMinChars}
+              onChange={(e) => setForwardChatMinChars(e.target.value)}
+              disabled={forwardChat === "off"}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Skip messages shorter than this after trim. Filters &quot;OK.&quot;
+              / &quot;Done.&quot; chatter. Default 40.
             </p>
           </div>
           <div className="flex flex-wrap gap-2 pt-1">

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   getManifestTelegramSettings,
   setManifestTelegramSettings,
-  type TelegramSettings,
+  type TelegramForwardChat,
 } from "@/lib/apps";
 import {
   ensureTelegramNotifier,
@@ -10,6 +10,13 @@ import {
 } from "@/lib/telegramNotifier";
 
 export const dynamic = "force-dynamic";
+
+interface TelegramSettingsPatchBody {
+  botToken?: string;
+  chatId?: string;
+  forwardChat?: TelegramForwardChat;
+  forwardChatMinChars?: number;
+}
 
 /**
  * GET /api/telegram/settings
@@ -24,30 +31,43 @@ export function GET() {
     botToken: settings.botToken ? maskToken(settings.botToken) : "",
     botTokenSet: settings.botToken.length > 0,
     chatId: settings.chatId,
+    forwardChat: settings.forwardChat,
+    forwardChatMinChars: settings.forwardChatMinChars,
   });
 }
 
 /**
  * PUT /api/telegram/settings
  *
- * Body: `{ botToken?: string, chatId?: string }`. Empty strings clear
- * the corresponding field; omitted fields are left as-is. Once both
- * fields are empty the entire `telegram` section is dropped from
- * `bridge.json` (set by `setManifestTelegramSettings`).
+ * Body: `{ botToken?, chatId?, forwardChat?, forwardChatMinChars? }`.
+ * Empty strings clear the corresponding field; omitted fields are left
+ * as-is. Once both fields are empty (and forwardChat is at default) the
+ * entire `telegram` section is dropped from `bridge.json` (handled by
+ * `setManifestTelegramSettings`).
  *
  * Returns the post-write settings (bot token masked).
  */
 export async function PUT(req: NextRequest) {
-  let body: Partial<TelegramSettings>;
+  let body: TelegramSettingsPatchBody;
   try {
-    body = (await req.json()) as Partial<TelegramSettings>;
+    body = (await req.json()) as TelegramSettingsPatchBody;
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
 
-  const patch: Partial<TelegramSettings> = {};
+  const patch: TelegramSettingsPatchBody = {};
   if (typeof body.botToken === "string") patch.botToken = body.botToken;
   if (typeof body.chatId === "string") patch.chatId = body.chatId;
+  if (
+    body.forwardChat === "off" ||
+    body.forwardChat === "coordinator-only" ||
+    body.forwardChat === "all"
+  ) {
+    patch.forwardChat = body.forwardChat;
+  }
+  if (typeof body.forwardChatMinChars === "number") {
+    patch.forwardChatMinChars = body.forwardChatMinChars;
+  }
 
   const next = setManifestTelegramSettings(patch);
 
@@ -70,6 +90,8 @@ export async function PUT(req: NextRequest) {
     botToken: next.botToken ? maskToken(next.botToken) : "",
     botTokenSet: next.botToken.length > 0,
     chatId: next.chatId,
+    forwardChat: next.forwardChat,
+    forwardChatMinChars: next.forwardChatMinChars,
   });
 }
 
