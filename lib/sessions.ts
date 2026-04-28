@@ -267,19 +267,30 @@ export function listSessions(projectDir: string): SessionEntry[] {
     try { st = statSync(p); } catch { continue; }
 
     let preview = "";
+    // Claude Code writes leaf-pointer stub files (`{"type":"last-prompt",…}`)
+    // to track resume/rewind targets — they share the .jsonl extension but
+    // contain no real conversation. Surface only files that have at least
+    // one user/assistant/summary turn so these stubs don't show up as empty
+    // "orphan" sessions in the panel.
+    let hasRealEntry = false;
     try {
       const head = readFileSync(p, "utf8").slice(0, 8192);
       for (const line of head.split("\n")) {
         if (!line.trim()) continue;
         try {
           const obj = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
-          if (obj.type === "user") {
-            preview = extractText(obj.message?.content).trim().replace(/\s+/g, " ").slice(0, 120);
-            break;
+          if (obj.type === "user" || obj.type === "assistant" || obj.type === "summary") {
+            hasRealEntry = true;
+            if (!preview && obj.type === "user") {
+              preview = extractText(obj.message?.content).trim().replace(/\s+/g, " ").slice(0, 120);
+            }
+            if (preview) break;
           }
         } catch { /* partial line — keep scanning */ }
       }
     } catch { /* unreadable → leave preview empty */ }
+
+    if (!hasRealEntry) continue;
 
     out.push({
       sessionId: f.replace(/\.jsonl$/, ""),

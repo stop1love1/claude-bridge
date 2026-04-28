@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pathToSlug, tailJsonl, tailJsonlBefore, findSessionByPrefix } from "../sessions";
+import { pathToSlug, tailJsonl, tailJsonlBefore, findSessionByPrefix, listSessions } from "../sessions";
 import { join } from "node:path";
 import { mkdtempSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,6 +101,29 @@ describe("tailJsonlBefore", () => {
     const out = await tailJsonlBefore(file, 0);
     expect(out.lines).toEqual([]);
     expect(out.fromOffset).toBe(0);
+  });
+});
+
+describe("listSessions", () => {
+  it("hides leaf-pointer stub files that contain only `last-prompt`", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sessions-"));
+    const stub = join(dir, "stub.jsonl");
+    const real = join(dir, "real.jsonl");
+    writeFileSync(stub, `{"type":"last-prompt","lastPrompt":"hi","leafUuid":"x","sessionId":"stub"}\n`);
+    writeFileSync(real, `{"type":"user","message":{"role":"user","content":"hello"}}\n`);
+
+    const sessions = listSessions(dir);
+    expect(sessions.map((s) => s.sessionId)).toEqual(["real"]);
+    expect(sessions[0]?.preview).toBe("hello");
+  });
+
+  it("keeps assistant-only sessions (no user line yet) but with empty preview", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sessions-"));
+    const file = join(dir, "asst.jsonl");
+    writeFileSync(file, `{"type":"assistant","message":{"role":"assistant","content":"…"}}\n`);
+    const sessions = listSessions(dir);
+    expect(sessions.map((s) => s.sessionId)).toEqual(["asst"]);
+    expect(sessions[0]?.preview).toBe("");
   });
 });
 
