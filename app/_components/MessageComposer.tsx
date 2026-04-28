@@ -6,7 +6,8 @@ import { api } from "@/lib/client/api";
 import { useLocalStorage } from "@/lib/client/useLocalStorage";
 import { useToast } from "./Toasts";
 import { ChatSettingsMenu } from "./ChatSettingsMenu";
-import { ActionsMenu, type ActionId } from "./ActionsMenu";
+import { QuickAddMenu } from "./ActionsMenu";
+import { SlashActionsPalette } from "./SlashActionsPalette";
 import { MentionPicker, type MentionMatch } from "./MentionPicker";
 import { MicButton } from "./MicButton";
 import type { ChatSettings } from "@/lib/client/types";
@@ -121,10 +122,19 @@ function MessageComposerInner({
   const [uploadProgress, setUploadProgress] = useState<{ name: string; pct: number } | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [interim, setInterim] = useState("");
+  const [slashPaletteOpen, setSlashPaletteOpen] = useState(false);
+  /** Bumps only when "/" opens the palette so the subtree remounts with a cleared filter (controlled open skips Radix open handler). */
+  const [slashPaletteMountKey, setSlashPaletteMountKey] = useState(0);
   const lastSentRef = useRef<string>("");
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
+
+  /** True when caret is at the start of a line (whole message or after newline), optionally with leading spaces — matches where Claude opens the `/` palette. */
+  const isCaretAtLogicalLineStart = useCallback((beforeCaret: string) => {
+    const ls = beforeCaret.lastIndexOf("\n") + 1;
+    return beforeCaret.slice(ls).trim() === "";
+  }, []);
 
   // Stop the in-flight claude subprocess for this session. 404 ("no
   // live process") is benign — the run finished a moment ago and the
@@ -268,6 +278,26 @@ function MessageComposerInner({
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mention) return; // MentionPicker handles ↑↓↵Esc
+    if (
+      e.key === "/" &&
+      !e.shiftKey &&
+      !slashPaletteOpen &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey
+    ) {
+      const ta = taRef.current;
+      if (!ta) return;
+      const caret = ta.selectionStart ?? draft.length;
+      const selEnd = ta.selectionEnd ?? draft.length;
+      if (caret !== selEnd) return;
+      const before = draft.slice(0, caret);
+      if (isCaretAtLogicalLineStart(before)) {
+        e.preventDefault();
+        setSlashPaletteMountKey((k) => k + 1);
+        setSlashPaletteOpen(true);
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -280,49 +310,30 @@ function MessageComposerInner({
   };
 
   // -- Actions menu wiring --
-  const onActionPick = (id: ActionId) => {
-    if (id === "attach") { onPickFile(); return; }
-    if (id === "mention") {
-      const el = taRef.current;
-      if (!el) return;
-      const caret = el.selectionStart ?? draft.length;
-      const before = draft.slice(0, caret);
-      const after = draft.slice(caret);
-      const insert = before && !/\s$/.test(before) ? " @" : "@";
-      const next = before + insert + after;
-      setDraft(next);
-      requestAnimationFrame(() => {
-        el.focus();
-        const newCaret = before.length + insert.length;
-        el.setSelectionRange(newCaret, newCaret);
-      });
-      return;
-    }
-    if (id === "clear") {
-      if (!onClearConversation) {
-        toast("info", "Open this from inside a task to clear its conversation");
-        return;
-      }
-      onClearConversation();
-      return;
-    }
-    if (id === "rewind") {
-      if (!onRewindRequest) {
-        toast("info", "Click on a user message in the log, then choose Rewind");
-        return;
-      }
-      onRewindRequest();
-      return;
-    }
-    if (id === "switch-model" || id === "effort" || id === "thinking") {
-      toast("info", "Open the Mode picker (button to the left of Send)");
-      return;
-    }
-    if (id === "account") {
-      window.open("https://console.anthropic.com/settings/usage", "_blank", "noopener");
-      return;
-    }
-  };
+  const insertAtCaret = useCallback((text: string) => {
+    setInterim("");
+    const el = taRef.current;
+    const caret = el?.selectionStart ?? draft.length;
+    const before = draft.slice(0, caret);
+    const after = draft.slice(caret);
+    const next = before + text + after;
+    setDraft(next);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      const newCaret = before.length + text.length;
+      ta.setSelectionRange(newCaret, newCaret);
+    });
+  }, [draft]);
+
+  const handleMentionAction = useCallback(() => {
+    const el = taRef.current;
+    const caret = el?.selectionStart ?? draft.length;
+    const before = draft.slice(0, caret);
+    const insert = before && !/\s$/.test(before) ? " @" : "@";
+    insertAtCaret(insert);
+  }, [draft, insertAtCaret]);
 
   const composedMessage = draft + (interim ? (draft ? " " : "") + interim : "");
   const canSend = !!composedMessage.trim() || attachments.length > 0;
@@ -332,6 +343,13 @@ function MessageComposerInner({
   // (textarea border + form border-t). When focused we also dim the
   // top border so the card visually merges with the chat above.
   const [focused, setFocused] = useState(false);
+
+  const onSlashPaletteOpenChange = useCallback((open: boolean) => {
+    setSlashPaletteOpen(open);
+    if (!open) {
+      requestAnimationFrame(() => taRef.current?.focus());
+    }
+  }, []);
 
   return (
     <form
@@ -367,7 +385,7 @@ function MessageComposerInner({
           rounded surface so the composer reads as a single control,
           not three stacked widgets. Border lifts on focus. */}
       <div
-        className={`rounded-xl border bg-background transition-colors ${
+        className={`relative rounded-xl border bg-background transition-colors overflow-visible ${
           focused
             ? "border-primary/60 shadow-[0_0_0_3px_rgba(106,168,255,0.12)]"
             : "border-border"
@@ -441,12 +459,20 @@ function MessageComposerInner({
             surface. Subtle top divider only when content above is
             non-trivial (textarea always is). */}
         <div className="flex items-center gap-1.5 px-1.5 pb-1.5 pt-1">
-          <ActionsMenu
-            onPick={onActionPick}
-            disabled={{
-              clear: !onClearConversation,
-              rewind: !onRewindRequest,
-            }}
+          <QuickAddMenu
+            onAttach={onPickFile}
+            onMention={handleMentionAction}
+          />
+          <SlashActionsPalette
+            key={slashPaletteMountKey}
+            open={slashPaletteOpen}
+            onOpenChange={onSlashPaletteOpenChange}
+            repo={repo}
+            onSlashInsert={insertAtCaret}
+            onAttach={onPickFile}
+            onMention={handleMentionAction}
+            onClear={onClearConversation}
+            onRewind={onRewindRequest}
           />
           {uploading && <Loader2 size={12} className="text-muted-foreground animate-spin" />}
 
@@ -456,7 +482,7 @@ function MessageComposerInner({
             className="hidden sm:inline text-[10px] text-muted-foreground/60 ml-1 truncate"
             aria-hidden="true"
           >
-            Enter to send · Shift+Enter newline · @ mention
+            Enter to send · Shift+Enter newline · @ mention · / commands
           </span>
 
           {/* Mode pill + Send live on the right edge, like Claude. */}

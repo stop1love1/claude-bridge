@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { resolveRepos } from "@/lib/repos";
-import { listSessions, projectDirFor } from "@/lib/sessions";
+import { discoverOrphanProjects, listSessions, projectDirFor } from "@/lib/sessions";
 import { readMeta } from "@/lib/meta";
 import { readGitBranch } from "@/lib/git";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
@@ -42,21 +42,28 @@ function buildLinkIndex(): { links: Map<string, LinkInfo>; taskTitles: Map<strin
  *   - the bridge itself
  *   - every repo declared in BRIDGE.md
  *   - any sibling folder of the bridge that exists on disk
+ *   - every other project folder under `~/.claude/projects/` that holds
+ *     at least one session (worktrees, unrelated repos, sessions started
+ *     in `~`, etc) — recovered via the cwd field stored in each .jsonl
  *
- * That mirrors the discovery logic in `/api/repos`, so the same folders
- * the user can spawn into are also the ones whose sessions show up here.
- * Each entry includes both the short folder name (`repo`) and the full
- * absolute path (`repoPath`) so the UI can group on either.
+ * That mirrors the discovery logic in `/api/repos` for the spawn-target
+ * cases AND surfaces every transcript Claude has written, so the
+ * sessions panel never silently hides a session because its cwd doesn't
+ * match a registered repo. Each entry includes both the short folder
+ * name (`repo`) and the full absolute path (`repoPath`) so the UI can
+ * group on either.
  */
 export function GET() {
   const md = readFileSync(BRIDGE_MD, "utf8");
   const { links, taskTitles } = buildLinkIndex();
 
   const seen = new Set<string>();
+  const seenProjectDirs = new Set<string>();
   const repos: Array<{ name: string; path: string; isBridge: boolean }> = [];
   const push = (name: string, path: string, isBridge: boolean) => {
     if (seen.has(path)) return;
     seen.add(path);
+    seenProjectDirs.add(projectDirFor(path));
     repos.push({ name, path, isBridge });
   };
   push(basename(BRIDGE_ROOT), BRIDGE_ROOT, true);
@@ -68,6 +75,16 @@ export function GET() {
       push(entry.name, join(parent, entry.name), false);
     }
   } catch { /* parent unreadable */ }
+
+  // Pick up every other ~/.claude/projects/<slug>/ folder that has at
+  // least one session and isn't already covered above. The cwd is
+  // recovered from the first transcript line so the path we surface is
+  // the real one Claude saw, not a lossy slug-decode.
+  for (const orphan of discoverOrphanProjects(seenProjectDirs)) {
+    if (seen.has(orphan.path)) continue;
+    seen.add(orphan.path);
+    repos.push({ name: orphan.name, path: orphan.path, isBridge: false });
+  }
 
   const out: Array<{
     sessionId: string;

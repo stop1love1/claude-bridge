@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Hash } from "lucide-react";
 import { api } from "@/lib/client/api";
@@ -34,11 +34,13 @@ function TaskPageInner() {
   // so a deep-link with `?sid=` (e.g. from /sessions) lands directly
   // in the chat without a manual tap; bare task URLs default to
   // "detail" so the user picks an agent first.
-  const [mobileTab, setMobileTab] = useState<"detail" | "chat">(() =>
-    typeof window !== "undefined" && new URL(window.location.href).searchParams.get("sid")
-      ? "chat"
-      : "detail",
-  );
+  const [mobileTab, setMobileTab] = useState<"detail" | "chat">(() => {
+    if (typeof window === "undefined") return "detail";
+    const params = new URL(window.location.href).searchParams;
+    const urlTab = params.get("activeTab");
+    if (urlTab === "detail" || urlTab === "chat") return urlTab;
+    return params.get("sid") ? "chat" : "detail";
+  });
 
   // Active run is reconstructed from the URL (`?sid=…`) so reloading or
   // sharing the URL keeps the same chat selected. It also cooperates
@@ -65,7 +67,14 @@ function TaskPageInner() {
     router.replace(qs ? `/tasks/${id}?${qs}` : `/tasks/${id}`, { scroll: false });
   }, [id, router, search]);
 
-  const saveRef = useRef<(() => void) | null>(null);
+  const setMobileTabWithUrl = useCallback((tab: "detail" | "chat") => {
+    setMobileTab(tab);
+    const params = new URLSearchParams(Array.from(search.entries()));
+    if (tab === "detail") params.delete("activeTab");
+    else params.set("activeTab", tab);
+    const qs = params.toString();
+    router.replace(qs ? `/tasks/${id}?${qs}` : `/tasks/${id}`, { scroll: false });
+  }, [id, router, search]);
 
   const refreshTask = useCallback(async () => {
     try {
@@ -165,14 +174,11 @@ function TaskPageInner() {
     });
   }, [meta?.runs, repos, search, setActiveRun]);
 
-  const handleSave = useCallback(
-    async (patch: Partial<Task>) => {
-      if (!id) return;
-      await api.updateTask(id, patch);
-      await refreshTask();
-    },
-    [id, refreshTask],
-  );
+  useEffect(() => {
+    const urlTab = search.get("activeTab");
+    const nextTab: "detail" | "chat" = urlTab === "chat" ? "chat" : "detail";
+    if (nextTab !== mobileTab) setMobileTab(nextTab);
+  }, [mobileTab, search]);
 
   const handleToggleComplete = useCallback(
     async (next: boolean) => {
@@ -223,9 +229,9 @@ function TaskPageInner() {
       // Auto-flip to chat on mobile — the user just clicked an agent
       // expecting to read its output, mirroring desktop where the right
       // pane updates inline.
-      setMobileTab("chat");
+      setMobileTabWithUrl("chat");
     },
-    [repos, setActiveRun],
+    [repos, setActiveRun, setMobileTabWithUrl],
   );
 
   const handleClearConversation = useCallback(async () => {
@@ -255,11 +261,6 @@ function TaskPageInner() {
     };
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        saveRef.current?.();
-        return;
-      }
       if (e.key === "Escape" && !isTextInput(e.target)) {
         e.preventDefault();
         router.push("/tasks");
@@ -271,7 +272,7 @@ function TaskPageInner() {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-screen">
+      <div className="flex flex-col h-dvh overflow-hidden">
         <div className="h-11 shrink-0 border-b border-border bg-card" />
         <div className="flex-1 p-6 max-w-3xl mx-auto w-full space-y-3">
           <div className="h-3 w-32 rounded bg-muted/60 animate-pulse" />
@@ -286,7 +287,7 @@ function TaskPageInner() {
 
   if (!task) {
     return (
-      <div className="flex flex-col h-screen items-center justify-center text-fg-dim text-sm">
+      <div className="flex flex-col h-dvh overflow-hidden items-center justify-center text-fg-dim text-sm">
         <Hash size={32} className="mb-3 opacity-30" />
         <p className="mb-1 text-foreground">Task not found</p>
         <p className="text-xs text-fg-dim/70 mb-4 font-mono">{id}</p>
@@ -301,7 +302,7 @@ function TaskPageInner() {
   }
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-dvh overflow-hidden">
       <HeaderShell active="tasks" />
 
       {/* Page sub-toolbar — breadcrumb + keyboard hints out of the global
@@ -313,9 +314,6 @@ function TaskPageInner() {
         <span className="hidden sm:inline text-fg-dim shrink-0">·</span>
         <span className="text-sm font-medium truncate flex-1 min-w-0">{task.title}</span>
         <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border shrink-0">
-          ⌘S save
-        </kbd>
-        <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border shrink-0">
           Esc back
         </kbd>
       </div>
@@ -325,7 +323,7 @@ function TaskPageInner() {
       <div className="lg:hidden shrink-0 flex border-b border-border bg-card">
         <button
           type="button"
-          onClick={() => setMobileTab("detail")}
+          onClick={() => setMobileTabWithUrl("detail")}
           aria-pressed={mobileTab === "detail"}
           className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors ${
             mobileTab === "detail"
@@ -337,7 +335,7 @@ function TaskPageInner() {
         </button>
         <button
           type="button"
-          onClick={() => setMobileTab("chat")}
+          onClick={() => setMobileTabWithUrl("chat")}
           aria-pressed={mobileTab === "chat"}
           className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors ${
             mobileTab === "chat"
@@ -349,7 +347,7 @@ function TaskPageInner() {
         </button>
       </div>
 
-      <main className="flex-1 flex flex-col lg:flex-row min-h-0">
+      <main className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
         {/* Both panels stay mounted (display:none vs flex) so editor
             state and scroll position survive a tab switch. */}
         <div
@@ -362,11 +360,9 @@ function TaskPageInner() {
             meta={meta}
             repos={repos}
             activeRunId={activeRun?.sessionId ?? null}
-            onSave={handleSave}
             onDelete={handleDelete}
             onSelectRun={handleSelectRun}
             onToggleComplete={handleToggleComplete}
-            saveRef={saveRef}
           />
         </div>
         <div

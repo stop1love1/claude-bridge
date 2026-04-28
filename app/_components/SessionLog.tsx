@@ -7,7 +7,7 @@ import {
   Terminal, Copy, Check, ArrowDown,
   Wrench, FileText, Brain, ChevronDown, ChevronRight, AlertCircle,
   Undo2, ListTodo, Square, CheckSquare, Asterisk,
-  Search, X, ArrowUp, Download, MoreVertical,
+  Search, X, ArrowUp, Download, MoreVertical, RotateCw,
 } from "lucide-react";
 import { exportSessionMarkdown, downloadFile } from "@/lib/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
@@ -976,6 +976,13 @@ function SessionLogInner({
   const toast = useToast();
   const confirm = useConfirm();
 
+  const onRewindFromPalette = useCallback(() => {
+    toast(
+      "info",
+      "Rewind only from the log: tap rewind beside the user message you want to roll back to.",
+    );
+  }, [toast]);
+
   useEffect(() => {
     // Note: state resets are handled by remounting via the `key={sessionId}`
     // wrapper in `SessionLog` (see export below) — calling setEntries([])
@@ -1587,7 +1594,7 @@ function SessionLogInner({
   }
 
   return (
-    <section className="flex-1 min-w-0 flex flex-col bg-card relative">
+    <section className="flex-1 min-w-0 min-h-0 flex flex-col bg-card relative overflow-hidden">
       {searchOpen && (
         <div className="absolute top-2 right-3 z-30 flex items-center gap-1 rounded-md border border-border bg-card shadow-lg px-2 py-1.5 text-xs">
           <Search size={12} className="text-fg-dim shrink-0" />
@@ -1722,6 +1729,15 @@ function SessionLogInner({
             {run.sessionId.slice(0, 8)}…
             {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
           </button>
+          {onClearConversation && (
+            <button
+              onClick={onClearConversation}
+              className="hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
+              title="Spawn a fresh coordinator"
+            >
+              <RotateCw size={10} /> Clear
+            </button>
+          )}
           {/* Mobile-only kebab — bundles Tools toggle, Export, and Copy
               session ID so the header stays one line on phones. h-7/w-7
               gives a finger-friendly tap target. */}
@@ -1759,6 +1775,12 @@ function SessionLogInner({
                 {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
                 <span className="font-mono">{run.sessionId.slice(0, 8)}…</span>
               </DropdownMenuItem>
+              {onClearConversation && (
+                <DropdownMenuItem onClick={onClearConversation}>
+                  <RotateCw size={12} />
+                  Clear conversation
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1852,16 +1874,19 @@ function SessionLogInner({
 
       <InlinePermissionRequests sessionId={run.sessionId} />
 
-      <MessageComposer
-        sessionId={run.sessionId}
-        repo={run.repo}
-        repoPath={run.repoPath}
-        role={run.role}
-        taskId={taskId}
-        isResponding={isResponding}
-        onSent={onSent}
-        onClearConversation={onClearConversation}
-      />
+      <div className="sticky bottom-0 z-20 border-t border-border bg-card">
+        <MessageComposer
+          sessionId={run.sessionId}
+          repo={run.repo}
+          repoPath={run.repoPath}
+          role={run.role}
+          taskId={taskId}
+          isResponding={isResponding}
+          onSent={onSent}
+          onClearConversation={onClearConversation}
+          onRewindRequest={onRewindFromPalette}
+        />
+      </div>
     </section>
   );
 }

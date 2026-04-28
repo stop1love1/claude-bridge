@@ -38,7 +38,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { BRIDGE_ROOT, USER_CLAUDE_DIR } from "./paths";
 
 /**
@@ -954,20 +954,117 @@ export function renameApp(
   return { ok: true, app: target };
 }
 
-const REPO_MARKERS = [
-  "package.json", "pyproject.toml", "requirements.txt",
-  "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts",
-  "tsconfig.json", "Gemfile", "composer.json", ".git",
-];
+/**
+ * Per-marker weights for repo-likeness scoring. A folder needs to clear
+ * `SCORE_THRESHOLD` to be promoted to a candidate. The split makes it
+ * possible to score a `.git` folder strongly even if no other manifest
+ * is present, while a lone `tsconfig.json` (common in tooling subdirs)
+ * doesn't drag in noise.
+ */
+const STRONG_MARKERS: ReadonlyMap<string, number> = new Map([
+  [".git", 10],
+]);
+
+const PROJECT_MARKERS: ReadonlyMap<string, number> = new Map([
+  ["package.json", 6],
+  ["pyproject.toml", 6],
+  ["go.mod", 6],
+  ["Cargo.toml", 6],
+  ["pom.xml", 6],
+  ["build.gradle", 6],
+  ["build.gradle.kts", 6],
+  ["Gemfile", 6],
+  ["composer.json", 6],
+  ["mix.exs", 6],
+  ["Pipfile", 6],
+  ["setup.py", 5],
+  ["deno.json", 5],
+  ["deno.jsonc", 5],
+  ["flake.nix", 4],
+  ["tsconfig.json", 4],
+  ["requirements.txt", 4],
+  ["setup.cfg", 4],
+  ["Rakefile", 4],
+  ["Dockerfile", 3],
+  ["shell.nix", 3],
+  ["Makefile", 2],
+]);
+
+const LOCKFILE_MARKERS: ReadonlyMap<string, number> = new Map([
+  ["package-lock.json", 3],
+  ["yarn.lock", 3],
+  ["pnpm-lock.yaml", 3],
+  ["bun.lockb", 3],
+  ["bun.lock", 3],
+  ["Cargo.lock", 3],
+  ["Pipfile.lock", 3],
+  ["poetry.lock", 3],
+  ["composer.lock", 3],
+  ["Gemfile.lock", 3],
+  ["go.sum", 3],
+]);
+
+const MONOREPO_MARKERS = [
+  "pnpm-workspace.yaml",
+  "lerna.json",
+  "turbo.json",
+  "nx.json",
+  "rush.json",
+] as const;
+
+/**
+ * Common monorepo workspace folders. When a root repo declares itself a
+ * monorepo, the detector also descends into these to surface workspace
+ * children as separate candidates.
+ */
+const MONOREPO_CHILD_DIRS = ["packages", "apps", "services", "libs"] as const;
+
+/** Minimum score for a folder to be promoted to a candidate. */
+const SCORE_THRESHOLD = 5;
+
+/** Hard cap on directories scanned per root. Stops a misconfigured root pointing at `~` from melting the host. */
+const MAX_DIRS_PER_ROOT = 200;
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", ".vscode", ".idea", "dist", "build",
   ".next", "out", ".turbo", ".cache", ".pnpm-store", ".bridge-state",
-  ".uploads", ".playwright-mcp", "coverage",
+  ".uploads", ".playwright-mcp", "coverage", ".venv", "venv", "__pycache__",
+  "target", "bin", "obj", ".gradle", ".mvn",
 ]);
 
-function looksLikeCodeRepo(p: string): boolean {
-  return REPO_MARKERS.some((m) => existsSync(join(p, m)));
+interface RepoScore {
+  score: number;
+  signals: string[];
+  isMonorepoRoot: boolean;
+}
+
+/**
+ * Compute a repo-likeness score for a folder by summing marker weights.
+ * `.git` alone qualifies; a manifest plus a lockfile is the typical
+ * source-tree signature; a stray `tsconfig.json` in a tooling subdir
+ * (weight 4) does not clear the threshold by itself.
+ */
+function scoreRepo(p: string): RepoScore {
+  let score = 0;
+  const signals: string[] = [];
+  let isMonorepoRoot = false;
+  for (const [marker, weight] of STRONG_MARKERS) {
+    if (existsSync(join(p, marker))) { score += weight; signals.push(marker); }
+  }
+  for (const [marker, weight] of PROJECT_MARKERS) {
+    if (existsSync(join(p, marker))) { score += weight; signals.push(marker); }
+  }
+  for (const [marker, weight] of LOCKFILE_MARKERS) {
+    if (existsSync(join(p, marker))) { score += weight; signals.push(marker); }
+  }
+  for (const marker of MONOREPO_MARKERS) {
+    if (existsSync(join(p, marker))) {
+      isMonorepoRoot = true;
+      score += 2; // small bump so monorepo roots themselves register too
+      signals.push(marker);
+    }
+  }
+  return { score, signals, isMonorepoRoot };
 }
 
 function safeReadJson(p: string): { description?: string } | null {
@@ -988,69 +1085,295 @@ function deriveDescription(repoPath: string): string {
   return "";
 }
 
+/**
+ * Render an absolute path as the operator-friendly form we persist in
+ * `bridge.json`. Sibling-of-bridge → `../<name>`, anything deeper than
+ * one parent traversal stays absolute (more readable, no surprise).
+ */
+function formatRawPath(absPath: string): string {
+  const rel = relative(BRIDGE_ROOT, absPath).replace(/\\/g, "/");
+  if (!rel || rel === ".") return absPath;
+  // Allow at most one `..` segment in a relative form. Deep traversals
+  // turn into mostly-`../` ladders that are harder to read than the
+  // absolute path.
+  const parentLadder = rel.match(/^(\.\.\/)+/)?.[0] ?? "";
+  if (parentLadder.length > 3) return absPath;
+  return rel;
+}
+
+/**
+ * Coerce a folder name into a valid app name slug. The detection layer
+ * only proposes candidates whose folder name is already valid (the UI
+ * shows the suggestion and the user can rename in the modal), but the
+ * monorepo path produces composite names like `mono__pkg-web` so we
+ * sanitize defensively.
+ */
+function suggestAppName(raw: string, taken: Set<string>): string {
+  let base = raw.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^-+|-+$/g, "");
+  if (!base || !/^[A-Za-z0-9]/.test(base)) base = `app-${base}`.replace(/^-+|-+$/g, "");
+  if (!APP_NAME_RE.test(base)) base = "app";
+  let name = base;
+  let n = 2;
+  while (taken.has(name)) {
+    name = `${base}-${n++}`;
+  }
+  return name;
+}
+
+export interface DetectCandidate {
+  /** Suggested registration name (folder name, slugified + de-duped). */
+  name: string;
+  /** Path the user would see in `bridge.json` (relative or absolute). */
+  rawPath: string;
+  /** Resolved absolute path on disk. */
+  absolutePath: string;
+  description: string;
+  /** Marker filenames that fired during scoring. */
+  signals: string[];
+  /** Total weighted score; ≥ SCORE_THRESHOLD to qualify. */
+  score: number;
+  /** True when an existing app entry already points at this folder. */
+  alreadyRegistered: boolean;
+  /** True when this candidate is a child of a workspace root (e.g. `apps/web`). */
+  isMonorepoChild: boolean;
+}
+
+export type DetectEvent =
+  | { type: "started"; roots: string[]; depth: number }
+  | { type: "scanning"; root: string }
+  | { type: "candidate"; candidate: DetectCandidate }
+  | { type: "skipped"; path: string; reason: "not-a-repo" | "already-scanned" | "permission" | "max-dirs" }
+  | { type: "done"; candidates: number; alreadyRegistered: number; scanned: number };
+
+export interface DetectOptions {
+  /** Absolute or relative-to-BRIDGE_ROOT roots. Empty / undefined → bridge parent. */
+  roots?: string[];
+  /** Plain recursion depth into non-repo folders. Defaults to 1 (children only). Capped at 3. */
+  depth?: number;
+  /** Streaming hook — fires for every event so the SSE route can flush incrementally. */
+  onEvent?: (ev: DetectEvent) => void | Promise<void>;
+  /** Aborts early when fired (client disconnect). */
+  signal?: AbortSignal;
+}
+
+/**
+ * Pure detection — scans `roots` for code repos and emits candidates
+ * via `onEvent`. Does NOT mutate `bridge.json`. Callers (the UI confirm
+ * flow, or `autoDetectApps` for backward compat) decide which
+ * candidates to add.
+ *
+ * Smart parts vs. the previous one-tier scan:
+ *   - Marker scoring (≥ 5) instead of any-marker, so a stray
+ *     `tsconfig.json` in a tooling folder no longer registers.
+ *   - Multi-root, configurable via `roots[]` and persisted via
+ *     `set/getManifestDetectScanRoots`. Default still = bridge parent.
+ *   - Monorepo aware: workspace roots additionally surface
+ *     `packages/*`, `apps/*`, `services/*`, `libs/*` as separate
+ *     candidates (folder name suggestion is the workspace child, with
+ *     a slug-disambiguator if it collides).
+ *   - `depth` controls plain recursion into non-repo folders for
+ *     operators whose code lives 1–2 levels under the configured root.
+ */
+export async function detectAppCandidates(
+  opts: DetectOptions = {},
+): Promise<DetectCandidate[]> {
+  const depth = Math.min(3, Math.max(1, opts.depth ?? 1));
+  const requestedRoots = (opts.roots ?? [])
+    .map((r) => r.trim())
+    .filter((r) => r.length > 0);
+  const rootsAbs = (requestedRoots.length > 0 ? requestedRoots : [dirname(BRIDGE_ROOT)])
+    .map((r) => (isAbsolute(r) ? resolve(r) : resolve(BRIDGE_ROOT, r)));
+
+  const existing = loadApps();
+  const knownNames = new Set(existing.map((a) => a.name));
+  const knownPaths = new Set(existing.map((a) => a.path));
+
+  const emit = async (ev: DetectEvent) => {
+    try { await opts.onEvent?.(ev); } catch { /* never let the consumer kill the scan */ }
+  };
+
+  await emit({ type: "started", roots: rootsAbs, depth });
+
+  const candidates: DetectCandidate[] = [];
+  const visited = new Set<string>();
+  // Names taken by existing apps + already-emitted candidates, so the
+  // suggestion logic can pick a non-conflicting slug.
+  const takenNames = new Set(knownNames);
+  let totalScanned = 0;
+  let totalAlreadyRegistered = 0;
+
+  for (const root of rootsAbs) {
+    if (opts.signal?.aborted) break;
+    await emit({ type: "scanning", root });
+
+    const queue: { path: string; depthLeft: number; isMonorepoChild: boolean }[] = [
+      { path: root, depthLeft: depth, isMonorepoChild: false },
+    ];
+    let dirsForRoot = 0;
+
+    while (queue.length > 0) {
+      if (opts.signal?.aborted) break;
+      const { path: dir, depthLeft, isMonorepoChild } = queue.shift()!;
+      if (visited.has(dir)) continue;
+      visited.add(dir);
+      if (++dirsForRoot > MAX_DIRS_PER_ROOT) {
+        await emit({ type: "skipped", path: dir, reason: "max-dirs" });
+        break;
+      }
+
+      let entries: import("node:fs").Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch (err) {
+        await emit({ type: "skipped", path: dir, reason: "permission" });
+        console.warn("detect: cannot read", dir, (err as Error).message);
+        continue;
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.startsWith(".")) continue;
+        if (SKIP_DIRS.has(entry.name)) continue;
+        const childPath = join(dir, entry.name);
+        if (childPath === BRIDGE_ROOT) continue;
+        if (visited.has(childPath)) continue;
+
+        totalScanned += 1;
+        // Yield to the event loop every few stat-batches so the SSE
+        // route can flush — Node's fs is sync but the runtime needs a
+        // microtask break to push bytes.
+        if (totalScanned % 8 === 0) await new Promise((r) => setTimeout(r, 0));
+
+        const repoScore = scoreRepo(childPath);
+        const qualifies = repoScore.score >= SCORE_THRESHOLD;
+
+        if (qualifies) {
+          if (knownPaths.has(childPath)) {
+            totalAlreadyRegistered += 1;
+            await emit({
+              type: "candidate",
+              candidate: {
+                name: existing.find((a) => a.path === childPath)?.name ?? entry.name,
+                rawPath: formatRawPath(childPath),
+                absolutePath: childPath,
+                description: existing.find((a) => a.path === childPath)?.description ?? "",
+                signals: repoScore.signals,
+                score: repoScore.score,
+                alreadyRegistered: true,
+                isMonorepoChild,
+              },
+            });
+            // Don't recurse into a registered repo's children — registered
+            // implies the operator already has the granularity they want.
+            continue;
+          }
+          const suggestedName = suggestAppName(entry.name, takenNames);
+          takenNames.add(suggestedName);
+          const candidate: DetectCandidate = {
+            name: suggestedName,
+            rawPath: formatRawPath(childPath),
+            absolutePath: childPath,
+            description: deriveDescription(childPath),
+            signals: repoScore.signals,
+            score: repoScore.score,
+            alreadyRegistered: false,
+            isMonorepoChild,
+          };
+          candidates.push(candidate);
+          await emit({ type: "candidate", candidate });
+
+          // Monorepo: descend into workspace dirs to surface members as
+          // their own candidates, regardless of `depth`. Cap depth on
+          // the monorepo path so we don't double-recurse.
+          if (repoScore.isMonorepoRoot) {
+            for (const wsDir of MONOREPO_CHILD_DIRS) {
+              const wsPath = join(childPath, wsDir);
+              if (existsSync(wsPath)) {
+                queue.push({ path: wsPath, depthLeft: 1, isMonorepoChild: true });
+              }
+            }
+          }
+          continue;
+        }
+
+        // Folder doesn't itself qualify. Recurse into it if depth allows
+        // — useful for operators whose code lives one level under the
+        // configured root (e.g. `~/work/<client>/<repo>`).
+        if (depthLeft > 1) {
+          queue.push({ path: childPath, depthLeft: depthLeft - 1, isMonorepoChild });
+        } else {
+          await emit({ type: "skipped", path: childPath, reason: "not-a-repo" });
+        }
+      }
+    }
+  }
+
+  await emit({
+    type: "done",
+    candidates: candidates.length,
+    alreadyRegistered: totalAlreadyRegistered,
+    scanned: totalScanned,
+  });
+  return candidates;
+}
+
 export interface AutoDetectResult {
   added: App[];
   skipped: { name: string; reason: "already-registered" | "not-a-repo" }[];
 }
 
 /**
- * Scan the parent directory for sibling code repos and add any that
- * aren't already registered. The bridge folder itself is always
- * skipped. Returns the diff so the UI can toast a summary.
+ * Backward-compat wrapper over `detectAppCandidates` for the Telegram
+ * `/scan` command and any non-UI caller. Auto-confirms every candidate
+ * (no review modal — the Telegram surface can't render one).
  */
-export function autoDetectApps(): AutoDetectResult {
-  const parent = dirname(BRIDGE_ROOT);
-  const bridgeName = basename(BRIDGE_ROOT);
-  const existing = loadApps();
-  const known = new Set(existing.map((a) => a.name));
+export async function autoDetectApps(): Promise<AutoDetectResult> {
+  const candidates = await detectAppCandidates();
   const added: App[] = [];
   const skipped: AutoDetectResult["skipped"] = [];
 
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = readdirSync(parent, { withFileTypes: true });
-  } catch (err) {
-    console.error("auto-detect: cannot read parent", parent, err);
-    return { added, skipped };
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === bridgeName) continue;
-    if (entry.name.startsWith(".")) continue;
-    if (SKIP_DIRS.has(entry.name)) continue;
-    if (!APP_NAME_RE.test(entry.name)) continue;
-    const repoPath = join(parent, entry.name);
-    if (!looksLikeCodeRepo(repoPath)) {
-      skipped.push({ name: entry.name, reason: "not-a-repo" });
+  for (const c of candidates) {
+    if (c.alreadyRegistered) {
+      skipped.push({ name: c.name, reason: "already-registered" });
       continue;
     }
-    if (known.has(entry.name)) {
-      skipped.push({ name: entry.name, reason: "already-registered" });
-      continue;
-    }
-    const rawPath = `../${entry.name}`;
-    const description = deriveDescription(repoPath);
-    const app: App = {
-      name: entry.name,
-      rawPath,
-      path: repoPath,
-      description,
-      git: { ...DEFAULT_GIT_SETTINGS },
-      verify: { ...DEFAULT_VERIFY },
-      pinnedFiles: [],
-      symbolDirs: [],
-      quality: { ...DEFAULT_QUALITY },
-      capabilities: [],
-    };
-    added.push(app);
-    known.add(entry.name);
+    const result = addApp({ name: c.name, path: c.rawPath, description: c.description });
+    if (result.ok) added.push(result.app);
+    else skipped.push({ name: c.name, reason: "not-a-repo" });
   }
-
-  if (added.length > 0) {
-    const next = [...existing, ...added].sort((a, b) => a.name.localeCompare(b.name));
-    saveApps(next);
-  }
-
   return { added, skipped };
+}
+
+/**
+ * Read the operator's saved scan roots from `bridge.json` (under the
+ * shared `detect.*` block alongside `detect.source`). Empty array
+ * means "use default" — i.e. `dirname(BRIDGE_ROOT)`. The detector
+ * reads this on first open of the auto-detect modal so the operator
+ * doesn't have to retype paths each session.
+ */
+export function getManifestDetectScanRoots(): string[] {
+  const m = readManifest();
+  const det = (m as { detect?: { scanRoots?: unknown } }).detect;
+  return normalizeStringList(det?.scanRoots);
+}
+
+/**
+ * Persist scan roots. Empty input clears the field entirely so
+ * `bridge.json` stays terse for default-config operators.
+ */
+export function setManifestDetectScanRoots(roots: string[]): string[] {
+  const cleaned = normalizeStringList(roots);
+  const manifest = readManifest();
+  const detPrev = (manifest as { detect?: Record<string, unknown> }).detect ?? {};
+  const detNext: Record<string, unknown> = { ...detPrev };
+  if (cleaned.length === 0) delete detNext.scanRoots;
+  else detNext.scanRoots = cleaned;
+  const next = { ...manifest } as BridgeManifest;
+  if (Object.keys(detNext).length === 0) {
+    delete (next as { detect?: unknown }).detect;
+  } else {
+    (next as { detect?: Record<string, unknown> }).detect = detNext;
+  }
+  writeManifest(next);
+  return cleaned;
 }

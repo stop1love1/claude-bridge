@@ -24,12 +24,11 @@ const baseHeaders = [
   // Cross-origin isolation light: keep window-level isolation enabled
   // so a hostile cross-origin window can't read into ours.
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-  // Block legacy permissions APIs we don't use; trim the surface area
-  // of "browser fingerprinting" / device-access vectors a hijacked
-  // session would otherwise have access to.
+  // Keep camera/geolocation/payment blocked; allow same-origin mic for
+  // the in-app voice composer (`MicButton` + Web Speech API).
   {
     key: "Permissions-Policy",
-    value: "camera=(), microphone=(), geolocation=(), payment=()",
+    value: "camera=(), microphone=(self), geolocation=(), payment=()",
   },
   {
     key: "Content-Security-Policy",

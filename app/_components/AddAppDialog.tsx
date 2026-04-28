@@ -16,6 +16,7 @@ import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { api } from "@/lib/client/api";
 import { useToast } from "./Toasts";
+import { AutoDetectDialog } from "./AutoDetectDialog";
 
 interface AddAppDialogProps {
   /** Called after a successful add or auto-detect so the parent can refetch. */
@@ -26,19 +27,21 @@ interface AddAppDialogProps {
 
 /**
  * Dialog for declaring a new app in the bridge's apps registry
- * (`sessions/init.md`). Pairs with an "Auto-detect" button for one-shot
- * scanning of the parent directory.
+ * (`~/.claude/bridge.json`). The "Auto-detect" button next to it opens
+ * the multi-step `AutoDetectDialog` which streams a scan of one or
+ * more parent directories and lets the operator review + pick repos
+ * to register before anything is written.
  *
- * The two actions are exposed as a single `<div>` of buttons so callers
+ * Both actions are exposed as a single `<div>` of buttons so callers
  * can drop them next to whatever toolbar they already have.
  */
 export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
   const [open, setOpen] = useState(false);
+  const [autoDetectOpen, setAutoDetectOpen] = useState(false);
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [detecting, setDetecting] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
 
@@ -105,41 +108,6 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
     }
   };
 
-  const autoDetect = async () => {
-    setDetecting(true);
-    try {
-      const r = await api.autoDetectApps();
-      if (r.added.length === 0) {
-        toast("info", "No new apps detected");
-        return;
-      }
-      toast(
-        "success",
-        `Detected ${r.added.length} app${r.added.length === 1 ? "" : "s"}: ${r.added.map((a) => a.name).join(", ")}. Scanning with Claude…`,
-      );
-      onChanged?.();
-
-      // Kick off model-grounded description scans in parallel. Each
-      // scan runs `claude -p` inside the app's cwd and updates
-      // bridge.json when the answer arrives. Failures are silent —
-      // the heuristic description from auto-detect remains.
-      const scanResults = await Promise.allSettled(
-        r.added.map((a) => api.scanApp(a.name)),
-      );
-      const scanned = scanResults.filter(
-        (s) => s.status === "fulfilled" && s.value.scanned,
-      ).length;
-      if (scanned > 0) {
-        toast("info", `Claude described ${scanned} of ${r.added.length} new app${r.added.length === 1 ? "" : "s"}`);
-        onChanged?.();
-      }
-    } catch (e) {
-      toast("error", (e as Error).message);
-    } finally {
-      setDetecting(false);
-    }
-  };
-
   return (
     <>
       <div className="flex items-center gap-1.5">
@@ -147,16 +115,21 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
           <Plus className="h-3.5 w-3.5" /> Add app
         </Button>
         <Button
-          onClick={autoDetect}
-          disabled={detecting}
+          onClick={() => setAutoDetectOpen(true)}
           size="sm"
           variant="ghost"
-          title="Scan the parent directory for sibling code repos and register any not already added"
+          title="Scan one or more parent directories, review detected repos, then register the ones you want"
         >
-          <Sparkles className={`h-3.5 w-3.5 ${detecting ? "animate-pulse" : ""}`} />
-          {detecting ? "Detecting…" : "Auto-detect"}
+          <Sparkles className="h-3.5 w-3.5" />
+          Auto-detect
         </Button>
       </div>
+
+      <AutoDetectDialog
+        open={autoDetectOpen}
+        onOpenChange={setAutoDetectOpen}
+        onAdded={onChanged}
+      />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-md">

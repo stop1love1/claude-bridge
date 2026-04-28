@@ -69,6 +69,7 @@ Assess the task and decide. **Read the `## Bridge hint` block above first** — 
   - **"Add / build feature spanning UI + API"** → `api-builder` in the backend repo first, then `ui-builder` in the frontend repo consuming the new endpoint, then optionally a `reviewer` running across both reports.
   - **"Fix bug Z"** → ONE `fixer` in the affected repo. The auto-retry path covers a single follow-up if the first attempt fails.
   - **"Refactor / migrate"** → start with a `surveyor` that produces a written plan; if the plan is shippable, a `coder` then executes it. Don't combine survey + execute in one prompt — too much context drift.
+  - **"Test the UI / verify in the browser"** → ONE `ui-tester` agent in the frontend-shaped repo. The role has a playbook (`bridge/playbooks/ui-tester.md`) that hard-blocks code edits — this agent uses the **Playwright MCP plugin** (`mcp__plugin_playwright_playwright__browser_*`) to drive the rendered UI, never patches code. It probes the dev URL first; if the server is not reachable, it returns `NEEDS-DECISION` so the user picks (a) bridge auto-starts + shutdowns the dev server, or (b) user runs `bun dev` / `pnpm dev` themselves and re-dispatches. **Only authorize auto-start in the brief** when the user picks option (a) — say so explicitly (e.g. "the user authorized auto-start; spin up `<dev-cmd>`, run the test, then `KillShell` it before exiting"). If a `ui-tester` finds bugs, follow up with a `fixer` in the same repo whose brief embeds the tester's findings; never combine "test + fix" in one agent.
   - **XL** → do not spawn. Stop and tell the user to split the task in the UI.
 - **Role names are free-form.** Use a short noun-phrase that describes what this specific agent does for this specific task. Two agents on one task shouldn't share a role name if their jobs differ.
 
@@ -116,6 +117,7 @@ Run agents sequentially unless the task explicitly benefits from parallelism (in
 | `refactor X`                        | surveyor (plan) → coder (execute) — sequential                    |
 | `feature spanning UI+API`           | api-builder → ui-builder → cross-repo reviewer                    |
 | `research / audit`                  | researcher (read-only)                                            |
+| `test the UI / verify in browser`   | ui-tester (Playwright MCP, no code edits, NEEDS-DECISION on dead server) |
 
 **CLI fallback** (only when the bridge UI is NOT running and the agents endpoint is unreachable): you may shell out via `"${CLAUDE_BIN:-claude}" -p --permission-mode bypassPermissions "<full prompt>"` with `cwd=../<repo>` — but the bridge wrapper is unavailable here, so you have to inline the boilerplate yourself (task header, language directive, self-register curl, report contract from `bridge/report-template.md`). Capture the UUID from stdout (or the newest `.jsonl` in `~/.claude/projects/<slug-of-cwd>/`) and append the run to `meta.json` directly. Note this in the summary so the user knows the spawn wasn't user-mediated.
 

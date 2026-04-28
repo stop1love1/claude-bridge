@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Meta, Repo, Run, Task } from "@/lib/client/types";
 import {
   Hash,
@@ -24,19 +24,15 @@ import { useConfirm } from "./ConfirmProvider";
 import { api } from "@/lib/client/api";
 import { AgentTree } from "./AgentTree";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Textarea } from "./ui/textarea";
 
 interface TaskDetailProps {
   task: Task | null;
   meta: Meta | null;
   repos: Repo[];
   activeRunId: string | null;
-  onSave: (patch: Partial<Task>) => Promise<void>;
   onSelectRun: (run: Run) => void;
   onDelete: () => Promise<void>;
   onToggleComplete: (next: boolean) => Promise<void>;
-  saveRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 // Outer keys the inner by task.id so switching between tasks
@@ -58,32 +54,17 @@ function TaskDetailInner({
   meta,
   repos,
   activeRunId,
-  onSave,
   onSelectRun,
   onDelete,
   onToggleComplete,
-  saveRef,
 }: TaskDetailProps) {
-  // Mount-time initial values pulled from the (snapshot of the) task
-  // we were given. Subsequent task changes are handled by the outer
-  // remount, so these initialisers only ever run for *this* task.
-  const [title, setTitle] = useState(task?.title ?? "");
-  const [body, setBody] = useState(task?.body ?? "");
   const [continuing, setContinuing] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [usage, setUsage] = useState<TokenTotals | null>(null);
-  // Synchronous flag — a useState `saving` would only commit on the
-  // next render, so two onBlur events firing in the same tick could
-  // both observe `saving === false` and issue duplicate saves. The
-  // ref serializes them deterministically. Nothing in the UI needs
-  // to read the saving state, so we don't keep a parallel useState
-  // alongside this ref.
-  const savingRef = useRef(false);
   const toast = useToast();
   const confirm = useConfirm();
-  const titleRef = useRef<HTMLInputElement>(null);
 
   const branchByRepo = useMemo(() => {
     const map: Record<string, string | null> = {};
@@ -103,18 +84,6 @@ function TaskDetailInner({
       .catch(() => { /* 404 ok if meta hasn't landed yet */ });
     return () => { cancelled = true; };
   }, [task?.id, meta?.runs?.length, meta?.runs]);
-
-  const dirty = task ? (title !== task.title || body !== task.body) : false;
-
-  const save = useCallback(async () => {
-    if (!dirty || savingRef.current) return;
-    savingRef.current = true;
-    try { await onSave({ title, body }); }
-    catch (e) { toast("error", (e as Error).message); }
-    finally {
-      savingRef.current = false;
-    }
-  }, [dirty, onSave, title, body, toast]);
 
   const continueTask = async () => {
     if (!task || continuing) return;
@@ -142,12 +111,6 @@ function TaskDetailInner({
       setToggling(false);
     }
   };
-
-  useEffect(() => {
-    if (!saveRef) return;
-    saveRef.current = save;
-    return () => { if (saveRef.current === save) saveRef.current = null; };
-  }, [saveRef, save]);
 
   if (!task) {
     return (
@@ -297,25 +260,13 @@ function TaskDetailInner({
           </div>
         )}
 
-        <Input
-          ref={titleRef}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={save}
-          placeholder="Task title (auto-derived from the first line)"
-          className={`bg-transparent border-0 border-b border-border rounded-none px-0 pb-2 mb-3 text-lg font-medium h-auto focus-visible:ring-0 focus-visible:border-primary ${
+        <h2
+          className={`mb-3 border-b border-border pb-2 text-lg font-medium ${
             task.checked ? "line-through text-muted-foreground" : ""
           }`}
-        />
-
-        <Textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onBlur={save}
-          placeholder="Task title / short description"
-          rows={2}
-          className="font-mono text-xs resize-y mb-4"
-        />
+        >
+          {task.title}
+        </h2>
 
         {canContinue && (
           <div className="flex gap-2 mb-6 items-center">

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { resolveRepos } from "@/lib/repos";
-import { projectDirFor } from "@/lib/sessions";
+import { discoverOrphanProjects, projectDirFor } from "@/lib/sessions";
 import { removeSessionFromTask } from "@/lib/meta";
 import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
 import { badRequest, isValidSessionId } from "@/lib/validate";
@@ -37,16 +37,32 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
 
   // Bring in sibling folders too — discovered repos can also host sessions.
   const parent = dirname(BRIDGE_ROOT);
-  const known = new Set(declared.map((r) => r.name));
+  const seenNames = new Set(declared.map((r) => r.name));
+  const seenProjectDirs = new Set(declared.map((r) => projectDirFor(r.path)));
   const discovered: Array<{ name: string; path: string }> = [];
   try {
     for (const entry of readdirSync(parent, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith(".")) continue;
-      if (known.has(entry.name)) continue;
-      discovered.push({ name: entry.name, path: join(parent, entry.name) });
+      if (seenNames.has(entry.name)) continue;
+      const path = join(parent, entry.name);
+      discovered.push({ name: entry.name, path });
+      seenNames.add(entry.name);
+      seenProjectDirs.add(projectDirFor(path));
     }
   } catch { /* ignore */ }
+
+  // Mirror /api/sessions/all: surface every project folder under
+  // ~/.claude/projects/ that holds at least one session, even if it's
+  // not a registered repo or current sibling. Without this, sessions
+  // recovered via cwd from .jsonl files (worktrees, since-deleted
+  // siblings, unrelated cwds) would 404 on DELETE because the named
+  // candidate list never sees them.
+  for (const orphan of discoverOrphanProjects(seenProjectDirs)) {
+    if (seenNames.has(orphan.name)) continue;
+    discovered.push({ name: orphan.name, path: orphan.path });
+    seenNames.add(orphan.name);
+  }
 
   const allCandidates = [...declared, ...discovered];
   const targets = repoHint

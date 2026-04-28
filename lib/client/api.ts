@@ -6,6 +6,7 @@ import type {
   ChatSettings,
   App,
   AppGitSettings,
+  SlashCommandsItemDto,
 } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -61,6 +62,11 @@ export const api = {
   files: (repo: string, query: string) =>
     req<Array<{ rel: string; path: string }>>(
       `/repos/${encodeURIComponent(repo)}/files?q=${encodeURIComponent(query)}`,
+    ),
+  /** Built-in list (JSON) + `~/.claude` + repo `.claude/commands` & skills — same sources Claude Code loads. */
+  repoSlashCommands: (name: string) =>
+    req<{ items: SlashCommandsItemDto[] }>(
+      `/repos/${encodeURIComponent(name)}/slash-commands`,
     ),
   uploadFile: async (sessionId: string, file: File) => {
     const fd = new FormData();
@@ -142,6 +148,27 @@ export const api = {
       added: App[];
       skipped: Array<{ name: string; reason: "already-registered" | "not-a-repo" }>;
     }>("/apps/auto-detect", { method: "POST" }),
+  /**
+   * Bulk-add apps from the auto-detect modal's review step. Failures
+   * are returned per item so the dialog can surface duplicates and
+   * keep the rest of the selection.
+   */
+  bulkAddApps: (apps: Array<{ name: string; path: string; description?: string }>) =>
+    req<{
+      added: App[];
+      failed: Array<{
+        ok: false;
+        name: string;
+        reason: "invalid-name" | "missing-path" | "duplicate-name" | "invalid-input";
+      }>;
+    }>("/apps/bulk", { method: "POST", body: JSON.stringify({ apps }) }),
+  scanRoots: () =>
+    req<{ roots: string[]; defaultRoot: string }>("/detect/scan-roots"),
+  updateScanRoots: (roots: string[]) =>
+    req<{ roots: string[]; defaultRoot: string }>("/detect/scan-roots", {
+      method: "PUT",
+      body: JSON.stringify({ roots }),
+    }),
   runDiff: (taskId: string, sessionId: string) =>
     req<{ kind: "worktree" | "live"; cwd: string; diff: string; truncated?: boolean }>(
       `/tasks/${taskId}/runs/${sessionId}/diff`,

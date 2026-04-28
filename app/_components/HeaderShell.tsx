@@ -45,7 +45,7 @@ export function HeaderShell({
       ? `Theme: system (currently ${resolved})`
       : `Theme: ${pref}`;
   return (
-    <header className="h-11 shrink-0 px-2 sm:px-3 border-b border-border bg-card flex items-center gap-2 sm:gap-3">
+    <header className="sticky top-0 z-40 h-11 shrink-0 px-2 sm:px-3 border-b border-border bg-card flex items-center gap-2 sm:gap-3">
       <Link href="/" className="flex items-center gap-2 shrink-0" title="Home">
         <Image
           src="/logo.svg"

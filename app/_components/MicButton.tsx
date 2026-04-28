@@ -17,6 +17,16 @@ interface SpeechRecognitionEvent extends Event {
   resultIndex: number;
   results: { length: number; [i: number]: SpeechRecognitionResult };
 }
+interface SpeechRecognitionErrorEvent extends Event {
+  error?: string;
+}
+interface PermissionStatusLike extends EventTarget {
+  state: "granted" | "denied" | "prompt";
+  onchange: ((this: PermissionStatusLike, ev: Event) => unknown) | null;
+}
+interface PermissionsLike {
+  query: (permissionDesc: { name: string }) => Promise<PermissionStatusLike>;
+}
 interface SpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
@@ -65,6 +75,8 @@ export function MicButton({
     getSupportedServer,
   );
   const [recording, setRecording] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [hasInputDevice, setHasInputDevice] = useState(true);
   const ref = useRef<SpeechRecognition | null>(null);
   // Lazy default — `navigator` is undefined during SSR, so resolve only
   // on the client. The lazy initializer ensures this runs once on mount,
@@ -80,6 +92,55 @@ export function MicButton({
     return () => { try { ref.current?.abort(); } catch { /* noop */ } };
   }, []);
 
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    const nav = navigator as Navigator & {
+      permissions?: PermissionsLike;
+      mediaDevices?: MediaDevices;
+    };
+    let cancelled = false;
+    let permStatus: PermissionStatusLike | null = null;
+
+    const refreshDevices = async () => {
+      if (!nav.mediaDevices?.enumerateDevices) return;
+      try {
+        const devices = await nav.mediaDevices.enumerateDevices();
+        if (cancelled) return;
+        const hasMic = devices.some((d) => d.kind === "audioinput");
+        setHasInputDevice(hasMic);
+      } catch {
+        // If the browser blocks device enumeration details, keep enabled.
+        if (!cancelled) setHasInputDevice(true);
+      }
+    };
+
+    const onDeviceChange = () => { void refreshDevices(); };
+    void refreshDevices();
+    nav.mediaDevices?.addEventListener?.("devicechange", onDeviceChange);
+
+    const bindPermission = async () => {
+      if (!nav.permissions?.query) return;
+      try {
+        // TS DOM lib doesn't include "microphone" in all targets.
+        permStatus = await nav.permissions.query({ name: "microphone" });
+        if (cancelled) return;
+        setBlocked(permStatus.state === "denied");
+        permStatus.onchange = () => {
+          setBlocked(permStatus?.state === "denied");
+        };
+      } catch {
+        // Ignore unsupported Permissions API browsers.
+      }
+    };
+    void bindPermission();
+
+    return () => {
+      cancelled = true;
+      nav.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange);
+      if (permStatus) permStatus.onchange = null;
+    };
+  }, []);
+
   const toggle = useCallback(() => {
     const SR = getSR();
     if (!SR) return;
@@ -87,6 +148,8 @@ export function MicButton({
       ref.current?.stop();
       return;
     }
+    // Let users retry after they re-enable mic permission in browser UI.
+    setBlocked(false);
     const r = new SR();
     r.continuous = true;
     r.interimResults = true;
@@ -106,25 +169,57 @@ export function MicButton({
       }
       if (interim) onTranscript(interim, false);
     };
-    r.onerror = () => { setRecording(false); };
+    r.onerror = (e) => {
+      const err = (e as SpeechRecognitionErrorEvent).error ?? "";
+      // Permission-denied states should show a "mic blocked" affordance.
+      if (
+        err === "not-allowed" ||
+        err === "service-not-allowed" ||
+        err === "permission-denied" ||
+        err === "audio-capture"
+      ) {
+        setBlocked(true);
+      }
+      setRecording(false);
+    };
     r.onend = () => { setRecording(false); ref.current = null; };
     ref.current = r;
-    try { r.start(); setRecording(true); } catch { /* already started */ }
+    try {
+      r.start();
+      setRecording(true);
+      setBlocked(false);
+    } catch {
+      /* already started / transient */
+    }
   }, [recording, effectiveLang, onTranscript]);
 
   if (!supported) return null;
+  const disabled = blocked || !hasInputDevice;
 
-  const Icon = recording ? MicOff : Mic;
+  const Icon = blocked ? MicOff : Mic;
   return (
     <button
       type="button"
       onClick={toggle}
+      disabled={disabled}
       className={`inline-flex items-center justify-center w-7 h-7 rounded-md border ${
-        recording
+        blocked
           ? "bg-destructive/15 border-destructive/40 text-destructive"
-          : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+          : recording
+            ? "bg-primary/15 border-primary/40 text-primary"
+          : disabled
+            ? "border-border text-muted-foreground/40 bg-muted/20 cursor-not-allowed"
+            : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
       }`}
-      title={recording ? "Stop recording" : "Voice input"}
+      title={
+        blocked
+          ? "Microphone is blocked by browser permission"
+          : !hasInputDevice
+            ? "No microphone input device available"
+          : recording
+            ? "Recording… click to stop"
+            : "Voice input"
+      }
     >
       <Icon size={13} className={recording ? "animate-pulse" : ""} />
     </button>

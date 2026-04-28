@@ -1,6 +1,6 @@
-import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 /**
  * Convert an absolute path to Claude Code's project slug convention.
@@ -13,18 +13,22 @@ export function pathToSlug(absPath: string): string {
   return absPath.replace(/[\\/:.]/g, "-");
 }
 
-const CLAUDE_PROJECTS_ROOT = join(homedir(), ".claude", "projects");
+export const CLAUDE_PROJECTS_ROOT = join(homedir(), ".claude", "projects");
 
 /**
- * Resolve the actual on-disk session directory for a given cwd.
- * Falls back to a case-insensitive lookup so Windows drive-letter case
- * (`D:` vs `d:`) doesn't desync from whatever case `claude` saw when it
- * created the folder.
+ * Resolve the actual on-disk session directory for a given cwd. Always
+ * looks the folder up by case-insensitive match against `readdirSync`
+ * so the returned path uses the canonical casing the FS chose when
+ * `claude` created it. We can't trust `existsSync(direct)` to short-
+ * circuit here — Windows' filesystem is case-insensitive, so the call
+ * returns true even when the slug we built differs from the on-disk
+ * folder by case. Without this, callers comparing path strings (e.g.
+ * the orphan-project dedupe in `/api/sessions/all`) miss matches and
+ * surface the same folder twice with different cases.
  */
 export function projectDirFor(cwd: string): string {
   const slug = pathToSlug(cwd);
   const direct = join(CLAUDE_PROJECTS_ROOT, slug);
-  if (existsSync(direct)) return direct;
   try {
     const lower = slug.toLowerCase();
     for (const entry of readdirSync(CLAUDE_PROJECTS_ROOT)) {
@@ -287,4 +291,71 @@ export function listSessions(projectDir: string): SessionEntry[] {
   }
 
   return out.sort((a, b) => b.mtime - a.mtime);
+}
+
+/**
+ * Recover the absolute `cwd` Claude Code recorded when it created a
+ * session. The slug-encoding `pathToSlug` uses is lossy (every `/`,
+ * `\`, `:`, and `.` collapses to `-`), so we can't reverse a project
+ * folder name back to a path on disk reliably. But every transcript
+ * line carries the original cwd as a field — read the first lines until
+ * we find one and pull it out. Used to surface sessions whose project
+ * folder isn't a bridge sibling (worktrees, unrelated repos, etc).
+ */
+export function readSessionCwd(filePath: string): string | null {
+  let head: string;
+  try { head = readFileSync(filePath, "utf8").slice(0, 16384); }
+  catch { return null; }
+  for (const line of head.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line) as { cwd?: unknown };
+      if (typeof obj.cwd === "string" && obj.cwd) return obj.cwd;
+    } catch { /* partial / malformed line — keep scanning */ }
+  }
+  return null;
+}
+
+/**
+ * Scan `~/.claude/projects/` for project folders we haven't already
+ * covered via the explicit repos list, and return one entry per folder
+ * with the cwd recovered from its newest session. The caller decides
+ * how to render these (typically as additional groups in the sessions
+ * list). `excludeDirs` is the set of project-dir paths already emitted
+ * — anything in it is skipped to avoid duplicate groups.
+ */
+export function discoverOrphanProjects(
+  excludeDirs: Set<string>,
+): Array<{ name: string; path: string; projectDir: string }> {
+  let entries: string[];
+  try { entries = readdirSync(CLAUDE_PROJECTS_ROOT); }
+  catch { return []; }
+
+  const out: Array<{ name: string; path: string; projectDir: string }> = [];
+  for (const name of entries) {
+    // Dot-prefixed entries are claude-internal backups (`.bak`,
+    // `.tombstones`, etc.) — they may contain stale `.jsonl` files
+    // whose `cwd` collides with a live project, which would surface the
+    // same folder twice with subtly different casing. Skip them, same
+    // way the bridge's sibling-iteration filter does.
+    if (name.startsWith(".")) continue;
+    const projectDir = join(CLAUDE_PROJECTS_ROOT, name);
+    if (excludeDirs.has(projectDir)) continue;
+    let st;
+    try { st = statSync(projectDir); } catch { continue; }
+    if (!st.isDirectory()) continue;
+
+    const sessions = listSessions(projectDir);
+    if (sessions.length === 0) continue;
+
+    // The newest session is usually the freshest source of truth — read
+    // its cwd. Fall back to the slug itself if no cwd field is present
+    // (very old files, manually placed jsonl, etc.) so the group is at
+    // least visible rather than silently dropped.
+    const cwd = readSessionCwd(sessions[0]!.filePath);
+    const path = cwd ?? name;
+    const folderName = cwd ? basename(cwd) : name;
+    out.push({ name: folderName, path, projectDir });
+  }
+  return out;
 }

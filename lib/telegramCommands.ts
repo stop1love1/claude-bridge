@@ -838,7 +838,7 @@ async function commandPermissionAnswer(
 async function commandScan(appArg: string | undefined): Promise<string> {
   // No arg → auto-detect siblings of the bridge folder.
   if (!appArg) {
-    const r = autoDetectApps();
+    const r = await autoDetectApps();
     if (r.added.length === 0) {
       return `🔎 No new apps detected \\(${r.skipped.length} skipped\\)`;
     }

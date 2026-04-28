@@ -1,3 +1,12 @@
+/** Slash palette rows from `/api/repos/<name>/slash-commands`. */
+export type SlashCommandsItemSource = "builtin" | "project" | "user";
+
+export interface SlashCommandsItemDto {
+  slug: string;
+  description: string | null;
+  source: SlashCommandsItemSource;
+}
+
 export type TaskStatus = "todo" | "doing" | "blocked" | "done";
 export type TaskSection = "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived";
 
@@ -165,3 +174,26 @@ export interface ChatSettings {
   effort?: EffortLevel;
   model?: string;
 }
+
+/**
+ * Auto-detect candidate as it travels over the SSE stream. Mirror of
+ * `DetectCandidate` in `lib/apps.ts`; lifted here so the dialog can
+ * type the parsed `event.data` payloads without importing server code.
+ */
+export interface DetectCandidate {
+  name: string;
+  rawPath: string;
+  absolutePath: string;
+  description: string;
+  signals: string[];
+  score: number;
+  alreadyRegistered: boolean;
+  isMonorepoChild: boolean;
+}
+
+export type DetectEvent =
+  | { type: "started"; roots: string[]; depth: number }
+  | { type: "scanning"; root: string }
+  | { type: "candidate"; candidate: DetectCandidate }
+  | { type: "skipped"; path: string; reason: "not-a-repo" | "already-scanned" | "permission" | "max-dirs" }
+  | { type: "done"; candidates: number; alreadyRegistered: number; scanned: number };

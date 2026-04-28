@@ -1,17 +1,58 @@
 "use client";
 
 import { memo, useMemo, useState } from "react";
-import { Crown, Sparkles, X, GitBranch, GitCompare } from "lucide-react";
+import {
+  Crown,
+  Sparkles,
+  X,
+  GitBranch,
+  GitCompare,
+  Search,
+  Wrench,
+  Code,
+  Compass,
+  Microscope,
+  Pen,
+  MonitorPlay,
+  Hammer,
+  Palette,
+  ShieldCheck,
+} from "lucide-react";
 import type { Meta, Run } from "@/lib/client/types";
 import { duration } from "@/lib/client/time";
 import { RUN_STATUS_PILL } from "@/lib/client/runStatus";
 import { DiffViewer } from "./DiffViewer";
 
+// Role-keyed color/icon. Roles are free-form strings the coordinator
+// invents per task, so the lookup falls through to a neutral default.
+// Retry suffixes (`-retry`, `-cretry`, `-svretry`) are stripped before
+// the lookup so a `fixer-cretry` follow-up still renders as a wrench.
 const ROLE_COLOR: Record<string, string> = {
   coordinator: "text-warning",
+  reviewer: "text-primary",
+  fixer: "text-success",
+  coder: "text-primary",
+  planner: "text-muted-foreground",
+  surveyor: "text-muted-foreground",
+  researcher: "text-muted-foreground",
+  writer: "text-muted-foreground",
+  "ui-tester": "text-success",
+  tester: "text-success",
+  qa: "text-success",
+  builder: "text-warning",
+  "api-builder": "text-warning",
+  "ui-builder": "text-warning",
+  "style-critic": "text-destructive",
+  "semantic-verifier": "text-primary",
 };
 
-function roleColor(role: string) { return ROLE_COLOR[role] ?? "text-muted-foreground"; }
+function normalizeRole(role: string): string {
+  return role.replace(/-(retry|cretry|svretry)$/, "");
+}
+
+function roleColor(role: string) {
+  return ROLE_COLOR[normalizeRole(role)] ?? "text-muted-foreground";
+}
 
 // Stable wrapper around the lucide icon picked from `role`. Switch
 // instead of a `roleIcon(role)` lookup that returns a component —
@@ -27,9 +68,34 @@ function RoleIcon({
   size?: number;
   className?: string;
 }) {
-  switch (role) {
+  switch (normalizeRole(role)) {
     case "coordinator":
       return <Crown size={size} className={className} />;
+    case "reviewer":
+      return <Search size={size} className={className} />;
+    case "fixer":
+      return <Wrench size={size} className={className} />;
+    case "coder":
+      return <Code size={size} className={className} />;
+    case "planner":
+    case "surveyor":
+      return <Compass size={size} className={className} />;
+    case "researcher":
+      return <Microscope size={size} className={className} />;
+    case "writer":
+      return <Pen size={size} className={className} />;
+    case "ui-tester":
+    case "tester":
+    case "qa":
+      return <MonitorPlay size={size} className={className} />;
+    case "builder":
+    case "api-builder":
+    case "ui-builder":
+      return <Hammer size={size} className={className} />;
+    case "style-critic":
+      return <Palette size={size} className={className} />;
+    case "semantic-verifier":
+      return <ShieldCheck size={size} className={className} />;
     default:
       return <Sparkles size={size} className={className} />;
   }

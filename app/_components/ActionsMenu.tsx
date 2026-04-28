@@ -1,81 +1,90 @@
 "use client";
 
-import { Plus, Paperclip, AtSign, Trash2, Undo2, Cpu, Gauge, Brain, ExternalLink } from "lucide-react";
+import { useState } from "react";
+import { Plus, Upload, FileText } from "lucide-react";
+import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Button } from "./ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
+import { cn } from "@/lib/cn";
 
-export type ActionId =
-  | "attach" | "mention" | "clear" | "rewind"
-  | "switch-model" | "effort" | "thinking"
-  | "account";
-
-interface ActionItem {
-  id: ActionId;
-  label: string;
-  hint?: string;
-  group: "Context" | "Model" | "Account";
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-}
-
-const ACTIONS: ActionItem[] = [
-  { id: "attach",       label: "Attach file… (max 25 MB)",        group: "Context", icon: Paperclip },
-  { id: "mention",      label: "Mention file from this project…", group: "Context", icon: AtSign },
-  { id: "clear",        label: "Clear conversation",              group: "Context", icon: Trash2 },
-  { id: "rewind",       label: "Rewind…",                         group: "Context", icon: Undo2 },
-  { id: "switch-model", label: "Switch model…",                   group: "Model",   icon: Cpu },
-  { id: "effort",       label: "Effort",                          group: "Model",   icon: Gauge },
-  { id: "thinking",     label: "Thinking",                        group: "Model",   icon: Brain },
-  { id: "account",      label: "Account & usage…",                group: "Account", icon: ExternalLink },
-];
-
-export function ActionsMenu({
-  onPick,
-  disabled,
+/**
+ * Composer "+" — Claude Desktop short menu: upload + @ mention for context.
+ */
+export function QuickAddMenu({
+  onAttach,
+  onMention,
 }: {
-  onPick: (id: ActionId) => void;
-  disabled?: Partial<Record<ActionId, boolean>>;
+  onAttach: () => void;
+  onMention: () => void;
 }) {
-  const groupNames: Array<ActionItem["group"]> = ["Context", "Model", "Account"];
+  const [open, setOpen] = useState(false);
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="iconSm" title="Actions">
+    <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+      <PopoverPrimitive.Trigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="iconSm"
+          title="Add"
+          aria-label="Add"
+          aria-expanded={open}
+          aria-haspopup="dialog"
+        >
           <Plus className="h-3.5 w-3.5" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-72">
-        {groupNames.map((group, gi) => {
-          const items = ACTIONS.filter((a) => a.group === group);
-          if (items.length === 0) return null;
-          return (
-            <div key={group}>
-              {gi > 0 && <DropdownMenuSeparator />}
-              <DropdownMenuLabel>{group}</DropdownMenuLabel>
-              {items.map((it) => {
-                const Icon = it.icon;
-                return (
-                  <DropdownMenuItem
-                    key={it.id}
-                    disabled={disabled?.[it.id]}
-                    onSelect={() => onPick(it.id)}
-                  >
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span>{it.label}</span>
-                  </DropdownMenuItem>
-                );
-              })}
-            </div>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverPrimitive.Trigger>
+      <PopoverPrimitive.Portal>
+        <PopoverPrimitive.Content
+          align="start"
+          side="top"
+          sideOffset={8}
+          collisionPadding={8}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          className={cn(
+            "z-50 w-[220px] rounded-lg border border-border bg-popover text-popover-foreground shadow-xl p-1",
+            "data-[state=open]:animate-in data-[state=closed]:animate-out",
+            "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+            "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          )}
+        >
+          <ActionRow
+            icon={Upload}
+            label="Upload from computer"
+            onClick={onAttach}
+          />
+          <ActionRow
+            icon={FileText}
+            label="Add context"
+            onClick={onMention}
+          />
+        </PopoverPrimitive.Content>
+      </PopoverPrimitive.Portal>
+    </PopoverPrimitive.Root>
+  );
+}
+
+function ActionRow({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string; size?: number }>;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <PopoverPrimitive.Close asChild>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-[13px] text-left",
+          "hover:bg-accent hover:text-accent-foreground transition-colors",
+        )}
+      >
+        <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="flex-1 min-w-0 truncate">{label}</span>
+      </button>
+    </PopoverPrimitive.Close>
   );
 }
