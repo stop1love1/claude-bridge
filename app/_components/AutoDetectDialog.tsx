@@ -104,6 +104,15 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
     });
   }, [open]);
 
+  // Mount-lifetime cleanup: if the user navigates away mid-scan the
+  // close-on-!open effect doesn't run, so the EventSource lingers and
+  // keeps the TCP connection open. Mirror the close here so the
+  // connection is always reaped.
+  useEffect(() => () => {
+    esRef.current?.close();
+    esRef.current = null;
+  }, []);
+
   const startScan = useCallback(() => {
     setMode("scanning");
     setRows([]);

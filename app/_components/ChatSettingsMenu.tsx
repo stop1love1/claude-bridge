@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Hand, Code2, ListTree, Zap, Check } from "lucide-react";
+import { Hand, Code2, ListTree, Zap, Check, ShieldOff } from "lucide-react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import type { ChatSettings, PermissionMode, EffortLevel } from "@/lib/client/types";
 import { Button } from "./ui/button";
@@ -37,6 +37,19 @@ const MODE_OPTIONS: Array<{
     hint: "Claude will automatically choose the best permission mode for each task",
     icon: Zap,
   },
+  // Operator opt-in via `NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS=1`. The server
+  // mirrors the same gate in `isValidUserPermissionMode`, so toggling
+  // this off drops the option from the UI AND rejects spoofed requests.
+  ...(process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS === "1"
+    ? [
+        {
+          value: "bypassPermissions" as const,
+          label: "Skip permissions",
+          hint: "No popup — Claude runs every tool call without asking. Use only on a trusted single-user machine.",
+          icon: ShieldOff,
+        },
+      ]
+    : []),
 ];
 
 const EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "max"];
@@ -75,7 +88,6 @@ export function ChatSettingsMenu({
           side="top"
           sideOffset={8}
           collisionPadding={8}
-          onCloseAutoFocus={(e) => e.preventDefault()}
           className={cn(
             "z-50 rounded-md border border-border bg-popover text-popover-foreground shadow-xl p-0",
             "w-[320px] sm:w-[420px] max-w-[calc(100vw-1.5rem)]",

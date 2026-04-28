@@ -253,18 +253,26 @@ function MessageComposerInner({
 
   // -- Submit --
   const submit = useCallback(async () => {
-    const msg = (draft + (interim ? " " + interim : "")).trim();
-    if ((!msg && attachments.length === 0) || sending) return;
+    // The textarea ref is the authoritative source: when an IME
+    // composition (e.g. Vietnamese Telex/VNI) commits as part of the
+    // click → blur sequence, the resulting `onChange` schedules a
+    // setDraft that hasn't applied yet by the time the form submit
+    // handler runs. Reading state-only would drop the last-typed
+    // syllable and only flush it on the *next* send. The DOM value
+    // already includes draft + interim because that's what we feed
+    // into `value={composedMessage}`.
+    const live = (taRef.current?.value ?? (draft + (interim ? (draft ? " " : "") + interim : ""))).trim();
+    if ((!live && attachments.length === 0) || sending) return;
     setSending(true);
     try {
       const attachLines = attachments
         .map((a) => `Attached file: \`${a.path}\` (${a.name}, ${a.size} bytes) — please Read it as part of this turn.`)
         .join("\n");
       const finalMsg = attachLines
-        ? `${attachLines}\n\n${msg}`.trim()
-        : msg;
+        ? `${attachLines}\n\n${live}`.trim()
+        : live;
       await api.sendMessage(sessionId, { message: finalMsg, repo, settings });
-      lastSentRef.current = msg;
+      lastSentRef.current = live;
       setDraft("");
       setAttachments([]);
       setInterim("");
@@ -433,7 +441,21 @@ function MessageComposerInner({
           <textarea
             ref={taRef}
             value={composedMessage}
-            onChange={(e) => { setInterim(""); setDraft(e.target.value); }}
+            onChange={(e) => {
+              // During an IME composition (CJK input methods, accented
+              // dead keys, etc.) `onChange` fires per syllable while the
+              // candidate is still being chosen. Clearing `interim` and
+              // setting the draft mid-composition drops the in-flight
+              // syllable; defer until composition end.
+              const native = e.nativeEvent as InputEvent & { isComposing?: boolean };
+              if (native.isComposing) return;
+              setInterim("");
+              setDraft(e.target.value);
+            }}
+            onCompositionEnd={(e) => {
+              setInterim("");
+              setDraft((e.target as HTMLTextAreaElement).value);
+            }}
             onKeyDown={onKeyDown}
             onSelect={detectMention}
             onClick={detectMention}
