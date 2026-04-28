@@ -4,8 +4,15 @@ import { homedir } from "node:os";
 /**
  * The Next app now lives at the bridge repo root (no separate `ui/`
  * sub-dir), so `process.cwd()` *is* the bridge root.
+ *
+ * The `turbopackIgnore` hint stops Turbopack from treating this `cwd()`
+ * as a dynamic import path and pulling the entire project into the NFT
+ * (Node File Trace) bundle for every API route that transitively imports
+ * `lib/paths.ts`. Without it, builds emit a noisy "whole project was
+ * traced unintentionally" warning even though we never use these
+ * constants as import targets — they're just runtime FS paths.
  */
-export const BRIDGE_ROOT = resolve(process.cwd());
+export const BRIDGE_ROOT = resolve(/* turbopackIgnore: true */ process.cwd());
 /**
  * Folder name of the bridge itself (the directory `BRIDGE_ROOT` points
  * at). Substituted into prompt templates so children write their
@@ -64,8 +71,11 @@ export const CLAUDE_DIR = join(BRIDGE_ROOT, ".claude");
  * upstream `git pull` / version upgrade. One registry per machine,
  * not per project; if the operator runs multiple bridge installs they
  * share the same apps roster.
+ *
+ * `turbopackIgnore` for the same NFT-trace reason as `BRIDGE_ROOT`
+ * above — `homedir()` is a runtime FS path, never a module specifier.
  */
-export const USER_CLAUDE_DIR = join(homedir(), ".claude");
+export const USER_CLAUDE_DIR = join(/* turbopackIgnore: true */ homedir(), ".claude");
 
 /**
  * Port the bridge listens on. Read from BRIDGE_PORT first (legacy /

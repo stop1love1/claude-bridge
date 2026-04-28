@@ -94,7 +94,11 @@ export function MicButton({
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
-    const nav = navigator as Navigator & {
+    // Override the built-in `permissions` property rather than intersect:
+    // the DOM `Permissions.query` is overloaded and returns the wider
+    // `PermissionStatus` (which has a required `name` field), making
+    // assignments to `PermissionStatusLike` fail typechecking.
+    const nav = navigator as Omit<Navigator, "permissions"> & {
       permissions?: PermissionsLike;
       mediaDevices?: MediaDevices;
     };

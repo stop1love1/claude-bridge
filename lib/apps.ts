@@ -184,7 +184,7 @@ export interface BridgeManifest {
   [key: string]: unknown;
 }
 
-const BRIDGE_JSON = join(USER_CLAUDE_DIR, "bridge.json");
+const BRIDGE_JSON = join(/* turbopackIgnore: true */ USER_CLAUDE_DIR, "bridge.json");
 const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SCHEMA_VERSION = 1;
 

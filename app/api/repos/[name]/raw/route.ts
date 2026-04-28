@@ -58,8 +58,15 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   // Accept either an absolute path (already inside the repo) or a path
   // relative to the repo root. Normalize to absolute and verify
   // containment before any disk access.
-  const target = isAbsolute(raw) ? resolve(raw) : resolve(repoCwd, raw);
-  if (!isInside(resolve(repoCwd), target)) {
+  //
+  // The `turbopackIgnore` hints tell Turbopack's NFT analyzer that
+  // these `resolve()` calls aren't import paths — `raw` is a runtime
+  // query param, not a module specifier — so the build doesn't trace
+  // the entire repo into the route's bundle.
+  const target = isAbsolute(raw)
+    ? resolve(/* turbopackIgnore: true */ raw)
+    : resolve(/* turbopackIgnore: true */ repoCwd, raw);
+  if (!isInside(resolve(/* turbopackIgnore: true */ repoCwd), target)) {
     return new Response("outside repo", { status: 400 });
   }
 
