@@ -59,7 +59,7 @@ export function MainNav({
           >
             <Icon size={12} />
             {label}
-            {badges?.[key]}
+            {!isActive && badges?.[key]}
           </Link>
         );
       })}
