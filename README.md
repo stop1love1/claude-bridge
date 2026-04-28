@@ -66,10 +66,14 @@ No project naming convention. No vendor lock-in. Works on whatever stack you alr
 | 🗂️ **Task lifecycle in the UI** | Tasks flow through `TODO → DOING → DONE / BLOCKED` with one click. Each task has a stable id, body, and an agent run tree. |
 | 📡 **Live monitoring** | Token-level streaming of every agent's output, instant SSE status updates, and a per-task tree showing parent / child relationships. |
 | 🛂 **Per-tool permission gates** | Risky tool calls (`Bash`, `Edit`, `Write`, `Delete`, …) pause behind a popup until you allow or deny — with reusable allowlists per session. |
-| ♻️ **Resilient by default** | Auto-retry once on failure with the failure context injected into the fix agent. Stale-run reaper keeps the dashboard honest. |
-| 💬 **Session continuation** | Open any past session and pick up the conversation with full transcript replay. |
-| 📝 **Markdown registers** | `decisions.md`, `bugs.md`, `questions.md`, `contracts/` capture cross-repo agreements the coordinator reads before planning. |
-| 🌿 **Branch-aware dispatch** | Per-app git policy: stay on current branch, fix to one branch, or auto-create `claude/<task-id>` per task. Optional auto-commit + push. |
+| ✅ **Verify-then-ship chain** | After a successful child run, the bridge runs preflight, semantic, style-critic, and your own per-app `test` / `lint` / `build` commands before declaring the run done. Failures auto-retry once with the failure transcript injected into a fix agent. |
+| 💬 **Session continuation + rewind** | Open any past session and resume with full transcript replay, or rewind to a specific message and re-prompt. |
+| 📝 **Cross-repo registers** | `decisions.md`, `bugs.md`, `questions.md`, `contracts/` capture cross-repo agreements the coordinator reads before planning. |
+| 🌿 **Branch-aware dispatch** | Per-app git policy: stay on current branch, pin to one branch, or auto-create `claude/<task-id>`; optional `git worktree` isolation per spawn. Optional auto-commit + push after every successful run. |
+| 📨 **Telegram bridge** | Spawn tasks, watch transitions, kill runs, or read a report from your phone. Bot + user-client channels with chat-id allowlist and natural-language command routing. |
+| 💰 **Token usage analytics** | Per-task input / output / cache token totals with per-run drill-down. |
+| 🔐 **Single-operator auth** | Password (scrypt) + signed session cookie + trusted-device allowlist + CSRF + rate-limited login. Optional cross-device login approvals over Telegram. |
+| 📊 **Repo profiles** | Heuristic per-repo summaries (stack, conventions, pinned files, slash commands) the coordinator injects into every child prompt. |
 | ⚙️ **Runtime-agnostic** | Runs identically under Bun, npm, or pnpm — no lockfile religion. |
 
 ---
@@ -86,7 +90,8 @@ No project naming convention. No vendor lock-in. Works on whatever stack you alr
                        ┌──────────────────────────┐
                        │    Coordinator agent     │
                        │  (reads BRIDGE.md +      │
-                       │   markdown registers)    │
+                       │   markdown registers +   │
+                       │   per-repo profiles)     │
                        └─────┬──────────────┬─────┘
                              │              │
                   spawns ◄───┘              └───► spawns
@@ -98,11 +103,17 @@ No project naming convention. No vendor lock-in. Works on whatever stack you alr
                   │  ↑ tool gates    │  │  ↑ tool gates    │
                   └────────┬─────────┘  └────────┬─────────┘
                            │                     │
-                           └──────────┬──────────┘
-                                      ▼
-                            ┌─────────────────┐
-                            │  reviewer agent │  ◄─ optional
-                            └─────────────────┘
+                           ▼                     ▼
+                ┌─────────────────────────────────────────┐
+                │  Verify-then-ship chain                 │
+                │  preflight → semantic → style critic →  │
+                │  your app's test/lint/build commands    │
+                │  fail → auto-retry once with context    │
+                └────────────────────┬────────────────────┘
+                                     ▼
+                          ┌──────────────────┐
+                          │  reviewer agent  │  ◄─ optional
+                          └──────────────────┘
 ```
 
 Sibling paths are resolved as `../<folder-name>`. There are no hardcoded absolute paths
@@ -185,7 +196,8 @@ agents, streams their output live, and aggregates a report when they finish.
 
 ### Environment variables
 
-Optional — the bridge runs with sensible defaults out of the box.
+Optional — the bridge runs with sensible defaults out of the box. See `.env.example` for the
+full annotated list.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -193,6 +205,10 @@ Optional — the bridge runs with sensible defaults out of the box.
 | `PORT` | (falls back to `BRIDGE_PORT`) | Standard Next.js port |
 | `BRIDGE_URL` | `http://localhost:<port>` | Override origin when running behind a reverse proxy |
 | `CLAUDE_BIN` | `claude` | Override the Claude CLI binary path |
+| `ALLOWED_DEV_ORIGINS` | (none) | Comma-separated origins allowed to hit the dev server |
+| `BRIDGE_LOCK_VERIFY` | `0` | Set to `1` to reject API edits to per-app verify commands; only host-level edits to `bridge.json` are accepted |
+| `BRIDGE_TRUSTED_PROXY` | `0` | Set to `1` when the bridge sits behind a reverse proxy you control, so XFF headers are honored for rate-limit keying |
+| `NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS` | (unset) | Single-user opt-in: adds a "Skip permissions" mode to the composer dropdown. Don't enable on a multi-user or public deploy. |
 
 Create a `.env` file at the bridge root if you want to set any of these:
 
@@ -204,13 +220,52 @@ BRIDGE_PORT=7777
 
 The apps roster lives in `~/.claude/bridge.json` (per-machine, edited via the bridge UI). Storing
 it outside the project tree means a `git pull` on the bridge can never overwrite it. The
-coordinator only dispatches into folders listed there.
+coordinator only dispatches into folders listed there. Each app entry can carry:
+
+- `git`: branch policy (`current` / `fixed` / `auto-create`), worktree mode, `autoCommit`, `autoPush`
+- `verify`: shell commands run after every successful child run (`test`, `lint`, `build`, …)
+- `pinnedFiles`: paths the coordinator should always include in child prompts
+- `quality`: thresholds for the verify-chain critics
+- `description`, `capabilities`: free-text metadata the coordinator surfaces in routing decisions
+
+### Authentication
+
+The bridge is a single-operator dashboard. On first run it redirects to `/login?setup=1` to set
+a password (`scrypt` hash stored in `~/.claude/bridge.json`). Subsequent visits issue an
+HMAC-signed session cookie; the optional "trust this device" path saves a long-lived cookie
+that can be revoked from `/settings`. CSRF is enforced via `Sec-Fetch-Site` + a session-pinned
+double-submit token; login attempts are rate-limited.
+
+If you also configure Telegram (below), login attempts from a fresh device can require approval
+from the operator's chat — useful when the bridge is exposed beyond `localhost`.
+
+```bash
+bun run set:password         # set or rotate the password
+bun run telegram:login       # one-shot Telegram approval flow (optional)
+```
 
 ### Permissions
 
-By default, agents run with `bypassPermissions` so they don't hang on the first tool call. Toggle
-the per-tool approval flow per session in the UI — settings persist as allowlists you can review
-and edit later.
+By default, agents run in `default` mode for user-typed messages — every tool call (`Bash`,
+`Edit`, `Write`, `Delete`, …) pauses behind an inline Allow / Deny popup. Coordinator and
+auto-spawned children run in bypass mode (otherwise they'd hang on the first tool call).
+
+Settings persist as a reusable allowlist per session you can review and edit later. On a
+single-user localhost setup you can opt the composer into bypass too via
+`NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS=1`; the env gate is mirrored on the server so a deploy that
+toggles it off rejects spoofed bypass requests.
+
+### Telegram (optional)
+
+Configure once in `/settings → Telegram`:
+
+- **Bot channel** — paste a bot token; the bridge listens for `/new`, `/list`, `/status`,
+  `/report`, `/tail`, `/kill`, `/delete`, `/done`, … plus free-text NL routing for matching
+  intents. Notifications fire on every task transition (`spawned` / `done` / `failed` / `stale`)
+  to a configured chat id.
+- **User-client channel (optional)** — the operator's own Telegram account as a private DM
+  channel. Requires a numeric user id to dispatch (an `@username` alone is refused so a
+  random DM can't trigger commands).
 
 ---
 
@@ -225,6 +280,9 @@ and edit later.
 | `test` | Run the test suite via Vitest |
 | `test:watch` | Vitest in watch mode |
 | `lint` | Run ESLint |
+| `set:password` | Set or rotate the operator password |
+| `telegram:login` | One-shot interactive Telegram user-client login |
+| `approve:login` | Approve a pending login attempt from another device |
 
 Run any of them with your preferred runtime:
 
@@ -275,9 +333,20 @@ telemetry, no analytics. The apps registry lives in `~/.claude/bridge.json` on d
 <details>
 <summary><strong>What happens if an agent fails?</strong></summary>
 
-It auto-retries once with the failure transcript injected into a fix agent. If that also fails,
-the task moves to `BLOCKED` and the dashboard shows the stack of attempts so you can decide
+The verify-then-ship chain runs every successful child through preflight, semantic, style-critic,
+and your app's configured `test` / `lint` / `build` commands. If any stage fails, the bridge
+auto-retries once with the failure transcript injected into a fix agent. If the retry still
+fails the task is left in `DOING` with the failure surfaced in the run tree so you can decide
 what to do.
+</details>
+
+<details>
+<summary><strong>How do I drive the bridge from my phone?</strong></summary>
+
+Configure a Telegram bot (or pair your own user account) in `/settings → Telegram`. You'll then
+be able to spawn tasks (`/new ...`), monitor (`/status`, `/list`, `/tail`), kill runs, read
+reports, and approve cross-device logins from any chat — with a numeric chat-id allowlist so
+random DMs are ignored.
 </details>
 
 <details>
@@ -295,8 +364,12 @@ coordinator spawn.
 - [ ] More retry strategies than single-shot auto-retry
 - [ ] Read-only public dashboard mode for stakeholders
 - [ ] First-class support for monorepo workspaces (Nx, Turbo, pnpm workspaces)
-- [ ] Built-in cost / token usage analytics per task
 - [ ] Plugin system for custom agent roles
+- [x] Built-in token usage analytics per task
+- [x] Telegram bridge for remote control + notifications
+- [x] Verify-then-ship chain (preflight + semantic + style + per-app commands)
+- [x] Branch-aware dispatch with per-spawn `git worktree` isolation
+- [x] Single-operator auth with trusted devices + login approvals
 
 Have an idea? [Open an issue](https://github.com/stop1love1/claude-bridge/issues) — feedback
 shapes the roadmap.

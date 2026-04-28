@@ -1,7 +1,9 @@
 import {
+  BookOpenCheck,
   Boxes,
   GitBranch,
   LayoutGrid,
+  Send,
   ShieldCheck,
   Sparkles,
   Terminal,
@@ -46,8 +48,23 @@ export const FEATURES: Feature[] = [
   },
   {
     Icon: Sparkles,
-    title: "Resilient by default",
-    body: "Auto-retry once on failure with the failure context injected into the fix agent. A stale-run reaper keeps the dashboard honest.",
+    title: "Verify-then-ship chain",
+    body: "Auto-retry on failure, then run preflight, semantic, style-critic, and your own test/lint/build commands before declaring a run done. The fix agent gets the failure context injected.",
+  },
+  {
+    Icon: Send,
+    title: "Telegram bridge",
+    body: "Spawn tasks, watch transitions, kill runs, or read a report from your phone. Bot + user-client channels with chat-id allowlist and natural-language command routing.",
+  },
+  {
+    Icon: BookOpenCheck,
+    title: "Cross-repo registers",
+    body: "decisions.md, bugs.md, questions.md, contracts/ — markdown notebooks the coordinator reads before planning so cross-repo agreements outlive the AI session.",
+  },
+  {
+    Icon: GitBranch,
+    title: "Branch-aware dispatch",
+    body: "Per-app git policy: stay on current branch, fix to one branch, auto-create claude/<task-id>, or spawn into a fresh worktree. Optional auto-commit + push after every successful run.",
   },
 ];
 
@@ -76,7 +93,7 @@ export const HIGHLIGHTS: Highlight[] = [
   { Icon: Zap, label: "Live token streaming" },
   { Icon: ShieldCheck, label: "Per-tool permission gates" },
   { Icon: Workflow, label: "Coordinator → child agent tree" },
-  { Icon: GitBranch, label: "Branch-aware dispatch" },
+  { Icon: Send, label: "Control from Telegram" },
 ];
 
 export const QUICK_LINKS: QuickLink[] = [
@@ -88,9 +105,9 @@ export const QUICK_LINKS: QuickLink[] = [
 export const STACK = ["Next.js 16", "TypeScript", "Tailwind v4", "Bun · npm · pnpm", "Claude Code"];
 
 export const STATS: { value: string; label: string }[] = [
-  { value: "100%", label: "Open source · MIT-friendly" },
   { value: "0", label: "Hardcoded paths or names" },
   { value: "3", label: "Runtimes (Bun · npm · pnpm)" },
+  { value: "4", label: "Verify stages before ship" },
   { value: "∞", label: "Repos coordinated per task" },
 ];
 
