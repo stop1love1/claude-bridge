@@ -8,6 +8,10 @@ import type {
   AppGitSettings,
   AppRetry,
   SlashCommandsItemDto,
+  TunnelEntry,
+  TunnelProvider,
+  TunnelProviderStatus,
+  TunnelInstallResult,
 } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -213,6 +217,34 @@ export const api = {
         }
         return { ok: false, reason: e.message };
       }),
+  tunnels: () =>
+    req<{ tunnels: TunnelEntry[] }>(`/tunnels`),
+  startTunnel: (body: {
+    port: number;
+    provider: TunnelProvider;
+    label?: string;
+    subdomain?: string;
+  }) =>
+    req<{ tunnel: TunnelEntry }>(`/tunnels`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  stopTunnel: (id: string, purge = false) =>
+    req<{ ok: true }>(
+      `/tunnels/${encodeURIComponent(id)}${purge ? "?purge=1" : ""}`,
+      { method: "DELETE" },
+    ),
+  tunnelProviders: () =>
+    req<{ providers: TunnelProviderStatus[] }>(`/tunnels/providers`),
+  installNgrok: () =>
+    req<TunnelInstallResult>(`/tunnels/providers/ngrok/install`, {
+      method: "POST",
+    }),
+  setNgrokAuthtoken: (authtoken: string) =>
+    req<{ providers: TunnelProviderStatus[] }>(
+      `/tunnels/providers/ngrok/authtoken`,
+      { method: "PUT", body: JSON.stringify({ authtoken }) },
+    ),
   bridgeSettings: () =>
     req<{ publicUrl: string }>(`/bridge/settings`),
   updateBridgeSettings: (patch: { publicUrl?: string }) =>

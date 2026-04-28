@@ -222,6 +222,48 @@ export interface DetectCandidate {
   isMonorepoChild: boolean;
 }
 
+/**
+ * Public-facing shape of `lib/tunnels.ts#TunnelEntry`. Mirrored here
+ * so the `/tunnels` page and the `api` client can type tunnel rows
+ * without dragging server-only `child_process` imports into the bundle.
+ */
+export type TunnelStatus = "starting" | "running" | "error" | "stopped";
+export type TunnelProvider = "localtunnel" | "ngrok";
+
+export interface TunnelEntry {
+  id: string;
+  port: number;
+  label?: string;
+  subdomain?: string;
+  provider: TunnelProvider;
+  status: TunnelStatus;
+  url?: string;
+  error?: string;
+  startedAt: string;
+  endedAt?: string;
+  log: string[];
+}
+
+/**
+ * Per-provider availability snapshot — see `lib/tunnels#detectProviders`.
+ * The Tunnels page uses these fields to render install / authtoken
+ * affordances next to the provider select.
+ */
+export interface TunnelProviderStatus {
+  provider: TunnelProvider;
+  installed: boolean;
+  version?: string;
+  authtokenSet?: boolean;
+  installable: boolean;
+  hint?: string;
+}
+
+export interface TunnelInstallResult {
+  ok: boolean;
+  status: TunnelProviderStatus;
+  log: string;
+}
+
 export type DetectEvent =
   | { type: "started"; roots: string[]; depth: number }
   | { type: "scanning"; root: string }

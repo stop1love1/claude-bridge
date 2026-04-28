@@ -3,12 +3,13 @@
 import Link from "next/link";
 import {
   Boxes,
+  Globe2,
   LayoutGrid,
   Settings as SettingsIcon,
   Terminal,
 } from "lucide-react";
 
-export type MainNavSection = "apps" | "tasks" | "sessions" | "settings";
+export type MainNavSection = "apps" | "tasks" | "sessions" | "tunnels" | "settings";
 
 const ITEMS: {
   key: MainNavSection;
@@ -19,6 +20,7 @@ const ITEMS: {
   { key: "apps",     href: "/apps",     label: "Apps",     Icon: Boxes },
   { key: "tasks",    href: "/tasks",    label: "Tasks",    Icon: LayoutGrid },
   { key: "sessions", href: "/sessions", label: "Sessions", Icon: Terminal },
+  { key: "tunnels",  href: "/tunnels",  label: "Tunnels",  Icon: Globe2 },
   { key: "settings", href: "/settings", label: "Settings", Icon: SettingsIcon },
 ];
 
