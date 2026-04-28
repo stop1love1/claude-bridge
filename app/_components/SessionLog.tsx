@@ -270,13 +270,17 @@ const MD_COMPONENTS = {
       : <input {...p} />,
 };
 
-function MarkdownText({ text }: { text: string }) {
+// Memoized so streaming token deltas don't remount the full
+// remark-gfm + react-markdown pipeline on every partial update —
+// `StreamingAssistantRow` re-renders per token but the rendered text
+// only grows incrementally.
+const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
       {text}
     </ReactMarkdown>
   );
-}
+});
 
 function formatThoughtSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
@@ -1255,10 +1259,14 @@ function SessionLogInner({
   // satisfied — the wall clock is read once on mount, then ticked by
   // the effect below.
   const [now, setNow] = useState(() => Date.now());
+  // Stop the per-second tick once the SSE alive flag is the
+  // authoritative source — at that point `isResponding` no longer
+  // reads `now` and the re-render is wasted CPU per session per tab.
   useEffect(() => {
+    if (aliveSse !== null) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [aliveSse]);
   // Authoritative source: the SSE-reported child-process state. Falls
   // back to the legacy lastTs heuristic only until the first `alive`
   // event arrives (e.g. on a brand-new SSE connection in dev), so the
@@ -1301,20 +1309,36 @@ function SessionLogInner({
     );
   }, []);
 
+  // Pre-index the search text once per `visibleEntries` change so the
+  // per-keystroke filter is a simple lowercase substring test rather
+  // than re-stringifying every entry's content blob on every keystroke.
+  const searchIndex = useMemo(
+    () =>
+      visibleEntries.map((e, i) => {
+        const c = e.message?.content;
+        const text = typeof c === "string" ? c : JSON.stringify(c ?? "");
+        return { key: entryKey(e, i), text: text.toLowerCase() };
+      }),
+    [visibleEntries, entryKey],
+  );
+
   const matchedKeys = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [] as string[];
     const keys: string[] = [];
-    visibleEntries.forEach((e, i) => {
-      const c = e.message?.content;
-      // Cheap text scan: stringify the content blob and substring-test.
-      // JSON.stringify is enough since content blocks are JSON-serializable.
-      const text = (typeof c === "string" ? c : JSON.stringify(c ?? "")).toLowerCase();
-      if (text.includes(q)) keys.push(entryKey(e, i));
-    });
+    for (const item of searchIndex) {
+      if (item.text.includes(q)) keys.push(item.key);
+    }
     return keys;
-  }, [searchQuery, visibleEntries, entryKey]);
+  }, [searchQuery, searchIndex]);
 
+  // Track the most recent highlight timer so a fast next-match jump (or
+  // an unmount) clears the previous element's pending class removal —
+  // otherwise the callback can fire on a stale or unmounted DOM node.
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+  }, []);
   const scrollToMatch = useCallback((idx: number) => {
     const k = matchedKeys[idx];
     if (!k) return;
@@ -1323,7 +1347,11 @@ function SessionLogInner({
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     el.classList.add("ring-2", "ring-warning/60");
-    setTimeout(() => el.classList.remove("ring-2", "ring-warning/60"), 1400);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => {
+      el.classList.remove("ring-2", "ring-warning/60");
+      highlightTimerRef.current = null;
+    }, 1400);
   }, [matchedKeys]);
 
   useEffect(() => {
