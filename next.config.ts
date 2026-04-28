@@ -70,11 +70,31 @@ const prodOnlyHeaders = isProd
   : [];
 
 const nextConfig: NextConfig = {
-  // Disable double-render in dev: keystrokes in the composer were
-  // re-running effects twice per tick, piling up with the tail poll.
-  // Still opt back in when debugging effect cleanup.
-  reactStrictMode: false,
+  // Re-enabled after the Sprint 1/3 effect cleanup pass — the SSE
+  // subscriptions in `app/tasks/[id]/page.tsx` and the search-highlight
+  // timer in `SessionLog.tsx` now survive double-mount, so strict mode
+  // catches genuine missing-cleanup regressions instead of producing
+  // false-positive cascading polls.
+  reactStrictMode: true,
   allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS?.split(",") || [],
+  // Tree-shake icon + UI primitive packages at the per-import level.
+  // Without this, `import { Foo } from "lucide-react"` pulls the whole
+  // ~1k-icon barrel into the client bundle even though we only use a
+  // dozen. Same effect for Radix primitive families that re-export
+  // sub-components from a single entry.
+  experimental: {
+    optimizePackageImports: [
+      "lucide-react",
+      "@radix-ui/react-alert-dialog",
+      "@radix-ui/react-dialog",
+      "@radix-ui/react-dropdown-menu",
+      "@radix-ui/react-label",
+      "@radix-ui/react-popover",
+      "@radix-ui/react-select",
+      "@radix-ui/react-slot",
+      "@radix-ui/react-tooltip",
+    ],
+  },
   async headers() {
     return [
       {
