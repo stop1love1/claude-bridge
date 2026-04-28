@@ -59,6 +59,11 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
  * coordinator / agents routes that genuinely need bypass mode pass
  * `mode: "bypassPermissions"` from server-side code, never relayed
  * from the request body.
+ *
+ * Single-user localhost setups can opt in to `bypassPermissions` from
+ * the composer by setting `NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS=1`; the
+ * env gate is read at request time so a deploy can toggle it without
+ * a code change.
  */
 const USER_SAFE_PERMISSION_MODES = [
   "default",
@@ -66,6 +71,15 @@ const USER_SAFE_PERMISSION_MODES = [
   "plan",
   "auto",
 ] as const;
+
+const USER_SAFE_PERMISSION_MODES_WITH_BYPASS = [
+  ...USER_SAFE_PERMISSION_MODES,
+  "bypassPermissions",
+] as const;
+
+function bypassEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS === "1";
+}
 
 export function isValidSessionId(s: unknown): s is string {
   return typeof s === "string" && UUID_RE.test(s);
@@ -115,10 +129,11 @@ export function isValidPermissionMode(s: unknown): s is PermissionMode {
  * authenticated by `INTERNAL_TOKEN_HEADER` and explicitly trusted.
  */
 export function isValidUserPermissionMode(s: unknown): s is PermissionMode {
-  return (
-    typeof s === "string" &&
-    (USER_SAFE_PERMISSION_MODES as readonly string[]).includes(s)
-  );
+  if (typeof s !== "string") return false;
+  const allowed = bypassEnabled()
+    ? (USER_SAFE_PERMISSION_MODES_WITH_BYPASS as readonly string[])
+    : (USER_SAFE_PERMISSION_MODES as readonly string[]);
+  return allowed.includes(s);
 }
 
 /**
