@@ -12,6 +12,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+export type FaqItem = { q: string; a: string };
+
 export const REPO_URL = "https://github.com/stop1love1/claude-bridge";
 export const AUTHOR_URL = "https://github.com/stop1love1";
 
@@ -109,6 +111,33 @@ export const STATS: { value: string; label: string }[] = [
   { value: "3", label: "Runtimes (Bun · npm · pnpm)" },
   { value: "4", label: "Verify stages before ship" },
   { value: "∞", label: "Repos coordinated per task" },
+];
+
+export const FAQS: FaqItem[] = [
+  {
+    q: "Where does my code go? Is anything sent to a third-party?",
+    a: "The bridge runs entirely on your machine. Your repos stay on your disk; only the prompts and tool calls you'd already be making with Claude Code are sent to Anthropic. The dashboard, registry, and session transcripts are all local files.",
+  },
+  {
+    q: "Do I need a paid Claude plan?",
+    a: "You need the `claude` CLI authenticated however you'd normally use it — Anthropic API key, Claude Pro, or a workspace plan. The bridge spawns regular `claude` processes; whatever works for you in a single repo works here across many.",
+  },
+  {
+    q: "How does it handle dangerous tool calls?",
+    a: "Every Bash, Edit, Write, or Delete call pauses behind an Allow / Deny popup until you decide. You can build per-session allowlists, mark a child as bypass-trusted, or operate fully gated — your call, per task.",
+  },
+  {
+    q: "Can multiple people use the same dashboard?",
+    a: "It's designed as a single-operator console — scrypt password, signed cookie, optional trusted-device list, optional Telegram approval for new logins. For shared deployments, run it behind your VPN or reverse proxy.",
+  },
+  {
+    q: "What stacks does the auto-detect support?",
+    a: "Next.js, NestJS, Express, Vue, Svelte, Tailwind, Prisma, plus Python, Go, Rust, Java, and more. Nothing in the bridge is hardcoded to a stack — you can also register repos by hand from the UI.",
+  },
+  {
+    q: "Will the agent push code without me reviewing it?",
+    a: "Only if you've turned on auto-commit + auto-push for that specific app, and the verify chain (preflight + semantic + style + your own test/lint/build) passed. Default policy is: stay on the current branch and let you decide what to do with the diff.",
+  },
 ];
 
 export function GithubIcon({ size = 16, className }: { size?: number; className?: string }) {

@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   CheckCircle2,
+  HelpCircle,
   Menu,
   PlayCircle,
   Rocket,
@@ -17,6 +18,7 @@ import { Button } from "../_components/ui/button";
 import { DEMO_MODE } from "@/lib/demoMode";
 import {
   AUTHOR_URL,
+  FAQS,
   FEATURES,
   GithubIcon,
   HIGHLIGHTS,
@@ -50,6 +52,7 @@ const NAV_LINKS = [
   { href: "/#features", label: "Features" },
   { href: "/#how", label: "How it works" },
   { href: "/#preview", label: "Preview" },
+  { href: "/#faq", label: "FAQ" },
   { href: "/docs", label: "Docs" },
 ];
 
@@ -124,9 +127,15 @@ export function LandingHeader() {
 export function Hero() {
   return (
     <section className="relative overflow-hidden border-b border-border">
+      {/* Subtle dot grid + radial glow + bottom hairline build the
+          production-feel backdrop without competing with foreground copy. */}
       <div
         aria-hidden="true"
         className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,var(--color-primary)_0%,transparent_60%)] opacity-20"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 -z-10 opacity-[0.18] bg-[radial-gradient(circle_at_1px_1px,var(--color-primary)_1px,transparent_0)] bg-size-[24px_24px] mask-[radial-gradient(ellipse_at_top,black_20%,transparent_70%)]"
       />
       <div
         aria-hidden="true"
@@ -170,6 +179,19 @@ export function Hero() {
           management, agent dispatch, live monitoring, and permission control — runtime-agnostic,
           stack-agnostic, no lock-in.
         </p>
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 mb-5 sm:mb-6 text-[10px] sm:text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <CheckCircle2 size={12} className="text-success" /> Free &amp; open source
+          </span>
+          <span className="text-fg-dim">·</span>
+          <span className="inline-flex items-center gap-1.5">
+            <CheckCircle2 size={12} className="text-success" /> Self-hosted, your code stays local
+          </span>
+          <span className="hidden sm:inline text-fg-dim">·</span>
+          <span className="hidden sm:inline-flex items-center gap-1.5">
+            <CheckCircle2 size={12} className="text-success" /> Bun · npm · pnpm
+          </span>
+        </div>
         <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-center gap-2 mb-7 sm:mb-8">
           {!DEMO_MODE && (
             <Button asChild size="default" className="w-full sm:w-auto">
@@ -455,10 +477,159 @@ export function QuickLinks() {
   );
 }
 
+/**
+ * CSS-only runtime tab control. The whole landing page renders as a
+ * Server Component, so we avoid hydration cost by driving tab state
+ * with `<input type="radio">` + Tailwind's named `peer-checked/<id>`
+ * variants — no `useState`, no `"use client"` needed. The radios sit
+ * at the top so every tab strip and panel can reference them as a
+ * previous sibling.
+ */
+function RuntimeTabs() {
+  const runtimes = [
+    { id: "npm", label: "npm", install: "npm install", serve: "npm run serve" },
+    { id: "pnpm", label: "pnpm", install: "pnpm install", serve: "pnpm run serve" },
+    { id: "bun", label: "Bun", install: "bun install", serve: "bun run serve" },
+  ] as const;
+
+  // Hard-coded peer variants — Tailwind's JIT can't see template strings.
+  const tabClass: Record<typeof runtimes[number]["id"], string> = {
+    npm:  "peer-checked/npm:bg-primary peer-checked/npm:text-primary-foreground peer-checked/npm:shadow",
+    pnpm: "peer-checked/pnpm:bg-primary peer-checked/pnpm:text-primary-foreground peer-checked/pnpm:shadow",
+    bun:  "peer-checked/bun:bg-primary peer-checked/bun:text-primary-foreground peer-checked/bun:shadow",
+  };
+  const panelClass: Record<typeof runtimes[number]["id"], string> = {
+    npm:  "hidden peer-checked/npm:block",
+    pnpm: "hidden peer-checked/pnpm:block",
+    bun:  "hidden peer-checked/bun:block",
+  };
+
+  return (
+    <div className="max-w-md mx-auto mb-3">
+      {/* Hidden radios — must precede the tab strip + panels so peer
+          variants resolve. `defaultChecked` on npm makes it the
+          initially-active tab. */}
+      <input
+        type="radio"
+        name="bridge-runtime"
+        id="bridge-rt-npm"
+        defaultChecked
+        className="peer/npm sr-only"
+      />
+      <input
+        type="radio"
+        name="bridge-runtime"
+        id="bridge-rt-pnpm"
+        className="peer/pnpm sr-only"
+      />
+      <input
+        type="radio"
+        name="bridge-runtime"
+        id="bridge-rt-bun"
+        className="peer/bun sr-only"
+      />
+
+      {/* Tab strip */}
+      <div
+        className="flex items-stretch p-1 rounded-md border border-border bg-card/80 backdrop-blur mb-2"
+        role="tablist"
+        aria-label="Pick a runtime"
+      >
+        {runtimes.map(({ id, label }) => (
+          <label
+            key={id}
+            htmlFor={`bridge-rt-${id}`}
+            role="tab"
+            className={`flex-1 text-center text-xs font-medium py-1.5 rounded-sm cursor-pointer text-muted-foreground hover:text-foreground transition-colors ${tabClass[id]}`}
+          >
+            {label}
+          </label>
+        ))}
+      </div>
+
+      {/* Panels — one per runtime, only the matching peer-checked
+          variant flips it from `hidden` to `block`. */}
+      {runtimes.map(({ id, install, serve }) => (
+        <div
+          key={id}
+          role="tabpanel"
+          aria-labelledby={`bridge-rt-${id}`}
+          className={`${panelClass[id]} rounded-md border border-border bg-card/80 backdrop-blur overflow-hidden text-left`}
+        >
+          <div className="p-3 space-y-1.5 font-mono text-[11px] sm:text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-success select-none shrink-0">$</span>
+              <code className="truncate text-foreground">{install}</code>
+            </div>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-success select-none shrink-0">$</span>
+              <code className="truncate text-foreground">{serve}</code>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function FAQ() {
+  return (
+    <section
+      id="faq"
+      className="border-t border-border bg-card/40 scroll-mt-16"
+    >
+      <div className={`${CONTAINER_NARROW} ${SECTION} py-12 sm:py-16`}>
+        <div className="text-center max-w-2xl mx-auto mb-7 sm:mb-9">
+          <SectionEyebrow icon={HelpCircle}>FAQ</SectionEyebrow>
+          <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight mb-3 text-balance">
+            Questions teams ask before they ship.
+          </h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Short answers to the things people email about most. The{" "}
+            <Link href="/docs#faq" className="text-foreground hover:text-primary underline-offset-4 hover:underline">
+              docs
+            </Link>{" "}
+            cover the long ones.
+          </p>
+        </div>
+        <div className="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden shadow-sm">
+          {FAQS.map(({ q, a }, i) => (
+            <details
+              key={q}
+              className="group"
+              {...(i === 0 ? { open: true } : {})}
+            >
+              <summary className="flex items-start gap-3 px-4 sm:px-5 py-3.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-accent/40 transition-colors">
+                <span className="mt-0.5 inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 border border-primary/20 text-primary text-[10px] font-mono shrink-0">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="text-sm font-medium text-foreground flex-1 leading-snug">
+                  {q}
+                </span>
+                <ArrowRight
+                  size={14}
+                  className="mt-1 shrink-0 text-muted-foreground transition-transform group-open:rotate-90"
+                />
+              </summary>
+              <div className="px-4 sm:px-5 pb-4 pl-12 sm:pl-13 -mt-1 text-xs sm:text-[13px] text-muted-foreground leading-relaxed text-pretty">
+                {a}
+              </div>
+            </details>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function FinalCTA() {
   return (
-    <section className="border-t border-border">
-      <div className={`${CONTAINER_NARROW} ${SECTION} py-12 sm:py-16 text-center`}>
+    <section className="relative overflow-hidden border-t border-border">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_bottom,var(--color-primary)_0%,transparent_60%)] opacity-15"
+      />
+      <div className={`${CONTAINER_NARROW} ${SECTION} py-14 sm:py-20 text-center`}>
         <div className="inline-flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-primary/10 border border-primary/20 mb-4 sm:mb-5">
           <Rocket size={20} className="text-primary" />
         </div>
@@ -468,6 +639,10 @@ export function FinalCTA() {
         <p className="max-w-xl mx-auto text-sm text-muted-foreground mb-6 sm:mb-7 leading-relaxed text-pretty">
           Free, open source, and runs identically on Bun, npm, or pnpm. Clone, run, ship.
         </p>
+        <RuntimeTabs />
+        <div className="text-[10px] sm:text-[11px] text-fg-dim text-center mb-6 sm:mb-7">
+          Production build + start · port 7777 · setup happens in the browser
+        </div>
         <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-center gap-2">
           {!DEMO_MODE && (
             <Button asChild size="default" className="w-full sm:w-auto">
@@ -483,6 +658,12 @@ export function FinalCTA() {
               Star on GitHub
             </a>
           </Button>
+          <Button asChild variant="ghost" size="default" className="w-full sm:w-auto">
+            <Link href="/docs">
+              <ScrollText size={14} />
+              Read the docs
+            </Link>
+          </Button>
         </div>
       </div>
     </section>
@@ -490,15 +671,141 @@ export function FinalCTA() {
 }
 
 export function LandingFooter() {
+  const year = new Date().getFullYear();
   return (
     <footer className="border-t border-border bg-card">
-      <div
-        className={`${CONTAINER} ${SECTION} py-5 sm:py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] sm:text-xs text-muted-foreground text-center sm:text-left`}
-      >
-        <div className="flex items-center gap-2">
-          <Image src="/logo.svg" alt="" width={16} height={16} className="rounded-sm opacity-80" />
+      <div className={`${CONTAINER} ${SECTION} py-8 sm:py-10`}>
+        <div className="grid gap-6 sm:gap-8 sm:grid-cols-2 md:grid-cols-4 text-[12px] sm:text-xs">
+          <div className="sm:col-span-2 md:col-span-1">
+            <div className="flex items-center gap-2 mb-2">
+              <Image src="/logo.svg" alt="" width={20} height={20} className="rounded-sm" />
+              <span className="text-sm font-semibold text-foreground">Claude Bridge</span>
+            </div>
+            <p className="text-muted-foreground leading-relaxed text-pretty">
+              Hand off the task. Go grab a coffee. We&apos;ll ping you when it ships.
+            </p>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-fg-dim font-medium mb-2.5">
+              Product
+            </div>
+            <ul className="space-y-1.5 text-muted-foreground">
+              <li>
+                <Link href="/#features" className="hover:text-foreground transition-colors">
+                  Features
+                </Link>
+              </li>
+              <li>
+                <Link href="/#how" className="hover:text-foreground transition-colors">
+                  How it works
+                </Link>
+              </li>
+              <li>
+                <Link href="/#preview" className="hover:text-foreground transition-colors">
+                  Preview
+                </Link>
+              </li>
+              <li>
+                <Link href="/#faq" className="hover:text-foreground transition-colors">
+                  FAQ
+                </Link>
+              </li>
+            </ul>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-fg-dim font-medium mb-2.5">
+              Resources
+            </div>
+            <ul className="space-y-1.5 text-muted-foreground">
+              <li>
+                <Link href="/docs" className="hover:text-foreground transition-colors">
+                  Documentation
+                </Link>
+              </li>
+              <li>
+                <a
+                  href={`${REPO_URL}/issues`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  Report an issue
+                </a>
+              </li>
+              <li>
+                <a
+                  href={`${REPO_URL}#-roadmap`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  Roadmap
+                </a>
+              </li>
+              <li>
+                <a
+                  href={`${REPO_URL}/releases`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  Releases
+                </a>
+              </li>
+            </ul>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-fg-dim font-medium mb-2.5">
+              Project
+            </div>
+            <ul className="space-y-1.5 text-muted-foreground">
+              <li>
+                <a
+                  href={REPO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
+                >
+                  <GithubIcon size={12} />
+                  GitHub
+                </a>
+              </li>
+              <li>
+                <a
+                  href={AUTHOR_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  Author
+                </a>
+              </li>
+              <li>
+                <a
+                  href={`${REPO_URL}/blob/main/README.md`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  README
+                </a>
+              </li>
+              <li>
+                <a
+                  href={`${REPO_URL}/blob/main/LICENSE`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  License
+                </a>
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div className="mt-7 pt-5 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-muted-foreground text-center sm:text-left">
           <span>
-            Claude Bridge — built by{" "}
+            © {year} Claude Bridge · built by{" "}
             <a
               href={AUTHOR_URL}
               target="_blank"
@@ -508,21 +815,10 @@ export function LandingFooter() {
               @stop1love1
             </a>
           </span>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link href="/docs" className="hover:text-foreground transition-colors">
-            Docs
-          </Link>
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
-          >
-            <GithubIcon size={13} />
-            <span className="hidden sm:inline">github.com/stop1love1/claude-bridge</span>
-            <span className="sm:hidden">GitHub</span>
-          </a>
+          <span className="inline-flex items-center gap-1.5 text-fg-dim">
+            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+            Open source · self-hosted · no telemetry
+          </span>
         </div>
       </div>
     </footer>
