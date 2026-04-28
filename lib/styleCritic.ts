@@ -17,7 +17,6 @@
  * claim-vs-diff HONESTY without an LLM spawn. The critic is opt-in and
  * costs ~30-100K tokens per task on top of the coder.
  */
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { appendRun, type Run, type RunStyleCritic } from "./meta";
@@ -32,7 +31,7 @@ import { readOriginalPrompt } from "./promptStore";
 import { isAlreadyRetryRun } from "./verifyChain";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
 import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 
 export const STYLE_CRITIC_ROLE = "style-critic";
 export const STYLE_CRITIC_RETRY_SUFFIX = "-stretry";
@@ -205,12 +204,7 @@ export async function spawnStyleCriticRetry(args: {
   const { taskId, finishedRun, critic } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
-  let md: string;
-  try {
-    md = readFileSync(BRIDGE_MD, "utf8");
-  } catch {
-    return null;
-  }
+  const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;

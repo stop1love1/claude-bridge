@@ -1,11 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { readMeta } from "@/lib/meta";
 import { resolveRepoCwd } from "@/lib/repos";
 import { projectDirFor } from "@/lib/sessions";
 import { addUsage, sumUsageFromJsonl, type SessionUsage } from "@/lib/sessionUsage";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
 import { isValidTaskId } from "@/lib/tasks";
 import { badRequest } from "@/lib/validate";
 
@@ -40,7 +39,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "task not found" }, { status: 404 });
   }
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const runs: PerRunUsage[] = [];
   let total: SessionUsage = {
     inputTokens: 0, outputTokens: 0,

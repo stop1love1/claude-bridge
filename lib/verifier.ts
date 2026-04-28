@@ -33,7 +33,7 @@ import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSetti
 import { readOriginalPrompt } from "./promptStore";
 import { isAlreadyRetryRun } from "./verifyChain";
 import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 
 const execFileP = promisify(execFile);
 const CRETRY_SUFFIX = "-cretry";
@@ -362,12 +362,7 @@ export async function spawnClaimRetry(args: {
   const { taskId, finishedRun, verifier } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
-  let md: string;
-  try {
-    md = readFileSync(BRIDGE_MD, "utf8");
-  } catch {
-    return null;
-  }
+  const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;

@@ -14,8 +14,8 @@
  * tries the LLM impl first, falls back to heuristic on any error.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { BRIDGE_MD, BRIDGE_ROOT } from "../paths";
+import { existsSync } from "node:fs";
+import { BRIDGE_ROOT, readBridgeMd } from "../paths";
 import { loadProfiles } from "../profileStore";
 import { resolveRepos } from "../repos";
 import { getManifestDetectSource, loadApps } from "../apps";
@@ -91,8 +91,7 @@ export function loadDetectInput(opts: {
 }): DetectInput {
   let repoList = opts.repos;
   if (!repoList) {
-    let md = "";
-    try { md = readFileSync(BRIDGE_MD, "utf8"); } catch { /* ignore */ }
+    const md = readBridgeMd();
     repoList = resolveRepos(md, BRIDGE_ROOT)
       .filter((r) => existsSync(r.path))
       .map((r) => r.name);

@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { basename as pathBasename, join, relative } from "node:path";
 import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { isValidAppName } from "@/lib/apps";
 import { badRequest } from "@/lib/validate";
 
@@ -43,7 +43,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const { searchParams } = new URL(req.url);
   const q = (searchParams.get("q") ?? "").toLowerCase();
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const repoPath = resolveRepoCwd(md, BRIDGE_ROOT, name);
   if (!repoPath) return NextResponse.json({ error: "unknown repo" }, { status: 404 });
 

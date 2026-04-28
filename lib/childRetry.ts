@@ -9,7 +9,7 @@ import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSetti
 import { projectDirFor } from "./sessions";
 import { readOriginalPrompt } from "./promptStore";
 import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 
 /**
  * Phase D — auto-retry for failed children.
@@ -293,9 +293,7 @@ async function spawnRetryRun(args: {
   // Resolve the same repo the failed run targeted. If the repo isn't
   // resolvable any more (renamed / deleted between the original spawn
   // and the failure), we can't retry — bail.
-  let md: string;
-  try { md = readFileSync(BRIDGE_MD, "utf8"); }
-  catch { return null; }
+  const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, failedRun.repo);
   if (!liveRepoCwd) return null;
   // P4/F1: when the failed run executed in a worktree, the retry runs

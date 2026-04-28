@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { resolveRepos } from "@/lib/repos";
 import { discoverOrphanProjects, projectDirFor } from "@/lib/sessions";
 import { removeSessionFromTask } from "@/lib/meta";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
 import { badRequest, isValidSessionId } from "@/lib/validate";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +29,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   const { searchParams } = new URL(req.url);
   const repoHint = searchParams.get("repo");
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const declared = [
     { name: basename(BRIDGE_ROOT), path: BRIDGE_ROOT },
     ...resolveRepos(md, BRIDGE_ROOT).map((r) => ({ name: r.name, path: r.path })),

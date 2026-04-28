@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolveRepos } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { ensureFreshOrAuto, type RepoLike } from "@/lib/profileStore";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "name required" }, { status: 400 });
   }
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const declared = resolveRepos(md, BRIDGE_ROOT);
   const declaredEntry = declared.find((r) => r.name === name);
   if (!declaredEntry) {

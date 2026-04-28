@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolveRepos } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { ensureFreshOrAuto, type RepoLike } from "@/lib/profileStore";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  * coordinator-prompt rendering paths that want a synchronous read.
  */
 export function GET() {
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const declared = resolveRepos(md, BRIDGE_ROOT);
   const repos: RepoLike[] = declared.map((r) => ({
     name: r.name,

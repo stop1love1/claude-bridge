@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { BRIDGE_MD, BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR, readBridgeMd } from "./paths";
 import {
   createMeta,
   emitTaskSection,
@@ -207,8 +207,7 @@ export function deleteTask(id: string): DeleteTaskResult {
 
   const meta = readMeta(dir);
   if (meta && meta.runs.length > 0) {
-    let bridgeMd = "";
-    try { bridgeMd = readFileSync(BRIDGE_MD, "utf8"); } catch { /* ignore */ }
+    const bridgeMd = readBridgeMd();
 
     for (const run of meta.runs) {
       try { killChild(run.sessionId); } catch { /* best-effort */ }

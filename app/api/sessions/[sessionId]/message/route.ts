@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { resumeClaude, spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/lib/spawn";
 import { projectDirFor } from "@/lib/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return badRequest("invalid settings.mode");
   }
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const cwd = resolveRepoCwd(md, BRIDGE_ROOT, repo!);
   // L4: don't echo the rejected `repo` value back. A 400 reply is
   // enough — including the input string makes log-poisoning easier

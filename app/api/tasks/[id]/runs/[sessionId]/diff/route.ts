@@ -18,13 +18,13 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { getApp } from "@/lib/apps";
 import { readMeta } from "@/lib/meta";
 import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
 import { isValidTaskId } from "@/lib/tasks";
 import { badRequest, isValidSessionId } from "@/lib/validate";
 
@@ -129,11 +129,11 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   } else if (app && existsSync(app.path)) {
     cwd = app.path;
   } else {
-    try {
-      const md = readFileSync(BRIDGE_MD, "utf8");
+    const md = readBridgeMd();
+    if (md) {
       const resolved = resolveRepoCwd(md, BRIDGE_ROOT, run.repo);
       if (resolved && existsSync(resolved)) cwd = resolved;
-    } catch { /* fall through */ }
+    }
   }
 
   if (!cwd) {

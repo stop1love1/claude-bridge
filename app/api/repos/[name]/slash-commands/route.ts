@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { NextResponse, type NextRequest } from "next/server";
 import { getBuiltinSlashCommands } from "@/lib/claudeBuiltinSlash";
 import {
@@ -6,7 +5,7 @@ import {
   discoverUserSlashCommands,
   type SlashDiscoverySource,
 } from "@/lib/claudeSlashDiscovery";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { resolveRepoCwd } from "@/lib/repos";
 import { isValidAppName } from "@/lib/apps";
 
@@ -56,7 +55,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   if (!isValidAppName(name)) {
     return NextResponse.json({ error: "invalid app name" }, { status: 400 });
   }
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const cwd = resolveRepoCwd(md, BRIDGE_ROOT, name);
   if (!cwd) return NextResponse.json({ error: "unknown repo" }, { status: 404 });
 

@@ -30,7 +30,7 @@ import { spawnFreeSession } from "./spawn";
 import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
 import { readOriginalPrompt } from "./promptStore";
 import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 
 /** Default required Read count before any Edit/Write. Overridable per
  * app via `App.preflightReads`. */
@@ -274,12 +274,7 @@ export async function spawnPreflightRetry(args: {
   const { taskId, finishedRun, preflight } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
-  let md: string;
-  try {
-    md = readFileSync(BRIDGE_MD, "utf8");
-  } catch {
-    return null;
-  }
+  const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;

@@ -1,11 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { appendRunIfNotDuplicate, readMeta, updateRun } from "@/lib/meta";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
 import { resolveRepoCwd, resolveRepos } from "@/lib/repos";
 import { spawnFreeSession } from "@/lib/spawn";
 import { wireRunLifecycle } from "@/lib/coordinator";
@@ -136,12 +135,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // (the apps registry in `bridge.json` is the actual source of truth
   // post-Phase-G). Empty string = "no repos declared via BRIDGE.md",
   // which is the same fallback `resolveRepos` already handles.
-  let md = "";
-  try {
-    md = readFileSync(BRIDGE_MD, "utf8");
-  } catch (err) {
-    console.warn("BRIDGE.md unreadable — continuing with empty Repos table", err);
-  }
+  const md = readBridgeMd();
   const profileStore = loadProfiles();
   const profilesMap = profileStore?.profiles;
 

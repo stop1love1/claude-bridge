@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/lib/spawn";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
 import { isValidAppName } from "@/lib/apps";
@@ -79,7 +78,7 @@ export async function POST(req: NextRequest) {
     return badRequest("invalid settings.mode");
   }
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const cwd = resolveRepoCwd(md, BRIDGE_ROOT, body.repo);
   // L4: keep the rejected name out of the response body — the caller
   // already knows what they sent.

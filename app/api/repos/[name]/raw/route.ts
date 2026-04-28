@@ -1,9 +1,9 @@
 import { type NextRequest } from "next/server";
-import { existsSync, statSync, createReadStream, readFileSync } from "node:fs";
+import { existsSync, statSync, createReadStream } from "node:fs";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { isValidAppName } from "@/lib/apps";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const { name } = await ctx.params;
   if (!isValidAppName(name)) return new Response("invalid app name", { status: 400 });
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const md = readBridgeMd();
   const repoCwd = resolveRepoCwd(md, BRIDGE_ROOT, name);
   if (!repoCwd) return new Response("unknown repo", { status: 404 });
 

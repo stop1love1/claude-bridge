@@ -56,7 +56,7 @@ function loadSemanticVerifier(): typeof SemanticVerifier {
 import type { Task } from "./tasks";
 import { loadProfiles } from "./profileStore";
 import { resolveRepoCwd, resolveRepos } from "./repos";
-import { BRIDGE_MD } from "./paths";
+import { readBridgeMd } from "./paths";
 import { getApp } from "./apps";
 import { autoCommitAndPush } from "./gitOps";
 import { mergeAndRemoveWorktree } from "./worktrees";
@@ -300,11 +300,11 @@ export function wireRunLifecycle(
       // from that exact same cwd or the file lookup misses.
       let preflightCwd = run.worktreePath ?? app.path;
       if (!run.worktreePath) {
-        try {
-          const md = readFileSync(BRIDGE_MD, "utf8");
+        const md = readBridgeMd();
+        if (md) {
           const resolved = resolveRepoCwd(md, BRIDGE_ROOT, run.repo);
           if (resolved) preflightCwd = resolved;
-        } catch { /* keep app.path fallback */ }
+        }
       }
       let preflightResult: Preflight.PreflightResult | null = null;
       try {
@@ -814,7 +814,7 @@ export async function spawnCoordinatorForTask(
     // template doesn't have to hardcode a project-specific name.
     let exampleRepo = BRIDGE_FOLDER;
     try {
-      const md = readFileSync(BRIDGE_MD, "utf8");
+      const md = readBridgeMd();
       const declared = resolveRepos(md, BRIDGE_ROOT)
         .filter((r) => existsSync(r.path))
         .map((r) => r.name);

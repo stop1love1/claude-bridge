@@ -18,7 +18,6 @@
  *   - inline verifier  — "did the agent claim what they actually edited?"
  *   - semantic verifier (this) — "do the edits actually do what the task asked?"
  */
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { appendRun, type Run, type RunSemanticVerifier } from "./meta";
@@ -33,7 +32,7 @@ import { readOriginalPrompt } from "./promptStore";
 import { isAlreadyRetryRun } from "./verifyChain";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
 import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 
 export const SEMANTIC_VERIFIER_ROLE = "semantic-verifier";
 export const SEMANTIC_VERIFIER_RETRY_SUFFIX = "-svretry";
@@ -202,12 +201,7 @@ export async function spawnSemanticVerifierRetry(args: {
   const { taskId, finishedRun, verifier } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
-  let md: string;
-  try {
-    md = readFileSync(BRIDGE_MD, "utf8");
-  } catch {
-    return null;
-  }
+  const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;

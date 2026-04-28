@@ -1,5 +1,6 @@
 import { resolve, join, basename } from "node:path";
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 
 /**
  * The Next app now lives at the bridge repo root (no separate `ui/`
@@ -21,6 +22,20 @@ export const BRIDGE_ROOT = resolve(/* turbopackIgnore: true */ process.cwd());
  */
 export const BRIDGE_FOLDER = basename(BRIDGE_ROOT);
 export const BRIDGE_MD = join(BRIDGE_ROOT, "BRIDGE.md");
+
+/**
+ * Read BRIDGE.md, tolerating its absence — a fresh checkout, deletion,
+ * or path-rename should never crash a route. Every call site that used
+ * to do `readFileSync(BRIDGE_MD)` now goes through this so the empty-
+ * fallback semantic is consistent project-wide.
+ */
+export function readBridgeMd(): string {
+  try {
+    return readFileSync(BRIDGE_MD, "utf8");
+  } catch {
+    return "";
+  }
+}
 export const SESSIONS_DIR = join(BRIDGE_ROOT, "sessions");
 
 /**
