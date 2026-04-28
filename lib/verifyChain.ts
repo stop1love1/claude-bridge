@@ -18,7 +18,6 @@
  * sees the ground-truth error before re-reading the original brief.
  */
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { App, AppVerify } from "./apps";
@@ -29,7 +28,7 @@ import { spawnFreeSession } from "./spawn";
 import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
 import { readOriginalPrompt } from "./promptStore";
 import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 
 /** Canonical order — matches the `## Verify commands` section in childPrompt. */
 const STEP_ORDER: RunVerifyStep["name"][] = [
@@ -152,6 +151,20 @@ function execStep(
 ): Promise<ExecResult> {
   return new Promise<ExecResult>((resolve) => {
     const start = Date.now();
+    // Defensive sanity check: reject NUL bytes and embedded newlines
+    // before they reach the shell. Real verify commands are single-line
+    // (`bun test`, `pnpm lint`, …); a multi-line value almost always
+    // means a paste accident — and on Windows in particular, a stray
+    // newline can re-enter `cmd.exe` parsing in surprising ways.
+    if (cmd.includes("\0") || cmd.includes("\n") || cmd.includes("\r")) {
+      resolve({
+        exitCode: null,
+        durationMs: 0,
+        output:
+          "(bridge: refused to run verify command containing NUL or newline characters)",
+      });
+      return;
+    }
     const ac = new AbortController();
     const spawnOpts: SpawnOptionsWithoutStdio = {
       cwd,
@@ -321,12 +334,7 @@ export async function spawnVerifyRetry(args: {
   const { taskId, finishedRun, verify } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
-  let md: string;
-  try {
-    md = readFileSync(BRIDGE_MD, "utf8");
-  } catch {
-    return null;
-  }
+  const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
   if (!liveRepoCwd) return null;
   // P4/F1: retries inherit the parent's worktree so they edit the same
