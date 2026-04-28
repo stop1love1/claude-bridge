@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   CheckCircle2,
+  Menu,
   PlayCircle,
   Rocket,
   ScrollText,
@@ -13,6 +14,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { Button } from "../_components/ui/button";
+import { DEMO_MODE } from "@/lib/demoMode";
 import {
   AUTHOR_URL,
   FEATURES,
@@ -44,11 +46,18 @@ function SectionEyebrow({
   );
 }
 
+const NAV_LINKS = [
+  { href: "/#features", label: "Features" },
+  { href: "/#how", label: "How it works" },
+  { href: "/#preview", label: "Preview" },
+  { href: "/docs", label: "Docs" },
+];
+
 export function LandingHeader() {
   return (
     <header className="sticky top-0 z-30 h-12 shrink-0 border-b border-border bg-card/80 backdrop-blur supports-backdrop-filter:bg-card/60">
-      <div className={`${CONTAINER} h-full ${SECTION} flex items-center gap-3`}>
-        <Link href="/" className="flex items-center gap-2 shrink-0" title="Home">
+      <div className={`${CONTAINER} h-full ${SECTION} flex items-center gap-2 sm:gap-3`}>
+        <Link href="/" className="flex items-center gap-2 shrink-0 min-w-0" title="Home">
           <Image
             src="/logo.svg"
             alt="Claude Bridge"
@@ -57,31 +66,55 @@ export function LandingHeader() {
             className="rounded-sm"
             priority
           />
-          <span className="text-sm font-semibold">Claude Bridge</span>
-          <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded-full bg-secondary border border-border text-[9px] font-medium text-muted-foreground uppercase tracking-wider">
-            Open Source
-          </span>
+          <span className="text-sm font-semibold truncate">Claude Bridge</span>
         </Link>
         <nav className="hidden md:flex items-center gap-1 ml-2 text-xs text-muted-foreground">
-          <a href="#features" className="px-2 py-1 hover:text-foreground transition-colors">Features</a>
-          <a href="#how" className="px-2 py-1 hover:text-foreground transition-colors">How it works</a>
-          <a href="#preview" className="px-2 py-1 hover:text-foreground transition-colors">Preview</a>
+          {NAV_LINKS.map(({ href, label }) => (
+            <Link
+              key={href}
+              href={href}
+              className="px-2 py-1 rounded-sm hover:text-foreground hover:bg-accent/40 transition-colors"
+            >
+              {label}
+            </Link>
+          ))}
         </nav>
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
           <Button asChild variant="ghost" size="xs" title="View source on GitHub">
-            <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer" aria-label="View source on GitHub">
               <GithubIcon size={12} />
               <span className="hidden sm:inline">GitHub</span>
               <Star size={11} className="hidden sm:inline opacity-70" />
             </a>
           </Button>
-          <Button asChild size="xs">
-            <Link href="/apps">
-              <span className="hidden sm:inline">Open dashboard</span>
-              <span className="sm:hidden">Open</span>
-              <ArrowRight size={12} />
-            </Link>
-          </Button>
+          {!DEMO_MODE && (
+            <Button asChild size="xs">
+              <Link href="/apps">
+                <span className="hidden sm:inline">Open dashboard</span>
+                <span className="sm:hidden">Open</span>
+                <ArrowRight size={12} />
+              </Link>
+            </Button>
+          )}
+          <details className="md:hidden relative group">
+            <summary
+              className="list-none flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/60 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
+              aria-label="Open navigation menu"
+            >
+              <Menu size={14} />
+            </summary>
+            <nav className="absolute right-0 top-full mt-1 min-w-[180px] rounded-md border border-border bg-card shadow-lg p-1 z-40">
+              {NAV_LINKS.map(({ href, label }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className="block px-3 py-2 text-xs rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+                >
+                  {label}
+                </Link>
+              ))}
+            </nav>
+          </details>
         </div>
       </div>
     </header>
@@ -99,59 +132,73 @@ export function Hero() {
         aria-hidden="true"
         className="absolute inset-x-0 bottom-0 -z-10 h-px bg-linear-to-r from-transparent via-primary/40 to-transparent"
       />
-      <div className={`${CONTAINER_NARROW} ${SECTION} py-16 sm:py-20 md:py-28 text-center`}>
+      <div className={`${CONTAINER_NARROW} ${SECTION} py-12 sm:py-20 md:py-28 text-center`}>
         <a
           href={REPO_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="group inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-secondary/60 hover:border-primary/40 hover:bg-secondary text-[11px] text-muted-foreground hover:text-foreground transition-colors mb-6"
+          className="group inline-flex max-w-full items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-full border border-border bg-secondary/60 hover:border-primary/40 hover:bg-secondary text-[10px] sm:text-[11px] text-muted-foreground hover:text-foreground transition-colors mb-5 sm:mb-6"
         >
-          <Sparkles size={12} className="text-primary" />
+          <Sparkles size={12} className="text-primary shrink-0" />
           <span className="hidden sm:inline">Built for Claude Code agents</span>
           <span className="sm:hidden">For Claude Code</span>
           <span className="text-fg-dim">·</span>
-          <span className="inline-flex items-center gap-1">
+          <span className="inline-flex items-center gap-1 shrink-0">
             <Star size={11} className="text-warning" />
-            Star on GitHub
+            <span className="hidden sm:inline">Star on GitHub</span>
+            <span className="sm:hidden">Star</span>
           </span>
-          <ArrowRight size={11} className="opacity-60 transition-transform group-hover:translate-x-0.5" />
+          <ArrowRight size={11} className="opacity-60 transition-transform group-hover:translate-x-0.5 shrink-0" />
         </a>
         <Image
           src="/logo.svg"
           alt="Claude Bridge"
           width={88}
           height={88}
-          className="mx-auto mb-6 rounded-md drop-shadow-[0_0_30px_rgba(106,168,255,0.25)] w-16 h-16 sm:w-[88px] sm:h-[88px]"
+          className="mx-auto mb-5 sm:mb-6 rounded-md drop-shadow-[0_0_30px_rgba(106,168,255,0.25)] w-14 h-14 sm:w-[88px] sm:h-[88px]"
           priority
         />
-        <h1 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-5 leading-[1.1]">
+        <h1 className="text-[1.75rem] sm:text-4xl md:text-5xl font-semibold tracking-tight mb-4 sm:mb-5 leading-[1.1] text-balance">
           One dashboard to dispatch{" "}
           <span className="bg-linear-to-r from-primary via-info to-primary bg-clip-text text-transparent">
             Claude
           </span>
           <br className="hidden sm:block" /> across every repo.
         </h1>
-        <p className="max-w-2xl mx-auto text-sm sm:text-base text-muted-foreground mb-8 leading-relaxed">
+        <p className="max-w-2xl mx-auto text-sm sm:text-base text-muted-foreground mb-7 sm:mb-8 leading-relaxed text-pretty">
           Drop the bridge next to your app folders and a single UI handles cross-repo task
           management, agent dispatch, live monitoring, and permission control — runtime-agnostic,
           stack-agnostic, no lock-in.
         </p>
-        <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-center gap-2 mb-8">
-          <Button asChild size="default" className="w-full sm:w-auto">
-            <Link href="/apps">
-              <Rocket size={14} />
-              Get started
-              <ArrowRight size={14} />
+        <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-center gap-2 mb-7 sm:mb-8">
+          {!DEMO_MODE && (
+            <Button asChild size="default" className="w-full sm:w-auto">
+              <Link href="/apps">
+                <Rocket size={14} />
+                Get started
+                <ArrowRight size={14} />
+              </Link>
+            </Button>
+          )}
+          <Button asChild variant={DEMO_MODE ? "default" : "outline"} size="default" className="w-full sm:w-auto">
+            <Link href="/docs">
+              <ScrollText size={14} />
+              Read the docs
             </Link>
           </Button>
-          <Button asChild variant="outline" size="default" className="w-full sm:w-auto">
+          <Button
+            asChild
+            variant={DEMO_MODE ? "outline" : "ghost"}
+            size="default"
+            className="hidden sm:inline-flex"
+          >
             <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
               <GithubIcon size={14} />
               Star on GitHub
             </a>
           </Button>
         </div>
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-center gap-x-3 sm:gap-x-4 gap-y-1.5 sm:gap-y-2 text-[10px] sm:text-[11px] text-muted-foreground">
           {STACK.map((s) => (
             <span key={s} className="inline-flex items-center gap-1.5">
               <span className="w-1 h-1 rounded-full bg-primary/60" />
@@ -167,11 +214,14 @@ export function Hero() {
 export function HighlightStrip() {
   return (
     <section className="border-b border-border bg-card/40">
-      <div className={`${CONTAINER} ${SECTION} py-5 grid grid-cols-2 md:grid-cols-4 gap-3`}>
+      <div className={`${CONTAINER} ${SECTION} py-5 grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3`}>
         {HIGHLIGHTS.map(({ Icon, label }) => (
-          <div key={label} className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div
+            key={label}
+            className="flex items-center gap-2 text-[11px] sm:text-xs text-muted-foreground"
+          >
             <Icon size={14} className="text-primary shrink-0" />
-            <span className="truncate">{label}</span>
+            <span className="leading-snug">{label}</span>
           </div>
         ))}
       </div>
@@ -196,7 +246,7 @@ export function Features() {
         {FEATURES.map(({ Icon, title, body }) => (
           <article
             key={title}
-            className="group relative rounded-lg border border-border bg-card p-5 transition-all hover:border-primary/40 hover:-translate-y-0.5"
+            className="group relative rounded-lg border border-border bg-card p-4 sm:p-5 transition-all hover:border-primary/40 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/5"
           >
             <div className="w-9 h-9 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center mb-3 group-hover:bg-primary/15 transition-colors">
               <Icon size={18} className="text-primary" />
@@ -213,13 +263,17 @@ export function Features() {
 export function Stats() {
   return (
     <section className="border-y border-border bg-linear-to-b from-card/0 via-card/40 to-card/0">
-      <div className={`${CONTAINER} ${SECTION} py-10 grid grid-cols-2 md:grid-cols-4 gap-6`}>
+      <div
+        className={`${CONTAINER} ${SECTION} py-8 sm:py-10 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-6`}
+      >
         {STATS.map(({ value, label }) => (
-          <div key={label} className="text-center">
-            <div className="text-2xl sm:text-3xl font-semibold tracking-tight bg-linear-to-r from-primary to-info bg-clip-text text-transparent">
+          <div key={label} className="text-center min-w-0">
+            <div className="text-2xl sm:text-3xl md:text-[2rem] font-semibold tracking-tight bg-linear-to-r from-primary to-info bg-clip-text text-transparent">
               {value}
             </div>
-            <div className="mt-1 text-[11px] text-muted-foreground leading-relaxed">{label}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground leading-relaxed text-balance">
+              {label}
+            </div>
           </div>
         ))}
       </div>
@@ -239,13 +293,18 @@ export function HowItWorks() {
         </div>
         <ol className="grid gap-3 md:grid-cols-3">
           {STEPS.map(({ n, title, body, code }) => (
-            <li key={n} className="rounded-lg border border-border bg-background p-5 relative">
+            <li
+              key={n}
+              className="rounded-lg border border-border bg-background p-4 sm:p-5 relative flex flex-col"
+            >
               <div className="font-mono text-xs text-primary/70 mb-2">{n}</div>
               <h3 className="text-sm font-semibold mb-1.5">{title}</h3>
-              <p className="text-xs text-muted-foreground leading-relaxed mb-3">{body}</p>
+              <p className="text-xs text-muted-foreground leading-relaxed mb-3 flex-1">{body}</p>
               {code && (
-                <pre className="rounded-md border border-border bg-secondary/40 p-2.5 overflow-x-auto">
-                  <code className="text-[11px] font-mono text-foreground/90">{code}</code>
+                <pre className="rounded-md border border-border bg-secondary/40 p-2.5 overflow-x-auto max-w-full">
+                  <code className="text-[10.5px] sm:text-[11px] font-mono text-foreground/90 whitespace-pre">
+                    {code}
+                  </code>
                 </pre>
               )}
             </li>
@@ -271,23 +330,23 @@ export function Preview() {
       </div>
 
       <div className="rounded-xl border border-border bg-card overflow-hidden shadow-2xl shadow-primary/5">
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-secondary/50">
-          <span className="w-2.5 h-2.5 rounded-full bg-destructive/70" />
-          <span className="w-2.5 h-2.5 rounded-full bg-warning/70" />
-          <span className="w-2.5 h-2.5 rounded-full bg-success/70" />
-          <span className="ml-3 text-[11px] font-mono text-muted-foreground truncate">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-secondary/50 min-w-0">
+          <span className="w-2.5 h-2.5 rounded-full bg-destructive/70 shrink-0" />
+          <span className="w-2.5 h-2.5 rounded-full bg-warning/70 shrink-0" />
+          <span className="w-2.5 h-2.5 rounded-full bg-success/70 shrink-0" />
+          <span className="ml-2 sm:ml-3 text-[10px] sm:text-[11px] font-mono text-muted-foreground truncate min-w-0">
             localhost:7777/tasks/t_20260425_001
           </span>
         </div>
         <div className="p-3 sm:p-5 grid gap-3 md:grid-cols-[1.4fr_1fr]">
-          <div className="rounded-lg border border-border bg-background p-4">
+          <div className="rounded-lg border border-border bg-background p-3 sm:p-4 min-w-0">
             <div className="flex items-center gap-2 mb-3 flex-wrap">
               <span className="font-mono text-[10px] text-fg-dim">t_20260425_001</span>
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-info/15 border border-info/30 text-info text-[10px] font-medium">
                 <span className="w-1.5 h-1.5 rounded-full bg-info animate-pulse" />
                 DOING
               </span>
-              <span className="ml-auto text-[10px] text-muted-foreground whitespace-nowrap">2 agents running</span>
+              <span className="sm:ml-auto text-[10px] text-muted-foreground whitespace-nowrap">2 agents running</span>
             </div>
             <h4 className="text-sm font-semibold mb-1">Bump auth lib + update callers</h4>
             <p className="text-xs text-muted-foreground mb-4">
@@ -327,14 +386,14 @@ export function Preview() {
             </div>
           </div>
 
-          <div className="rounded-lg border border-border bg-background overflow-hidden">
-            <div className="px-3 py-1.5 border-b border-border bg-secondary/40 flex items-center gap-2">
+          <div className="rounded-lg border border-border bg-background overflow-hidden min-w-0">
+            <div className="px-3 py-1.5 border-b border-border bg-secondary/40 flex items-center gap-2 min-w-0">
               <Terminal size={12} className="text-info shrink-0" />
-              <span className="font-mono text-[10px] text-muted-foreground truncate">
+              <span className="font-mono text-[10px] text-muted-foreground truncate min-w-0">
                 coder · app-api · stream
               </span>
             </div>
-            <pre className="p-3 text-[11px] font-mono leading-relaxed overflow-hidden">
+            <pre className="p-3 text-[10.5px] sm:text-[11px] font-mono leading-relaxed overflow-x-auto">
               <code>
                 <span className="text-fg-dim">$ </span>
                 <span className="text-foreground">read package.json</span>
@@ -363,6 +422,10 @@ export function Preview() {
 }
 
 export function QuickLinks() {
+  // Every card here links into the operator dashboard. Demo deployments
+  // can't run any of those routes — render nothing rather than a wall of
+  // dead links that would all redirect back to here.
+  if (DEMO_MODE) return null;
   return (
     <section className={`${CONTAINER} ${SECTION} pb-12 sm:pb-16`}>
       <div className="flex items-center gap-2 mb-5">
@@ -374,17 +437,17 @@ export function QuickLinks() {
           <Link
             key={href}
             href={href}
-            className="group rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="group rounded-lg border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-accent/40 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <div className="flex items-center gap-2 mb-1.5">
-              <Icon size={16} className="text-primary" />
-              <span className="text-sm font-semibold">{label}</span>
+              <Icon size={16} className="text-primary shrink-0" />
+              <span className="text-sm font-semibold truncate">{label}</span>
               <ArrowRight
                 size={12}
-                className="ml-auto text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+                className="ml-auto shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
               />
             </div>
-            <p className="text-xs text-muted-foreground">{description}</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
           </Link>
         ))}
       </div>
@@ -396,23 +459,25 @@ export function FinalCTA() {
   return (
     <section className="border-t border-border">
       <div className={`${CONTAINER_NARROW} ${SECTION} py-12 sm:py-16 text-center`}>
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 border border-primary/20 mb-5">
+        <div className="inline-flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-primary/10 border border-primary/20 mb-4 sm:mb-5">
           <Rocket size={20} className="text-primary" />
         </div>
-        <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight mb-3">
+        <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight mb-3 text-balance">
           Stop juggling repos. Start dispatching.
         </h2>
-        <p className="max-w-xl mx-auto text-sm text-muted-foreground mb-7 leading-relaxed">
+        <p className="max-w-xl mx-auto text-sm text-muted-foreground mb-6 sm:mb-7 leading-relaxed text-pretty">
           Free, open source, and runs identically on Bun, npm, or pnpm. Clone, run, ship.
         </p>
         <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-center gap-2">
-          <Button asChild size="default" className="w-full sm:w-auto">
-            <Link href="/apps">
-              Open the dashboard
-              <ArrowRight size={14} />
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="default" className="w-full sm:w-auto">
+          {!DEMO_MODE && (
+            <Button asChild size="default" className="w-full sm:w-auto">
+              <Link href="/apps">
+                Open the dashboard
+                <ArrowRight size={14} />
+              </Link>
+            </Button>
+          )}
+          <Button asChild variant={DEMO_MODE ? "default" : "outline"} size="default" className="w-full sm:w-auto">
             <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
               <GithubIcon size={14} />
               Star on GitHub
@@ -428,7 +493,7 @@ export function LandingFooter() {
   return (
     <footer className="border-t border-border bg-card">
       <div
-        className={`${CONTAINER} ${SECTION} py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted-foreground`}
+        className={`${CONTAINER} ${SECTION} py-5 sm:py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] sm:text-xs text-muted-foreground text-center sm:text-left`}
       >
         <div className="flex items-center gap-2">
           <Image src="/logo.svg" alt="" width={16} height={16} className="rounded-sm opacity-80" />
@@ -445,11 +510,14 @@ export function LandingFooter() {
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <Link href="/docs" className="hover:text-foreground transition-colors">
+            Docs
+          </Link>
           <a
             href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 hover:text-foreground"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
           >
             <GithubIcon size={13} />
             <span className="hidden sm:inline">github.com/stop1love1/claude-bridge</span>
