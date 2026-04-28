@@ -50,13 +50,23 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       const snap = readMeta(sessionsDir);
       if (snap) send("snapshot", snap);
 
+      // Helper: piggyback the full Meta snapshot onto every lifecycle
+       // event so the client never needs a follow-up `GET /api/tasks/<id>`
+       // round-trip just to see the new meta state. The previous shape
+       // (event payload = `{ sessionId, run }`) forced the UI to refetch
+       // for the rest of the runs[] array.
+      const sendWithMeta = (event: string, payload: Record<string, unknown>) => {
+        const meta = readMeta(sessionsDir);
+        send(event, { ...payload, meta });
+      };
+
       const unsub = subscribeMeta(id, (ev: MetaChangeEvent) => {
         if (ev.kind === "spawned") {
-          send("spawned", { sessionId: ev.sessionId, run: ev.run });
+          sendWithMeta("spawned", { sessionId: ev.sessionId, run: ev.run });
           return;
         }
         if (ev.kind === "retried") {
-          send("retried", {
+          sendWithMeta("retried", {
             sessionId: ev.sessionId,
             retryOf: ev.retryOf,
             run: ev.run,
@@ -66,20 +76,18 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         if (ev.kind === "transition") {
           // We only care about terminal transitions out of `running`.
           // The initial appendRun is the spawn event; never re-emit
-          // "running" here. Other oddball transitions (queued -> running
-          // when something later wires lifecycle) are silent — UI can
-          // refresh meta if it cares.
+          // "running" here.
           const next = ev.run?.status;
           if (
             ev.prevStatus === "running" &&
             (next === "done" || next === "failed" || next === "stale")
           ) {
-            send(next, { sessionId: ev.sessionId, run: ev.run, prevStatus: ev.prevStatus });
+            sendWithMeta(next, { sessionId: ev.sessionId, run: ev.run, prevStatus: ev.prevStatus });
           }
           return;
         }
         if (ev.kind === "updated") {
-          send("updated", { sessionId: ev.sessionId, run: ev.run });
+          sendWithMeta("updated", { sessionId: ev.sessionId, run: ev.run });
           return;
         }
         if (ev.kind === "writeMeta") {

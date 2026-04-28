@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Hash } from "lucide-react";
 import { api } from "@/lib/client/api";
@@ -30,16 +30,14 @@ function TaskPageInner() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loading, setLoading] = useState(true);
   // Mobile (< lg) shows ONE of TaskDetail / SessionLog at full height
-  // via a tab bar; lg+ keeps the side-by-side split. Lazy initializer
-  // so a deep-link with `?sid=` (e.g. from /sessions) lands directly
-  // in the chat without a manual tap; bare task URLs default to
-  // "detail" so the user picks an agent first.
+  // via a tab bar; lg+ keeps the side-by-side split. The lazy initializer
+  // reads from the same `useSearchParams()` snapshot the rest of the
+  // page already consumes — `window.location` access from a render path
+  // would crash any SSR/prerender pass that tries to evaluate the page.
   const [mobileTab, setMobileTab] = useState<"detail" | "chat">(() => {
-    if (typeof window === "undefined") return "detail";
-    const params = new URL(window.location.href).searchParams;
-    const urlTab = params.get("activeTab");
+    const urlTab = search.get("activeTab");
     if (urlTab === "detail" || urlTab === "chat") return urlTab;
-    return params.get("sid") ? "chat" : "detail";
+    return search.get("sid") ? "chat" : "detail";
   });
 
   // Active run is reconstructed from the URL (`?sid=…`) so reloading or
@@ -118,19 +116,21 @@ function TaskPageInner() {
 
   useEffect(() => {
     if (!visible || !id) return;
-    // Initial fetch and slow polling fallback (5s) — the SSE stream
-    // below should drive the bulk of updates, but Next dev-server HMR
-    // tends to drop SSE connections, so we keep a low-frequency
-    // polling safety net to recover from a missed event.
+    // Initial fetch + a slow polling safety net (30s — was 5s). The SSE
+    // stream now ships the full Meta snapshot on every lifecycle event,
+    // so the polling loop only exists to recover from a dropped SSE
+    // connection (Next dev-server HMR can sever it). 30s is plenty for
+    // recovery and reduces idle HTTP chatter.
     void Promise.resolve().then(loadMeta);
     // Also refresh the task itself (title/body/checked may have been
     // edited in another tab while this one was hidden).
     void Promise.resolve().then(refreshTask);
-    const h = setInterval(loadMeta, 5000);
+    const h = setInterval(loadMeta, 30000);
 
-    // Lifecycle SSE: on `snapshot` we hydrate meta directly (no extra
-    // HTTP round-trip on mount); on every other event we re-fetch meta
-    // so the run we just rendered is the same shape as a polled meta.
+    // Lifecycle SSE: every server-side event piggybacks the full Meta
+    // snapshot via `payload.meta`, so we never need a follow-up
+    // /api/tasks/<id> round-trip — just patch state straight from the
+    // event payload.
     const url = `/api/tasks/${encodeURIComponent(id)}/events`;
     const es = new EventSource(url);
     es.addEventListener("snapshot", (ev: MessageEvent) => {
@@ -139,12 +139,19 @@ function TaskPageInner() {
         setMeta(data);
       } catch { /* ignore */ }
     });
-    const refetch = () => { void loadMeta(); };
-    es.addEventListener("spawned", refetch);
-    es.addEventListener("done", refetch);
-    es.addEventListener("failed", refetch);
-    es.addEventListener("stale", refetch);
-    es.addEventListener("updated", refetch);
+    const applyMetaFromEvent = (ev: MessageEvent) => {
+      try {
+        const data = JSON.parse(ev.data) as { meta?: Meta };
+        if (data.meta) setMeta(data.meta);
+        else void loadMeta(); // legacy payload — fall back to refetch
+      } catch { /* ignore */ }
+    };
+    es.addEventListener("spawned", applyMetaFromEvent);
+    es.addEventListener("done", applyMetaFromEvent);
+    es.addEventListener("failed", applyMetaFromEvent);
+    es.addEventListener("stale", applyMetaFromEvent);
+    es.addEventListener("updated", applyMetaFromEvent);
+    es.addEventListener("retried", applyMetaFromEvent);
     es.addEventListener("meta", (ev: MessageEvent) => {
       try {
         const data = JSON.parse(ev.data) as Meta;
@@ -161,9 +168,15 @@ function TaskPageInner() {
 
   // If no `?sid=` is in the URL yet, default to the coordinator's session
   // by writing it to the URL — that opens the chat panel immediately AND
-  // means the selection survives a reload.
+  // means the selection survives a reload. Guarded by a ref so the
+  // 5-second meta poll, which produces a fresh `meta.runs` array on
+  // every tick even when the contents are identical, doesn't keep
+  // calling router.replace and polluting browser history.
+  const autoSelectedRef = useRef(false);
   useEffect(() => {
+    if (autoSelectedRef.current) return;
     if (search.get("sid") || !meta?.runs?.length) return;
+    autoSelectedRef.current = true;
     const coord = meta.runs.find((r) => r.role === "coordinator") ?? meta.runs[0];
     const repo = repos.find((r) => r.name === coord.repo);
     setActiveRun({
@@ -174,11 +187,18 @@ function TaskPageInner() {
     });
   }, [meta?.runs, repos, search, setActiveRun]);
 
+  // Sync the mobile tab to ?activeTab=. We deliberately don't include
+  // mobileTab in the deps — the effect should react to URL changes only,
+  // not to its own setState side-effect. The `prev !== nextTab` guard
+  // keeps React from queuing an identity-only update; the microtask
+  // defer satisfies the project's `react-hooks/set-state-in-effect` rule.
   useEffect(() => {
     const urlTab = search.get("activeTab");
     const nextTab: "detail" | "chat" = urlTab === "chat" ? "chat" : "detail";
-    if (nextTab !== mobileTab) setMobileTab(nextTab);
-  }, [mobileTab, search]);
+    void Promise.resolve().then(() => {
+      setMobileTab((prev) => (prev !== nextTab ? nextTab : prev));
+    });
+  }, [search]);
 
   const handleToggleComplete = useCallback(
     async (next: boolean) => {
@@ -219,19 +239,18 @@ function TaskPageInner() {
 
   const handleSelectRun = useCallback(
     (run: Run) => {
-      const repo = repos.find((r) => r.name === run.repo);
-      setActiveRun({
-        sessionId: run.sessionId,
-        repoPath: repo?.path ?? "",
-        role: run.role,
-        repo: run.repo,
-      });
-      // Auto-flip to chat on mobile — the user just clicked an agent
-      // expecting to read its output, mirroring desktop where the right
-      // pane updates inline.
-      setMobileTabWithUrl("chat");
+      // Both the sid and activeTab updates land in one router.replace
+      // because separate calls would each rebuild params from the same
+      // stale `search` snapshot — the second call would overwrite the
+      // first's sid and the chat would stay on the old run.
+      setMobileTab("chat");
+      const params = new URLSearchParams(Array.from(search.entries()));
+      params.set("sid", run.sessionId);
+      params.set("activeTab", "chat");
+      const qs = params.toString();
+      router.replace(qs ? `/tasks/${id}?${qs}` : `/tasks/${id}`, { scroll: false });
     },
-    [repos, setActiveRun, setMobileTabWithUrl],
+    [id, router, search],
   );
 
   const handleClearConversation = useCallback(async () => {
@@ -259,9 +278,17 @@ function TaskPageInner() {
       const tag = el.tagName;
       return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
     };
+    // Skip our Esc handler when a Radix overlay (Dialog / DropdownMenu /
+    // Popover / AlertDialog) is open — Radix handles Esc itself, and
+    // running our handler on top would dismiss the overlay AND
+    // navigate, losing the user's place.
+    const overlayOpen = () =>
+      typeof document !== "undefined" &&
+      !!document.querySelector(
+        '[data-radix-popper-content-wrapper], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]',
+      );
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (e.key === "Escape" && !isTextInput(e.target)) {
+      if (e.key === "Escape" && !isTextInput(e.target) && !overlayOpen()) {
         e.preventDefault();
         router.push("/tasks");
       }
