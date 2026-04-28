@@ -40,17 +40,51 @@ function emptyStore(): StyleStore {
   };
 }
 
+// Same in-memory cache pattern as symbolStore — see that module for
+// rationale. Hot path: `ensureFreshStyleFingerprint` is called per
+// spawn alongside symbol-index lookup; without this cache we paid
+// for two redundant readFileSync + JSON.parse on every dispatch.
+const STYLE_CACHE_TTL_MS = 5_000;
+const SG = globalThis as unknown as {
+  __bridgeStyleStoreCache?: { value: StyleStore | null; expires: number };
+};
+function readCache(): StyleStore | null | undefined {
+  const c = SG.__bridgeStyleStoreCache;
+  if (!c) return undefined;
+  if (c.expires < Date.now()) return undefined;
+  return c.value;
+}
+function writeCache(value: StyleStore | null): void {
+  SG.__bridgeStyleStoreCache = {
+    value,
+    expires: Date.now() + STYLE_CACHE_TTL_MS,
+  };
+}
+function invalidateCache(): void {
+  SG.__bridgeStyleStoreCache = undefined;
+}
+
 export function loadStyleStore(): StyleStore | null {
+  const cached = readCache();
+  if (cached !== undefined) return cached;
   const path = storeFilePath();
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) {
+    writeCache(null);
+    return null;
+  }
   try {
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as StyleStore;
-    if (!parsed || typeof parsed !== "object") return null;
-    if (typeof parsed.version !== "number") return null;
-    if (!parsed.fingerprints || typeof parsed.fingerprints !== "object") return null;
+    if (!parsed || typeof parsed !== "object") { writeCache(null); return null; }
+    if (typeof parsed.version !== "number") { writeCache(null); return null; }
+    if (!parsed.fingerprints || typeof parsed.fingerprints !== "object") {
+      writeCache(null);
+      return null;
+    }
+    writeCache(parsed);
     return parsed;
   } catch {
+    writeCache(null);
     return null;
   }
 }
@@ -70,6 +104,7 @@ export function saveStyleStore(store: StyleStore): void {
       throw err;
     }
   }
+  invalidateCache();
 }
 
 export function getStyleFingerprint(appName: string): StyleFingerprint | null {

@@ -454,8 +454,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!dedupResult.inserted) {
     // Race: the early fast-path check passed but a sibling POST raced
     // ahead of us and won the lock. Clean up the worktree we just
-    // created so we don't leak. (Settings file is fine to leave; the
-    // session never started, so no .jsonl exists alongside it.)
+    // created AND the per-session settings dir we wrote — neither
+    // will ever be used because the session never started.
     if (worktreePath && app) {
       try {
         await removeWorktree({ appPath: app.path, worktreePath });
@@ -466,6 +466,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         );
       }
     }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { cleanupSessionSettings } = require("@/lib/permissionSettings") as typeof import("@/lib/permissionSettings");
+      cleanupSessionSettings(sessionId);
+    } catch { /* ignore */ }
     return NextResponse.json(
       {
         error: "duplicate spawn",
@@ -555,8 +560,26 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
  *
  * We use `execFile` (no shell), which works identically whether the
  * Next.js process was launched from bash or PowerShell.
+ *
+ * Cached for 5 seconds per cwd: when a coordinator dispatches multiple
+ * children at once (multi-repo task), each spawn would otherwise pay
+ * for 3 git commands × N children. The cache keeps it to one set per
+ * cwd per burst — git activity rarely changes inside a 5s window from
+ * the bridge's perspective, and a stale row in the prompt is fine.
  */
+const REPO_CONTEXT_TTL_MS = 5_000;
+const RG = globalThis as unknown as {
+  __bridgeRepoContextCache?: Map<string, { value: string; expires: number }>;
+};
+const repoContextCache: Map<string, { value: string; expires: number }> =
+  RG.__bridgeRepoContextCache ?? new Map();
+RG.__bridgeRepoContextCache = repoContextCache;
+
 async function buildRepoContextBlock(cwd: string): Promise<string> {
+  const now = Date.now();
+  const cached = repoContextCache.get(cwd);
+  if (cached && cached.expires > now) return cached.value;
+
   const [status, log, files] = await Promise.all([
     runGit(cwd, ["status", "--porcelain=v1"]),
     runGit(cwd, ["log", "-10", "--oneline"]),
@@ -570,7 +593,7 @@ async function buildRepoContextBlock(cwd: string): Promise<string> {
     ? files.split(/\r?\n/).slice(0, 40).join("\n")
     : "(no tracked files)";
 
-  return [
+  const block = [
     "## Repo context (auto-injected by bridge)",
     statusBlock,
     "Recent commits:",
@@ -578,6 +601,14 @@ async function buildRepoContextBlock(cwd: string): Promise<string> {
     "Top files:",
     filesTrimmed,
   ].join("\n");
+  repoContextCache.set(cwd, { value: block, expires: now + REPO_CONTEXT_TTL_MS });
+  // Bound the cache so a long-running bridge with many spawn cwds
+  // doesn't accumulate entries beyond what TTL alone evicts.
+  if (repoContextCache.size > 64) {
+    const oldest = repoContextCache.keys().next().value;
+    if (oldest !== undefined) repoContextCache.delete(oldest);
+  }
+  return block;
 }
 
 interface ApprovalDecision {

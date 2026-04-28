@@ -10,6 +10,7 @@ import { basename, join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { TaskStatus, TaskSection } from "./tasks";
 import type { DetectedScopeCacheEntry } from "./detect/types";
+import { SESSIONS_DIR } from "./paths";
 
 /**
  * Write `meta.json` atomically: stage the new contents in a sibling
@@ -356,19 +357,17 @@ function taskIdFromDir(dir: string): string {
   return basename(dir);
 }
 
-function emit(ev: MetaChangeEvent): void {
+function emit(dir: string, ev: MetaChangeEvent): void {
+  // Drop the cached snapshot for the exact dir that just changed BEFORE
+  // notifying subscribers. Direct delete by full path is O(1) and
+  // platform-agnostic (the previous suffix-iteration variant assumed
+  // forward-slash separators and silently no-op'd on Windows). Note
+  // that subscribers may call back into readMeta synchronously, so
+  // invalidation must happen first.
+  if (dir) metaCache.delete(dir);
   // setImmediate-equivalent: emit synchronously so subscribers see the
   // mutation in the same tick. SSE consumers buffer their own writes.
   events.emitter.emit("meta:changed", ev);
-  // Any change to a task's meta.json must drop the cached snapshot for
-  // that task — otherwise readMeta can return a stale Meta to callers
-  // that ran in the same TTL window as the write.
-  if (ev.taskId) {
-    const dirSuffix = `${SEP}${ev.taskId}`;
-    for (const key of metaCache.keys()) {
-      if (key.endsWith(dirSuffix) || key === ev.taskId) metaCache.delete(key);
-    }
-  }
 }
 
 // In-process cache for readMeta() — same TTL pattern as appsCache /
@@ -378,7 +377,6 @@ function emit(ev: MetaChangeEvent): void {
 // JSON.parse. Invalidated explicitly by emit() above so writeMeta
 // transitions are visible immediately.
 const META_CACHE_TTL_MS = 500;
-const SEP = "/";
 const metaCache = new Map<string, { value: Meta | null; expires: number }>();
 
 /**
@@ -406,7 +404,18 @@ const metaCache = new Map<string, { value: Meta | null; expires: number }>();
  * below. Without this, a UI title edit racing a child's appendRun
  * could silently drop the just-appended run.
  */
-const writeQueues = new Map<string, Promise<unknown>>();
+// HMR-safe: pin the queue map onto globalThis like __bridgeMetaEvents.
+// In Next.js dev, an HMR reload of meta.ts would otherwise drop the
+// in-flight queue head; a write started under module-instance-A and a
+// follow-up write under module-instance-B would race because B sees
+// an empty queue. Persisting onto globalThis keeps the chain intact
+// across reloads.
+const GW = globalThis as unknown as {
+  __bridgeMetaWriteQueues?: Map<string, Promise<unknown>>;
+};
+const writeQueues: Map<string, Promise<unknown>> =
+  GW.__bridgeMetaWriteQueues ?? new Map<string, Promise<unknown>>();
+GW.__bridgeMetaWriteQueues = writeQueues;
 export async function withTaskLock<T>(dir: string, fn: () => T | Promise<T>): Promise<T> {
   const prev = writeQueues.get(dir) ?? Promise.resolve();
   // Run regardless of whether `prev` resolved or rejected — one bad
@@ -433,7 +442,13 @@ export async function withTaskLock<T>(dir: string, fn: () => T | Promise<T>): Pr
  * can use to draw the retry-of arrow without scanning every run.
  */
 export function emitRetried(taskId: string, retryRun: Run, retryOf: string): void {
-  emit({
+  // The cache-invalidation key is the dir, not just the taskId. Callers
+  // already hold the dir at the callsite (it's `join(SESSIONS_DIR, taskId)`),
+  // but the emitRetried public API was defined when emit() did its own
+  // best-effort suffix scan. Reconstruct the dir here so the new
+  // O(1) direct-delete path stays in step with the data it caches.
+  const dir = join(SESSIONS_DIR, taskId);
+  emit(dir, {
     taskId,
     kind: "retried",
     sessionId: retryRun.sessionId,
@@ -458,7 +473,8 @@ export function emitTaskSection(args: {
   taskChecked: boolean;
 }): void {
   if (args.prevSection === args.nextSection) return;
-  emit({
+  const dir = join(SESSIONS_DIR, args.taskId);
+  emit(dir, {
     taskId: args.taskId,
     kind: "task-section",
     prevSection: args.prevSection,
@@ -472,7 +488,7 @@ export function createMeta(dir: string, header: Omit<Meta, "runs">): void {
   mkdirSync(dir, { recursive: true });
   const meta: Meta = { ...header, runs: [] };
   atomicWriteJson(join(dir, FILE), meta);
-  emit({ taskId: taskIdFromDir(dir), kind: "writeMeta" });
+  emit(dir, { taskId: taskIdFromDir(dir), kind: "writeMeta" });
 }
 
 export function readMeta(dir: string): Meta | null {
@@ -511,7 +527,7 @@ export function readMeta(dir: string): Meta | null {
 export function writeMeta(dir: string, meta: Meta): void {
   mkdirSync(dir, { recursive: true });
   atomicWriteJson(join(dir, FILE), meta);
-  emit({ taskId: taskIdFromDir(dir), kind: "writeMeta" });
+  emit(dir, { taskId: taskIdFromDir(dir), kind: "writeMeta" });
 }
 
 export async function appendRun(dir: string, run: Run): Promise<void> {
@@ -520,7 +536,7 @@ export async function appendRun(dir: string, run: Run): Promise<void> {
     if (!meta) throw new Error(`meta.json missing at ${dir}`);
     meta.runs.push(run);
     atomicWriteJson(join(dir, FILE), meta);
-    emit({
+    emit(dir, {
       taskId: taskIdFromDir(dir),
       kind: "spawned",
       sessionId: run.sessionId,
@@ -557,7 +573,7 @@ export async function appendRunIfNotDuplicate(
     }
     meta.runs.push(run);
     atomicWriteJson(join(dir, FILE), meta);
-    emit({
+    emit(dir, {
       taskId: taskIdFromDir(dir),
       kind: "spawned",
       sessionId: run.sessionId,
@@ -567,27 +583,46 @@ export async function appendRunIfNotDuplicate(
   });
 }
 
+/**
+ * Patch a run row. The optional `precondition` predicate runs INSIDE
+ * the per-task lock against the freshest on-disk state — use it to
+ * guard against demoting a final state under race (e.g. lifecycle hook
+ * firing `failed` after a kill route already wrote `failed`, or vice
+ * versa). When the predicate returns false the patch is skipped and
+ * `applied: false` is returned to the caller; no event fires.
+ *
+ * Without precondition, `updateRun` is the legacy unconditional
+ * Object.assign — kept for callers that don't care.
+ */
 export async function updateRun(
   dir: string,
   sessionId: string,
   patch: Partial<Run>,
-): Promise<void> {
-  await withTaskLock(dir, () => {
+  precondition?: (run: Run) => boolean,
+): Promise<{ applied: boolean; run: Run | null }> {
+  return withTaskLock(dir, () => {
     const meta = readMeta(dir);
     if (!meta) throw new Error(`meta.json missing at ${dir}`);
     const run = meta.runs.find((r) => r.sessionId === sessionId);
     if (!run) throw new Error(`run ${sessionId} not found`);
+    if (precondition && !precondition(run)) {
+      // Caller's invariant didn't hold — most commonly the run already
+      // reached a terminal state. Return without writing so we never
+      // demote `done → failed` (or any other final-state regression).
+      return { applied: false as const, run: { ...run } };
+    }
     const prevStatus = run.status;
     Object.assign(run, patch);
     atomicWriteJson(join(dir, FILE), meta);
     const statusChanged = patch.status !== undefined && patch.status !== prevStatus;
-    emit({
+    emit(dir, {
       taskId: taskIdFromDir(dir),
       kind: statusChanged ? "transition" : "updated",
       sessionId,
       run: { ...run },
       prevStatus,
     });
+    return { applied: true as const, run: { ...run } };
   });
 }
 
@@ -652,7 +687,7 @@ export async function applyManyRuns(
     }
     if (mutated) {
       atomicWriteJson(join(dir, FILE), meta);
-      for (const ev of pending) emit(ev);
+      for (const ev of pending) emit(dir, ev);
     }
     return meta;
   });
@@ -676,7 +711,7 @@ export async function removeSessionFromTask(
     meta.runs = meta.runs.filter((r) => r.sessionId !== sessionId);
     if (meta.runs.length === before) return false;
     atomicWriteJson(join(dir, FILE), meta);
-    emit({ taskId: taskIdFromDir(dir), kind: "writeMeta" });
+    emit(dir, { taskId: taskIdFromDir(dir), kind: "writeMeta" });
     return true;
   });
 }

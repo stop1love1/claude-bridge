@@ -42,13 +42,15 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
   // Flip to failed only if still running — never clobber a final state
   // the run may have just transitioned to (race against the lifecycle
-  // helper's exit handler).
-  if (run.status === "running") {
-    await updateRun(dir, sessionId, {
-      status: "failed",
-      endedAt: new Date().toISOString(),
-    });
-  }
+  // helper's exit handler). The precondition runs inside the per-task
+  // lock against the freshest on-disk row, so the read-then-patch
+  // window can't be raced by the exit-handler's own `failed` write.
+  await updateRun(
+    dir,
+    sessionId,
+    { status: "failed", endedAt: new Date().toISOString() },
+    (r) => r.status === "running",
+  );
 
   return NextResponse.json({ ok: true, sessionId, action: "killed" });
 }

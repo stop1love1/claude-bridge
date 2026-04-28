@@ -36,13 +36,45 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   const stream = new ReadableStream({
     start(controller) {
+      // `closed` is the single source of truth for "tear everything
+      // down". Set true on either an enqueue throw (client TCP RST
+      // before req.signal.abort fires) or the abort signal itself.
+      // Without it the keepalive setInterval kept ticking forever
+      // into a wedged controller, leaking both the timer AND the
+      // subscribeMeta listener — that's the unbounded zombie.
+      let closed = false;
+      let ka: ReturnType<typeof setInterval> | null = null;
+      let unsub: (() => void) | null = null;
+
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        if (unsub) {
+          try { unsub(); } catch { /* ignore */ }
+          unsub = null;
+        }
+        if (ka !== null) {
+          clearInterval(ka);
+          ka = null;
+        }
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      };
+
       const send = (event: string, data: unknown) => {
+        if (closed) return;
         try {
           controller.enqueue(
             encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
           );
         } catch {
-          /* client disconnected */
+          // Enqueue threw → controller is wedged or the client RST'd
+          // before signal.abort propagated. Tear down NOW; otherwise
+          // ka + unsub would leak.
+          close();
         }
       };
 
@@ -60,7 +92,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         send(event, { ...payload, meta });
       };
 
-      const unsub = subscribeMeta(id, (ev: MetaChangeEvent) => {
+      unsub = subscribeMeta(id, (ev: MetaChangeEvent) => {
+        if (closed) return;
         if (ev.kind === "spawned") {
           sendWithMeta("spawned", { sessionId: ev.sessionId, run: ev.run });
           return;
@@ -98,23 +131,16 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         }
       });
 
-      const ka = setInterval(() => {
+      ka = setInterval(() => {
+        if (closed) return;
         try {
           controller.enqueue(encoder.encode(`: keepalive\n\n`));
         } catch {
-          /* ignore */
+          // Same teardown rule as `send` — a wedged controller means
+          // tear everything down rather than keep ticking forever.
+          close();
         }
       }, 15000);
-
-      const close = () => {
-        unsub();
-        clearInterval(ka);
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      };
 
       req.signal.addEventListener("abort", close);
     },

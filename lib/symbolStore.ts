@@ -47,17 +47,64 @@ function emptyStore(): SymbolStore {
   };
 }
 
+/**
+ * In-memory cache of `loadSymbolStore()`. The store is read on EVERY
+ * spawn (`ensureFreshSymbolIndex` + `ensureFreshStyleFingerprint` both
+ * loadSymbolStore-equivalent the underlying file), and on a busy
+ * dispatch flow that's a `readFileSync` + `JSON.parse` per spawn for
+ * the same file. TTL keeps the cache short enough that an external
+ * editor / refresh writes are visible quickly. Invalidated explicitly
+ * on save so writes from this process see fresh data on the next read.
+ *
+ * HMR-safe via globalThis like the meta + git queues.
+ */
+const SYMBOL_CACHE_TTL_MS = 5_000;
+const SG = globalThis as unknown as {
+  __bridgeSymbolStoreCache?: { value: SymbolStore | null; expires: number };
+};
+function readCache(): SymbolStore | null | undefined {
+  const c = SG.__bridgeSymbolStoreCache;
+  if (!c) return undefined;
+  if (c.expires < Date.now()) return undefined;
+  return c.value;
+}
+function writeCache(value: SymbolStore | null): void {
+  SG.__bridgeSymbolStoreCache = {
+    value,
+    expires: Date.now() + SYMBOL_CACHE_TTL_MS,
+  };
+}
+function invalidateCache(): void {
+  SG.__bridgeSymbolStoreCache = undefined;
+}
+
 export function loadSymbolStore(): SymbolStore | null {
+  const cached = readCache();
+  if (cached !== undefined) return cached;
   const path = storeFilePath();
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) {
+    writeCache(null);
+    return null;
+  }
   try {
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as SymbolStore;
-    if (!parsed || typeof parsed !== "object") return null;
-    if (typeof parsed.version !== "number") return null;
-    if (!parsed.indexes || typeof parsed.indexes !== "object") return null;
+    if (!parsed || typeof parsed !== "object") {
+      writeCache(null);
+      return null;
+    }
+    if (typeof parsed.version !== "number") {
+      writeCache(null);
+      return null;
+    }
+    if (!parsed.indexes || typeof parsed.indexes !== "object") {
+      writeCache(null);
+      return null;
+    }
+    writeCache(parsed);
     return parsed;
   } catch {
+    writeCache(null);
     return null;
   }
 }
@@ -78,6 +125,9 @@ export function saveSymbolStore(store: SymbolStore): void {
       throw err;
     }
   }
+  // Drop the cache so the next loadSymbolStore in this process reads
+  // the freshly-written file rather than the pre-write snapshot.
+  invalidateCache();
 }
 
 export function getSymbolIndex(appName: string): SymbolIndex | null {

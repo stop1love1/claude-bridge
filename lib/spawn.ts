@@ -303,8 +303,18 @@ function spawnClaudeWithStdin(
   });
   if (child.stdin) {
     child.stdin.on("error", () => { /* swallow EPIPE on early child exit */ });
-    child.stdin.write(stdinPayload);
-    child.stdin.end();
+    // Honor backpressure: large prompts (symbol index + pinned files
+    // + recent direction can push past the OS pipe buffer) on slow
+    // Windows pipes have been observed to truncate when end() runs
+    // before the kernel drains. Wait for the write callback so end()
+    // only fires after the bytes are actually queued.
+    child.stdin.write(stdinPayload, () => {
+      try {
+        child.stdin?.end();
+      } catch {
+        /* child may have exited between write and end */
+      }
+    });
   }
   emitAlive(sessionId, true);
   // Line-buffered stdout JSON parser. stream-json prints one event per

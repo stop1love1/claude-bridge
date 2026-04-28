@@ -44,12 +44,12 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       if (!meta) continue;
       const run = meta.runs.find((r) => r.sessionId === sessionId);
       if (!run) continue;
-      if (run.status === "running") {
-        await updateRun(dir, sessionId, {
-          status: "failed",
-          endedAt: new Date().toISOString(),
-        });
-      }
+      await updateRun(
+        dir,
+        sessionId,
+        { status: "failed", endedAt: new Date().toISOString() },
+        (r) => r.status === "running",
+      );
       break;
     }
   }

@@ -39,11 +39,20 @@ import { isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { AppGitSettings } from "./apps";
 import { sanitizeBranchSegment } from "./gitOps";
+import { readMeta } from "./meta";
+import { SESSIONS_DIR } from "./paths";
 
 const execFileP = promisify(execFile);
 
 const SHORT_TIMEOUT_MS = 10_000;
 const PRUNE_TIMEOUT_MS = 30_000;
+/**
+ * `git worktree add` on a large repo with antivirus / Defender on
+ * Windows routinely takes 15-25s for the file walk. The previous
+ * 10s cap was failing healthy spawns; bump to the same tier the
+ * push uses (60s) so we only abort on genuinely stuck git hangs.
+ */
+const WORKTREE_ADD_TIMEOUT_MS = 60_000;
 const WORKTREES_DIRNAME = ".worktrees";
 const WORKTREE_BRANCH_PREFIX = "claude/wt/";
 /** Default TTL for stale worktree pruning. Configurable via env. */
@@ -247,7 +256,7 @@ export async function createWorktreeForRun(args: {
     wtPath,
   ];
   if (baseBranch) addArgs.push(baseBranch);
-  const r = await runGit(appPath, addArgs);
+  const r = await runGit(appPath, addArgs, WORKTREE_ADD_TIMEOUT_MS);
   if (!r.ok) {
     await runGit(appPath, ["worktree", "prune"], PRUNE_TIMEOUT_MS);
     return null;
@@ -384,6 +393,44 @@ export async function mergeAndRemoveWorktree(args: {
   };
 }
 
+/**
+ * Walk every task's meta.json and collect sessionIds whose run is
+ * still queued/running. The pruner uses this to skip worktrees of
+ * in-flight children — without it, a long-running spawn whose
+ * top-level mtime aged past TTL would get reaped under the running
+ * agent, eating its WIP.
+ *
+ * Failure-soft: a corrupt meta.json is treated as "no active runs"
+ * for that task; we never want a single bad file to disable pruning
+ * for every other app.
+ */
+function collectActiveSessionIds(): Set<string> {
+  const out = new Set<string>();
+  if (!existsSync(SESSIONS_DIR)) return out;
+  let taskDirs: string[] = [];
+  try {
+    taskDirs = readdirSync(SESSIONS_DIR);
+  } catch {
+    return out;
+  }
+  for (const taskId of taskDirs) {
+    const dir = join(SESSIONS_DIR, taskId);
+    let meta;
+    try {
+      meta = readMeta(dir);
+    } catch {
+      continue;
+    }
+    if (!meta) continue;
+    for (const r of meta.runs) {
+      if (r.status === "queued" || r.status === "running") {
+        out.add(r.sessionId);
+      }
+    }
+  }
+  return out;
+}
+
 function staleHours(): number {
   const raw = process.env.BRIDGE_WORKTREE_STALE_HOURS;
   const n = raw ? Number(raw) : DEFAULT_STALE_HOURS;
@@ -414,11 +461,19 @@ export async function pruneStaleWorktrees(args: {
   } catch {
     return 0;
   }
+  // Build the active-session set ONCE per prune pass: any worktree
+  // dir name (which IS the run's sessionId) that matches a queued /
+  // running run is in-flight and must NOT be reaped, regardless of
+  // its mtime. The previous mtime-only logic could (and did) reap
+  // long-running children whose top-level dir mtime hadn't ticked
+  // recently — taking out the agent's WIP under it.
+  const activeSessions = collectActiveSessionIds();
   let removed = 0;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const wt = join(root, entry.name);
     if (!isUnderAppRoot(appPath, wt)) continue;
+    if (activeSessions.has(entry.name)) continue;
     // The dir's own mtime only ticks on entry add/remove — an agent
     // modifying existing files would otherwise look idle. Walk the
     // immediate top-level children and take the max mtime as a

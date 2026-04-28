@@ -114,14 +114,17 @@ export function wireRunLifecycle(
 
   const failRun = async (reason: string, exitCode: number | null) => {
     try {
-      const meta = readMeta(sessionsDir);
-      const run = meta?.runs.find((r) => r.sessionId === sessionId);
-      if (run && run.status === "running") {
-        await updateRun(sessionsDir, sessionId, {
-          status: "failed",
-          endedAt: new Date().toISOString(),
-        });
-      }
+      // Precondition guard: only flip running → failed. Without this,
+      // a late `exit` after a post-exit gate already wrote `done`
+      // could demote the row. The check runs INSIDE the per-task
+      // lock so a racing writer can't slip a final state in between
+      // the read and the patch.
+      await updateRun(
+        sessionsDir,
+        sessionId,
+        { status: "failed", endedAt: new Date().toISOString() },
+        (run) => run.status === "running",
+      );
     } catch (e) {
       console.error("failed to mark run failed for", tag, e);
     }
@@ -152,10 +155,12 @@ export function wireRunLifecycle(
           run.role !== "coordinator" &&
           !vc.isAlreadyRetryRun(run.role);
         if (!willRunPostExitGate) {
-          await updateRun(sessionsDir, sessionId, {
-            status: "done",
-            endedAt: new Date().toISOString(),
-          });
+          await updateRun(
+            sessionsDir,
+            sessionId,
+            { status: "done", endedAt: new Date().toISOString() },
+            (r) => r.status === "running",
+          );
         }
       }
       if (run && meta) {
@@ -844,6 +849,17 @@ export function wireRunLifecycle(
 
   child.on("error", (err) => {
     void failRun(`spawn error: ${err.message}`, null);
+    // Reap per-session settings dir on abnormal exit too — the
+    // child never landed, so the settings file we wrote alongside
+    // it is now garbage. Defer to the next tick so the failRun
+    // updateRun gets a chance to land first (cosmetic ordering).
+    setImmediate(() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { cleanupSessionSettings } = require("./permissionSettings") as typeof import("./permissionSettings");
+        cleanupSessionSettings(sessionId);
+      } catch { /* swallow */ }
+    });
   });
   child.on("exit", (code) => {
     if (code === 0) {
@@ -851,6 +867,16 @@ export function wireRunLifecycle(
     } else if (code !== null) {
       void failRun(`exit code ${code}`, code);
     }
+    // Always reap the per-session settings file on terminal exit —
+    // success path included. The dir is owned exclusively by this
+    // session so once the process is gone nothing else needs it.
+    setImmediate(() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { cleanupSessionSettings } = require("./permissionSettings") as typeof import("./permissionSettings");
+        cleanupSessionSettings(sessionId);
+      } catch { /* swallow */ }
+    });
   });
 }
 

@@ -32,6 +32,44 @@ const SHORT_TIMEOUT_MS = 5_000;
 const PUSH_TIMEOUT_MS = 60_000;
 const AUTO_BRANCH_PREFIX = "claude/";
 
+/**
+ * Per-cwd serialization for sequential git commands. Two children of
+ * the same task on the same app finish nearly simultaneously? Both
+ * reach `autoCommitAndPush` at almost the same time — `git add -A` +
+ * `git commit` are NOT atomic against each other, and `git push`
+ * shells out separately. Without serialization, you get
+ * "another git process seems to be running" or, worse, a commit that
+ * mixes file changes from two unrelated children.
+ *
+ * The chain is HMR-safe via globalThis (same trick as
+ * `__bridgeMetaWriteQueues`) so a Next.js hot reload doesn't drop
+ * the in-flight serialization head.
+ */
+const GW = globalThis as unknown as {
+  __bridgeGitQueues?: Map<string, Promise<unknown>>;
+};
+const gitQueues: Map<string, Promise<unknown>> =
+  GW.__bridgeGitQueues ?? new Map<string, Promise<unknown>>();
+GW.__bridgeGitQueues = gitQueues;
+
+export async function withGitLock<T>(
+  cwd: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const prev = gitQueues.get(cwd) ?? Promise.resolve();
+  const next: Promise<T> = prev.then(
+    () => fn(),
+    () => fn(),
+  );
+  const tail = next.catch(() => {});
+  gitQueues.set(cwd, tail);
+  try {
+    return await next;
+  } finally {
+    if (gitQueues.get(cwd) === tail) gitQueues.delete(cwd);
+  }
+}
+
 export interface GitOpResult {
   ok: boolean;
   /** One-line human-readable summary, suitable for logs / toasts. */
@@ -109,11 +147,35 @@ export async function prepareBranch(
   settings: AppGitSettings,
   taskId: string,
 ): Promise<GitOpResult> {
+  return withGitLock(cwd, () => prepareBranchLocked(cwd, settings, taskId));
+}
+
+async function prepareBranchLocked(
+  cwd: string,
+  settings: AppGitSettings,
+  taskId: string,
+): Promise<GitOpResult> {
   if (settings.branchMode === "current") {
     return { ok: true, message: "branch policy: use current — no change" };
   }
   if (!isGitRepo(cwd)) {
     return { ok: false, message: `not a git repo: ${cwd}`, error: "missing .git" };
+  }
+
+  // Refuse to clobber uncommitted edits in the live tree. Without this
+  // guard, `git checkout <branch>` either errors (best case) or carries
+  // dirty files across to the new branch — the operator's WIP gets
+  // silently mixed into a child agent's run. The check is cheap; the
+  // safer outcome is to fail the spawn and let the operator commit /
+  // stash / use worktree mode.
+  const dirty = await runGit(cwd, ["status", "--porcelain"]);
+  if (dirty.ok && dirty.stdout.trim().length > 0) {
+    return {
+      ok: false,
+      message:
+        "branch prep aborted: working tree has uncommitted changes — commit / stash, or enable worktreeMode",
+      error: dirty.stdout.trim().slice(0, 800),
+    };
   }
 
   if (settings.branchMode === "fixed") {
@@ -125,11 +187,33 @@ export async function prepareBranch(
   }
 
   if (settings.branchMode === "auto-create") {
-    const branch = AUTO_BRANCH_PREFIX + sanitizeBranchSegment(taskId);
+    // Each child gets its OWN branch, even on retried tasks. Re-using
+    // `claude/<taskId>` for retry runs silently piles new commits on
+    // top of the prior run — the operator has no signal that happened
+    // and the diff endpoint then mixes both runs' edits. Suffix with
+    // a short unique tag based on wall-clock + random so two children
+    // of the same retry never collide either.
+    const branch =
+      AUTO_BRANCH_PREFIX +
+      sanitizeBranchSegment(taskId) +
+      "-" +
+      uniqueBranchSuffix();
     return checkoutOrCreate(cwd, branch);
   }
 
   return { ok: false, message: `unsupported branchMode: ${settings.branchMode}` };
+}
+
+/**
+ * 8-char suffix combining a base36-encoded timestamp and crypto-random
+ * tail. Long enough that two spawns within the same ms don't collide
+ * (Math.random gives ~52 bits of entropy), short enough to keep the
+ * branch name human-scannable.
+ */
+function uniqueBranchSuffix(): string {
+  const ts = Date.now().toString(36).slice(-4);
+  const r = Math.random().toString(36).slice(2, 6);
+  return `${ts}${r}`;
 }
 
 async function checkoutOrCreate(cwd: string, branch: string): Promise<GitOpResult> {
@@ -163,6 +247,14 @@ async function checkoutOrCreate(cwd: string, branch: string): Promise<GitOpResul
  * the operator prefers.
  */
 export async function autoCommitAndPush(
+  cwd: string,
+  settings: AppGitSettings,
+  message: string,
+): Promise<GitOpResult> {
+  return withGitLock(cwd, () => autoCommitAndPushLocked(cwd, settings, message));
+}
+
+async function autoCommitAndPushLocked(
   cwd: string,
   settings: AppGitSettings,
   message: string,
@@ -248,6 +340,16 @@ async function tryPush(cwd: string): Promise<GitOpResult> {
  * `autoPush=true` reaches the merged result.
  */
 export async function mergeIntoTargetBranch(args: {
+  cwd: string;
+  sourceBranch: string;
+  targetBranch: string;
+  message: string;
+  push: boolean;
+}): Promise<GitOpResult> {
+  return withGitLock(args.cwd, () => mergeIntoTargetBranchLocked(args));
+}
+
+async function mergeIntoTargetBranchLocked(args: {
   cwd: string;
   sourceBranch: string;
   targetBranch: string;
