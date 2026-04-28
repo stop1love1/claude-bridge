@@ -334,12 +334,23 @@ function TaskPageInner() {
 
       {/* Page sub-toolbar — breadcrumb + keyboard hints out of the global
           header. truncate + min-w-0 keep long titles from breaking row
-          wrap on narrow viewports. */}
+          wrap on narrow viewports. The back arrow is a real button on
+          mobile (browser back can be unpredictable inside SPA history)
+          and degrades to a plain `/` separator on sm+. */}
       <div className="shrink-0 px-3 py-2 border-b border-border bg-background flex items-center gap-2 min-w-0">
-        <span className="text-fg-dim shrink-0">/</span>
+        <button
+          type="button"
+          onClick={() => router.push("/tasks")}
+          className="sm:hidden inline-flex items-center justify-center h-7 w-7 -ml-1 rounded-md text-fg-dim hover:text-foreground hover:bg-accent shrink-0"
+          aria-label="Back to tasks"
+          title="Back to tasks"
+        >
+          <ArrowLeft size={14} />
+        </button>
+        <span className="hidden sm:inline text-fg-dim shrink-0">/</span>
         <span className="hidden sm:inline font-mono text-xs text-fg-dim shrink-0">{task.id}</span>
         <span className="hidden sm:inline text-fg-dim shrink-0">·</span>
-        <span className="text-sm font-medium truncate flex-1 min-w-0">{task.title}</span>
+        <span className="text-[13px] sm:text-sm font-medium truncate flex-1 min-w-0">{task.title}</span>
         <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border shrink-0">
           Esc back
         </kbd>
@@ -352,7 +363,7 @@ function TaskPageInner() {
           type="button"
           onClick={() => setMobileTabWithUrl("detail")}
           aria-pressed={mobileTab === "detail"}
-          className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors ${
+          className={`flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors ${
             mobileTab === "detail"
               ? "border-primary text-foreground"
               : "border-transparent text-muted-foreground hover:text-foreground"
@@ -364,7 +375,7 @@ function TaskPageInner() {
           type="button"
           onClick={() => setMobileTabWithUrl("chat")}
           aria-pressed={mobileTab === "chat"}
-          className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors ${
+          className={`flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors truncate px-2 ${
             mobileTab === "chat"
               ? "border-primary text-foreground"
               : "border-transparent text-muted-foreground hover:text-foreground"

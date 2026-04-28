@@ -265,12 +265,12 @@ function TunnelsPage() {
     <div className="flex flex-col h-screen">
       <HeaderShell active="tunnels" />
       <main className="flex-1 overflow-y-auto">
-        <div className="p-6 max-w-3xl mx-auto space-y-6">
+        <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-5 sm:space-y-6">
           <div className="flex items-center gap-2 mb-2">
             <Globe2 size={18} className="text-primary" />
-            <h2 className="text-lg font-semibold">Tunnels</h2>
+            <h2 className="text-base sm:text-lg font-semibold">Tunnels</h2>
           </div>
-          <p className="text-xs text-muted-foreground mt-4">
+          <p className="text-[11px] sm:text-xs text-muted-foreground mt-4">
             Expose a local port to the public internet. Pick{" "}
             <code className="font-mono text-foreground">localtunnel</code>{" "}
             for a one-click free tunnel, or{" "}
@@ -282,7 +282,7 @@ function TunnelsPage() {
           <section className="rounded-lg border border-border bg-card p-4">
             <div className="flex items-center gap-2 mb-3">
               <Play size={14} className="text-primary" />
-              <h3 className="text-sm font-semibold">Start a tunnel</h3>
+              <h3 className="text-[13px] sm:text-sm font-semibold">Start a tunnel</h3>
             </div>
 
             <form
@@ -292,7 +292,10 @@ function TunnelsPage() {
               }}
               className="space-y-3"
             >
-              <div className="grid gap-3 sm:grid-cols-2">
+              {/* Row 1 — Provider + Port. Chips moved out of the Port
+                  cell so the two cells are equal-height and the next
+                  row's labels line up across columns. */}
+              <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
                 <div className="grid gap-1.5">
                   <Label htmlFor="tunnel-provider">Provider</Label>
                   <Select value={provider} onValueChange={(v) => setProvider(v as TunnelProvider)}>
@@ -315,7 +318,7 @@ function TunnelsPage() {
                     placeholder="3000"
                     autoComplete="off"
                   />
-                  <div className="flex gap-1.5 text-[11px]">
+                  <div className="flex flex-wrap gap-1.5 text-[11px]">
                     <button
                       type="button"
                       onClick={() => setPort("7777")}
@@ -334,7 +337,10 @@ function TunnelsPage() {
                 </div>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              {/* Row 2 — Subdomain + Label. Helper text wrapped in a
+                  fixed-min-height block so cells stay equal-height even
+                  when one helper is 1 line and the other is 2. */}
+              <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
                 <div className="grid gap-1.5">
                   <Label htmlFor="tunnel-subdomain">
                     Subdomain{" "}
@@ -353,7 +359,7 @@ function TunnelsPage() {
                     spellCheck={false}
                     disabled={provider !== "localtunnel"}
                   />
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[11px] text-muted-foreground sm:min-h-[2.6em] leading-snug">
                     {provider === "localtunnel"
                       ? "Sticky URL across restarts. 4–63 chars, lowercase + digits + hyphens."
                       : "ngrok free-plan subdomains are randomized. Disable to skip."}
@@ -370,7 +376,7 @@ function TunnelsPage() {
                     placeholder="e.g. landing demo"
                     autoComplete="off"
                   />
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[11px] text-muted-foreground sm:min-h-[2.6em] leading-snug">
                     Shows in the row so you can tell parallel tunnels apart.
                   </p>
                 </div>
@@ -556,7 +562,7 @@ function NgrokStatusPanel({
       <section className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
         <div className="flex items-center gap-2 mb-2">
           <AlertTriangle size={14} className="text-amber-500" />
-          <h3 className="text-sm font-semibold">ngrok not installed</h3>
+          <h3 className="text-[13px] sm:text-sm font-semibold">ngrok not installed</h3>
         </div>
         <p className="text-[11px] text-muted-foreground mb-3">{status.hint}</p>
         <div className="flex flex-wrap gap-2">
@@ -590,7 +596,7 @@ function NgrokStatusPanel({
       <section className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
         <div className="flex items-center gap-2 mb-2">
           <Key size={14} className="text-amber-500" />
-          <h3 className="text-sm font-semibold">
+          <h3 className="text-[13px] sm:text-sm font-semibold">
             {status.authtokenSet ? "Replace ngrok authtoken" : "ngrok authtoken needed"}
           </h3>
         </div>
@@ -727,17 +733,41 @@ function TunnelRow({
         )}
         <div className="flex-1" />
         {live && (
-          <Button variant="ghost" size="xs" onClick={onStop} className="text-fg-dim hover:text-destructive">
-            <Square size={12} /> Stop
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={onStop}
+            title="Stop tunnel"
+            aria-label="Stop tunnel"
+            className="text-fg-dim hover:text-destructive"
+          >
+            <Square size={12} />
+            <span className="hidden sm:inline">Stop</span>
           </Button>
         )}
         {canRestart && (
-          <Button variant="ghost" size="xs" onClick={onRestart} className="text-fg-dim hover:text-foreground">
-            <RotateCw size={12} /> Restart
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={onRestart}
+            title="Restart tunnel"
+            aria-label="Restart tunnel"
+            className="text-fg-dim hover:text-foreground"
+          >
+            <RotateCw size={12} />
+            <span className="hidden sm:inline">Restart</span>
           </Button>
         )}
-        <Button variant="ghost" size="xs" onClick={onRemove} className="text-fg-dim hover:text-destructive">
-          <Trash2 size={12} /> Remove
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={onRemove}
+          title="Remove tunnel"
+          aria-label="Remove tunnel"
+          className="text-fg-dim hover:text-destructive"
+        >
+          <Trash2 size={12} />
+          <span className="hidden sm:inline">Remove</span>
         </Button>
       </div>
 
@@ -753,13 +783,27 @@ function TunnelRow({
               {t.url}
               <ExternalLink size={12} />
             </a>
-            <Button variant="ghost" size="xs" onClick={() => void copy()}>
-              <Copy size={11} /> {copied ? "Copied" : "Copy"}
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => void copy()}
+              title={copied ? "Copied" : "Copy URL"}
+              aria-label="Copy URL"
+            >
+              <Copy size={11} />
+              <span className="hidden sm:inline">{copied ? "Copied" : "Copy"}</span>
             </Button>
             {t.provider === "ngrok" && live && (
               <Button asChild variant="ghost" size="xs" className="text-fg-dim">
-                <a href={NGROK_INSPECTOR_URL} target="_blank" rel="noreferrer" title="ngrok web inspector">
-                  <Eye size={11} /> Inspector
+                <a
+                  href={NGROK_INSPECTOR_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="ngrok web inspector"
+                  aria-label="ngrok web inspector"
+                >
+                  <Eye size={11} />
+                  <span className="hidden sm:inline">Inspector</span>
                 </a>
               </Button>
             )}

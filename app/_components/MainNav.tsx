@@ -27,10 +27,11 @@ const ITEMS: {
 /**
  * The four top-level navigations: Apps (registry), Tasks (board),
  * Sessions (raw chats), Settings (config). Renders as a horizontally
- * scrollable pill row at every breakpoint — on mobile the row scrolls
- * sideways instead of collapsing into a dropdown so every section stays
- * one tap away. `min-w-0` on the wrapper prevents the row from pushing
- * the header buttons off-screen.
+ * scrollable pill row at every breakpoint — on mobile the labels
+ * collapse to icons-only so all sections fit on a phone without
+ * sideways scrolling; the active tab keeps its label so the user
+ * always knows where they are. `min-w-0` on the wrapper prevents the
+ * row from pushing the header buttons off-screen.
  *
  * `active` highlights the current page; pass `badges` for any per-tab
  * counters (e.g. orphan sessions).
@@ -57,10 +58,12 @@ export function MainNav({
             key={key}
             href={href}
             aria-current={isActive ? "page" : undefined}
-            className={`inline-flex shrink-0 items-center gap-1 px-2.5 py-0.5 rounded text-xs whitespace-nowrap ${cls}`}
+            aria-label={label}
+            title={label}
+            className={`inline-flex shrink-0 items-center gap-1 px-2 sm:px-2.5 py-1 sm:py-0.5 rounded text-xs whitespace-nowrap ${cls}`}
           >
-            <Icon size={12} />
-            {label}
+            <Icon size={13} />
+            <span className={isActive ? "inline" : "hidden sm:inline"}>{label}</span>
             {!isActive && badges?.[key]}
           </Link>
         );

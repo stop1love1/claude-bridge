@@ -209,6 +209,7 @@ function TaskDetailInner({
             variant={task.checked ? "secondary" : "outline"}
             size="xs"
             title={task.checked ? "Reopen — moves back to DOING" : "Mark complete — moves to DONE"}
+            aria-label={task.checked ? "Reopen task" : "Mark task complete"}
             className="h-6 px-2 gap-1"
           >
             {task.checked ? (
@@ -216,7 +217,9 @@ function TaskDetailInner({
             ) : (
               <Circle size={12} className="opacity-70" />
             )}
-            {task.checked ? "Completed" : "Mark complete"}
+            <span className="hidden sm:inline">
+              {task.checked ? "Completed" : "Mark complete"}
+            </span>
           </Button>
           <Button
             onClick={() => downloadFile(`${task.id}.md`, exportTaskMarkdown(task, meta))}
@@ -261,7 +264,7 @@ function TaskDetailInner({
         )}
 
         <h2
-          className={`mb-3 border-b border-border pb-2 text-lg font-medium ${
+          className={`mb-3 border-b border-border pb-2 text-base sm:text-lg font-medium leading-snug ${
             task.checked ? "line-through text-muted-foreground" : ""
           }`}
         >
@@ -269,18 +272,19 @@ function TaskDetailInner({
         </h2>
 
         {canContinue && (
-          <div className="flex gap-2 mb-6 items-center">
+          <div className="flex gap-2 mb-6 items-center flex-wrap">
             <Button
               disabled={continuing}
               onClick={continueTask}
               variant="secondary"
               size="sm"
               title="Resume the coordinator (last run was killed or died unexpectedly)"
+              className="shrink-0"
             >
               <RotateCw size={14} className={continuing ? "animate-spin" : ""} />
               {continuing ? "Continuing…" : "Continue"}
             </Button>
-            <span className="text-[11px] text-fg-dim">
+            <span className="text-[11px] text-fg-dim min-w-0 flex-1">
               Last coordinator run ended in <span className="font-mono">{lastCoordinator?.status}</span> — pick up where it stopped.
             </span>
           </div>

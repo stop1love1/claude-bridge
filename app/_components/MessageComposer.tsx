@@ -156,8 +156,15 @@ function MessageComposerInner({
     const el = taRef.current;
     if (!el) return;
     el.style.height = "0px";
-    const h = Math.min(MAX_H, Math.max(MIN_H, el.scrollHeight));
+    const natural = el.scrollHeight;
+    const h = Math.min(MAX_H, Math.max(MIN_H, natural));
     el.style.height = `${h}px`;
+    // Phantom scrollbar fix: when content fits the auto-grown height,
+    // suppress the scrollbar entirely. Browsers (esp. Windows Chrome at
+    // fractional DPI) round scrollHeight up by 1px on an empty textarea
+    // and render a useless scroll track. Only re-enable scrolling when
+    // we actually clamped to MAX_H.
+    el.style.overflowY = natural > MAX_H ? "auto" : "hidden";
   }, []);
   useEffect(resize, [draft, interim, resize]);
 
@@ -467,7 +474,7 @@ function MessageComposerInner({
                 : `Message ${role}${repo ? ` @ ${repo}` : ""}…`
             }
             rows={1}
-            className={`w-full bg-transparent border-0 rounded-t-xl pl-3 pr-9 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none leading-relaxed placeholder:text-muted-foreground/70 ${
+            className={`w-full bg-transparent border-0 rounded-t-xl pl-3 pr-9 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none leading-relaxed placeholder:text-muted-foreground/70 overflow-y-hidden ${
               interim ? "italic text-muted-foreground" : ""
             }`}
             style={{ minHeight: `${MIN_H}px`, maxHeight: `${MAX_H}px` }}

@@ -9,8 +9,8 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
       ref={ref}
       type={type}
       className={cn(
-        "flex h-8 w-full rounded-md border border-border bg-background px-3 py-1 text-xs shadow-sm",
-        "placeholder:text-muted-foreground/70",
+        "flex h-8 w-full rounded-md border border-border bg-background px-3 py-1 text-[11px] sm:text-xs shadow-sm",
+        "placeholder:text-muted-foreground/70 placeholder:text-[11px] sm:placeholder:text-xs",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         "disabled:cursor-not-allowed disabled:opacity-50",
         "file:border-0 file:bg-transparent file:text-xs file:font-medium",

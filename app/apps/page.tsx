@@ -176,14 +176,14 @@ function AppsPage() {
           <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
             <div className="flex items-center gap-2">
               <Boxes size={18} className="text-primary" />
-              <h2 className="text-lg font-semibold">Registered apps</h2>
+              <h2 className="text-base sm:text-lg font-semibold">Registered apps</h2>
               <span className="text-[10px] text-muted-foreground">
                 {apps.length} app{apps.length === 1 ? "" : "s"}
               </span>
             </div>
             <AddAppDialog onChanged={refresh} openRef={addDialogRef} />
           </div>
-          <p className="text-xs text-muted-foreground mb-6">
+          <p className="text-[11px] sm:text-xs text-muted-foreground mb-6">
             Apps live in <code className="font-mono text-foreground">~/.claude/bridge.json</code>
             (outside this project, so version updates can&apos;t overwrite it).
             The coordinator dispatches agents into these folders by name.
@@ -238,7 +238,7 @@ function AppsPage() {
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-sm font-semibold">{app.name}</span>
+                          <span className="font-mono text-[13px] sm:text-sm font-semibold">{app.name}</span>
                           {!exists && (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-warning/20 text-warning text-[9px] font-medium uppercase tracking-wide">
                               missing
@@ -255,9 +255,14 @@ function AppsPage() {
                           )}
                         </div>
                         {app.description && (
-                          <p className="mt-1 text-xs text-foreground/80">{app.description}</p>
+                          <p className="mt-1 text-[11px] sm:text-xs text-foreground/80 line-clamp-3 sm:line-clamp-none">
+                            {app.description}
+                          </p>
                         )}
-                        <p className="mt-1 text-[11px] text-muted-foreground font-mono break-all">
+                        <p
+                          className="mt-1 text-[10.5px] sm:text-[11px] text-muted-foreground font-mono break-all line-clamp-2 sm:line-clamp-none"
+                          title={app.rawPath !== app.path ? `${app.rawPath} → ${app.path}` : app.rawPath}
+                        >
                           {app.rawPath}
                           {app.rawPath !== app.path && ` → ${app.path}`}
                         </p>

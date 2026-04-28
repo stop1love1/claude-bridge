@@ -48,8 +48,9 @@ context between sessions, and *babysitting* AI work that was supposed to save yo
 - 🧭 **Picks the right repos** and spawns a coder agent in each.
 - 📺 **Streams every agent live** to one dashboard you don't have to stare at.
 - 🛡️ **Gates risky tools** behind a popup so nothing scary happens unsupervised.
-- ✅ **Runs the verify chain** (preflight + semantic + style + your `test` / `lint` / `build`)
-  before declaring anything *done*, and auto-retries once on failure.
+- ✅ **Runs the verify chain** (preflight + claim-vs-diff + semantic + style + your `test` / `lint` / `build`)
+  before declaring anything *done*, with a configurable 6-gate retry ladder feeding the failure transcript
+  back to a fix agent.
 - 📨 **Pings your phone** over Telegram when it ships — or when it needs a human call.
 
 So the loop becomes: *type the task → close the laptop → go pour a coffee, walk the dog, or
@@ -77,7 +78,7 @@ These are the load-bearing pieces — everything else exists to make them work b
 | 🧭 **Multi-repo coordinator** | One agent reads the task, picks which sibling repos it touches, and spawns coder / reviewer / fixer children in the right working directory. No naming convention, no hardcoded paths. |
 | 📺 **Live dashboard** | Token-level streaming of every agent's output, SSE status updates, and a per-task tree of parent / child runs — so when you *do* peek, you see everything at once. |
 | 🛡️ **Per-tool permission gates** | Risky calls (`Bash`, `Edit`, `Write`, `Delete`, …) pause behind an Allow / Deny popup. Build up reusable allowlists per session; bypass mode for trusted children only. |
-| ✅ **Verify-then-ship chain** | Every successful child run is gated by preflight → semantic → style critic → your app's `test` / `lint` / `build`. If anything fails, the bridge auto-retries once with the failure transcript fed back to a fix agent. |
+| ✅ **Verify-then-ship chain** | Every successful child run is gated by preflight → claim-vs-diff → semantic → style critic → your app's `test` / `lint` / `build`. Failures fan out into a 6-gate retry ladder (crash / verify / claim / preflight / style / semantic), each with its own configurable budget — the failure transcript is fed back to a fix agent on every retry. |
 | 📨 **Telegram bridge** | Spawn tasks, watch transitions, kill runs, or read a report from your phone. Bot + user-client channels with chat-id allowlist and natural-language command routing — the reason you can actually leave the desk. |
 
 ### 🎁 What else is in the box
@@ -92,6 +93,8 @@ The smaller stuff that makes the five pillars pleasant to live with:
 - 💰 **Token usage analytics** — per-task input / output / cache totals with per-run drill-down.
 - 🔐 **Single-operator auth** — scrypt password + signed cookie + trusted devices + CSRF + rate-limited login + optional Telegram login approvals.
 - 📊 **Repo profiles** — heuristic per-repo summaries injected into every child prompt.
+- 🧩 **Pre-warmed child context** — every spawn ships with house rules, pinned files, a symbol index, the repo's style fingerprint, and the most recent coordinator direction so children don't start cold.
+- 🧠 **Task memory** — top extracted notes from prior runs on the same task get folded into the next coordinator prompt, so re-dispatches don't re-litigate decisions the team already made.
 - ⚙️ **Runtime-agnostic** — runs identically under Bun, npm, or pnpm.
 - 🌐 **Demo-mode deployable** — flip a single env var to host the landing page on Vercel/Netlify without exposing the dashboard.
 - 🛰️ **One-click public tunnels** — pick a local port, choose `localtunnel` (free, no signup) or `ngrok` (faster, one-time authtoken), and share the public URL. The bridge installs ngrok via winget/brew/tarball if it isn't on PATH.

@@ -3,7 +3,14 @@ import "./globals.css";
 import { Providers } from "./_components/Providers";
 import { NO_FLASH_SCRIPT } from "./_components/ThemeProvider";
 
+// Resolves relative `openGraph.images` / `twitter.images` URLs. The bridge is
+// a localhost dashboard, so we fall back to the dev port; deploys can override
+// via `NEXT_PUBLIC_SITE_URL`.
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ?? `http://localhost:${process.env.PORT ?? 7777}`;
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "Claude Bridge",
   description: "Owner dashboard for dispatching cross-repo tasks to a Claude agent team.",
 };

@@ -69,12 +69,12 @@ function SettingsPage() {
     <div className="flex flex-col h-screen">
       <HeaderShell active="settings" />
       <main className="flex-1 overflow-y-auto">
-        <div className="p-6 max-w-3xl mx-auto space-y-8">
+        <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-6 sm:space-y-8">
           <div className="flex items-center gap-2 mb-2">
             <SettingsIcon size={18} className="text-primary" />
-            <h2 className="text-lg font-semibold">Settings</h2>
+            <h2 className="text-base sm:text-lg font-semibold">Settings</h2>
           </div>
-          <p className="text-xs text-muted-foreground -mt-4">
+          <p className="text-[11px] sm:text-xs text-muted-foreground mt-4">
             Per-machine configuration stored in{" "}
             <code className="font-mono text-foreground">
               ~/.claude/bridge.json
@@ -157,7 +157,7 @@ function PublicUrlSection() {
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2 mb-1">
         <Globe size={14} className="text-primary" />
-        <h3 className="text-sm font-semibold">Public URL</h3>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Public URL</h3>
       </div>
       <p className="text-[11px] text-muted-foreground mb-4">
         The origin the bridge is reachable at after deploy. Used to render
@@ -247,7 +247,7 @@ function DetectSettingsSection() {
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2 mb-1">
         <Sparkles size={14} className="text-primary" />
-        <h3 className="text-sm font-semibold">Scope detection</h3>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Scope detection</h3>
       </div>
       <p className="text-[11px] text-muted-foreground mb-4">
         Controls how the bridge picks repo + features for a new task.
@@ -435,7 +435,7 @@ function TelegramSettingsSection() {
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2 mb-1">
         <Send size={14} className="text-primary" />
-        <h3 className="text-sm font-semibold">Telegram notifier</h3>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Telegram notifier</h3>
       </div>
       <p className="text-[11px] text-muted-foreground mb-4">
         Forwards run lifecycle events (done / failed) and pending permission
@@ -720,7 +720,7 @@ function TelegramUserSection() {
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2 mb-1">
         <User size={14} className="text-primary" />
-        <h3 className="text-sm font-semibold">
+        <h3 className="text-[13px] sm:text-sm font-semibold">
           Telegram user-client (MTProto)
         </h3>
       </div>
@@ -926,7 +926,7 @@ function TrustedDevicesSection() {
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2 mb-1">
         <ShieldCheck size={14} className="text-primary" />
-        <h3 className="text-sm font-semibold">Trusted devices</h3>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Trusted devices</h3>
       </div>
       <p className="text-[11px] text-muted-foreground mb-4">
         Browsers where you ticked &ldquo;Trust this device&rdquo; at sign-in.

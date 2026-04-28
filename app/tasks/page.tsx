@@ -312,17 +312,17 @@ function Dashboard() {
       {/* Page sub-toolbar — search, filter, and CTAs that used to live
           in the global header. Wraps to a second row on narrow viewports
           so nothing gets pushed off-screen. */}
-      <div className="shrink-0 px-3 py-2 border-b border-border bg-background flex items-center gap-2 flex-wrap">
+      <div className="shrink-0 px-2 sm:px-3 py-2 border-b border-border bg-background flex items-center gap-1.5 sm:gap-2 flex-wrap">
         <Input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search tasks"
-          className="flex-1 min-w-[160px] max-w-sm h-7 text-xs"
+          className="flex-1 min-w-[120px] max-w-sm h-7 text-xs"
         />
         <Select value={appFilter} onValueChange={setAppFilter}>
           <SelectTrigger
-            className="h-7 px-2 text-xs gap-1 [&>span]:truncate w-[120px] sm:w-[150px]"
+            className="h-7 px-2 text-xs gap-1 [&>span]:truncate w-[110px] sm:w-[150px]"
             title="Filter tasks by target app"
           >
             <SelectValue />

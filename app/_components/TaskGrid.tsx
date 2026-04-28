@@ -114,7 +114,7 @@ function GridCard({
           {selected && <Check size={11} strokeWidth={3} />}
         </button>
         <h3
-          className={`flex-1 text-sm font-medium line-clamp-2 min-w-0 ${
+          className={`flex-1 text-[13px] sm:text-sm font-medium line-clamp-2 min-w-0 leading-snug ${
             task.checked ? "line-through text-muted-foreground" : "text-foreground"
           }`}
         >

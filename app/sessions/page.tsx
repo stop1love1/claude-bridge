@@ -2,7 +2,6 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { PanelLeftOpen } from "lucide-react";
 import { api } from "@/lib/client/api";
 import type { Repo, SessionSummary } from "@/lib/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
@@ -28,7 +27,13 @@ function SessionsPageInner() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [query, setQuery] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Mobile (< md) shows ONE pane at a time via the tab bar — same UX
+  // as task-detail. Desktop keeps both panes side-by-side, so this
+  // only matters on phones.
+  const [mobileTab, setMobileTab] = useState<"browser" | "chat">(() => {
+    if (typeof window === "undefined") return "browser";
+    return new URLSearchParams(window.location.search).get("sid") ? "chat" : "browser";
+  });
 
   const newSessionRef = useRef<(() => void) | null>(null);
 
@@ -92,37 +97,6 @@ function SessionsPageInner() {
     return () => clearInterval(h);
   }, [visible, refreshSessions]);
 
-  // Hide sidebar by default on small screens once we know the viewport.
-  // On larger screens, restore the user's last collapsed/open preference
-  // from localStorage so a refresh doesn't yank the panel back.
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 768px)");
-    const SIDEBAR_KEY = "bridge.sessions.sidebarOpen";
-    const apply = () => {
-      if (mq.matches) {
-        setSidebarOpen(false);
-      } else {
-        try {
-          const stored = window.localStorage.getItem(SIDEBAR_KEY);
-          setSidebarOpen(stored === null ? true : stored === "1");
-        } catch {
-          setSidebarOpen(true);
-        }
-      }
-    };
-    apply();
-    mq.addEventListener("change", apply);
-    return () => mq.removeEventListener("change", apply);
-  }, []);
-
-  // Persist desktop sidebar preference. Skipped on mobile so toggling
-  // the panel while on a phone doesn't override the desktop default.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (window.matchMedia("(max-width: 768px)").matches) return;
-    try { window.localStorage.setItem("bridge.sessions.sidebarOpen", sidebarOpen ? "1" : "0"); }
-    catch { /* ignore */ }
-  }, [sidebarOpen]);
 
   const handleSelectSession = useCallback(
     (s: SessionSummary) => {
@@ -137,8 +111,9 @@ function SessionsPageInner() {
         role: "orphan",
         repo: s.repo,
       });
-      // Auto-collapse sidebar on small screens after picking a session.
-      if (window.matchMedia("(max-width: 768px)").matches) setSidebarOpen(false);
+      // Mobile: jump to the chat tab so the user sees their selection
+      // immediately. Desktop keeps both panes visible so no-op there.
+      setMobileTab("chat");
     },
     [repos, router, setActiveRun],
   );
@@ -213,7 +188,7 @@ function SessionsPageInner() {
       role: "orphan",
       repo,
     });
-    if (window.matchMedia("(max-width: 768px)").matches) setSidebarOpen(false);
+    setMobileTab("chat");
   }, [repos, toast, setActiveRun]);
 
   const orphanCount = sessions.filter((s) => !s.link).length;
@@ -231,50 +206,64 @@ function SessionsPageInner() {
         }}
       />
 
-      <main className="flex-1 flex min-h-0 relative">
-        {/* Mobile-only floating "Show sessions" affordance — the sidebar
-            houses the new-session button + search + list, so when the
-            user has dismissed it on a phone we still need a one-tap way
-            to bring it back. On md+ the sidebar is always docked, so
-            this never renders. */}
-        {!sidebarOpen && (
-          <button
-            type="button"
-            aria-label="Show sessions"
-            onClick={() => setSidebarOpen(true)}
-            className="md:hidden absolute top-2 left-2 z-20 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-card border border-border shadow-sm text-xs text-foreground hover:bg-accent"
-          >
-            <PanelLeftOpen className="h-3.5 w-3.5" />
-            Sessions
-          </button>
-        )}
-        {sidebarOpen && (
-          <>
-            {/* Backdrop on small screens — taps it close the sidebar */}
-            <button
-              type="button"
-              aria-label="Close sidebar"
-              onClick={() => setSidebarOpen(false)}
-              className="md:hidden absolute inset-0 z-10 bg-black/40 backdrop-blur-[1px]"
-            />
-            <div className="absolute md:static z-20 left-0 top-0 h-full md:h-auto md:flex">
-              <SessionsBrowser
-                sessions={sessions}
-                query={query}
-                activeSessionId={activeRun?.sessionId ?? null}
-                onQueryChange={setQuery}
-                onSelect={handleSelectSession}
-                onDelete={handleDelete}
-                onBulkDelete={handleBulkDelete}
-                repos={repos}
-                defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
-                onCreateSession={handleCreate}
-                newSessionRef={newSessionRef}
-              />
-            </div>
-          </>
-        )}
-        <div className="flex-1 min-w-0 flex">
+      {/* Mobile-only tab bar — same UX as /tasks/[id]: pick which pane
+          fills the viewport. On md+ both panes render side-by-side and
+          this bar is hidden. */}
+      <div className="md:hidden shrink-0 flex border-b border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setMobileTab("browser")}
+          aria-pressed={mobileTab === "browser"}
+          className={`flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors ${
+            mobileTab === "browser"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Sessions{orphanCount > 0 ? ` · ${orphanCount}` : ""}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab("chat")}
+          aria-pressed={mobileTab === "chat"}
+          className={`flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors truncate px-2 ${
+            mobileTab === "chat"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Chat{activeRun ? ` · ${activeRun.role}` : ""}
+        </button>
+      </div>
+
+      <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
+        {/* Both panes stay mounted (display:none vs flex) so search
+            input, scroll position, and SessionLog state survive a tab
+            switch. */}
+        <div
+          className={`flex-1 min-h-0 md:flex-none md:flex ${
+            mobileTab === "browser" ? "flex" : "hidden md:flex"
+          }`}
+        >
+          <SessionsBrowser
+            sessions={sessions}
+            query={query}
+            activeSessionId={activeRun?.sessionId ?? null}
+            onQueryChange={setQuery}
+            onSelect={handleSelectSession}
+            onDelete={handleDelete}
+            onBulkDelete={handleBulkDelete}
+            repos={repos}
+            defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
+            onCreateSession={handleCreate}
+            newSessionRef={newSessionRef}
+          />
+        </div>
+        <div
+          className={`flex-1 min-w-0 min-h-0 md:flex ${
+            mobileTab === "chat" ? "flex" : "hidden md:flex"
+          }`}
+        >
           <SessionLog run={activeRun} repos={repos} />
         </div>
       </main>

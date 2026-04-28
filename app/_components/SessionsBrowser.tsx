@@ -105,7 +105,7 @@ export function SessionsBrowser({
   const selectedSessions = sessions.filter((s) => selected.has(s.sessionId));
 
   return (
-    <aside className="w-80 shrink-0 border-r border-border bg-card overflow-y-auto flex flex-col">
+    <aside className="w-full md:w-80 md:shrink-0 md:border-r border-border bg-card overflow-y-auto flex flex-col">
       <div className="p-2 border-b border-border sticky top-0 bg-card z-10 space-y-2">
         <NewSessionDialog
           repos={repos}
