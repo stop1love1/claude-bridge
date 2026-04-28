@@ -54,6 +54,22 @@ export type GitBranchMode = "current" | "fixed" | "auto-create";
 /** (P4/F1) Worktree isolation policy for spawned children. */
 export type GitWorktreeMode = "disabled" | "enabled";
 
+/**
+ * Post-success integration mode — what the bridge does with the agent's
+ * work branch after auto-commit succeeds.
+ *
+ *   - `none`         — leave the branch alone (historical default)
+ *   - `auto-merge`   — `git checkout <target> && git merge --no-ff` locally
+ *   - `pull-request` — spawn a `devops` LLM child that uses `gh` (GitHub)
+ *                      or `glab` (GitLab) to open a PR/MR against `target`.
+ *                      Requires git remote + the matching CLI installed;
+ *                      falls back to no-op + warning if either is missing.
+ *
+ * Both non-`none` modes require `mergeTargetBranch`. `pull-request` also
+ * implies `autoPush` (the head branch must reach the remote first).
+ */
+export type GitIntegrationMode = "none" | "auto-merge" | "pull-request";
+
 export interface AppGitSettings {
   /**
    * - `current`     — leave HEAD alone, agent works on whatever's checked out
@@ -76,6 +92,32 @@ export interface AppGitSettings {
    * Defaults to `disabled` so existing apps don't change behavior.
    */
   worktreeMode: GitWorktreeMode;
+  /**
+   * Integration target branch — used when `integrationMode` is
+   * `auto-merge` (local merge) or `pull-request` (devops agent opens
+   * a PR/MR). Empty string is required when `integrationMode === "none"`.
+   *
+   * Use case: `branchMode: "auto-create"` produces `claude/<task-id>`,
+   * and the operator wants the bridge to roll that branch up into
+   * `main` (or `develop`) automatically rather than mopping up by hand.
+   */
+  mergeTargetBranch: string;
+  /**
+   * What the bridge does with the agent's work branch after auto-commit:
+   *
+   *   - `none`         — leave it (default)
+   *   - `auto-merge`   — local `git merge --no-ff` into `mergeTargetBranch`.
+   *                      Conflict aborts cleanly; work branch preserved.
+   *   - `pull-request` — spawn a `devops` LLM child that runs `gh` /
+   *                      `glab` to open a PR/MR. Requires git remote +
+   *                      the matching CLI installed locally; otherwise
+   *                      logs a warning and skips.
+   *
+   * Implies `autoCommit` for both non-`none` modes. `pull-request` also
+   * implies `autoPush` so the head branch is on the remote before the
+   * CLI tries to open the PR/MR.
+   */
+  integrationMode: GitIntegrationMode;
 }
 
 export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
@@ -84,6 +126,8 @@ export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
   autoCommit: false,
   autoPush: false,
   worktreeMode: "disabled",
+  mergeTargetBranch: "",
+  integrationMode: "none",
 };
 
 /**
@@ -126,6 +170,32 @@ export interface AppQuality {
 
 export const DEFAULT_QUALITY: AppQuality = {};
 
+/**
+ * (Gap 2) Per-gate retry budgets. Each gate has an independent counter;
+ * 0 disables retries for that gate, ≥1 = max attempts. Capped by
+ * `MAX_RETRY_PER_GATE` from `retryLadder.ts` regardless of value here.
+ *
+ * Defaults (when missing) preserve historical 1-shot behavior. See
+ * `lib/retryLadder.ts` for the ladder logic and the strategy registry.
+ *
+ *   crash     — child crash retry (lib/childRetry.ts)
+ *   verify    — verify-chain failure retry (lib/verifyChain.ts)
+ *   claim     — claim-vs-diff retry (lib/verifier.ts)
+ *   preflight — preflight (read-before-edit) retry (lib/preflightCheck.ts)
+ *   style     — style critic retry (lib/styleCritic.ts)
+ *   semantic  — semantic verifier retry (lib/semanticVerifier.ts)
+ */
+export interface AppRetry {
+  crash?: number;
+  verify?: number;
+  claim?: number;
+  preflight?: number;
+  style?: number;
+  semantic?: number;
+}
+
+export const DEFAULT_APP_RETRY: AppRetry = {};
+
 export interface App {
   name: string;
   path: string;          // absolute, resolved against BRIDGE_ROOT
@@ -153,6 +223,12 @@ export interface App {
    */
   quality: AppQuality;
   /**
+   * (Gap 2) Per-gate retry budgets. Empty / missing = each gate uses
+   * `DEFAULT_RETRY` (1 attempt) per `retryLadder.ts`. Operators bump
+   * a specific gate higher to allow multi-strategy retry ladders.
+   */
+  retry: AppRetry;
+  /**
    * (Detect) Free-form domain capability tags this app owns. Used by
    * `lib/detect` to score this app against task bodies that mention
    * the same concepts. Examples:
@@ -176,6 +252,7 @@ interface ManifestAppEntry {
   symbolDirs?: string[];
   quality?: AppQuality;
   capabilities?: string[];
+  retry?: AppRetry;
 }
 
 export interface BridgeManifest {
@@ -260,11 +337,38 @@ function normalizeGitSettings(raw: unknown): AppGitSettings {
   const branchMode: GitBranchMode =
     r.branchMode === "fixed" || r.branchMode === "auto-create" ? r.branchMode : "current";
   const fixedBranch = typeof r.fixedBranch === "string" ? r.fixedBranch.trim() : "";
-  const autoCommit = r.autoCommit === true || r.autoPush === true;
-  const autoPush = r.autoPush === true;
+  const mergeTargetBranch =
+    typeof r.mergeTargetBranch === "string" ? r.mergeTargetBranch.trim() : "";
+  // Backwards compat: an old manifest may have only `mergeTargetBranch`
+  // set (from the first auto-merge ship). Treat that as `auto-merge`
+  // so existing operators don't lose behavior on upgrade.
+  let integrationMode: GitIntegrationMode =
+    r.integrationMode === "auto-merge" || r.integrationMode === "pull-request"
+      ? r.integrationMode
+      : "none";
+  if (integrationMode === "none" && mergeTargetBranch.length > 0 && r.integrationMode === undefined) {
+    integrationMode = "auto-merge";
+  }
+  // Empty mergeTargetBranch with a non-none mode is a malformed config —
+  // demote to `none` so we never run integration on a missing target.
+  if (integrationMode !== "none" && mergeTargetBranch.length === 0) {
+    integrationMode = "none";
+  }
+  // Integration requires a commit (auto-merge) or commit+push (PR).
+  const autoCommit =
+    r.autoCommit === true || r.autoPush === true || integrationMode !== "none";
+  const autoPush = r.autoPush === true || integrationMode === "pull-request";
   const worktreeMode: GitWorktreeMode =
     r.worktreeMode === "enabled" ? "enabled" : "disabled";
-  return { branchMode, fixedBranch, autoCommit, autoPush, worktreeMode };
+  return {
+    branchMode,
+    fixedBranch,
+    autoCommit,
+    autoPush,
+    worktreeMode,
+    mergeTargetBranch,
+    integrationMode,
+  };
 }
 
 /**
@@ -323,6 +427,45 @@ function normalizeQuality(raw: unknown): AppQuality {
 }
 
 /**
+ * (Gap 2) Coerce arbitrary input into an `AppRetry`. Each field must be
+ * a finite non-negative integer; out-of-range values are dropped (the
+ * ladder falls back to `DEFAULT_RETRY` for missing keys, and clamps
+ * upper bounds via `MAX_RETRY_PER_GATE` at read time, so invalid input
+ * here just degrades to the default).
+ */
+function normalizeRetry(raw: unknown): AppRetry {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_APP_RETRY };
+  const r = raw as Partial<Record<keyof AppRetry, unknown>>;
+  const out: AppRetry = {};
+  for (const key of [
+    "crash", "verify", "claim", "preflight", "style", "semantic",
+  ] as const) {
+    const v = r[key];
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0) continue;
+    out[key] = Math.floor(v);
+  }
+  return out;
+}
+
+/**
+ * Drop the `retry` key entirely when no overrides are set — same terse-
+ * default convention as `serializeQuality`.
+ */
+function serializeRetry(r: AppRetry | undefined): AppRetry | undefined {
+  if (!r) return undefined;
+  const out: AppRetry = {};
+  for (const key of [
+    "crash", "verify", "claim", "preflight", "style", "semantic",
+  ] as const) {
+    const v = r[key];
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+      out[key] = Math.floor(v);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
  * Drop the `quality` key entirely when no gates are enabled — same
  * terse-default convention as `serializeVerify`.
  */
@@ -377,6 +520,12 @@ function serializeGitSettings(g: AppGitSettings | undefined): Partial<AppGitSett
   if (g.autoCommit) out.autoCommit = true;
   if (g.autoPush) out.autoPush = true;
   if (g.worktreeMode === "enabled") out.worktreeMode = "enabled";
+  if (g.mergeTargetBranch && g.mergeTargetBranch.trim().length > 0) {
+    out.mergeTargetBranch = g.mergeTargetBranch.trim();
+  }
+  if (g.integrationMode && g.integrationMode !== "none") {
+    out.integrationMode = g.integrationMode;
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -399,6 +548,7 @@ export function parseApps(json: string): App[] {
     const symbolDirsRaw = (raw as { symbolDirs?: unknown }).symbolDirs;
     const qualityRaw = (raw as { quality?: unknown }).quality;
     const capabilitiesRaw = (raw as { capabilities?: unknown }).capabilities;
+    const retryRaw = (raw as { retry?: unknown }).retry;
     if (!isValidAppName(name)) continue;
     if (typeof rawPath !== "string" || !rawPath.trim()) continue;
     out.push({
@@ -412,6 +562,7 @@ export function parseApps(json: string): App[] {
       symbolDirs: normalizeStringList(symbolDirsRaw),
       quality: normalizeQuality(qualityRaw),
       capabilities: normalizeStringList(capabilitiesRaw),
+      retry: normalizeRetry(retryRaw),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -442,6 +593,8 @@ export function serializeApps(apps: App[]): string {
       if (quality) entry.quality = quality;
       const capabilities = serializeStringList(a.capabilities);
       if (capabilities) entry.capabilities = capabilities;
+      const retry = serializeRetry(a.retry);
+      if (retry) entry.retry = retry;
       return entry;
     }),
   };
@@ -540,6 +693,7 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     symbolDirs: [],
     quality: { ...DEFAULT_QUALITY },
     capabilities: [],
+    retry: { ...DEFAULT_APP_RETRY },
   };
   apps.push(app);
   apps.sort((a, b) => a.name.localeCompare(b.name));
@@ -588,8 +742,19 @@ export function updateAppGitSettings(
   const next: AppGitSettings = { ...target.git, ...patch };
   if (next.branchMode !== "fixed") next.fixedBranch = "";
   else next.fixedBranch = (next.fixedBranch ?? "").trim();
-  if (next.autoPush) next.autoCommit = true;
   if (next.worktreeMode !== "enabled") next.worktreeMode = "disabled";
+  next.mergeTargetBranch = (next.mergeTargetBranch ?? "").trim();
+  if (next.integrationMode !== "auto-merge" && next.integrationMode !== "pull-request") {
+    next.integrationMode = "none";
+  }
+  // Empty target with a non-none mode is malformed — demote so we don't
+  // run integration on a missing target.
+  if (next.integrationMode !== "none" && next.mergeTargetBranch.length === 0) {
+    next.integrationMode = "none";
+  }
+  if (next.integrationMode !== "none") next.autoCommit = true;
+  if (next.integrationMode === "pull-request") next.autoPush = true;
+  if (next.autoPush) next.autoCommit = true;
   target.git = next;
   saveApps(apps);
   return target;
@@ -670,6 +835,76 @@ export function setManifestDetectSource(source: DetectManifestSource): void {
 }
 
 /**
+ * Operator-configured public origin for the bridge — the URL it's
+ * reachable at after a deploy / behind a reverse proxy. Persisted at
+ * `bridge.json#publicUrl` and surfaced everywhere the bridge needs to
+ * render an absolute link the operator (or someone they share with) can
+ * actually click: Telegram task notifications, login-approval emails,
+ * any future webhook payloads.
+ *
+ * Stored without a trailing slash so consumers can naively concatenate
+ * `${publicUrl}/tasks/${id}` without producing `//`.
+ *
+ * Validation rules:
+ *   - Empty string is allowed and means "no public URL configured"
+ *     (callers fall back to `runtime.url` / localhost).
+ *   - Must parse via `new URL(...)` and use http:/https: protocol —
+ *     anything else (file:, javascript:, ftp:) is rejected.
+ *   - Pathname / search / hash are stripped: only the origin survives.
+ */
+function normalizePublicUrl(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return "";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+  // Origin only; drop trailing slash + any path/query/hash an operator
+  // pasted by accident from a deeper page they were on.
+  return parsed.origin;
+}
+
+export function getManifestPublicUrl(): string {
+  const m = readManifest();
+  return normalizePublicUrl((m as { publicUrl?: unknown }).publicUrl);
+}
+
+/**
+ * Persist the operator-configured public URL. Pass `""` (empty string)
+ * to clear it — the field is dropped from the manifest entirely so a
+ * fresh `cat bridge.json` doesn't carry a meaningless `"publicUrl": ""`.
+ *
+ * Returns the post-write value (which may differ from the input if the
+ * operator pasted a URL with a path or invalid protocol).
+ */
+export function setManifestPublicUrl(input: string): string {
+  const normalized = normalizePublicUrl(input);
+  // Empty input is a deliberate clear — we still want to handle that
+  // path explicitly rather than silently no-op.
+  const explicitClear = typeof input === "string" && input.trim() === "";
+  const manifest = readManifest();
+  const updated: BridgeManifest = { ...manifest };
+  if (!normalized && !explicitClear && typeof input === "string") {
+    // Caller passed a non-empty value that failed validation — leave
+    // the existing value alone rather than silently nuking it. The API
+    // route surfaces this as a 400 before it ever reaches us, but
+    // belt-and-suspenders for direct programmatic callers.
+    return getManifestPublicUrl();
+  }
+  if (normalized) {
+    (updated as { publicUrl?: string }).publicUrl = normalized;
+  } else {
+    delete (updated as { publicUrl?: string }).publicUrl;
+  }
+  writeManifest(updated);
+  return normalized;
+}
+
+/**
  * Telegram notifier credentials, persisted at the bridge.json top level
  * so the operator manages them through the bridge UI rather than a
  * shell-scoped `.env`. Both `botToken` + `chatId` are required for the
@@ -726,6 +961,43 @@ export type TelegramForwardChat = "off" | "coordinator-only" | "all";
 export const DEFAULT_FORWARD_CHAT: TelegramForwardChat = "off";
 export const DEFAULT_FORWARD_CHAT_MIN_CHARS = 40;
 
+/**
+ * Notification volume preset. Drives `lib/telegramNotifier`'s gating of
+ * lifecycle / section / permission events.
+ *
+ *   "minimal"  — only what the operator must act on:
+ *                  · coordinator done/failed (the "READY FOR REVIEW" signal)
+ *                  · ANY child failure
+ *                  · section moves to BLOCKED / DONE
+ *                  · permission requests, coalesced per session+tool
+ *   "normal"   — minimal + child completions + "Started" section moves.
+ *                The recommended default — actionable signal without spam.
+ *   "verbose"  — legacy behavior: every transition, every section move,
+ *                every permission request individually. Useful for
+ *                debugging the bridge itself.
+ */
+export type TelegramNotificationLevel = "minimal" | "normal" | "verbose";
+
+export const DEFAULT_NOTIFICATION_LEVEL: TelegramNotificationLevel = "normal";
+
+/**
+ * Chat-forwarder line filter. Independent of `forwardChat` (which picks
+ * WHICH agents to follow): this picks WHICH messages from those agents
+ * make it through.
+ *
+ *   "important-only" — only flush buffers whose text matches
+ *                      `/NEEDS-DECISION|BLOCKED|READY FOR REVIEW/i`.
+ *                      Matches the project's escalation convention so
+ *                      coordinators can think out loud without paging
+ *                      the operator. Default.
+ *   "all"            — flush every buffer above the min-char threshold.
+ *                      Equivalent to legacy behavior.
+ */
+export type TelegramForwardChatFilter = "important-only" | "all";
+
+export const DEFAULT_FORWARD_CHAT_FILTER: TelegramForwardChatFilter =
+  "important-only";
+
 export interface TelegramSettings {
   botToken: string;
   chatId: string;
@@ -739,6 +1011,10 @@ export interface TelegramSettings {
    * `forwardChat === "off"`.
    */
   forwardChatMinChars: number;
+  /** Lifecycle / permission notification volume. See type docstring. */
+  notificationLevel: TelegramNotificationLevel;
+  /** Which forwarded chat lines pass the filter. See type docstring. */
+  forwardChatFilter: TelegramForwardChatFilter;
 }
 
 export const DEFAULT_TELEGRAM_SETTINGS: TelegramSettings = {
@@ -747,6 +1023,8 @@ export const DEFAULT_TELEGRAM_SETTINGS: TelegramSettings = {
   user: { ...DEFAULT_TELEGRAM_USER_SETTINGS },
   forwardChat: DEFAULT_FORWARD_CHAT,
   forwardChatMinChars: DEFAULT_FORWARD_CHAT_MIN_CHARS,
+  notificationLevel: DEFAULT_NOTIFICATION_LEVEL,
+  forwardChatFilter: DEFAULT_FORWARD_CHAT_FILTER,
 };
 
 /**
@@ -784,6 +1062,16 @@ function normalizeForwardChatMinChars(raw: unknown): number {
   return v;
 }
 
+function normalizeNotificationLevel(raw: unknown): TelegramNotificationLevel {
+  if (raw === "minimal" || raw === "normal" || raw === "verbose") return raw;
+  return DEFAULT_NOTIFICATION_LEVEL;
+}
+
+function normalizeForwardChatFilter(raw: unknown): TelegramForwardChatFilter {
+  if (raw === "important-only" || raw === "all") return raw;
+  return DEFAULT_FORWARD_CHAT_FILTER;
+}
+
 export function getManifestTelegramSettings(): TelegramSettings {
   const m = readManifest();
   const tg = (m as {
@@ -793,6 +1081,8 @@ export function getManifestTelegramSettings(): TelegramSettings {
       user?: unknown;
       forwardChat?: unknown;
       forwardChatMinChars?: unknown;
+      notificationLevel?: unknown;
+      forwardChatFilter?: unknown;
     };
   }).telegram;
   if (!tg || typeof tg !== "object") {
@@ -804,6 +1094,8 @@ export function getManifestTelegramSettings(): TelegramSettings {
       user: { ...DEFAULT_TELEGRAM_USER_SETTINGS },
       forwardChat: DEFAULT_FORWARD_CHAT,
       forwardChatMinChars: DEFAULT_FORWARD_CHAT_MIN_CHARS,
+      notificationLevel: DEFAULT_NOTIFICATION_LEVEL,
+      forwardChatFilter: DEFAULT_FORWARD_CHAT_FILTER,
     };
   }
   const botToken = typeof tg.botToken === "string" ? tg.botToken.trim() : "";
@@ -811,6 +1103,8 @@ export function getManifestTelegramSettings(): TelegramSettings {
   const user = normalizeTelegramUserSettings(tg.user);
   const forwardChat = normalizeForwardChat(tg.forwardChat);
   const forwardChatMinChars = normalizeForwardChatMinChars(tg.forwardChatMinChars);
+  const notificationLevel = normalizeNotificationLevel(tg.notificationLevel);
+  const forwardChatFilter = normalizeForwardChatFilter(tg.forwardChatFilter);
   // bridge.json takes precedence, but if EITHER bot field is empty we
   // still fall through to env for those (the user-client side has no
   // env fallback — it's strictly bridge.json).
@@ -823,9 +1117,19 @@ export function getManifestTelegramSettings(): TelegramSettings {
       user,
       forwardChat,
       forwardChatMinChars,
+      notificationLevel,
+      forwardChatFilter,
     };
   }
-  return { botToken, chatId, user, forwardChat, forwardChatMinChars };
+  return {
+    botToken,
+    chatId,
+    user,
+    forwardChat,
+    forwardChatMinChars,
+    notificationLevel,
+    forwardChatFilter,
+  };
 }
 
 export function setManifestTelegramSettings(
@@ -835,6 +1139,8 @@ export function setManifestTelegramSettings(
     user?: Partial<TelegramUserSettings>;
     forwardChat?: TelegramForwardChat;
     forwardChatMinChars?: number;
+    notificationLevel?: TelegramNotificationLevel;
+    forwardChatFilter?: TelegramForwardChatFilter;
   },
 ): TelegramSettings {
   const current = getManifestTelegramSettings();
@@ -875,6 +1181,14 @@ export function setManifestTelegramSettings(
       patch.forwardChatMinChars !== undefined
         ? normalizeForwardChatMinChars(patch.forwardChatMinChars)
         : current.forwardChatMinChars,
+    notificationLevel:
+      patch.notificationLevel !== undefined
+        ? normalizeNotificationLevel(patch.notificationLevel)
+        : current.notificationLevel,
+    forwardChatFilter:
+      patch.forwardChatFilter !== undefined
+        ? normalizeForwardChatFilter(patch.forwardChatFilter)
+        : current.forwardChatFilter,
   };
   // Drop the section entirely when EVERY field is empty so bridge.json
   // doesn't carry a meaningless `telegram: { ... }`.
@@ -885,7 +1199,9 @@ export function setManifestTelegramSettings(
     next.user.targetChatId === "";
   const forwardChatDefault =
     next.forwardChat === DEFAULT_FORWARD_CHAT &&
-    next.forwardChatMinChars === DEFAULT_FORWARD_CHAT_MIN_CHARS;
+    next.forwardChatMinChars === DEFAULT_FORWARD_CHAT_MIN_CHARS &&
+    next.notificationLevel === DEFAULT_NOTIFICATION_LEVEL &&
+    next.forwardChatFilter === DEFAULT_FORWARD_CHAT_FILTER;
   const allEmpty =
     next.botToken === "" && next.chatId === "" && userEmpty && forwardChatDefault;
   const manifest = readManifest();
@@ -902,6 +1218,8 @@ export function setManifestTelegramSettings(
       user?: TelegramUserSettings;
       forwardChat?: TelegramForwardChat;
       forwardChatMinChars?: number;
+      notificationLevel?: TelegramNotificationLevel;
+      forwardChatFilter?: TelegramForwardChatFilter;
     } = {
       botToken: next.botToken,
       chatId: next.chatId,
@@ -912,6 +1230,12 @@ export function setManifestTelegramSettings(
     }
     if (next.forwardChatMinChars !== DEFAULT_FORWARD_CHAT_MIN_CHARS) {
       persisted.forwardChatMinChars = next.forwardChatMinChars;
+    }
+    if (next.notificationLevel !== DEFAULT_NOTIFICATION_LEVEL) {
+      persisted.notificationLevel = next.notificationLevel;
+    }
+    if (next.forwardChatFilter !== DEFAULT_FORWARD_CHAT_FILTER) {
+      persisted.forwardChatFilter = next.forwardChatFilter;
     }
     (updatedManifest as { telegram?: typeof persisted }).telegram = persisted;
   }
@@ -939,6 +1263,40 @@ export function updateAppQuality(
     else delete next[key];
   }
   target.quality = next;
+  saveApps(apps);
+  return target;
+}
+
+/**
+ * (Gap 2) Patch per-gate retry budgets on an app.
+ *
+ * Numeric value ≥ 0 → set; `null` / `undefined` → delete (revert to default).
+ * Non-numeric / NaN values are dropped silently — the ladder clamps high
+ * values to `MAX_RETRY_PER_GATE` at read time, so we accept any positive
+ * integer here without further validation.
+ */
+export function updateAppRetry(
+  name: string,
+  patch: Partial<Record<keyof AppRetry, number | null | undefined>>,
+): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  const next: AppRetry = { ...target.retry };
+  for (const key of [
+    "crash", "verify", "claim", "preflight", "style", "semantic",
+  ] as const) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    const v = patch[key];
+    if (v === null || v === undefined) {
+      delete next[key];
+    } else if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+      next[key] = Math.floor(v);
+    }
+    // non-numeric / NaN → drop silently (matches `normalizeRetry`)
+  }
+  target.retry = next;
   saveApps(apps);
   return target;
 }

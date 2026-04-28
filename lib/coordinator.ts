@@ -58,8 +58,13 @@ import { loadProfiles } from "./profileStore";
 import { resolveRepoCwd, resolveRepos } from "./repos";
 import { readBridgeMd } from "./paths";
 import { getApp } from "./apps";
-import { autoCommitAndPush } from "./gitOps";
+import {
+  autoCommitAndPush,
+  mergeIntoTargetBranch,
+  readCurrentBranch,
+} from "./gitOps";
 import { mergeAndRemoveWorktree } from "./worktrees";
+import { runDevopsAgent } from "./devops";
 import {
   getOrComputeScope,
   loadDetectInput,
@@ -227,7 +232,7 @@ export function wireRunLifecycle(
         const metaForCheck = readMeta(dir);
         const eligible =
           !!metaForCheck &&
-          vc.isEligibleForVerifyRetry({ finishedRun: run, meta: metaForCheck });
+          vc.isEligibleForVerifyRetry({ finishedRun: run, meta: metaForCheck, retry: app?.retry });
         if (eligible) {
           scheduledRetry = await vc.spawnVerifyRetry({
             taskId: tid,
@@ -320,7 +325,7 @@ export function wireRunLifecycle(
         const metaForCheck = readMeta(dir);
         const eligible =
           !!metaForCheck &&
-          pf.isEligibleForPreflightRetry({ finishedRun: run, meta: metaForCheck });
+          pf.isEligibleForPreflightRetry({ finishedRun: run, meta: metaForCheck, retry: app?.retry });
         let scheduledPreflightRetry: Awaited<
           ReturnType<typeof pf.spawnPreflightRetry>
         > = null;
@@ -403,7 +408,7 @@ export function wireRunLifecycle(
         const metaForCheck = readMeta(dir);
         const eligible =
           !!metaForCheck &&
-          vfn.isEligibleForClaimRetry({ finishedRun: run, meta: metaForCheck });
+          vfn.isEligibleForClaimRetry({ finishedRun: run, meta: metaForCheck, retry: app?.retry });
         if (eligible) {
           scheduledClaimRetry = await vfn.spawnClaimRetry({
             taskId: tid,
@@ -495,6 +500,7 @@ export function wireRunLifecycle(
           sc.isEligibleForStyleCriticRetry({
             finishedRun: run,
             meta: metaForCheck,
+            retry: app?.retry,
           });
         if (eligible) {
           scheduledStyleRetry = await sc.spawnStyleCriticRetry({
@@ -574,6 +580,7 @@ export function wireRunLifecycle(
           sv.isEligibleForSemanticVerifierRetry({
             finishedRun: run,
             meta: metaForCheck,
+            retry: app?.retry,
           });
         if (eligible) {
           scheduledSemanticRetry = await sv.spawnSemanticVerifierRetry({
@@ -680,6 +687,61 @@ export function wireRunLifecycle(
       }
     }
 
+    // Non-worktree integration: after auto-commit lands on the work
+    // branch (current / fixed / claude/<task-id>), branch on the
+    // operator's `integrationMode`. Worktree mode handles its own
+    // integration further down — we only run this branch when the run
+    // executed in the live tree.
+    if (
+      app &&
+      !run.worktreePath &&
+      app.git.integrationMode !== "none" &&
+      app.git.mergeTargetBranch.trim().length > 0 &&
+      commitCwd
+    ) {
+      try {
+        const sourceBranch = await readCurrentBranch(commitCwd);
+        if (!sourceBranch) {
+          console.warn(
+            `integration skipped for ${t}: detached HEAD or non-git tree at ${commitCwd}`,
+          );
+        } else if (app.git.integrationMode === "auto-merge") {
+          const m = await mergeIntoTargetBranch({
+            cwd: commitCwd,
+            sourceBranch,
+            targetBranch: app.git.mergeTargetBranch,
+            message: `merge ${sourceBranch} → ${app.git.mergeTargetBranch} (${tid})`,
+            push: app.git.autoPush,
+          });
+          if (m.ok) {
+            console.log(`auto-merge for ${t}: ${m.message}`);
+          } else {
+            console.warn(
+              `auto-merge for ${t}: ${m.message} — ${m.error ?? ""}`,
+            );
+          }
+        } else if (app.git.integrationMode === "pull-request") {
+          const d = await runDevopsAgent({
+            appPath: commitCwd,
+            taskId: tid,
+            finishedRun: run,
+            taskTitle: title,
+            taskBody: readMeta(dir)?.taskBody ?? "",
+            sourceBranch,
+            targetBranch: app.git.mergeTargetBranch,
+          });
+          const tag = `pull-request for ${t}`;
+          if (d.status === "opened" || d.status === "exists") {
+            console.log(`${tag}: ${d.status} — ${d.url ?? "(no url)"} (${d.reason})`);
+          } else {
+            console.warn(`${tag}: ${d.status} — ${d.reason}`);
+          }
+        }
+      } catch (err) {
+        console.error(`integration crashed for ${t}`, err);
+      }
+    }
+
     // P4/F1 — merge the worktree branch back into the base branch and
     // remove the worktree. Runs ONLY on the success path: any failing
     // gate above already returned early so we never reach here. The
@@ -702,7 +764,59 @@ export function wireRunLifecycle(
         } else {
           console.log(`[worktree] cleanup for ${t}: ${wm.message}`);
         }
-        // P4/F1 — push the live tree's base branch after a successful
+        // Worktree integration: after the worktree branch merged into
+        // `baseBranch`, branch on integrationMode. Auto-merge runs the
+        // local fast-forward into mergeTargetBranch BEFORE the autoPush
+        // pass below so that pass pushes the merged target rather than
+        // baseBranch. Pull-request mode hands off to the devops agent
+        // which opens the PR/MR against the configured target.
+        // Conflict on auto-merge is fail-soft: HEAD ends up back on
+        // baseBranch and autoPush still pushes that.
+        const baseBranch = run.worktreeBaseBranch ?? null;
+        if (
+          wm.ok &&
+          baseBranch &&
+          app.git.integrationMode !== "none" &&
+          app.git.mergeTargetBranch.trim().length > 0
+        ) {
+          if (app.git.integrationMode === "auto-merge") {
+            const m = await mergeIntoTargetBranch({
+              cwd: app.path,
+              sourceBranch: baseBranch,
+              targetBranch: app.git.mergeTargetBranch,
+              message: `merge ${baseBranch} → ${app.git.mergeTargetBranch} (${tid})`,
+              // Push handled by the explicit autoPush pass below to
+              // keep a single push site per run.
+              push: false,
+            });
+            if (m.ok) {
+              console.log(`auto-merge for ${t}: ${m.message}`);
+            } else {
+              console.warn(
+                `auto-merge for ${t}: ${m.message} — ${m.error ?? ""}`,
+              );
+            }
+          } else if (app.git.integrationMode === "pull-request") {
+            const d = await runDevopsAgent({
+              appPath: app.path,
+              taskId: tid,
+              finishedRun: run,
+              taskTitle: title,
+              taskBody: readMeta(dir)?.taskBody ?? "",
+              sourceBranch: baseBranch,
+              targetBranch: app.git.mergeTargetBranch,
+            });
+            const tag = `pull-request for ${t}`;
+            if (d.status === "opened" || d.status === "exists") {
+              console.log(
+                `${tag}: ${d.status} — ${d.url ?? "(no url)"} (${d.reason})`,
+              );
+            } else {
+              console.warn(`${tag}: ${d.status} — ${d.reason}`);
+            }
+          }
+        }
+        // P4/F1 — push the live tree's current branch after a successful
         // merge so `autoPush=true` reaches the merged result, not the
         // throwaway worktree branch we suppressed above. Calling
         // `autoCommitAndPush` with autoCommit=false short-circuits at

@@ -19,7 +19,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { appendRun, type Run, type RunStyleCritic } from "./meta";
+import { appendRun, readMeta, type Run, type RunStyleCritic } from "./meta";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { spawnFreeSession } from "./spawn";
@@ -32,6 +32,14 @@ import { isAlreadyRetryRun } from "./verifyChain";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { getApp } from "./apps";
+import {
+  checkEligibility,
+  maxAttemptsFor,
+  nextRetryRole,
+  parseRole,
+  renderStrategyPrefix,
+} from "./retryLadder";
 
 export const STYLE_CRITIC_ROLE = "style-critic";
 export const STYLE_CRITIC_RETRY_SUFFIX = "-stretry";
@@ -168,26 +176,21 @@ export function renderStyleRetryContextBlock(critic: RunStyleCritic): string {
 }
 
 /**
- * Eligibility for style-critic retry. Mirrors the claim-retry pattern:
- *
- *   - Must have a parentSessionId (no coordinator-level retries)
- *   - Must NOT itself already be a retry of any kind
- *   - No prior `-stretry` sibling for this exact role
+ * Eligibility for style-critic retry. Delegates to the central ladder:
+ * counts existing `-stretry*` siblings against `app.retry.style`
+ * (default 1).
  */
 export function isEligibleForStyleCriticRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
+  retry?: import("./apps").AppRetry;
 }): boolean {
-  const { finishedRun, meta } = args;
-  if (!finishedRun.parentSessionId) return false;
-  if (isAlreadyRetryRun(finishedRun.role)) return false;
-  const expected = `${finishedRun.role}${STYLE_CRITIC_RETRY_SUFFIX}`;
-  const prior = meta.runs.find(
-    (r) =>
-      r.parentSessionId === finishedRun.parentSessionId &&
-      r.role === expected,
-  );
-  return !prior;
+  return checkEligibility({
+    finishedRun: args.finishedRun,
+    meta: args.meta,
+    gate: "style",
+    retry: args.retry,
+  }).eligible;
 }
 
 /**
@@ -209,12 +212,30 @@ export async function spawnStyleCriticRetry(args: {
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
 
+  const app = getApp(finishedRun.repo);
+  const meta = readMeta(sessionsDir);
+  if (!meta) return null;
+  const elig = checkEligibility({
+    finishedRun,
+    meta,
+    gate: "style",
+    retry: app?.retry,
+  });
+  if (!elig.eligible) return null;
+  const parsed = parseRole(finishedRun.role);
+  const maxAttempts = maxAttemptsFor(app?.retry, "style");
+
+  const strategyPrefix = renderStrategyPrefix({
+    gate: "style",
+    attempt: elig.nextAttempt,
+    maxAttempts,
+  });
   const ctxBlock = renderStyleRetryContextBlock(critic);
   const originalPrompt = readOriginalPrompt(taskId, finishedRun);
   const body =
     originalPrompt.trim() ||
     "(original prompt unavailable — repo state and the failure context above are the only signals you have. Inspect the repo, infer the intent, and try to make forward progress while addressing the style issues.)";
-  const retryPrompt = [ctxBlock, "---", "", body].join("\n");
+  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
 
   const sessionId = randomUUID();
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
@@ -235,13 +256,14 @@ export async function spawnStyleCriticRetry(args: {
 
   const retryRun: Run = {
     sessionId,
-    role: `${finishedRun.role}${STYLE_CRITIC_RETRY_SUFFIX}`,
+    role: nextRetryRole(parsed.baseRole, "style", elig.nextAttempt),
     repo: finishedRun.repo,
     status: "running",
     startedAt: new Date().toISOString(),
     endedAt: null,
     parentSessionId: finishedRun.parentSessionId ?? null,
     retryOf: finishedRun.sessionId,
+    retryAttempt: elig.nextAttempt,
     ...inheritWorktreeFields(finishedRun),
   };
   await appendRun(sessionsDir, retryRun);

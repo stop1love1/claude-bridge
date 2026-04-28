@@ -20,10 +20,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { appendRun, type Run } from "./meta";
+import { appendRun, readMeta, type Run } from "./meta";
 import { projectDirFor } from "./sessions";
 import { isAlreadyRetryRun } from "./verifyChain";
-import { CLAIM_RETRY_SUFFIX } from "./verifier";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { spawnFreeSession } from "./spawn";
@@ -31,6 +30,14 @@ import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSetti
 import { readOriginalPrompt } from "./promptStore";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { getApp } from "./apps";
+import {
+  checkEligibility,
+  maxAttemptsFor,
+  nextRetryRole,
+  parseRole,
+  renderStrategyPrefix,
+} from "./retryLadder";
 
 /** Default required Read count before any Edit/Write. Overridable per
  * app via `App.preflightReads`. */
@@ -236,25 +243,22 @@ export function renderPreflightRetryContextBlock(
 }
 
 /**
- * Eligibility for a preflight-driven retry. Reuses the `-cretry`
- * suffix and budget — both preflight and claim-vs-diff signal "agent
- * didn't follow process", so a single budget per parent+role is
- * appropriate (decided in the P3b roadmap discussion).
+ * Eligibility for a preflight-driven retry. Delegates to the central
+ * ladder against gate=`preflight`, which shares the `-cretry` suffix /
+ * budget slot with claim-vs-diff retries (legacy behavior — both
+ * gates signal "agent didn't follow process").
  */
 export function isEligibleForPreflightRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
+  retry?: import("./apps").AppRetry;
 }): boolean {
-  const { finishedRun, meta } = args;
-  if (!finishedRun.parentSessionId) return false;
-  if (isAlreadyRetryRun(finishedRun.role)) return false;
-  const expected = `${finishedRun.role}${CLAIM_RETRY_SUFFIX}`;
-  const prior = meta.runs.find(
-    (r) =>
-      r.parentSessionId === finishedRun.parentSessionId &&
-      r.role === expected,
-  );
-  return !prior;
+  return checkEligibility({
+    finishedRun: args.finishedRun,
+    meta: args.meta,
+    gate: "preflight",
+    retry: args.retry,
+  }).eligible;
 }
 
 /**
@@ -279,12 +283,30 @@ export async function spawnPreflightRetry(args: {
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
 
+  const app = getApp(finishedRun.repo);
+  const meta = readMeta(sessionsDir);
+  if (!meta) return null;
+  const elig = checkEligibility({
+    finishedRun,
+    meta,
+    gate: "preflight",
+    retry: app?.retry,
+  });
+  if (!elig.eligible) return null;
+  const parsed = parseRole(finishedRun.role);
+  const maxAttempts = maxAttemptsFor(app?.retry, "preflight");
+
+  const strategyPrefix = renderStrategyPrefix({
+    gate: "preflight",
+    attempt: elig.nextAttempt,
+    maxAttempts,
+  });
   const ctxBlock = renderPreflightRetryContextBlock(preflight);
   const originalPrompt = readOriginalPrompt(taskId, finishedRun);
   const body =
     originalPrompt.trim() ||
     "(original prompt unavailable — repo state and the failure context above are the only signals you have. Read several relevant files first, then re-attempt.)";
-  const retryPrompt = [ctxBlock, "---", "", body].join("\n");
+  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
 
   const sessionId = randomUUID();
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
@@ -305,13 +327,17 @@ export async function spawnPreflightRetry(args: {
 
   const retryRun: Run = {
     sessionId,
-    role: `${finishedRun.role}${CLAIM_RETRY_SUFFIX}`,
+    // preflight gate shares the `-cretry` suffix; the ladder routes both
+    // through the same budget slot but reports `gate: "preflight"` here
+    // for log clarity. The role still serializes to `-cretry[N]`.
+    role: nextRetryRole(parsed.baseRole, "preflight", elig.nextAttempt),
     repo: finishedRun.repo,
     status: "running",
     startedAt: new Date().toISOString(),
     endedAt: null,
     parentSessionId: finishedRun.parentSessionId ?? null,
     retryOf: finishedRun.sessionId,
+    retryAttempt: elig.nextAttempt,
     ...inheritWorktreeFields(finishedRun),
   };
   await appendRun(sessionsDir, retryRun);

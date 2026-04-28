@@ -90,6 +90,12 @@ async function currentBranch(cwd: string): Promise<string | null> {
   return name && name !== "HEAD" ? name : null;
 }
 
+/** Public view of `currentBranch` for callers (coordinator merge step). */
+export async function readCurrentBranch(cwd: string): Promise<string | null> {
+  if (!isGitRepo(cwd)) return null;
+  return currentBranch(cwd);
+}
+
 /**
  * Prepare the working tree for a child agent according to `settings`.
  * Returns `ok: false` if a checkout / create fails so the caller can
@@ -218,4 +224,123 @@ async function tryPush(cwd: string): Promise<GitOpResult> {
     return { ok: false, message: "git push failed", error: r.stderr };
   }
   return { ok: true, message: "committed + pushed" };
+}
+
+/**
+ * Merge `sourceBranch` into `targetBranch` (no-fast-forward) and leave
+ * HEAD on target. Used by the post-success integration step when the
+ * operator configured `mergeTargetBranch`. Conflict-safe: any failure
+ * runs `git merge --abort`, returns HEAD to `sourceBranch`, and reports
+ * `ok: false` so the caller surfaces a warning to the operator.
+ *
+ * Pre-conditions:
+ *  - cwd is a git repo
+ *  - working tree is clean (caller already auto-committed)
+ *  - sourceBranch is the currently-checked-out branch (we don't
+ *    re-verify, but the caller in coordinator.ts ensures this)
+ *
+ * If `targetBranch === sourceBranch` we no-op (success). If the target
+ * branch doesn't exist locally we create it from the source's tip —
+ * matches `prepareBranch`'s behavior for `fixed` mode and lets a fresh
+ * repo bootstrap an integration branch on the first run.
+ *
+ * `push` runs `git push` on the target after a successful merge so
+ * `autoPush=true` reaches the merged result.
+ */
+export async function mergeIntoTargetBranch(args: {
+  cwd: string;
+  sourceBranch: string;
+  targetBranch: string;
+  message: string;
+  push: boolean;
+}): Promise<GitOpResult> {
+  const { cwd, sourceBranch, targetBranch, message, push } = args;
+  if (!isGitRepo(cwd)) {
+    return { ok: false, message: `not a git repo: ${cwd}`, error: "missing .git" };
+  }
+  const target = targetBranch.trim();
+  const source = sourceBranch.trim();
+  if (!target) {
+    return { ok: true, message: "no merge target configured" };
+  }
+  if (!source) {
+    return { ok: false, message: "merge: source branch is empty" };
+  }
+  if (source === target) {
+    return { ok: true, message: `merge skipped: source == target (${target})` };
+  }
+
+  // Refuse to merge if the working tree has uncommitted changes — that
+  // means autoCommit didn't run / didn't finish, and a checkout-then-
+  // merge would either fail or carry dirty edits across branches.
+  const dirty = await runGit(cwd, ["status", "--porcelain"]);
+  if (dirty.ok && dirty.stdout.trim().length > 0) {
+    return {
+      ok: false,
+      message: "merge skipped: working tree has uncommitted changes",
+      error: dirty.stdout.trim(),
+    };
+  }
+
+  // Checkout (or create) target. We deliberately skip remote tracking
+  // here — operators who want their target branch to track origin can
+  // configure that themselves; the bridge shouldn't guess remote intent.
+  const targetExists = await branchExists(cwd, target);
+  const checkout = await runGit(
+    cwd,
+    targetExists ? ["checkout", target] : ["checkout", "-b", target],
+  );
+  if (!checkout.ok) {
+    return {
+      ok: false,
+      message: `git checkout ${target} failed`,
+      error: checkout.stderr || `exit ${checkout.code}`,
+    };
+  }
+
+  // If we just created the target from source's tip, there's literally
+  // nothing to merge — they point at the same commit. Push if asked.
+  if (!targetExists) {
+    if (push) {
+      const p = await tryPush(cwd);
+      return {
+        ok: p.ok,
+        message: `created ${target} from ${source}; ${p.message}`,
+        error: p.error,
+      };
+    }
+    return { ok: true, message: `created ${target} from ${source}` };
+  }
+
+  const merge = await runGit(cwd, [
+    "merge",
+    "--no-ff",
+    source,
+    "-m",
+    message,
+  ]);
+  if (!merge.ok) {
+    // Conflict (or any other merge failure): abort cleanly, return to
+    // source so the operator finds their work where they left it.
+    await runGit(cwd, ["merge", "--abort"]);
+    await runGit(cwd, ["checkout", source]);
+    return {
+      ok: false,
+      message: `git merge ${source} → ${target} failed (aborted, back on ${source})`,
+      error: merge.stderr || `exit ${merge.code}`,
+    };
+  }
+
+  if (!push) {
+    return { ok: true, message: `merged ${source} → ${target}` };
+  }
+  const p = await tryPush(cwd);
+  if (!p.ok) {
+    return {
+      ok: false,
+      message: `merged ${source} → ${target}, but push failed: ${p.message}`,
+      error: p.error,
+    };
+  }
+  return { ok: true, message: `merged ${source} → ${target} + pushed` };
 }

@@ -59,7 +59,7 @@ export const FEATURES: Feature[] = [
   {
     Icon: BookOpenCheck,
     title: "Cross-repo registers",
-    body: "decisions.md, bugs.md, questions.md, contracts/ — markdown notebooks the coordinator reads before planning so cross-repo agreements outlive the AI session.",
+    body: "decisions.md, bugs.md, questions.md — markdown notebooks the coordinator reads before planning so cross-repo agreements outlive the AI session.",
   },
   {
     Icon: GitBranch,

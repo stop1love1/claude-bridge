@@ -11,9 +11,9 @@ export interface ResolvedRepo extends RepoEntry { path: string }
  * handlers) don't scatter `loadApps()` everywhere.
  *
  * BRIDGE.md is no longer parsed for the apps roster — it stays a
- * human-readable notebook for cross-repo decisions / contracts. The
- * `bridgeMd` arguments below are accepted for API compatibility and
- * intentionally ignored.
+ * human-readable notebook for cross-repo decisions. The `bridgeMd`
+ * arguments below are accepted for API compatibility and intentionally
+ * ignored.
  */
 
 function appsAsRepos(): ResolvedRepo[] {

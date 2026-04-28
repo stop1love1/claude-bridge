@@ -12,18 +12,26 @@
  * The notifier installs once per process (HMR-safe) and never throws —
  * any send error is logged to the bridge's console with a brief reason.
  *
- * Event matrix:
- *   - run transition → done    → ✅ "<role> @ <repo> done"
- *   - run transition → failed  → ⚠ "<role> @ <repo> failed"
- *   - permission pending       → 🔐 "<role>/<sid> wants <tool>"
+ * What fires is gated by `notificationLevel` (see `lib/apps`):
+ *   - "minimal" — coordinator done/failed, ANY child failure, section
+ *                 → BLOCKED / DONE, permission requests (per-tool
+ *                 coalesced).
+ *   - "normal"  — minimal + child completions + section → DOING (on
+ *                 START only, not "Resumed").
+ *   - "verbose" — every transition / section move / permission, with
+ *                 only the legacy 1.5s requestId dedupe.
  *
- * Quiet by default to avoid spam: `transition` events for `running` /
- * `queued` are ignored, and a per-event coalescer drops duplicates that
- * fire within `DEDUPE_MS` of each other.
+ * Per-event short-window dedupe (`DEDUPE_MS`) still runs at every level
+ * so a flood of identical events from a flapping session can't bypass
+ * the volume control.
  */
 import { subscribeMetaAll, type MetaChangeEvent } from "./meta";
 import { subscribeAllPermissions, type PendingRequest } from "./permissionStore";
-import { getManifestTelegramSettings } from "./apps";
+import {
+  getManifestTelegramSettings,
+  type TelegramNotificationLevel,
+} from "./apps";
+import { getPublicBridgeUrl } from "./paths";
 import {
   startTelegramCommandPoller,
   startTelegramUserCommandListener,
@@ -42,6 +50,13 @@ import {
 const TG_HOST = "https://api.telegram.org";
 const DEDUPE_MS = 1500;
 const MAX_TEXT = 3500;
+/**
+ * Window during which repeated permission requests from the same
+ * `(sessionId, tool)` pair are silently absorbed into the first one.
+ * Bash-loop-style sessions can fire 10+ permission requests in a few
+ * seconds; without coalescing each one becomes its own Telegram ping.
+ */
+const PERM_COALESCE_MS = 60_000;
 
 interface NotifierState {
   installed: boolean;
@@ -273,11 +288,82 @@ function shouldSend(key: string): boolean {
   return true;
 }
 
+/**
+ * Decide whether a `transition` event should produce a Telegram ping
+ * given the operator's notification level.
+ *
+ *   minimal — coordinator done/failed, OR any child `failed`. Child
+ *             `done` is filtered out (the coordinator's own done is
+ *             the actionable signal).
+ *   normal  — same as minimal PLUS child `done`. Surfaces "this
+ *             specific subagent finished" without the per-bash-call
+ *             firehose of verbose.
+ *   verbose — every done/failed transition (legacy behavior).
+ */
+function shouldNotifyTransition(
+  level: TelegramNotificationLevel,
+  role: string,
+  status: "done" | "failed",
+): boolean {
+  if (level === "verbose") return true;
+  const isCoordinator = role === "coordinator";
+  if (status === "failed") return true;
+  // status === "done":
+  if (level === "minimal") return isCoordinator;
+  // normal:
+  return true;
+}
+
+/**
+ * Decide whether a `task-section` event should ping Telegram.
+ *
+ *   minimal — only `BLOCKED` and `DONE — not yet archived`.
+ *             These are the moves that mean "I need the operator's
+ *             attention". Started / Resumed / Reset to TODO are
+ *             bookkeeping.
+ *   normal  — same as minimal PLUS first-time `DOING` (Started, not
+ *             Resumed). Lets the operator know a task actually picked
+ *             up workers without firing on every shuffle.
+ *   verbose — every section move (legacy).
+ */
+function shouldNotifySection(
+  level: TelegramNotificationLevel,
+  prev: string | undefined,
+  next: string,
+): boolean {
+  if (level === "verbose") return true;
+  if (next === "BLOCKED" || next === "DONE — not yet archived") return true;
+  if (level === "normal" && next === "DOING" && prev === "TODO") return true;
+  return false;
+}
+
+/**
+ * Build the trailing "open in UI" line for a Telegram message. Empty
+ * string when the operator hasn't set a public URL — we don't ship a
+ * `localhost:7777` link to a phone, since the phone can't reach it.
+ *
+ * Telegram MarkdownV2 inline-link form: `[label](url)`. Labels and the
+ * URL itself need escaping for the reserved set (we already do that
+ * for the rest of the body); a bare `\n[Open](https://…/tasks/t_x)`
+ * renders as a tappable link in mobile clients.
+ */
+function renderTaskLink(taskId: string): string {
+  const base = getPublicBridgeUrl();
+  if (!base || base.startsWith("http://localhost")) return "";
+  // taskId is `t_YYYYMMDD_NNN`, all URL-safe — but escape the closing
+  // parens / brackets MarkdownV2 reserves anyway, in case the format
+  // ever loosens.
+  const url = `${base}/tasks/${taskId}`.replace(/([)\\])/g, "\\$1");
+  return `\n[Open in bridge](${url})`;
+}
+
 function onMetaChange(ev: MetaChangeEvent): void {
+  const level = getManifestTelegramSettings().notificationLevel;
   // Run lifecycle: child / coordinator finished or crashed.
   if (ev.kind === "transition" && ev.run) {
     const next = ev.run.status;
     if (next !== "done" && next !== "failed") return;
+    if (!shouldNotifyTransition(level, ev.run.role, next)) return;
     const dedupeKey = `meta:${ev.taskId}:${ev.sessionId}:${next}`;
     if (!shouldSend(dedupeKey)) return;
     const role = escapeMarkdownV2(ev.run.role);
@@ -287,13 +373,15 @@ function onMetaChange(ev: MetaChangeEvent): void {
     const verb = next === "done" ? "completed" : "failed";
     const text =
       `${icon} *${role}* ${verb}\n` +
-      `task \`${taskId}\` · repo \`${repo}\``;
+      `task \`${taskId}\` · repo \`${repo}\`` +
+      renderTaskLink(ev.taskId);
     void sendTelegram(text);
     return;
   }
   // User-initiated section transitions: UI tick the complete checkbox,
   // or move TODO ↔ DOING / BLOCKED via the kanban board / API.
   if (ev.kind === "task-section" && ev.nextSection) {
+    if (!shouldNotifySection(level, ev.prevSection, ev.nextSection)) return;
     const dedupeKey = `task-section:${ev.taskId}:${ev.nextSection}:${ev.taskChecked}`;
     if (!shouldSend(dedupeKey)) return;
     const taskId = escapeMarkdownV2(ev.taskId);
@@ -304,7 +392,8 @@ function onMetaChange(ev: MetaChangeEvent): void {
     const verb = sectionVerb(ev.prevSection, ev.nextSection, ev.taskChecked);
     const text =
       `${icon} *${verb}*\n` +
-      `task \`${taskId}\` — ${title}`;
+      `task \`${taskId}\` — ${title}` +
+      renderTaskLink(ev.taskId);
     void sendTelegram(text);
     return;
   }
@@ -333,7 +422,43 @@ function sectionVerb(
   return `Section: ${next}`;
 }
 
+/**
+ * Per-`(session, tool)` coalescing window. The first request wakes the
+ * operator; follow-ups within `PERM_COALESCE_MS` are silently absorbed
+ * because the operator only needs ONE prompt per "session X wants tool
+ * Y" pattern — they'll see the rest in the bridge UI.
+ *
+ * In `verbose` mode we skip the coalescer entirely so debugging the
+ * permission flow itself still gets a per-request signal.
+ */
+const permCoalesce = new Map<string, number>();
+
+function shouldCoalescePermission(
+  level: TelegramNotificationLevel,
+  sessionId: string,
+  tool: string,
+): boolean {
+  if (level === "verbose") return false;
+  const key = `${sessionId}:${tool}`;
+  const now = Date.now();
+  const last = permCoalesce.get(key) ?? 0;
+  if (now - last < PERM_COALESCE_MS) return true;
+  permCoalesce.set(key, now);
+  // Bound the map: drop entries older than 4× the window. They can't
+  // coalesce future requests anyway and unbounded growth in a long-
+  // running bridge eventually shows up in heap snapshots.
+  if (permCoalesce.size > 256) {
+    const cutoff = now - PERM_COALESCE_MS * 4;
+    for (const [k, t] of permCoalesce) {
+      if (t < cutoff) permCoalesce.delete(k);
+    }
+  }
+  return false;
+}
+
 function onPermission(req: PendingRequest): void {
+  const level = getManifestTelegramSettings().notificationLevel;
+  if (shouldCoalescePermission(level, req.sessionId, req.tool)) return;
   const dedupeKey = `perm:${req.sessionId}:${req.requestId}`;
   if (!shouldSend(dedupeKey)) return;
   const tool = escapeMarkdownV2(req.tool);

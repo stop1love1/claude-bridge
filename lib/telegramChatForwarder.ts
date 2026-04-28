@@ -110,9 +110,22 @@ function renderHeader(buf: SessionBuffer): string {
 }
 
 /**
+ * Pattern matched against buffered assistant prose when
+ * `forwardChatFilter === "important-only"`. The tokens come from the
+ * coordinator escalation convention (see
+ * `memory/feedback_escalate_ambiguity.md`) — these are the strings the
+ * coordinator MUST use when it needs the operator. Anything else is
+ * considered "thinking out loud" and stays in the bridge UI.
+ */
+const IMPORTANT_PATTERN = /NEEDS-DECISION|BLOCKED|READY FOR REVIEW/i;
+
+/**
  * Flush whatever's currently buffered for this session as a single
- * Telegram message. No-op when the buffer is empty or below the
- * configured minimum length. Resets the buffer after flushing.
+ * Telegram message. No-op when the buffer is empty, below the
+ * configured minimum length, or — under `important-only` filtering —
+ * doesn't match the escalation pattern. Resets the buffer after
+ * flushing (or skipping; the buffer is consumed either way so a turn
+ * boundary always restarts accumulation).
  */
 function flushBuffer(buf: SessionBuffer, reason: "rotate" | "exit"): void {
   const trimmed = buf.text.trim();
@@ -121,6 +134,12 @@ function flushBuffer(buf: SessionBuffer, reason: "rotate" | "exit"): void {
   const settings = getManifestTelegramSettings();
   if (settings.forwardChat === "off") return;
   if (trimmed.length < settings.forwardChatMinChars) return;
+  if (
+    settings.forwardChatFilter === "important-only" &&
+    !IMPORTANT_PATTERN.test(trimmed)
+  ) {
+    return;
+  }
 
   const header = renderHeader(buf);
   const body = escapeMarkdownV2(trimmed);

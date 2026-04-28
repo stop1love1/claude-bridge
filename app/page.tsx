@@ -6,6 +6,7 @@ import {
   loadAuthConfig,
   verifySession,
 } from "@/lib/auth";
+import { DEMO_MODE } from "@/lib/demoMode";
 import {
   Features,
   FinalCTA,
@@ -24,13 +25,19 @@ export default async function HomePage() {
   // landing page is for first-time visitors / logged-out sessions only.
   // Mirrors the proxy.ts cookie + trusted-device check so a revoked
   // device isn't treated as logged in here.
-  const cfg = loadAuthConfig();
-  if (cfg) {
-    const token = (await cookies()).get(COOKIE_NAME)?.value;
-    if (token) {
-      const payload = verifySession(token, cfg.secret);
-      if (payload && (!payload.did || findTrustedDevice(payload.did))) {
-        redirect("/apps");
+  //
+  // Demo deployments skip the auth-redirect entirely: `/apps` doesn't
+  // function there, so we always render the landing page regardless of
+  // any stale cookie a visitor might be carrying.
+  if (!DEMO_MODE) {
+    const cfg = loadAuthConfig();
+    if (cfg) {
+      const token = (await cookies()).get(COOKIE_NAME)?.value;
+      if (token) {
+        const payload = verifySession(token, cfg.secret);
+        if (payload && (!payload.did || findTrustedDevice(payload.did))) {
+          redirect("/apps");
+        }
       }
     }
   }

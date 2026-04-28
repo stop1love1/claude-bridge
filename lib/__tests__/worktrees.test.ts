@@ -18,6 +18,8 @@ const SETTINGS: AppGitSettings = {
   autoCommit: false,
   autoPush: false,
   worktreeMode: "enabled",
+  mergeTargetBranch: "",
+  integrationMode: "none",
 };
 
 function gitInit(dir: string): void {

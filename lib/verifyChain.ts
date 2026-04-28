@@ -20,8 +20,8 @@
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { App, AppVerify } from "./apps";
-import { appendRun, type Run, type RunVerify, type RunVerifyStep } from "./meta";
+import { getApp, type App, type AppVerify } from "./apps";
+import { appendRun, readMeta, type Run, type RunVerify, type RunVerifyStep } from "./meta";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { spawnFreeSession } from "./spawn";
@@ -29,6 +29,14 @@ import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSetti
 import { readOriginalPrompt } from "./promptStore";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import {
+  checkEligibility,
+  isAnyRetryRole,
+  maxAttemptsFor,
+  nextRetryRole,
+  parseRole,
+  renderStrategyPrefix,
+} from "./retryLadder";
 
 /** Canonical order — matches the `## Verify commands` section in childPrompt. */
 const STEP_ORDER: RunVerifyStep["name"][] = [
@@ -242,30 +250,13 @@ function execStep(
 }
 
 /**
- * True iff the run is a retry already (any flavour), so the lifecycle
- * hook should NOT spawn another follow-up. Five suffixes map here:
- *
- *   - `-retry`    crash retry from `lib/childRetry.ts`
- *   - `-vretry`   verify-fail retry from this module
- *   - `-cretry`   claim-vs-diff retry from `lib/verifier.ts`
- *   - `-stretry`  style-critic retry from `lib/styleCritic.ts`
- *   - `-svretry`  semantic-verifier retry from `lib/semanticVerifier.ts`
- *
- * No retry of any flavour gets a second retry of any kind — one extra
- * attempt per failure mode is the documented cap.
- *
- * NOTE: `-svretry` ends in `-vretry`, so order matters in the matcher
- * (or rather, doesn't, since either match is a retry). The literal
- * suffix tests below tolerate both substrings safely.
+ * True iff the run is a retry already (any flavour). Now defers to
+ * `retryLadder.isAnyRetryRole` so numbered suffixes (e.g. `-vretry2`)
+ * are detected too. Kept exported under its old name because every
+ * other retry module imports it from here.
  */
 export function isAlreadyRetryRun(role: string): boolean {
-  return (
-    role.endsWith("-retry") ||
-    role.endsWith(VRETRY_SUFFIX) ||
-    role.endsWith("-cretry") ||
-    role.endsWith("-stretry") ||
-    role.endsWith("-svretry")
-  );
+  return isAnyRetryRole(role);
 }
 
 /**
@@ -341,12 +332,34 @@ export async function spawnVerifyRetry(args: {
   // sandbox the original run started in.
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
 
+  // Re-derive eligibility + nextAttempt at spawn time (the eligibility
+  // check at the call site decided we should retry, but it doesn't pass
+  // back the attempt number). Bail if a concurrent spawn raced us past
+  // the budget.
+  const app = getApp(finishedRun.repo);
+  const meta = readMeta(sessionsDir);
+  if (!meta) return null;
+  const elig = checkEligibility({
+    finishedRun,
+    meta,
+    gate: "verify",
+    retry: app?.retry,
+  });
+  if (!elig.eligible) return null;
+  const parsed = parseRole(finishedRun.role);
+  const maxAttempts = maxAttemptsFor(app?.retry, "verify");
+
+  const strategyPrefix = renderStrategyPrefix({
+    gate: "verify",
+    attempt: elig.nextAttempt,
+    maxAttempts,
+  });
   const ctxBlock = renderVerifyRetryContextBlock(verify);
   const originalPrompt = readOriginalPrompt(taskId, finishedRun);
   const body =
     originalPrompt.trim() ||
     "(original prompt unavailable — repo state and the failure context above are the only signals you have. Inspect the repo, infer the intent, and try to make forward progress.)";
-  const retryPrompt = [ctxBlock, "---", "", body].join("\n");
+  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
 
   const sessionId = randomUUID();
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
@@ -367,13 +380,14 @@ export async function spawnVerifyRetry(args: {
 
   const retryRun: Run = {
     sessionId,
-    role: `${finishedRun.role}${VRETRY_SUFFIX}`,
+    role: nextRetryRole(parsed.baseRole, "verify", elig.nextAttempt),
     repo: finishedRun.repo,
     status: "running",
     startedAt: new Date().toISOString(),
     endedAt: null,
     parentSessionId: finishedRun.parentSessionId ?? null,
     retryOf: finishedRun.sessionId,
+    retryAttempt: elig.nextAttempt,
     ...inheritWorktreeFields(finishedRun),
   };
   // Async per-task lock: must await before wiring lifecycle so an
@@ -390,31 +404,25 @@ export async function spawnVerifyRetry(args: {
 }
 
 /**
- * Eligibility for verify-driven retry. Stricter than crash-retry
- * (`childRetry.isEligibleForRetry`):
+ * Eligibility for verify-driven retry. Delegates to the central ladder:
+ * counts existing `-vretry*` siblings against the per-app budget
+ * (`app.retry.verify`, default 1). Same-gate retries chain up to the
+ * cap; cross-gate retries (e.g. a `-cretry` run) are blocked.
  *
- * - Must have a parent (no coordinator-level verify retries)
- * - Must NOT already be a retry of any kind (`-retry` or `-vretry`)
- * - No prior `-vretry` sibling already in meta.json
- *
- * Crash-retry siblings (`-retry`) DO NOT block a fresh verify-retry —
- * the two budgets are intentionally independent because they target
- * different failure modes.
+ * Crash-retry siblings (`-retry`) DO NOT count toward this budget —
+ * the gates are independent.
  */
 export function isEligibleForVerifyRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
+  retry?: import("./apps").AppRetry;
 }): boolean {
-  const { finishedRun, meta } = args;
-  if (!finishedRun.parentSessionId) return false;
-  if (isAlreadyRetryRun(finishedRun.role)) return false;
-  const expected = `${finishedRun.role}${VRETRY_SUFFIX}`;
-  const prior = meta.runs.find(
-    (r) =>
-      r.parentSessionId === finishedRun.parentSessionId &&
-      r.role === expected,
-  );
-  return !prior;
+  return checkEligibility({
+    finishedRun: args.finishedRun,
+    meta: args.meta,
+    gate: "verify",
+    retry: args.retry,
+  }).eligible;
 }
 
 /**

@@ -10,18 +10,23 @@ import { projectDirFor } from "./sessions";
 import { readOriginalPrompt } from "./promptStore";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { getApp } from "./apps";
+import {
+  checkEligibility,
+  maxAttemptsFor,
+  nextRetryRole,
+  parseRole,
+  renderStrategyPrefix,
+} from "./retryLadder";
 
 /**
  * Phase D — auto-retry for failed children.
  *
- * Cap: 1 retry per (parentSessionId, role) pair, scoped per-task. We
- * detect prior retries by scanning meta.json for any run whose `role`
- * ends with `-retry` and shares the same `parentSessionId` + same
- * original role prefix. No persistence beyond meta.json — losing the
- * cap on restart is acceptable; a redundant retry isn't catastrophic.
+ * Cap: per-app `app.retry.crash` (default 1) attempts per (parent, role)
+ * pair, scoped per-task. The ladder helpers in `retryLadder.ts` count
+ * prior siblings and pick the strategy for attempt N.
  */
 
-const RETRY_SUFFIX = "-retry";
 const MAX_LAST_ASSISTANT_CHARS = 2000;
 const MAX_TOOL_INPUT_SNIPPET = 200;
 const MAX_TOOL_USE_ENTRIES = 5;
@@ -44,37 +49,30 @@ interface ScheduleArgs {
 }
 
 /**
- * Decide whether this failed run is eligible for auto-retry. Eligibility
- * requires: a parent (it's a child, not the coordinator itself), an
- * unsuffixed role (we don't retry retries), no prior retry sibling
- * already in meta.json. Returns null when ineligible.
+ * Decide whether this failed run is eligible for crash auto-retry.
+ * Returns the next-attempt number when eligible, or `null` when not.
+ *
+ * Delegates to `retryLadder.checkEligibility(gate="crash")`, so the
+ * per-app `retry.crash` budget governs attempt count.
  */
 function isEligibleForRetry(
   taskId: string,
   failedRun: Run,
-): { reason: string } | null {
-  if (!failedRun.parentSessionId) {
-    return { reason: "no parent session — coordinator-level run, not a child" };
-  }
-  if (failedRun.role.endsWith(RETRY_SUFFIX)) {
-    return { reason: "already a retry — no further retries" };
-  }
-
+): { nextAttempt: number } | { reason: string } {
   const sessionsDir = join(SESSIONS_DIR, taskId);
   const meta = readMeta(sessionsDir);
   if (!meta) return { reason: "meta.json missing" };
-
-  const expectedRetryRole = `${failedRun.role}${RETRY_SUFFIX}`;
-  const priorRetry = meta.runs.find(
-    (r) =>
-      r.parentSessionId === failedRun.parentSessionId &&
-      r.role === expectedRetryRole,
-  );
-  if (priorRetry) {
-    return { reason: `retry already attempted (${priorRetry.sessionId})` };
+  const app = getApp(failedRun.repo);
+  const elig = checkEligibility({
+    finishedRun: failedRun,
+    meta,
+    gate: "crash",
+    retry: app?.retry,
+  });
+  if (!elig.eligible) {
+    return { reason: elig.reason ?? "ineligible" };
   }
-
-  return null; // eligible
+  return { nextAttempt: elig.nextAttempt };
 }
 
 interface FailedSessionContext {
@@ -286,8 +284,9 @@ async function spawnRetryRun(args: {
   taskId: string;
   failedRun: Run;
   exitCode: number | null;
+  nextAttempt: number;
 }): Promise<{ sessionId: string; run: Run } | null> {
-  const { taskId, failedRun, exitCode } = args;
+  const { taskId, failedRun, exitCode, nextAttempt } = args;
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
   // Resolve the same repo the failed run targeted. If the repo isn't
@@ -302,8 +301,17 @@ async function spawnRetryRun(args: {
   // cwd to locate it as we do to spawn.
   const spawnCwd = failedRun.worktreePath ?? liveRepoCwd;
 
+  const app = getApp(failedRun.repo);
+  const parsed = parseRole(failedRun.role);
+  const maxAttempts = maxAttemptsFor(app?.retry, "crash");
+
   const sessionContext = readFailedSessionContext(failedRun.sessionId, spawnCwd);
   const killedByUser = looksKilledByUser(failedRun);
+  const strategyPrefix = renderStrategyPrefix({
+    gate: "crash",
+    attempt: nextAttempt,
+    maxAttempts,
+  });
   const retryContextBlock = renderRetryContextBlock({
     exitCode,
     lastAssistantText: sessionContext.lastAssistantText,
@@ -311,7 +319,10 @@ async function spawnRetryRun(args: {
     killedByUser,
   });
   const originalPrompt = readOriginalPrompt(taskId, failedRun);
-  const retryPrompt = buildRetryPrompt(originalPrompt, retryContextBlock);
+  const retryPrompt = buildRetryPrompt(
+    originalPrompt,
+    `${strategyPrefix}${retryContextBlock}`,
+  );
 
   const sessionId = randomUUID();
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
@@ -332,13 +343,14 @@ async function spawnRetryRun(args: {
 
   const retryRun: Run = {
     sessionId,
-    role: `${failedRun.role}${RETRY_SUFFIX}`,
+    role: nextRetryRole(parsed.baseRole, "crash", nextAttempt),
     repo: failedRun.repo,
     status: "running",
     startedAt: new Date().toISOString(),
     endedAt: null,
     parentSessionId: failedRun.parentSessionId ?? null,
     retryOf: failedRun.sessionId,
+    retryAttempt: nextAttempt,
     ...inheritWorktreeFields(failedRun),
   };
   await appendRun(sessionsDir, retryRun);
@@ -365,17 +377,22 @@ export function maybeScheduleRetry(args: ScheduleArgs & { exitCode: number | nul
   void (async () => {
     try {
       const { taskId, failedRun, exitCode } = args;
-      const ineligible = isEligibleForRetry(taskId, failedRun);
-      if (ineligible) {
+      const elig = isEligibleForRetry(taskId, failedRun);
+      if (!("nextAttempt" in elig)) {
         // Quiet — most failed runs are ineligible (no parent, already a
-        // retry, etc.) and we don't want to spam logs.
+        // retry past budget, etc.) and we don't want to spam logs.
         return;
       }
-      const result = await spawnRetryRun({ taskId, failedRun, exitCode });
+      const result = await spawnRetryRun({
+        taskId,
+        failedRun,
+        exitCode,
+        nextAttempt: elig.nextAttempt,
+      });
       if (!result) return;
       emitRetried(taskId, result.run, failedRun.sessionId);
       console.log(
-        `[auto-retry] ${taskId}: spawned ${result.sessionId} (role=${result.run.role}) for failed ${failedRun.sessionId}`,
+        `[auto-retry] ${taskId}: spawned ${result.sessionId} (role=${result.run.role}, attempt=${elig.nextAttempt}) for failed ${failedRun.sessionId}`,
       );
     } catch (e) {
       console.error("auto-retry scheduling crashed", e);

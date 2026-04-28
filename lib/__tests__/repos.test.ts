@@ -72,6 +72,7 @@ describe("serializeApps + round-trip", () => {
         symbolDirs: [],
         quality: {},
         capabilities: [],
+        retry: {},
       },
       {
         name: "app-web",
@@ -84,6 +85,7 @@ describe("serializeApps + round-trip", () => {
         symbolDirs: [],
         quality: {},
         capabilities: [],
+        retry: {},
       },
     ];
     const json = serializeApps(apps);
@@ -107,6 +109,7 @@ describe("serializeApps + round-trip", () => {
         symbolDirs: [],
         quality: {},
         capabilities: [],
+        retry: {},
       },
     ]);
     const parsed = JSON.parse(json) as { apps: Array<Record<string, unknown>> };
@@ -132,12 +135,15 @@ describe("serializeApps + round-trip", () => {
           autoCommit: true,
           autoPush: true,
           worktreeMode: "disabled",
+          mergeTargetBranch: "",
+          integrationMode: "none",
         },
         verify: { ...DEFAULT_VERIFY },
         pinnedFiles: [],
         symbolDirs: [],
         quality: {},
         capabilities: [],
+        retry: {},
       },
     ];
     const json = serializeApps(apps);
@@ -152,5 +158,94 @@ describe("serializeApps + round-trip", () => {
     });
     const parsed = parseApps(json);
     expect(parsed[0].git).toEqual(apps[0].git);
+  });
+
+  it("round-trips mergeTargetBranch and infers autoCommit from it", () => {
+    // Operator wants auto-merge into `main`. autoCommit must be promoted
+    // automatically (you can't merge an uncommitted work branch).
+    const apps: App[] = [
+      {
+        name: "release-svc",
+        path: resolve(process.cwd(), "../release-svc"),
+        rawPath: "../release-svc",
+        description: "",
+        git: {
+          branchMode: "auto-create",
+          fixedBranch: "",
+          autoCommit: true,
+          autoPush: false,
+          worktreeMode: "disabled",
+          mergeTargetBranch: "main",
+          integrationMode: "auto-merge",
+        },
+        verify: { ...DEFAULT_VERIFY },
+        pinnedFiles: [],
+        symbolDirs: [],
+        quality: {},
+        capabilities: [],
+        retry: {},
+      },
+    ];
+    const json = serializeApps(apps);
+    const parsed = parseApps(json);
+    expect(parsed[0].git.mergeTargetBranch).toBe("main");
+    expect(parsed[0].git.autoCommit).toBe(true);
+    expect(parsed[0].git.integrationMode).toBe("auto-merge");
+    // Legacy: a manifest with `mergeTargetBranch` but no `integrationMode`
+    // (older bridge releases) is auto-promoted to `auto-merge` so the
+    // operator's prior behavior carries forward across upgrades.
+    const fromLegacy = parseApps(JSON.stringify({
+      version: 1,
+      apps: [{
+        name: "alt",
+        path: "../alt",
+        git: { branchMode: "auto-create", mergeTargetBranch: "develop" },
+      }],
+    }));
+    expect(fromLegacy[0].git.autoCommit).toBe(true);
+    expect(fromLegacy[0].git.mergeTargetBranch).toBe("develop");
+    expect(fromLegacy[0].git.integrationMode).toBe("auto-merge");
+  });
+
+  it("round-trips integrationMode=pull-request and forces autoPush", () => {
+    // pull-request mode requires the head branch on the remote, so the
+    // normalize layer pins autoPush=true regardless of input.
+    const fromManifest = parseApps(JSON.stringify({
+      version: 1,
+      apps: [{
+        name: "pr-svc",
+        path: "../pr-svc",
+        git: {
+          branchMode: "auto-create",
+          mergeTargetBranch: "main",
+          integrationMode: "pull-request",
+          // Note: autoPush deliberately omitted — normalize must promote.
+        },
+      }],
+    }));
+    expect(fromManifest[0].git.integrationMode).toBe("pull-request");
+    expect(fromManifest[0].git.autoCommit).toBe(true);
+    expect(fromManifest[0].git.autoPush).toBe(true);
+    expect(fromManifest[0].git.mergeTargetBranch).toBe("main");
+    // Round-trip through serialize: terse output keeps the mode, drops
+    // defaults.
+    const json = serializeApps(fromManifest);
+    const reparsed = parseApps(json);
+    expect(reparsed[0].git.integrationMode).toBe("pull-request");
+    expect(reparsed[0].git.autoPush).toBe(true);
+  });
+
+  it("demotes integrationMode to none when mergeTargetBranch is empty", () => {
+    // Malformed config (mode set but target empty) is normalized to
+    // `none` so the coordinator never tries to integrate against ''.
+    const parsed = parseApps(JSON.stringify({
+      version: 1,
+      apps: [{
+        name: "broken",
+        path: "../broken",
+        git: { integrationMode: "auto-merge", mergeTargetBranch: "" },
+      }],
+    }));
+    expect(parsed[0].git.integrationMode).toBe("none");
   });
 });

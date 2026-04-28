@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Send, Settings as SettingsIcon, ShieldCheck, Sparkles, Trash2, User } from "lucide-react";
+import {
+  Globe,
+  Send,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  User,
+} from "lucide-react";
 import { api } from "@/lib/client/api";
 import { HeaderShell } from "../_components/HeaderShell";
 import { Button } from "../_components/ui/button";
@@ -75,6 +83,7 @@ function SettingsPage() {
             your bot tokens / detection mode.
           </p>
 
+          <PublicUrlSection />
           <DetectSettingsSection />
           <TrustedDevicesSection />
           <TelegramSettingsSection />
@@ -82,6 +91,118 @@ function SettingsPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+function PublicUrlSection() {
+  const [publicUrl, setPublicUrl] = useState("");
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const s = await api.bridgeSettings();
+        if (cancelled) return;
+        setPublicUrl(s.publicUrl);
+        setDraft(s.publicUrl);
+      } catch (e) {
+        if (!cancelled) toast("error", (e as Error).message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [toast]);
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      const next = await api.updateBridgeSettings({ publicUrl: draft.trim() });
+      setPublicUrl(next.publicUrl);
+      setDraft(next.publicUrl);
+      toast(
+        "success",
+        next.publicUrl ? "Public URL saved" : "Public URL cleared",
+      );
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clear = async () => {
+    setSaving(true);
+    try {
+      const next = await api.updateBridgeSettings({ publicUrl: "" });
+      setPublicUrl(next.publicUrl);
+      setDraft("");
+      toast("info", "Public URL cleared");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirty = draft.trim() !== publicUrl;
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <Globe size={14} className="text-primary" />
+        <h3 className="text-sm font-semibold">Public URL</h3>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-4">
+        The origin the bridge is reachable at after deploy. Used to render
+        clickable links — Telegram task notifications, magic-link emails,
+        webhook payloads. Leave blank when running locally; fill in when
+        running behind a reverse proxy / public domain.
+      </p>
+
+      {loading ? (
+        <ListSkeleton rows={1} />
+      ) : (
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="bridge-public-url">Public origin</Label>
+            <Input
+              id="bridge-public-url"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="https://bridge.example.com"
+              autoComplete="off"
+              spellCheck={false}
+              inputMode="url"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Origin only — no path / query. Path / query / hash get stripped
+              on save. Must use http:// or https://.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button onClick={submit} disabled={saving || !dirty}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+            <div className="flex-1" />
+            <Button
+              variant="ghost"
+              onClick={clear}
+              disabled={saving || !publicUrl}
+              className="text-fg-dim hover:text-destructive"
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -180,6 +301,18 @@ function DetectSettingsSection() {
   );
 }
 
+type NotificationLevel = "minimal" | "normal" | "verbose";
+type ForwardChatFilter = "important-only" | "all";
+
+const NOTIFICATION_LEVEL_HINT: Record<NotificationLevel, string> = {
+  minimal:
+    "Coordinator done/failed, any child failure, BLOCKED/DONE moves, permission requests (coalesced per session+tool).",
+  normal:
+    "Default. Adds child completions and Started moves on top of minimal.",
+  verbose:
+    "Every transition, every section move, every permission request. Useful for debugging the bridge itself.",
+};
+
 function TelegramSettingsSection() {
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
@@ -189,6 +322,10 @@ function TelegramSettingsSection() {
     "off" | "coordinator-only" | "all"
   >("off");
   const [forwardChatMinChars, setForwardChatMinChars] = useState<string>("40");
+  const [notificationLevel, setNotificationLevel] =
+    useState<NotificationLevel>("normal");
+  const [forwardChatFilter, setForwardChatFilter] =
+    useState<ForwardChatFilter>("important-only");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -205,6 +342,8 @@ function TelegramSettingsSection() {
         setChatId(s.chatId);
         setForwardChat(s.forwardChat);
         setForwardChatMinChars(String(s.forwardChatMinChars));
+        setNotificationLevel(s.notificationLevel);
+        setForwardChatFilter(s.forwardChatFilter);
       } catch (e) {
         if (!cancelled) toast("error", (e as Error).message);
       } finally {
@@ -227,10 +366,14 @@ function TelegramSettingsSection() {
         chatId?: string;
         forwardChat: "off" | "coordinator-only" | "all";
         forwardChatMinChars: number;
+        notificationLevel: NotificationLevel;
+        forwardChatFilter: ForwardChatFilter;
       } = {
         chatId: chatId.trim(),
         forwardChat,
         forwardChatMinChars: clampMinChars(forwardChatMinChars),
+        notificationLevel,
+        forwardChatFilter,
       };
       if (botToken.trim().length > 0) patch.botToken = botToken.trim();
       const next = await api.updateTelegramSettings(patch);
@@ -240,6 +383,8 @@ function TelegramSettingsSection() {
       setChatId(next.chatId);
       setForwardChat(next.forwardChat);
       setForwardChatMinChars(String(next.forwardChatMinChars));
+      setNotificationLevel(next.notificationLevel);
+      setForwardChatFilter(next.forwardChatFilter);
       toast("success", "Telegram settings saved");
     } catch (e) {
       toast("error", (e as Error).message);
@@ -267,6 +412,8 @@ function TelegramSettingsSection() {
         chatId: "",
         forwardChat: "off",
         forwardChatMinChars: 40,
+        notificationLevel: "normal",
+        forwardChatFilter: "important-only",
       });
       setBotToken("");
       setMaskedToken(next.botToken);
@@ -274,6 +421,8 @@ function TelegramSettingsSection() {
       setChatId(next.chatId);
       setForwardChat(next.forwardChat);
       setForwardChatMinChars(String(next.forwardChatMinChars));
+      setNotificationLevel(next.notificationLevel);
+      setForwardChatFilter(next.forwardChatFilter);
       toast("info", "Telegram settings cleared");
     } catch (e) {
       toast("error", (e as Error).message);
@@ -339,6 +488,30 @@ function TelegramSettingsSection() {
             </p>
           </div>
           <div className="grid gap-1.5 pt-1 border-t border-border/60 mt-1">
+            <Label htmlFor="tg-level">Notification level</Label>
+            <select
+              id="tg-level"
+              className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+              value={notificationLevel}
+              onChange={(e) =>
+                setNotificationLevel(e.target.value as NotificationLevel)
+              }
+            >
+              <option value="minimal">
+                Minimal — only what needs your attention
+              </option>
+              <option value="normal">
+                Normal — recommended default
+              </option>
+              <option value="verbose">
+                Verbose — every event (legacy)
+              </option>
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              {NOTIFICATION_LEVEL_HINT[notificationLevel]}
+            </p>
+          </div>
+          <div className="grid gap-1.5 pt-1 border-t border-border/60 mt-1">
             <Label htmlFor="tg-forward">Forward chat to Telegram</Label>
             <select
               id="tg-forward"
@@ -360,6 +533,30 @@ function TelegramSettingsSection() {
               Mirrors assistant prose from spawned Claude sessions to your
               Telegram chat. Quality-gate runs (style-critic, semantic-verifier)
               are always skipped.
+            </p>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="tg-forward-filter">Chat filter</Label>
+            <select
+              id="tg-forward-filter"
+              className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+              value={forwardChatFilter}
+              onChange={(e) =>
+                setForwardChatFilter(e.target.value as ForwardChatFilter)
+              }
+              disabled={forwardChat === "off"}
+            >
+              <option value="important-only">
+                Important only — NEEDS-DECISION / BLOCKED / READY FOR REVIEW
+              </option>
+              <option value="all">
+                All — every assistant turn above min length
+              </option>
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              When &ldquo;Important only&rdquo;, only forward turns whose text
+              contains the coordinator escalation tokens. Lets agents think out
+              loud without paging you.
             </p>
           </div>
           <div className="grid gap-1.5">

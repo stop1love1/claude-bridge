@@ -3,6 +3,8 @@ import {
   getManifestTelegramSettings,
   setManifestTelegramSettings,
   type TelegramForwardChat,
+  type TelegramForwardChatFilter,
+  type TelegramNotificationLevel,
 } from "@/lib/apps";
 import {
   ensureTelegramNotifier,
@@ -16,6 +18,8 @@ interface TelegramSettingsPatchBody {
   chatId?: string;
   forwardChat?: TelegramForwardChat;
   forwardChatMinChars?: number;
+  notificationLevel?: TelegramNotificationLevel;
+  forwardChatFilter?: TelegramForwardChatFilter;
 }
 
 /**
@@ -33,6 +37,8 @@ export function GET() {
     chatId: settings.chatId,
     forwardChat: settings.forwardChat,
     forwardChatMinChars: settings.forwardChatMinChars,
+    notificationLevel: settings.notificationLevel,
+    forwardChatFilter: settings.forwardChatFilter,
   });
 }
 
@@ -68,6 +74,19 @@ export async function PUT(req: NextRequest) {
   if (typeof body.forwardChatMinChars === "number") {
     patch.forwardChatMinChars = body.forwardChatMinChars;
   }
+  if (
+    body.notificationLevel === "minimal" ||
+    body.notificationLevel === "normal" ||
+    body.notificationLevel === "verbose"
+  ) {
+    patch.notificationLevel = body.notificationLevel;
+  }
+  if (
+    body.forwardChatFilter === "important-only" ||
+    body.forwardChatFilter === "all"
+  ) {
+    patch.forwardChatFilter = body.forwardChatFilter;
+  }
 
   const next = setManifestTelegramSettings(patch);
 
@@ -92,6 +111,8 @@ export async function PUT(req: NextRequest) {
     chatId: next.chatId,
     forwardChat: next.forwardChat,
     forwardChatMinChars: next.forwardChatMinChars,
+    notificationLevel: next.notificationLevel,
+    forwardChatFilter: next.forwardChatFilter,
   });
 }
 

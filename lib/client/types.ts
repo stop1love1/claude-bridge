@@ -72,6 +72,7 @@ export interface Repo {
 
 export type GitBranchMode = "current" | "fixed" | "auto-create";
 export type GitWorktreeMode = "disabled" | "enabled";
+export type GitIntegrationMode = "none" | "auto-merge" | "pull-request";
 
 export interface AppGitSettings {
   branchMode: GitBranchMode;
@@ -80,6 +81,17 @@ export interface AppGitSettings {
   autoPush: boolean;
   /** (P4) `enabled` runs every spawned child in a private worktree. */
   worktreeMode: GitWorktreeMode;
+  /**
+   * Integration target branch — used when `integrationMode` is
+   * `auto-merge` (local merge) or `pull-request` (devops agent opens
+   * a PR/MR). Empty when `integrationMode === "none"`.
+   */
+  mergeTargetBranch: string;
+  /**
+   * What the bridge does with the agent's work branch after auto-commit:
+   * `none` | `auto-merge` (local) | `pull-request` (gh/glab via devops).
+   */
+  integrationMode: GitIntegrationMode;
 }
 
 /**
@@ -105,6 +117,20 @@ export interface AppQuality {
   verifier?: boolean;
 }
 
+/**
+ * (Gap 2) Per-gate retry budgets. Each gate has an independent attempt
+ * counter, capped server-side at MAX_RETRY_PER_GATE. Default 1 = legacy
+ * single-shot retry per gate.
+ */
+export interface AppRetry {
+  crash?: number;
+  verify?: number;
+  claim?: number;
+  preflight?: number;
+  style?: number;
+  semantic?: number;
+}
+
 export interface App {
   name: string;
   path: string;
@@ -127,6 +153,11 @@ export interface App {
    * = both gates off (the default).
    */
   quality: AppQuality;
+  /**
+   * (Gap 2) Per-gate retry budgets. Empty / missing = each gate uses
+   * the default (1 attempt per gate).
+   */
+  retry: AppRetry;
 }
 
 export interface SessionSummary {

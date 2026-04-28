@@ -8,6 +8,20 @@ import {
   verifySession,
 } from "@/lib/auth";
 import { checkCsrf } from "@/lib/csrf";
+import { DEMO_MODE } from "@/lib/demoMode";
+
+/**
+ * Paths the demo-mode gate redirects to `/`. Anything here is part of
+ * the operator dashboard (apps registry, task board, raw sessions,
+ * settings) and has no meaningful behavior when the bridge can't run
+ * agents — so we send the visitor back to the showcase landing page.
+ *
+ * `/login` is intentionally NOT in this list because the matcher
+ * below excludes it (excluding it avoids redirect loops in normal
+ * mode — the proxy redirects unauth'd users TO `/login`). The demo
+ * redirect for `/login` lives in `app/login/layout.tsx` instead.
+ */
+const DEMO_REDIRECT_PREFIXES = ["/apps", "/tasks", "/sessions", "/settings"];
 
 // Next.js 16 runs `proxy.ts` on the Node runtime by default, so we no
 // longer declare `runtime: "nodejs"` here — Next rejects route-segment
@@ -15,14 +29,16 @@ import { checkCsrf } from "@/lib/csrf";
 // is not allowed in Proxy file"). Only `matcher` is allowed.
 export const config = {
   // Run on every request EXCEPT static assets, the login page, the auth
-  // API surface, and Next-internal routes. Note: cannot use lookbehind
-  // here — Next.js compiles this matcher into a path regex and rejects
-  // some look-around forms. Plain negative-class is safest.
+  // API surface, the public `/docs` page, and Next-internal routes.
+  // Note: cannot use lookbehind here — Next.js compiles this matcher
+  // into a path regex and rejects some look-around forms. Plain
+  // negative-class is safest.
   // Exclude `/` (home) so it stays publicly viewable, plus the
-  // bypass list for static + auth routes. We require a non-empty
-  // path AFTER the leading slash via `.+` (rather than `.*`) — that
-  // single extra `+` is what keeps `/` itself out of the matcher.
-  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|api/auth/|login).+)"],
+  // bypass list for static + auth routes + the docs page. We require
+  // a non-empty path AFTER the leading slash via `.+` (rather than
+  // `.*`) — that single extra `+` is what keeps `/` itself out of
+  // the matcher.
+  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|api/auth/|login|docs).+)"],
 };
 
 /**
@@ -43,6 +59,40 @@ export const config = {
  */
 export function proxy(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
+
+  // Demo-mode gate runs first — it's a deployment-shape switch, not
+  // a per-request decision. When the bridge is deployed somewhere
+  // that can't run agents (Vercel / serverless / no persistent FS),
+  // `BRIDGE_DEMO_MODE=1` blanks the dashboard entirely:
+  //   - protected page paths → 302 to `/` (the landing showcase)
+  //   - non-public /api/* paths → 503 JSON
+  // CSRF / auth never get to run; the rest of the bridge logic doesn't
+  // matter when the backend can't function.
+  if (DEMO_MODE) {
+    const blocked = DEMO_REDIRECT_PREFIXES.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    );
+    if (blocked) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        {
+          error: "demo mode",
+          hint: "this deployment runs the bridge UI without agent backends; clone the repo locally to use the dashboard",
+        },
+        { status: 503 },
+      );
+    }
+    // Public paths (`/`, `/docs`, static, `/api/auth/*` excluded by
+    // matcher) fall through to the route. The auth APIs return 401
+    // safely on demo deployments because no auth config exists.
+    return NextResponse.next();
+  }
+
   const cfg = loadAuthConfig();
 
   // CSRF gate runs ahead of the auth check so a hostile cross-origin

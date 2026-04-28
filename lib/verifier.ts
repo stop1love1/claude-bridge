@@ -25,7 +25,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRun, type Run, type RunVerifier } from "./meta";
+import { appendRun, readMeta, type Run, type RunVerifier } from "./meta";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { spawnFreeSession } from "./spawn";
@@ -34,6 +34,14 @@ import { readOriginalPrompt } from "./promptStore";
 import { isAlreadyRetryRun } from "./verifyChain";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { getApp } from "./apps";
+import {
+  checkEligibility,
+  maxAttemptsFor,
+  nextRetryRole,
+  parseRole,
+  renderStrategyPrefix,
+} from "./retryLadder";
 
 const execFileP = promisify(execFile);
 const CRETRY_SUFFIX = "-cretry";
@@ -323,24 +331,22 @@ export function renderClaimRetryContextBlock(verifier: RunVerifier): string {
 }
 
 /**
- * Eligibility for claim-vs-diff retry. Mirrors the verify-retry
- * pattern but with `-cretry` suffix → independent budget.
+ * Eligibility for claim-vs-diff retry. Delegates to the central ladder
+ * — counts existing `-cretry*` siblings against `app.retry.claim`
+ * (default 1). Note: preflight retries also live under `-cretry`, and
+ * the ladder shares the slot between claim + preflight.
  */
 export function isEligibleForClaimRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
+  retry?: import("./apps").AppRetry;
 }): boolean {
-  const { finishedRun, meta } = args;
-  if (!finishedRun.parentSessionId) return false;
-  if (isAlreadyRetryRun(finishedRun.role)) return false;
-  // Also block if there's already a -cretry sibling for this exact role.
-  const expected = `${finishedRun.role}${CRETRY_SUFFIX}`;
-  const prior = meta.runs.find(
-    (r) =>
-      r.parentSessionId === finishedRun.parentSessionId &&
-      r.role === expected,
-  );
-  return !prior;
+  return checkEligibility({
+    finishedRun: args.finishedRun,
+    meta: args.meta,
+    gate: "claim",
+    retry: args.retry,
+  }).eligible;
 }
 
 /**
@@ -367,12 +373,30 @@ export async function spawnClaimRetry(args: {
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
 
+  const app = getApp(finishedRun.repo);
+  const meta = readMeta(sessionsDir);
+  if (!meta) return null;
+  const elig = checkEligibility({
+    finishedRun,
+    meta,
+    gate: "claim",
+    retry: app?.retry,
+  });
+  if (!elig.eligible) return null;
+  const parsed = parseRole(finishedRun.role);
+  const maxAttempts = maxAttemptsFor(app?.retry, "claim");
+
+  const strategyPrefix = renderStrategyPrefix({
+    gate: "claim",
+    attempt: elig.nextAttempt,
+    maxAttempts,
+  });
   const ctxBlock = renderClaimRetryContextBlock(verifier);
   const originalPrompt = readOriginalPrompt(taskId, finishedRun);
   const body =
     originalPrompt.trim() ||
     "(original prompt unavailable — repo state and the failure context above are the only signals you have. Re-read the report at sessions/<task>/reports/<role>-<repo>.md, fix the discrepancy, and re-attempt.)";
-  const retryPrompt = [ctxBlock, "---", "", body].join("\n");
+  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
 
   const sessionId = randomUUID();
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
@@ -393,13 +417,14 @@ export async function spawnClaimRetry(args: {
 
   const retryRun: Run = {
     sessionId,
-    role: `${finishedRun.role}${CRETRY_SUFFIX}`,
+    role: nextRetryRole(parsed.baseRole, "claim", elig.nextAttempt),
     repo: finishedRun.repo,
     status: "running",
     startedAt: new Date().toISOString(),
     endedAt: null,
     parentSessionId: finishedRun.parentSessionId ?? null,
     retryOf: finishedRun.sessionId,
+    retryAttempt: elig.nextAttempt,
     ...inheritWorktreeFields(finishedRun),
   };
   await appendRun(sessionsDir, retryRun);

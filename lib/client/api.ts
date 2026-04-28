@@ -6,6 +6,7 @@ import type {
   ChatSettings,
   App,
   AppGitSettings,
+  AppRetry,
   SlashCommandsItemDto,
 } from "./types";
 
@@ -137,7 +138,12 @@ export const api = {
     req<{ ok: true }>(`/apps/${encodeURIComponent(name)}`, { method: "DELETE" }),
   updateApp: (
     name: string,
-    patch: { name?: string; description?: string; git?: Partial<AppGitSettings> },
+    patch: {
+      name?: string;
+      description?: string;
+      git?: Partial<AppGitSettings>;
+      retry?: Partial<Record<keyof AppRetry, number | null>>;
+    },
   ) =>
     req<App & { migratedTasks?: number }>(`/apps/${encodeURIComponent(name)}`, {
       method: "PATCH",
@@ -207,6 +213,13 @@ export const api = {
         }
         return { ok: false, reason: e.message };
       }),
+  bridgeSettings: () =>
+    req<{ publicUrl: string }>(`/bridge/settings`),
+  updateBridgeSettings: (patch: { publicUrl?: string }) =>
+    req<{ publicUrl: string }>(`/bridge/settings`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   telegramSettings: () =>
     req<{
       botToken: string;
@@ -214,12 +227,16 @@ export const api = {
       chatId: string;
       forwardChat: "off" | "coordinator-only" | "all";
       forwardChatMinChars: number;
+      notificationLevel: "minimal" | "normal" | "verbose";
+      forwardChatFilter: "important-only" | "all";
     }>(`/telegram/settings`),
   updateTelegramSettings: (patch: {
     botToken?: string;
     chatId?: string;
     forwardChat?: "off" | "coordinator-only" | "all";
     forwardChatMinChars?: number;
+    notificationLevel?: "minimal" | "normal" | "verbose";
+    forwardChatFilter?: "important-only" | "all";
   }) =>
     req<{
       botToken: string;
@@ -227,6 +244,8 @@ export const api = {
       chatId: string;
       forwardChat: "off" | "coordinator-only" | "all";
       forwardChatMinChars: number;
+      notificationLevel: "minimal" | "normal" | "verbose";
+      forwardChatFilter: "important-only" | "all";
     }>(`/telegram/settings`, { method: "PUT", body: JSON.stringify(patch) }),
   telegramUserSettings: () =>
     req<{

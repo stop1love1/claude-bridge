@@ -20,7 +20,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { appendRun, type Run, type RunSemanticVerifier } from "./meta";
+import { appendRun, readMeta, type Run, type RunSemanticVerifier } from "./meta";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { spawnFreeSession } from "./spawn";
@@ -33,6 +33,14 @@ import { isAlreadyRetryRun } from "./verifyChain";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { getApp } from "./apps";
+import {
+  checkEligibility,
+  maxAttemptsFor,
+  nextRetryRole,
+  parseRole,
+  renderStrategyPrefix,
+} from "./retryLadder";
 
 export const SEMANTIC_VERIFIER_ROLE = "semantic-verifier";
 export const SEMANTIC_VERIFIER_RETRY_SUFFIX = "-svretry";
@@ -170,24 +178,21 @@ export function renderSemanticRetryContextBlock(
 }
 
 /**
- * Eligibility for semantic-verifier retry. Same shape as the other
- * retry-eligibility checks — independent budget keyed on the
- * `-svretry` suffix.
+ * Eligibility for semantic-verifier retry. Delegates to the central
+ * ladder: counts existing `-svretry*` siblings against
+ * `app.retry.semantic` (default 1).
  */
 export function isEligibleForSemanticVerifierRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
+  retry?: import("./apps").AppRetry;
 }): boolean {
-  const { finishedRun, meta } = args;
-  if (!finishedRun.parentSessionId) return false;
-  if (isAlreadyRetryRun(finishedRun.role)) return false;
-  const expected = `${finishedRun.role}${SEMANTIC_VERIFIER_RETRY_SUFFIX}`;
-  const prior = meta.runs.find(
-    (r) =>
-      r.parentSessionId === finishedRun.parentSessionId &&
-      r.role === expected,
-  );
-  return !prior;
+  return checkEligibility({
+    finishedRun: args.finishedRun,
+    meta: args.meta,
+    gate: "semantic",
+    retry: args.retry,
+  }).eligible;
 }
 
 /**
@@ -206,12 +211,30 @@ export async function spawnSemanticVerifierRetry(args: {
   if (!liveRepoCwd) return null;
   const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
 
+  const app = getApp(finishedRun.repo);
+  const meta = readMeta(sessionsDir);
+  if (!meta) return null;
+  const elig = checkEligibility({
+    finishedRun,
+    meta,
+    gate: "semantic",
+    retry: app?.retry,
+  });
+  if (!elig.eligible) return null;
+  const parsed = parseRole(finishedRun.role);
+  const maxAttempts = maxAttemptsFor(app?.retry, "semantic");
+
+  const strategyPrefix = renderStrategyPrefix({
+    gate: "semantic",
+    attempt: elig.nextAttempt,
+    maxAttempts,
+  });
   const ctxBlock = renderSemanticRetryContextBlock(verifier);
   const originalPrompt = readOriginalPrompt(taskId, finishedRun);
   const body =
     originalPrompt.trim() ||
     "(original prompt unavailable — repo state and the failure context above are the only signals you have. Re-read the task body and the prior report, identify the gap, and re-attempt.)";
-  const retryPrompt = [ctxBlock, "---", "", body].join("\n");
+  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
 
   const sessionId = randomUUID();
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
@@ -237,13 +260,14 @@ export async function spawnSemanticVerifierRetry(args: {
 
   const retryRun: Run = {
     sessionId,
-    role: `${finishedRun.role}${SEMANTIC_VERIFIER_RETRY_SUFFIX}`,
+    role: nextRetryRole(parsed.baseRole, "semantic", elig.nextAttempt),
     repo: finishedRun.repo,
     status: "running",
     startedAt: new Date().toISOString(),
     endedAt: null,
     parentSessionId: finishedRun.parentSessionId ?? null,
     retryOf: finishedRun.sessionId,
+    retryAttempt: elig.nextAttempt,
     ...inheritWorktreeFields(finishedRun),
   };
   await appendRun(sessionsDir, retryRun);

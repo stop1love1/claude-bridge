@@ -10,11 +10,11 @@ For installation, scripts, and runtime options, see [README.md](README.md). This
 
 ## Apps
 
-The apps roster lives in `~/.claude/bridge.json` (per-machine, edited via the bridge UI). Every entry has a folder name, a path, an optional description, and an optional `git` block (branch policy + auto-commit / auto-push).
+The apps roster lives in `~/.claude/bridge.json` (per-machine, edited via the bridge UI). Every entry has a folder name, a path, an optional description, and an optional `git` block: branch policy (`current` / `fixed` / `auto-create` / worktree-isolated) + auto-commit / auto-push + post-success integration (`auto-merge` into a target branch, or `pull-request` via a `devops` child that drives `gh` / `glab`).
 
 - **Add** apps via the bridge UI: `/apps` → "Add app" or "Auto-detect".
 - **Edit** name, description, and git workflow per app via the gear icon.
-- The coordinator dispatches tasks to whichever app the heuristic picks (or whichever the user pinned in the New Task dialog), then the bridge's lifecycle hook handles `git checkout` / `commit` / `push` per the app's settings.
+- The coordinator dispatches tasks to whichever app the heuristic picks (or whichever the user pinned in the New Task dialog). The bridge's lifecycle hook then handles branch prep before the spawn, commit/push after a clean exit, and (when the app opts in) the post-success merge or PR/MR — all driven by the app's git settings, no coordinator action needed.
 
 This file does **not** declare apps — it's purely the cross-repo notebook.
 
@@ -26,7 +26,7 @@ Before starting any task with **cross-repo signals**:
 - The user mentions another repo ("repo-A returns the wrong field X", "repo-B needs endpoint Y")
 - The user says "integrate", "connect", "sync" between repos
 
-→ Read `bridge/decisions.md` first (recent decisions that may affect this work), then any contract under `contracts/` the task body references.
+→ Read `bridge/decisions.md` first (recent decisions that may affect this work), then any other notebook the task body references.
 
 ## When to write to the bridge
 
@@ -34,7 +34,7 @@ After finishing a cross-repo task:
 
 | Situation | Write to |
 |---|---|
-| Just shipped a new endpoint or changed a contract | `contracts/<feature>.md` + create a follow-up task for the consumer repo via the UI |
+| Just shipped a new endpoint or changed an API shape | Create a follow-up task for the consumer repo via the UI |
 | Just locked in a decision that isn't obvious from the code (naming, format, pagination style…) | `bridge/decisions.md` (append, dated) |
 | Need to ask another repo something before continuing | `bridge/questions.md` (OPEN section) |
 | Found a bug whose root cause is in another repo | `bridge/bugs.md` (OPEN section) |
@@ -52,12 +52,11 @@ After finishing a cross-repo task:
 | `BRIDGE.md` | This playbook | Bridge maintainers | very low |
 | `bridge/coordinator.md` | Coordinator prompt template | Bridge maintainers | very low |
 | `bridge/report-template.md` | Child agent report contract (canonical copy; `lib/childPrompt.ts` injects it into every child) | Bridge maintainers | very low |
+| `bridge/playbooks/<role>.md` | Per-role playbook (style-critic, semantic-verifier, ui-tester, devops, …). Auto-injected into a child whose role matches the file's basename. | Bridge maintainers | low |
 | `bridge/tasks.md` | Legacy notebook — runtime state lives in `sessions/<id>/meta.json` | (none — bridge writes meta.json) | n/a |
 | `bridge/decisions.md` | Decisions log (append-only, dated) | Any repo | low |
 | `bridge/questions.md` | Open questions between repos | Repo that asks | low |
 | `bridge/bugs.md` | Cross-repo bugs | Repo that finds the bug | low |
-| `contracts/<feature>.md` | API contract — request / response / errors | Repo that owns the endpoint | medium |
-| `contracts/README.md` | Index of contracts | Updated when a new contract is added | low |
 | `~/.claude/bridge.json` | Apps registry + per-app git workflow settings. Outside the project tree so a `git pull` on the bridge never overwrites it. Edited via the bridge UI. | Bridge UI | low |
 
 ## Conventions
@@ -65,5 +64,5 @@ After finishing a cross-repo task:
 - **Plain markdown** — no JSON / YAML, so both humans and AI can read it.
 - **Always date entries** with `YYYY-MM-DD`.
 - **`bridge/decisions.md` is append-only.** To reverse an old decision, write a new entry that references the old one (`Supersedes: #YYYY-MM-DD-slug`).
-- **Cross-link.** Link tasks → contracts / questions / decisions, using relative paths.
+- **Cross-link.** Link tasks → questions / decisions, using relative paths.
 - **Don't dump everything.** The bridge holds only what **cannot be derived** from the source code or git history of any repo.

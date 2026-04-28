@@ -11,7 +11,7 @@ _(none)_
 ```md
 ### YYYY-MM-DD — <reporting-repo> → <owning-repo>: <short symptom>
 **Repro:** specific steps (URL, payload, account, …)
-**Expected:** per `contracts/<file>.md` or `decisions.md#<anchor>`
+**Expected:** per `decisions.md#<anchor>` or the relevant API source file
 **Actual:** what happens instead
 **Status:** new | confirmed | fixing | fixed-pending-verify
 **Notes:** extra info (commit, PR, …)

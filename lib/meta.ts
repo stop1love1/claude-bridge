@@ -63,6 +63,13 @@ export interface Run {
    */
   retryOf?: string | null;
   /**
+   * (Gap 2) Multi-strategy retry ladder: per-gate attempt number.
+   * 1 = first retry (legacy unsuffixed-number behavior); ≥2 surface in
+   * the role suffix as `-vretry2`, `-vretry3`, etc. Absent / null on
+   * base runs and on legacy retries written before this field shipped.
+   */
+  retryAttempt?: number | null;
+  /**
    * P2 verify chain: when an app has at least one `verify` command
    * configured (`bridge.json.apps[].verify`), the bridge runs the chain
    * after the child exits cleanly and persists the per-step results

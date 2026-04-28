@@ -114,5 +114,56 @@ export const BRIDGE_PORT = Number(
  * deployments behind a reverse proxy); otherwise we synthesise
  * `http://localhost:<port>` so prompts and curl examples render the
  * actual port the user started the bridge on.
+ *
+ * NOTE: this constant is what spawned children call back over — keep it
+ * pointing at the LOCAL origin (env override is fine; UI-configured
+ * public URL is NOT applied here, since the child needs to hit the
+ * loopback interface even when the operator has a public domain
+ * fronting the bridge).
  */
 export const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://localhost:${BRIDGE_PORT}`;
+
+/**
+ * Resolve the URL to use when rendering links the OPERATOR (or someone
+ * they share with) will click — Telegram task links, magic-link emails,
+ * webhook payloads. Distinct from `BRIDGE_URL` because:
+ *
+ *   - `BRIDGE_URL` is the address spawned children use to talk back to
+ *     the bridge; it must stay loopback-reachable.
+ *   - This is the address a human's browser opens; it should be the
+ *     publicly-routable domain when one is configured.
+ *
+ * Resolution order (first non-empty wins):
+ *   1. `BRIDGE_PUBLIC_URL` env — explicit operator override at boot.
+ *   2. `bridge.json#publicUrl` — UI-configured value (the typical path).
+ *   3. `BRIDGE_URL` env — same override the children use; fine for a
+ *      single-host install with no separate public domain.
+ *   4. `bridge.json#runtime.url` — auto-written at startup, always
+ *      `http://localhost:<port>`. Last-resort fallback.
+ *
+ * Lazy-imported `getManifestPublicUrl` to avoid a circular dep
+ * (`lib/apps.ts` doesn't import paths.ts at module load, but the
+ * Telegram notifier paths through both).
+ */
+export function getPublicBridgeUrl(): string {
+  const envExplicit = process.env.BRIDGE_PUBLIC_URL?.trim();
+  if (envExplicit) return stripTrailingSlash(envExplicit);
+  // Lazy require so this module stays cheap to import — `lib/apps.ts`
+  // pulls in fs / JSON parsing that not every caller needs.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getManifestPublicUrl } = require("./apps") as {
+      getManifestPublicUrl: () => string;
+    };
+    const fromManifest = getManifestPublicUrl();
+    if (fromManifest) return stripTrailingSlash(fromManifest);
+  } catch {
+    /* ignore — apps module unavailable in some test contexts */
+  }
+  if (process.env.BRIDGE_URL) return stripTrailingSlash(process.env.BRIDGE_URL);
+  return stripTrailingSlash(BRIDGE_URL);
+}
+
+function stripTrailingSlash(s: string): string {
+  return s.endsWith("/") ? s.slice(0, -1) : s;
+}
