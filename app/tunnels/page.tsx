@@ -104,17 +104,27 @@ function TunnelsPage() {
 
   // Fast poll while any tunnel is in `starting` (we're waiting for the
   // URL to land); slow poll otherwise to keep the row count fresh.
+  // The `cancelled` flag closes the gap where `refresh()` was already
+  // in-flight at unmount: cleanup-only-on-clearTimeout would still let
+  // the in-flight promise schedule the next tick after the component
+  // had been torn down.
   const tunnelsRef = useRef(tunnels);
   useEffect(() => { tunnelsRef.current = tunnels; }, [tunnels]);
   useEffect(() => {
+    let cancelled = false;
     let h: ReturnType<typeof setTimeout> | null = null;
-    const tick = () => {
+    const tick = async () => {
+      if (cancelled) return;
       const anyStarting = tunnelsRef.current.some((t) => t.status === "starting");
-      void refresh();
-      h = setTimeout(tick, anyStarting ? 1_000 : 4_000);
+      await refresh();
+      if (cancelled) return;
+      h = setTimeout(() => { void tick(); }, anyStarting ? 1_000 : 4_000);
     };
-    h = setTimeout(tick, 2_000);
-    return () => { if (h) clearTimeout(h); };
+    h = setTimeout(() => { void tick(); }, 2_000);
+    return () => {
+      cancelled = true;
+      if (h) clearTimeout(h);
+    };
   }, [refresh]);
 
   const currentProvider = useMemo<TunnelProviderStatus | null>(
@@ -189,19 +199,30 @@ function TunnelsPage() {
 
   /**
    * Re-spawn a stopped/error tunnel with the same provider + port +
-   * label + subdomain. The old row is purged so there's no stale entry
-   * left behind. The new run gets a fresh ID and announces fresh.
+   * label + subdomain. We purge the old row server-side BEFORE
+   * starting the new one, otherwise a transient DELETE failure left
+   * the old entry counting against `MAX_CONCURRENT` (8) — the new
+   * spawn would later fail with `max … reached` and the operator had
+   * no way to clear the zombie short of a full bridge restart.
    */
   const restart = async (t: TunnelEntry) => {
     try {
+      try {
+        await api.stopTunnel(t.id, true);
+      } catch (purgeErr) {
+        // Surface but don't abort — the operator's intent is "give me
+        // a working tunnel for this port"; if the old row is already
+        // gone server-side that error is benign. We log to console so
+        // a real failure (e.g. backend down) leaves a breadcrumb.
+        console.warn("[tunnels] restart purge failed:", (purgeErr as Error).message);
+      }
+      announcedRef.current.delete(t.id);
       const r = await api.startTunnel({
         port: t.port,
         provider: t.provider,
         label: t.label,
         subdomain: t.subdomain,
       });
-      void api.stopTunnel(t.id, true);
-      announcedRef.current.delete(t.id);
       setTunnels((prev) => [
         r.tunnel,
         ...prev.filter((x) => x.id !== t.id && x.id !== r.tunnel.id),

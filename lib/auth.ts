@@ -38,10 +38,12 @@ import {
   timingSafeEqual,
   createHmac,
 } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, chmodSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { USER_CLAUDE_DIR } from "./paths";
+import {
+  onBridgeManifestWrite,
+  readBridgeManifest,
+  updateBridgeManifest,
+} from "./bridgeManifest";
 
 interface ScryptOpts {
   N?: number;
@@ -55,8 +57,6 @@ const scrypt = promisify(scryptCb) as (
   keylen: number,
   opts?: ScryptOpts,
 ) => Promise<Buffer>;
-
-const BRIDGE_JSON = join(USER_CLAUDE_DIR, "bridge.json");
 
 // Tightened from N=16384 to N=131072 (2^17) — matches OWASP 2024+
 // recommendation for server-side scrypt. ~150ms verify on a modern
@@ -113,7 +113,7 @@ export function sessionCookieOptions(maxAgeMs: number): {
 }
 
 // -----------------------------------------------------------------------------
-// bridge.json IO (auth-section-aware, preserves all other top-level keys)
+// auth section (atop the shared bridge.json IO in ./bridgeManifest)
 // -----------------------------------------------------------------------------
 
 export interface TrustedDevice {
@@ -138,71 +138,27 @@ export function isValidEmail(s: string): boolean {
   return EMAIL_RE.test(s.trim());
 }
 
-interface RawManifest {
-  version?: number;
-  apps?: unknown;
-  auth?: Partial<AuthConfig>;
-  [k: string]: unknown;
-}
-
-function readManifest(): RawManifest {
-  if (!existsSync(BRIDGE_JSON)) return { version: 1, apps: [] };
-  try {
-    return JSON.parse(readFileSync(BRIDGE_JSON, "utf8")) as RawManifest;
-  } catch {
-    return { version: 1, apps: [] };
-  }
-}
-
-function atomicWrite(path: string, contents: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  // `mode: 0o600` — bridge.json holds the HMAC secret, internal-bypass
-  // token, password hash, and (optionally) Telegram credentials. On
-  // POSIX without 0600 a colocated user could `cat` it; on Windows the
-  // mode is ignored by the FS but the call still succeeds. `renameSync`
-  // preserves the temp file's mode, so the live file ends up locked-
-  // down even on first creation.
-  writeFileSync(tmp, contents, { mode: 0o600 });
-  try { renameSync(tmp, path); }
-  catch (err) { try { unlinkSync(tmp); } catch { /* ignore */ } throw err; }
-  // If the file pre-existed with a wider mode (e.g. 0644 from before
-  // this fix) `renameSync` keeps the temp's mode on Linux but on macOS
-  // some filesystems retain the destination inode's metadata. Force
-  // 0600 explicitly — best-effort on POSIX, no-op on Windows.
-  try { chmodSync(path, 0o600); } catch { /* ignore (windows) */ }
-}
-
-function writeManifest(m: RawManifest): void {
-  // Re-order so "version" + "apps" come first, matches lib/apps.ts convention.
-  const ordered = {
-    version: typeof m.version === "number" ? m.version : 1,
-    apps: Array.isArray(m.apps) ? m.apps : [],
-    ...Object.fromEntries(Object.entries(m).filter(([k]) => k !== "version" && k !== "apps")),
-  };
-  atomicWrite(BRIDGE_JSON, JSON.stringify(ordered, null, 2) + "\n");
-  // Invalidate the auth cache so the next loadAuthConfig() sees the
-  // freshly-written value rather than the in-memory snapshot.
-  authCache = null;
-}
-
-// Short-lived cache for loadAuthConfig(). proxy.ts calls it on every
-// request including SSE keepalives; without caching that's a synchronous
-// readFileSync(BRIDGE_JSON) per request. The cache is invalidated
-// explicitly on every writeManifest, so the only stale window is the TTL
-// itself — too brief to matter for non-write paths.
+// Short-lived derived cache for loadAuthConfig(). Distinct from the
+// raw-manifest cache in bridgeManifest.ts because the normalize step
+// (validating shape, projecting trustedDevices) is non-trivial. Drop
+// it whenever ANY module rewrites bridge.json — apps.ts changing git
+// settings shouldn't force loadAuthConfig() to re-normalize, but it
+// also can't be allowed to serve a stale auth payload after a tunnels
+// authtoken save (which goes through a different path).
 const AUTH_CACHE_TTL_MS = 1000;
 let authCache: { value: AuthConfig | null; expires: number } | null = null;
+onBridgeManifestWrite(() => { authCache = null; });
 
-function normalizeAuth(raw: Partial<AuthConfig> | undefined): AuthConfig | null {
+function normalizeAuth(raw: unknown): AuthConfig | null {
   if (!raw || typeof raw !== "object") return null;
-  const email = typeof raw.email === "string" ? raw.email.trim() : "";
-  const passwordHash = typeof raw.passwordHash === "string" ? raw.passwordHash.trim() : "";
-  const secret = typeof raw.secret === "string" ? raw.secret.trim() : "";
-  const internalToken = typeof raw.internalToken === "string" ? raw.internalToken.trim() : "";
+  const r = raw as Partial<AuthConfig>;
+  const email = typeof r.email === "string" ? r.email.trim() : "";
+  const passwordHash = typeof r.passwordHash === "string" ? r.passwordHash.trim() : "";
+  const secret = typeof r.secret === "string" ? r.secret.trim() : "";
+  const internalToken = typeof r.internalToken === "string" ? r.internalToken.trim() : "";
   if (!email || !passwordHash || !secret) return null;
-  const trustedDevices = Array.isArray(raw.trustedDevices)
-    ? raw.trustedDevices.flatMap((d): TrustedDevice[] => {
+  const trustedDevices = Array.isArray(r.trustedDevices)
+    ? r.trustedDevices.flatMap((d): TrustedDevice[] => {
         if (!d || typeof d !== "object") return [];
         const id = typeof d.id === "string" ? d.id : "";
         const createdAt = typeof d.createdAt === "string" ? d.createdAt : "";
@@ -220,15 +176,14 @@ function normalizeAuth(raw: Partial<AuthConfig> | undefined): AuthConfig | null 
 export function loadAuthConfig(): AuthConfig | null {
   const now = Date.now();
   if (authCache && authCache.expires > now) return authCache.value;
-  const value = normalizeAuth(readManifest().auth);
+  const value = normalizeAuth(readBridgeManifest().auth);
   authCache = { value, expires: now + AUTH_CACHE_TTL_MS };
   return value;
 }
 
 export function saveAuthConfig(next: AuthConfig): void {
-  const m = readManifest();
-  m.auth = next;
-  writeManifest(m);
+  updateBridgeManifest((m) => ({ ...m, auth: next as unknown }));
+  // onBridgeManifestWrite already nuked authCache; nothing else to do.
 }
 
 /** True when `auth` is configured (operator has set a password). */
@@ -521,14 +476,15 @@ export function verifyRequestAuthOrInternal(
  */
 export function writeRuntimeMeta(args: { url: string; port: number }): void {
   try {
-    const m = readManifest();
-    (m as { runtime?: unknown }).runtime = {
-      url: args.url,
-      port: args.port,
-      pid: process.pid,
-      startedAt: new Date().toISOString(),
-    };
-    writeManifest(m);
+    updateBridgeManifest((m) => ({
+      ...m,
+      runtime: {
+        url: args.url,
+        port: args.port,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      },
+    }));
   } catch (err) {
     console.warn("[bridge] writeRuntimeMeta failed (non-fatal):", err);
   }

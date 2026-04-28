@@ -5,6 +5,7 @@ import {
   createMeta,
   emitTaskSection,
   readMeta,
+  subscribeMetaAll,
   withTaskLock,
   writeMeta,
   type Meta,
@@ -65,7 +66,44 @@ function listMetaIds(): string[] {
   });
 }
 
+// In-process cache for `listTasks()`. The dashboard polls
+// `GET /api/tasks` every few seconds; without a cache each poll
+// scanned every `sessions/<id>/meta.json` synchronously — N+1
+// disk reads scaling with the task count. The cache is invalidated
+// the moment any meta.json changes (see `subscribeMetaAll` below)
+// so a UI edit is visible immediately. The cached array is a
+// freshly-allocated copy so callers can safely mutate / sort.
+const LIST_TASKS_TTL_MS = 1000;
+let listTasksCache: { value: Task[]; expires: number } | null = null;
+
+// Reverse index: sessionId → taskId. Used by `findTaskBySessionId`,
+// which previously did an O(N) linear scan + readMeta on every chat
+// message. The index is built lazily on first lookup, kept in sync
+// by the same meta-change subscription that drops `listTasksCache`.
+let sessionIndex: Map<string, string> | null = null;
+
+subscribeMetaAll(() => {
+  listTasksCache = null;
+  sessionIndex = null;
+});
+
+function buildSessionIndex(): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const id of listMetaIds()) {
+    const meta = readMeta(join(SESSIONS_DIR, id));
+    if (!meta) continue;
+    for (const run of meta.runs) {
+      idx.set(run.sessionId, meta.taskId);
+    }
+  }
+  return idx;
+}
+
 export function listTasks(): Task[] {
+  const now = Date.now();
+  if (listTasksCache && listTasksCache.expires > now) {
+    return [...listTasksCache.value];
+  }
   const tasks: Task[] = [];
   for (const id of listMetaIds()) {
     const meta = readMeta(join(SESSIONS_DIR, id));
@@ -73,7 +111,8 @@ export function listTasks(): Task[] {
   }
   // Newest first — `createdAt` is an ISO string so lexical sort works.
   tasks.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-  return tasks;
+  listTasksCache = { value: tasks, expires: now + LIST_TASKS_TTL_MS };
+  return [...tasks];
 }
 
 export function getTask(id: string): Task | null {
@@ -89,18 +128,17 @@ export function getTask(id: string): Task | null {
  * marked done — we re-open it (untick + back to DOING) so a follow-up
  * conversation isn't trapped inside a "completed" pill.
  *
- * Linear scan over `listMetaIds`; messages are user-driven so this
- * runs at human cadence, not per-tool-call.
+ * Backed by an in-process index (sessionId → taskId) populated lazily
+ * and invalidated whenever any meta.json changes. The previous
+ * implementation did an O(N) scan + N readMeta calls per message,
+ * which on a busy bridge with hundreds of tasks added measurable
+ * latency to every chat send.
  */
 export function findTaskBySessionId(sessionId: string): Task | null {
-  for (const id of listMetaIds()) {
-    const meta = readMeta(join(SESSIONS_DIR, id));
-    if (!meta) continue;
-    if (meta.runs.some((r) => r.sessionId === sessionId)) {
-      return metaToTask(meta);
-    }
-  }
-  return null;
+  if (!sessionIndex) sessionIndex = buildSessionIndex();
+  const taskId = sessionIndex.get(sessionId);
+  if (!taskId) return null;
+  return getTask(taskId);
 }
 
 export function generateTaskId(now: Date): string {

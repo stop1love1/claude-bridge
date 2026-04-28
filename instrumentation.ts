@@ -8,10 +8,18 @@
  *      CLI, auth state, registered apps, and both Telegram channels —
  *      so the operator immediately sees what's wired up vs missing
  *      instead of finding out later when something silently no-ops.
+ *   3. Register the tunnel-shutdown signal handler eagerly. Doing it
+ *      here (rather than lazily inside `startTunnel`) means a SIGINT
+ *      delivered before any tunnel exists still leaves a usable
+ *      handler in place; HMR-trapped stale closures are also gone
+ *      because we install before the route module is reloaded.
  *
- * Both are no-ops on the Edge runtime; everything below only runs when
- * NEXT_RUNTIME === "nodejs".
+ * Everything below is a no-op on the Edge runtime; only `nodejs` boots
+ * exercise startup checks, the notifier, and the tunnel handler.
  */
+
+interface ShutdownGlobal { __bridgeShutdownInstalled?: boolean }
+
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
@@ -26,4 +34,25 @@ export async function register(): Promise<void> {
 
   const { ensureTelegramNotifier } = await import("./lib/telegramNotifier");
   ensureTelegramNotifier();
+
+  // Tunnel shutdown handler — globalThis-guarded so HMR reloads don't
+  // stack up duplicate listeners across module reloads.
+  const g = globalThis as unknown as ShutdownGlobal;
+  if (!g.__bridgeShutdownInstalled) {
+    g.__bridgeShutdownInstalled = true;
+    const { killAllTunnels } = await import("./lib/tunnels");
+    const onSignal = (code: number) => {
+      try { killAllTunnels(); } catch { /* best-effort on shutdown */ }
+      // The OS reaps the children once we exit; still call exit
+      // explicitly so a stuck Telegram poller can't keep the process
+      // alive past the signal. Numeric code matches POSIX convention
+      // (SIGINT → 130, SIGTERM → 143).
+      process.exit(code);
+    };
+    process.once("SIGINT", () => onSignal(130));
+    process.once("SIGTERM", () => onSignal(143));
+    process.once("exit", () => {
+      try { killAllTunnels(); } catch { /* best-effort */ }
+    });
+  }
 }

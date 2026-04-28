@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   BookOpen,
+  Globe2,
   HelpCircle,
   KeyRound,
   Network,
@@ -35,6 +36,7 @@ const TOC: TocEntry[] = [
   { id: "auth", label: "Authentication", Icon: KeyRound },
   { id: "permissions", label: "Permissions", Icon: ShieldCheck },
   { id: "telegram", label: "Telegram", Icon: Send },
+  { id: "tunnels", label: "Tunnels", Icon: Globe2 },
   { id: "scripts", label: "Scripts", Icon: Terminal },
   { id: "faq", label: "FAQ", Icon: HelpCircle },
 ];
@@ -245,9 +247,9 @@ function Architecture() {
 
 function Configuration() {
   const envVars: { name: string; def: string; purpose: string }[] = [
-    { name: "BRIDGE_PORT", def: "7777", purpose: "Port the dashboard + API listen on" },
-    { name: "PORT", def: "→ BRIDGE_PORT", purpose: "Standard Next.js port (falls back)" },
-    { name: "BRIDGE_URL", def: "http://localhost:<port>", purpose: "Override origin behind a reverse proxy" },
+    { name: "BRIDGE_PORT", def: "7777", purpose: "Port the dashboard + API listen on (PORT also honored)" },
+    { name: "BRIDGE_URL", def: "http://localhost:<port>", purpose: "Origin spawned children + webhooks call back to" },
+    { name: "BRIDGE_DEMO_MODE", def: "—", purpose: "1 = landing-only mode; dashboard + APIs return 503" },
     { name: "CLAUDE_BIN", def: "claude", purpose: "Override the Claude CLI binary path" },
     { name: "ALLOWED_DEV_ORIGINS", def: "—", purpose: "Comma-separated origins allowed to hit the dev server" },
     { name: "BRIDGE_LOCK_VERIFY", def: "0", purpose: "1 = reject API edits to per-app verify commands" },
@@ -318,11 +320,14 @@ function Auth() {
       <H2 id="auth">Authentication</H2>
       <P>
         The bridge is a single-operator dashboard. On first run it redirects to{" "}
-        <Code>/login?setup=1</Code> to set a password (scrypt hash stored in{" "}
-        <Code>~/.claude/bridge.json</Code>). Subsequent visits issue an HMAC-signed session
-        cookie; the optional &ldquo;trust this device&rdquo; path saves a long-lived cookie
-        revocable from <Code>/settings</Code>. CSRF is enforced via <Code>Sec-Fetch-Site</Code>{" "}
-        plus a session-pinned double-submit token; login attempts are rate-limited.
+        <Code>/login?setup=1</Code> to set a password (scrypt hash, N=131072, stored in{" "}
+        <Code>~/.claude/bridge.json</Code> with mode <Code>0600</Code>). Subsequent visits issue
+        an HMAC-signed session cookie; the optional &ldquo;trust this device&rdquo; path saves
+        a 30-day cookie that&apos;s revocable per device from <Code>/settings</Code>. CSRF is
+        enforced via <Code>Sec-Fetch-Site</Code>, with <Code>Origin</Code> /{" "}
+        <Code>Referer</Code> host equality as a fallback for older clients; login attempts are
+        rate-limited and the cookie is <Code>SameSite=Lax</Code>, <Code>HttpOnly</Code>, and{" "}
+        <Code>Secure</Code> in production.
       </P>
       <P>
         If you also configure Telegram, login attempts from a fresh device can require approval
@@ -376,6 +381,47 @@ function Telegram() {
         Pair the operator&apos;s own Telegram account as a private DM channel. Requires a numeric
         user id to dispatch — an <Code>@username</Code> alone is refused so a random DM
         can&apos;t trigger commands.
+      </P>
+    </section>
+  );
+}
+
+function Tunnels() {
+  return (
+    <section>
+      <H2 id="tunnels">Tunnels</H2>
+      <P>
+        The <Code>/tunnels</Code> page exposes a local port to the public internet for demos,
+        webhook testing, or sharing a dev preview from the bridge itself. Two providers ship
+        out of the box:
+      </P>
+      <ul className="text-sm text-muted-foreground leading-relaxed mb-3 ml-5 list-disc space-y-1">
+        <li>
+          <strong className="text-foreground">localtunnel</strong> — runs via{" "}
+          <Code>bunx localtunnel</Code>. Free, no signup, slightly slower, shows an
+          interstitial password page on first visit per IP. Custom subdomains are
+          honoured. URL host: <Code>*.loca.lt</Code>.
+        </li>
+        <li>
+          <strong className="text-foreground">ngrok</strong> — faster, no interstitial,
+          needs a free authtoken from{" "}
+          <Code>dashboard.ngrok.com/get-started/your-authtoken</Code>. The bridge
+          one-click installs ngrok via <Code>winget</Code> (Windows),{" "}
+          <Code>brew</Code> (macOS), or the official tarball (Linux / mac without brew),
+          and persists the authtoken in <Code>~/.claude/bridge.json</Code> with mode{" "}
+          <Code>0600</Code>. URL host: <Code>*.ngrok-free.app</Code>.
+        </li>
+      </ul>
+      <P>
+        Tunnels are in-memory only — every entry dies when the bridge process exits, and
+        restarting the bridge clears the list. Up to 8 concurrent tunnels per bridge
+        instance; the page surfaces install state, authtoken state, and live stdout for
+        each running tunnel.
+      </P>
+      <P>
+        Anyone with the URL can reach the port — don&apos;t expose services without auth
+        in front. Demo-mode deployments (<Code>BRIDGE_DEMO_MODE=1</Code>) redirect{" "}
+        <Code>/tunnels</Code> back to <Code>/</Code> alongside the rest of the dashboard.
       </P>
     </section>
   );
@@ -557,6 +603,7 @@ export default function DocsPage() {
               <Auth />
               <Permissions />
               <Telegram />
+              <Tunnels />
               <Scripts />
               <Faq />
               <Cta />

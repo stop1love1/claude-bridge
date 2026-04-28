@@ -23,8 +23,13 @@
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import {
+  onBridgeManifestWrite,
+  readBridgeManifest,
+  updateBridgeManifest,
+} from "./bridgeManifest";
 import { USER_CLAUDE_DIR } from "./paths";
 import { treeKill } from "./processKill";
 
@@ -49,11 +54,10 @@ export interface TunnelEntry {
 
 interface Registry {
   tunnels: Map<string, { entry: TunnelEntry; child: ChildProcess }>;
-  shutdownInstalled: boolean;
 }
 
 const G = globalThis as unknown as { __bridgeTunnels?: Registry };
-const reg: Registry = G.__bridgeTunnels ?? { tunnels: new Map(), shutdownInstalled: false };
+const reg: Registry = G.__bridgeTunnels ?? { tunnels: new Map() };
 G.__bridgeTunnels = reg;
 
 const MAX_LOG_LINES = 50;
@@ -112,8 +116,21 @@ export interface StartOptions {
   subdomain?: string;
 }
 
-/** Subdomains: 4-63 chars, ASCII-lowercase + digits + hyphen, no edge dashes. */
-const SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{2,61}[a-z0-9])$/;
+/**
+ * Subdomains: 4-63 chars, ASCII-lowercase + digits + hyphen, no edge dashes.
+ *
+ * Length is checked separately so a 4-char subdomain like `abcd` doesn't
+ * trip a regex that requires the body to have ≥2 chars. The previous
+ * pattern (`^[a-z0-9](?:[a-z0-9-]{2,61}[a-z0-9])$`) had a non-optional
+ * inner group, so it rejected anything 4 chars or shorter — contradicting
+ * the user-facing "4–63" message.
+ */
+const SUBDOMAIN_BODY_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+export function isValidSubdomain(s: string): boolean {
+  if (s.length < 4 || s.length > 63) return false;
+  return SUBDOMAIN_BODY_RE.test(s);
+}
 
 export function startTunnel(opts: StartOptions): TunnelEntry {
   const port = Number(opts.port);
@@ -136,7 +153,7 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
   let subdomain: string | undefined;
   if (opts.subdomain && opts.subdomain.trim()) {
     const s = opts.subdomain.trim().toLowerCase();
-    if (!SUBDOMAIN_RE.test(s)) {
+    if (!isValidSubdomain(s)) {
       throw new Error(
         "subdomain must be 4–63 chars, lowercase letters/digits/hyphens, no edge dashes",
       );
@@ -147,7 +164,7 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
     subdomain = s;
   }
 
-  const { command, args, env } = buildSpawnArgs(opts.provider, port, subdomain);
+  const { command, args, env, useShell } = buildSpawnArgs(opts.provider, port, subdomain);
 
   const id = genId();
   const entry: TunnelEntry = {
@@ -161,20 +178,20 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
   if (opts.label && opts.label.trim()) entry.label = opts.label.trim().slice(0, 80);
   if (subdomain) entry.subdomain = subdomain;
 
-  // `shell: true` lets `bunx` / `where`-resolved binaries be found via
-  // PATHEXT on Windows. For ngrok we resolve the absolute path up
-  // front (so a winget install in the same session works without a
-  // PATH refresh), then `shell: false` is fine — but keeping `shell:
-  // true` uniform is harmless and one less branching surface.
+  // `shell: true` is required only for `bunx`, which on Windows lives
+  // as a .cmd shim that Node's direct exec path can't run. For ngrok
+  // we pass an absolute path resolved up front, so `shell: false`
+  // works everywhere AND avoids quoting bugs when the path itself
+  // contains spaces (e.g. `C:\Program Files\ngrok\ngrok.exe` once
+  // ngrok ships an MSI installer there).
   const child = spawn(command, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    shell: true,
+    shell: useShell,
     windowsHide: true,
     env,
   });
 
   reg.tunnels.set(id, { entry, child });
-  installShutdownHandler();
 
   const matchUrl = URL_RES[opts.provider];
   child.stdout?.setEncoding("utf8");
@@ -227,12 +244,17 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
  * Resolve the per-provider command + args + env that `startTunnel`
  * passes to `spawn`. Kept separate so unit-testing the matrix doesn't
  * have to spin up real subprocesses.
+ *
+ * `useShell` is provider-specific: `bunx` is a Windows .cmd shim
+ * (needs `shell: true` for cmd to find PATHEXT); `ngrok` is an
+ * absolute path we resolved ourselves (so `shell: false` is safe AND
+ * preferred — it survives spaces in the path without quoting tricks).
  */
 function buildSpawnArgs(
   provider: TunnelProvider,
   port: number,
   subdomain: string | undefined,
-): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
+): { command: string; args: string[]; env: NodeJS.ProcessEnv; useShell: boolean } {
   if (provider === "localtunnel") {
     const args = ["localtunnel", "--port", String(port)];
     if (subdomain) args.push("--subdomain", subdomain);
@@ -240,6 +262,7 @@ function buildSpawnArgs(
       command: "bunx",
       args,
       env: process.env,
+      useShell: true,
     };
   }
   // ngrok: prefer absolute path so a fresh winget install is reachable
@@ -261,6 +284,9 @@ function buildSpawnArgs(
     // that doesn't print the URL plainly.
     args: ["http", String(port), "--log=stdout"],
     env: { ...process.env, NGROK_AUTHTOKEN: token },
+    // Absolute path resolved up-front — `shell: false` avoids
+    // word-splitting spaces in `C:\Program Files\...`.
+    useShell: resolved === "ngrok",
   };
 }
 
@@ -292,6 +318,12 @@ export function removeTunnel(id: string): boolean {
  * Kill every live tunnel synchronously enough for a Ctrl-C / shutdown
  * path. SIGTERM first; the OS reaps the child as the parent exits.
  * Idempotent — safe to call from multiple signal handlers.
+ *
+ * Registered eagerly from `instrumentation.ts` so the handler exists
+ * before any tunnel is spawned. (Lazy `process.once(...)` from inside
+ * `startTunnel` was a footgun: a SIGINT delivered before the first
+ * tunnel was started would leave no handler in place, and HMR could
+ * trap a stale closure on subsequent reloads.)
  */
 export function killAllTunnels(): void {
   for (const slot of reg.tunnels.values()) {
@@ -301,15 +333,6 @@ export function killAllTunnels(): void {
       slot.entry.endedAt = new Date().toISOString();
     }
   }
-}
-
-function installShutdownHandler(): void {
-  if (reg.shutdownInstalled) return;
-  reg.shutdownInstalled = true;
-  const onExit = () => { killAllTunnels(); };
-  process.once("SIGINT", () => { onExit(); process.exit(130); });
-  process.once("SIGTERM", () => { onExit(); process.exit(143); });
-  process.once("exit", onExit);
 }
 
 // -----------------------------------------------------------------------------
@@ -331,9 +354,34 @@ export interface ProviderStatus {
   hint?: string;
 }
 
+/**
+ * Cache `detectProviders()` for a handful of seconds. The Tunnels page
+ * polls `/api/tunnels/providers` every 1–4 seconds; without a cache
+ * each poll spawned `where.exe ngrok` + `ngrok version` synchronously
+ * (each up to 5s timeout), blocking the event loop. Cleared whenever
+ * the ngrok authtoken changes (see `setNgrokAuthtoken`) so a UI save
+ * is reflected on the next request.
+ */
+const PROVIDER_CACHE_TTL_MS = 5000;
+let providerCache: { value: ProviderStatus[]; expires: number } | null = null;
+
 export function detectProviders(): ProviderStatus[] {
-  return [detectLocaltunnel(), detectNgrok()];
+  const now = Date.now();
+  if (providerCache && providerCache.expires > now) return providerCache.value;
+  const value = [detectLocaltunnel(), detectNgrok()];
+  providerCache = { value, expires: now + PROVIDER_CACHE_TTL_MS };
+  return value;
 }
+
+function invalidateProviderCache(): void {
+  providerCache = null;
+}
+
+// Manifest writes from outside this module (auth.ts saving credentials,
+// apps.ts editing settings) don't move the ngrok binary, so they
+// don't need to bust the provider cache. We invalidate it on
+// authtoken-write paths inline below — that's the only field that
+// affects the `authtokenSet` boolean.
 
 function detectLocaltunnel(): ProviderStatus {
   // localtunnel runs via `bunx`, which ships with Bun (the runtime
@@ -552,6 +600,20 @@ function runInstaller(
 }
 
 async function installViaDownload(url: string, archive: "zip" | "tgz"): Promise<InstallResult> {
+  // curl ships by default on macOS, modern Linux distros, and Windows
+  // 10+ (1803). For minimal containers / older Windows we surface a
+  // clear hint instead of letting `runInstaller` fail with a vague
+  // ENOENT — operators on those hosts should fall back to manual
+  // download from ngrok.com.
+  if (!commandExists("curl")) {
+    return {
+      ok: false,
+      status: detectNgrok(),
+      log:
+        "[bridge] `curl` not found on PATH. Install curl, or download ngrok manually from https://ngrok.com/download.",
+    };
+  }
+
   const dir = join(USER_CLAUDE_DIR, "bin");
   mkdirSync(dir, { recursive: true });
   const archivePath = join(dir, archive === "zip" ? "ngrok-download.zip" : "ngrok-download.tgz");
@@ -578,6 +640,7 @@ async function installViaDownload(url: string, archive: "zip" | "tgz"): Promise<
   }
   try { unlinkSync(archivePath); } catch { /* ignore — best-effort cleanup */ }
 
+  invalidateProviderCache();
   const status = detectNgrok();
   combinedLog += `\n[bridge] installed to ${join(dir, "ngrok")}`;
   return { ok: status.installed, status, log: combinedLog };
@@ -607,64 +670,38 @@ export async function installNgrok(): Promise<InstallResult> {
       ],
       120_000,
     );
+    invalidateProviderCache();
     return { ok: r.ok, status: detectNgrok(), log: r.log };
   }
   if (plan.kind === "brew") {
     const r = await runInstaller("brew", ["install", "ngrok/ngrok/ngrok"], 180_000);
+    invalidateProviderCache();
     return { ok: r.ok, status: detectNgrok(), log: r.log };
   }
   return await installViaDownload(plan.url, plan.archive);
 }
 
 // -----------------------------------------------------------------------------
-// ngrok authtoken — persisted in `bridge.json#tunnels.ngrok.authtoken`.
-// File mode 0600 (matches the rest of bridge.json) so a colocated POSIX
-// user can't read it.
+// ngrok authtoken — persisted in `bridge.json#tunnels.ngrok.authtoken`
+// via the shared bridgeManifest helper. Single source of truth for IO
+// avoids the historical race where this module had its own atomic-write
+// path that didn't invalidate auth.ts's authCache (and vice versa).
 // -----------------------------------------------------------------------------
 
-const BRIDGE_JSON = join(USER_CLAUDE_DIR, "bridge.json");
-
-interface TunnelManifest {
+interface TunnelManifestSection {
   ngrok?: { authtoken?: string };
 }
 
-interface RawManifest {
-  version?: number;
-  apps?: unknown;
-  tunnels?: TunnelManifest;
-  [k: string]: unknown;
-}
-
-function readTunnelManifest(): RawManifest {
-  if (!existsSync(BRIDGE_JSON)) return { version: 1, apps: [] };
-  try {
-    return JSON.parse(readFileSync(BRIDGE_JSON, "utf8")) as RawManifest;
-  } catch {
-    return { version: 1, apps: [] };
-  }
-}
-
-function writeTunnelManifest(m: RawManifest): void {
-  const ordered = {
-    version: typeof m.version === "number" ? m.version : 1,
-    apps: Array.isArray(m.apps) ? m.apps : [],
-    ...Object.fromEntries(Object.entries(m).filter(([k]) => k !== "version" && k !== "apps")),
-  };
-  mkdirSync(dirname(BRIDGE_JSON), { recursive: true });
-  const tmp = `${BRIDGE_JSON}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  writeFileSync(tmp, JSON.stringify(ordered, null, 2) + "\n", { mode: 0o600 });
-  try {
-    renameSync(tmp, BRIDGE_JSON);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* ignore */ }
-    throw err;
-  }
-  try { chmodSync(BRIDGE_JSON, 0o600); } catch { /* ignore (windows) */ }
-}
+// Drop the cached provider snapshot whenever bridge.json is rewritten
+// from anywhere — most writes don't move the binary, but a save from
+// `setNgrokAuthtoken()` flips `authtokenSet` and a quick subsequent
+// detectProviders() must reflect that.
+onBridgeManifestWrite(invalidateProviderCache);
 
 export function getNgrokAuthtoken(): string {
-  const m = readTunnelManifest();
-  const t = m.tunnels?.ngrok?.authtoken;
+  const m = readBridgeManifest();
+  const tunnels = m.tunnels as TunnelManifestSection | undefined;
+  const t = tunnels?.ngrok?.authtoken;
   return typeof t === "string" ? t.trim() : "";
 }
 
@@ -675,20 +712,21 @@ export function getNgrokAuthtoken(): string {
  */
 export function setNgrokAuthtoken(input: string): string {
   const trimmed = (input ?? "").trim();
-  const m = readTunnelManifest();
-  const tunnels: TunnelManifest = { ...(m.tunnels ?? {}) };
-  if (trimmed) {
-    tunnels.ngrok = { ...(tunnels.ngrok ?? {}), authtoken: trimmed };
-  } else if (tunnels.ngrok) {
-    delete tunnels.ngrok.authtoken;
-    if (Object.keys(tunnels.ngrok).length === 0) delete tunnels.ngrok;
-  }
-  const next: RawManifest = { ...m };
-  if (Object.keys(tunnels).length > 0) {
-    next.tunnels = tunnels;
-  } else {
-    delete next.tunnels;
-  }
-  writeTunnelManifest(next);
+  updateBridgeManifest((m) => {
+    const tunnels: TunnelManifestSection = { ...((m.tunnels as TunnelManifestSection | undefined) ?? {}) };
+    if (trimmed) {
+      tunnels.ngrok = { ...(tunnels.ngrok ?? {}), authtoken: trimmed };
+    } else if (tunnels.ngrok) {
+      delete tunnels.ngrok.authtoken;
+      if (Object.keys(tunnels.ngrok).length === 0) delete tunnels.ngrok;
+    }
+    const next = { ...m };
+    if (Object.keys(tunnels).length > 0) {
+      next.tunnels = tunnels;
+    } else {
+      delete next.tunnels;
+    }
+    return next;
+  });
   return trimmed;
 }

@@ -28,18 +28,15 @@
  * when needed.
  */
 
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { BRIDGE_ROOT, USER_CLAUDE_DIR } from "./paths";
+import { BRIDGE_ROOT } from "./paths";
+import {
+  BRIDGE_JSON,
+  onBridgeManifestWrite,
+  readBridgeManifest,
+  writeBridgeManifest,
+} from "./bridgeManifest";
 
 /**
  * Per-app git workflow settings, persisted alongside the app entry in
@@ -261,7 +258,6 @@ export interface BridgeManifest {
   [key: string]: unknown;
 }
 
-const BRIDGE_JSON = join(/* turbopackIgnore: true */ USER_CLAUDE_DIR, "bridge.json");
 const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SCHEMA_VERSION = 1;
 
@@ -274,61 +270,33 @@ function resolveAppPath(rawPath: string): string {
   return isAbsolute(rawPath) ? resolve(rawPath) : resolve(BRIDGE_ROOT, rawPath);
 }
 
-function atomicWrite(path: string, contents: string): void {
-  const dir = dirname(path);
-  mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  // bridge.json holds verify-command shell strings, app paths, and the
-  // shared HMAC secret (auth section). Mode 0600 keeps colocated POSIX
-  // users from reading it. No-op on Windows; benign on macOS / Linux.
-  writeFileSync(tmp, contents, { mode: 0o600 });
-  try {
-    renameSync(tmp, path);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* ignore */ }
-    throw err;
-  }
-  try { chmodSync(path, 0o600); } catch { /* ignore (windows) */ }
-}
-
 /**
- * Read the raw manifest, preserving any unknown top-level keys so
- * write-modify-write cycles don't accidentally drop `settings`,
- * `experiments`, etc. that future modules might add.
+ * Read the apps-flavored view of `bridge.json`. Goes through the shared
+ * `bridgeManifest` cache, so reads colocate with auth/tunnels reads
+ * (single fs hit per ~1s) and writes from any module invalidate this
+ * derived cache too (see `onBridgeManifestWrite` below).
  */
 function readManifest(): BridgeManifest {
-  if (!existsSync(BRIDGE_JSON)) {
-    return { version: SCHEMA_VERSION, apps: [] };
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(BRIDGE_JSON, "utf8")) as Partial<BridgeManifest>;
-    return {
-      version: typeof parsed.version === "number" ? parsed.version : SCHEMA_VERSION,
-      apps: Array.isArray(parsed.apps) ? parsed.apps : [],
-      ...Object.fromEntries(
-        Object.entries(parsed).filter(([k]) => k !== "version" && k !== "apps"),
-      ),
-    };
-  } catch (err) {
-    console.error("apps: bridge.json is unreadable — starting empty", err);
-    return { version: SCHEMA_VERSION, apps: [] };
-  }
+  const raw = readBridgeManifest();
+  return {
+    version: typeof raw.version === "number" ? raw.version : SCHEMA_VERSION,
+    apps: Array.isArray(raw.apps) ? (raw.apps as ManifestAppEntry[]) : [],
+    ...Object.fromEntries(
+      Object.entries(raw).filter(([k]) => k !== "version" && k !== "apps"),
+    ),
+  };
 }
 
 function writeManifest(manifest: BridgeManifest): void {
-  const ordered = {
+  writeBridgeManifest({
+    ...(manifest as unknown as Record<string, unknown>),
     version: SCHEMA_VERSION,
     apps: manifest.apps,
-    ...Object.fromEntries(
-      Object.entries(manifest).filter(([k]) => k !== "version" && k !== "apps"),
-    ),
-  };
-  atomicWrite(BRIDGE_JSON, JSON.stringify(ordered, null, 2) + "\n");
-  // Invalidate any in-process apps cache (loadApps() consumers) so a
-  // settings change is reflected on the very next call rather than
-  // after the TTL expires. Reaches every writeManifest path including
-  // git-policy patches, pinnedFiles edits, and the migration pass.
-  appsCache = null;
+  });
+  // appsCache invalidation is handled by the onBridgeManifestWrite
+  // subscriber registered alongside `let appsCache` below — that
+  // subscriber fires for writes from auth.ts and tunnels.ts as well,
+  // so a tunnel authtoken save can't strand a stale apps cache.
 }
 
 function normalizeGitSettings(raw: unknown): AppGitSettings {
@@ -535,9 +503,20 @@ export function parseApps(json: string): App[] {
   let parsed: Partial<BridgeManifest>;
   try { parsed = JSON.parse(json) as Partial<BridgeManifest>; }
   catch { return []; }
-  if (!Array.isArray(parsed.apps)) return [];
+  return parseAppsFromManifest(parsed);
+}
+
+/**
+ * Same as `parseApps` but takes an already-parsed manifest object.
+ * Used by `loadApps` so the shared bridgeManifest cache can hand us
+ * the parsed object directly — no need for a string→JSON.parse round
+ * trip per cache miss.
+ */
+function parseAppsFromManifest(parsed: Partial<BridgeManifest> | Record<string, unknown>): App[] {
+  if (!Array.isArray((parsed as Partial<BridgeManifest>).apps)) return [];
+  const apps = (parsed as Partial<BridgeManifest>).apps as ManifestAppEntry[];
   const out: App[] = [];
-  for (const raw of parsed.apps) {
+  for (const raw of apps) {
     if (!raw || typeof raw !== "object") continue;
     const name = (raw as { name?: unknown }).name;
     const rawPath = (raw as { path?: unknown }).path;
@@ -608,6 +587,13 @@ export function serializeApps(apps: App[]): string {
 // edit takes effect immediately.
 const APPS_CACHE_TTL_MS = 1000;
 let appsCache: { value: App[]; expires: number } | null = null;
+// Drop the derived apps cache whenever ANY module rewrites bridge.json
+// (apps.ts itself, auth.ts saving credentials, tunnels.ts saving the
+// ngrok authtoken). Without this an authtoken save inside the 1s TTL
+// would let the next `loadApps()` serve a cache built from the
+// pre-write snapshot, so a parallel git-settings change races into a
+// stale view.
+onBridgeManifestWrite(() => { appsCache = null; });
 
 export function loadApps(): App[] {
   const now = Date.now();
@@ -617,7 +603,7 @@ export function loadApps(): App[] {
     value = [];
   } else {
     try {
-      value = parseApps(readFileSync(BRIDGE_JSON, "utf8"));
+      value = parseAppsFromManifest(readBridgeManifest());
     } catch (err) {
       console.error("apps: cannot read", BRIDGE_JSON, err);
       value = [];

@@ -94,6 +94,7 @@ The smaller stuff that makes the five pillars pleasant to live with:
 - 📊 **Repo profiles** — heuristic per-repo summaries injected into every child prompt.
 - ⚙️ **Runtime-agnostic** — runs identically under Bun, npm, or pnpm.
 - 🌐 **Demo-mode deployable** — flip a single env var to host the landing page on Vercel/Netlify without exposing the dashboard.
+- 🛰️ **One-click public tunnels** — pick a local port, choose `localtunnel` (free, no signup) or `ngrok` (faster, one-time authtoken), and share the public URL. The bridge installs ngrok via winget/brew/tarball if it isn't on PATH.
 
 ---
 
@@ -202,7 +203,7 @@ home-lab setup).
 For a public showcase you can host the landing page only — set `BRIDGE_DEMO_MODE=1` and:
 
 - Dashboard CTAs (`Open dashboard`, `Get started`, `Jump in`) are hidden on the landing page.
-- Every dashboard route (`/apps`, `/tasks`, `/sessions`, `/settings`, `/login`) redirects to `/`.
+- Every dashboard route (`/apps`, `/tasks`, `/sessions`, `/settings`, `/tunnels`, `/login`) redirects to `/`.
 - Every non-public `/api/*` call returns `503 { error: "demo mode" }`.
 
 `/` and `/docs` stay public so visitors can read the pitch and docs. Anyone wanting the real

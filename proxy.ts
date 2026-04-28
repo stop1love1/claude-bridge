@@ -21,7 +21,13 @@ import { DEMO_MODE } from "@/lib/demoMode";
  * mode — the proxy redirects unauth'd users TO `/login`). The demo
  * redirect for `/login` lives in `app/login/layout.tsx` instead.
  */
-const DEMO_REDIRECT_PREFIXES = ["/apps", "/tasks", "/sessions", "/settings"];
+const DEMO_REDIRECT_PREFIXES = [
+  "/apps",
+  "/tasks",
+  "/sessions",
+  "/settings",
+  "/tunnels",
+];
 
 // Next.js 16 runs `proxy.ts` on the Node runtime by default, so we no
 // longer declare `runtime: "nodejs"` here — Next rejects route-segment
