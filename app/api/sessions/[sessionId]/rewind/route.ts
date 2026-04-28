@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { projectDirFor } from "@/lib/sessions";
 import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_MD, BRIDGE_ROOT } from "@/lib/paths";
+import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
 import { badRequest, isValidSessionId } from "@/lib/validate";
+import { getChild } from "@/lib/spawnRegistry";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +33,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "repo and uuid required" }, { status: 400 });
   }
 
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  // A live `claude` child holds the .jsonl open and appends to it. If we
+  // truncate while it's mid-write, either the in-progress turn is lost or
+  // the child writes at a now-invalid offset and corrupts the file. Refuse
+  // the rewind until the operator stops or finishes the run.
+  if (getChild(sessionId)) {
+    return NextResponse.json(
+      { error: "session is still running — stop the run before rewinding" },
+      { status: 409 },
+    );
+  }
+
+  const md = readBridgeMd();
   const cwd = resolveRepoCwd(md, BRIDGE_ROOT, body.repo);
   if (!cwd) return NextResponse.json({ error: "unknown repo" }, { status: 400 });
 
@@ -50,7 +63,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
   if (cutoff === -1) return NextResponse.json({ error: "uuid not found in session" }, { status: 404 });
 
+  // Atomic write: stage to a sibling tmp file then rename. A crash
+  // mid-write leaves the original file intact rather than truncated.
   const kept = lines.slice(0, cutoff + 1).join("\n");
-  writeFileSync(file, kept.endsWith("\n") ? kept : kept + "\n");
+  const payload = kept.endsWith("\n") ? kept : kept + "\n";
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  writeFileSync(tmp, payload);
+  renameSync(tmp, file);
   return NextResponse.json({ ok: true, kept: cutoff + 1, dropped: lines.length - cutoff - 1 });
 }
