@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>One dashboard to dispatch Claude across every repo.</strong><br />
-  Hand off the task. Go grab a coffee. ☕ The bridge dispatches, verifies, and pings you when it ships.
+  Hand off the task → coffee ☕ · beer 🍺 · walk the dog 🐕 · nap 😴 → the bridge pings you when it ships 📨
 </p>
 
 <p align="center">
@@ -231,16 +231,28 @@ Or browse the source: [`app/docs/page.tsx`](app/docs/page.tsx).
 
 ## 🗺️ Roadmap
 
-- [ ] LLM-assisted repo profile summaries (currently heuristic-only)
-- [ ] More retry strategies than single-shot auto-retry
+The aim is to be the most capable **agentic coding control plane** on your machine —
+model-agnostic, repo-agnostic, tracker-agnostic.
+
+- [ ] Multi-LLM support — Claude + GPT, Gemini, Grok, DeepSeek, OpenRouter, and local models (Ollama / vLLM) behind one loop
+- [ ] Per-role / per-task model pinning (coordinator, coder, reviewer, fixer all configurable)
+- [ ] Codebase knowledge graph + cross-repo long-term memory injected into every spawn
+- [ ] Sandboxed execution — each child in an ephemeral Docker/VM with declared scope
+- [ ] Policy engine — declarative invariants enforced by the verify chain
+- [ ] Plugin system for custom agent roles (security-auditor, perf-tuner, …)
+- [ ] LLM-assisted repo profiles (currently heuristic-only)
+- [ ] Richer retry strategies beyond the 6-gate ladder
+- [ ] First-class monorepo support (Nx, Turbo, pnpm / Bun workspaces)
+- [ ] GitHub / Linear / Jira bridges — issue → task, PR-review bot, CI-failure → fix
+- [ ] Editor companions (VS Code, JetBrains) + CLI client
+- [ ] Long-horizon autonomous mode — hand over a goal, the bridge backplans and ships PRs
 - [ ] Read-only public dashboard mode for stakeholders
-- [ ] First-class support for monorepo workspaces (Nx, Turbo, pnpm workspaces)
-- [ ] Plugin system for custom agent roles
 - [x] Built-in token usage analytics per task
 - [x] Telegram bridge for remote control + notifications
-- [x] Verify-then-ship chain (preflight + semantic + style + per-app commands)
+- [x] Verify-then-ship chain + 6-gate retry ladder
 - [x] Branch-aware dispatch with per-spawn `git worktree` isolation
 - [x] Single-operator auth with trusted devices + login approvals
+- [x] One-click public tunnels (localtunnel + ngrok auto-install)
 
 Have an idea? [Open an issue](https://github.com/stop1love1/claude-bridge/issues) — feedback
 shapes the roadmap.
