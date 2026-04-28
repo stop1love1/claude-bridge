@@ -32,6 +32,11 @@ interface ReplayBuffer {
 }
 const REPLAY_MAX = 500;
 const DEBOUNCE_MS = 250;
+// Cap how many sessions are tracked in the replay map. Without this,
+// every session ever opened lives in `globalThis` until the process
+// restarts — a long-lived bridge with thousands of sessions slowly
+// accumulates ~500 entries × 1 KiB each per session in heap.
+const REPLAY_SESSIONS_MAX = 100;
 
 const G = globalThis as unknown as { __bridgeTailReplay?: Map<string, ReplayBuffer> };
 const replay: Map<string, ReplayBuffer> = G.__bridgeTailReplay ?? new Map();
@@ -39,9 +44,21 @@ G.__bridgeTailReplay = replay;
 
 function getBuffer(key: string): ReplayBuffer {
   let b = replay.get(key);
-  if (!b) {
-    b = { endOffset: 0, entries: [] };
+  if (b) {
+    // LRU touch: re-insert so the most-recently-used keys live at the
+    // tail of the iteration order. Map preserves insertion order, so
+    // delete + set is the canonical cheap LRU bump.
+    replay.delete(key);
     replay.set(key, b);
+    return b;
+  }
+  b = { endOffset: 0, entries: [] };
+  replay.set(key, b);
+  // Evict the oldest entries until we're back under the cap.
+  while (replay.size > REPLAY_SESSIONS_MAX) {
+    const oldest = replay.keys().next().value;
+    if (oldest === undefined) break;
+    replay.delete(oldest);
   }
   return b;
 }

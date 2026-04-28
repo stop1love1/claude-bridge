@@ -181,7 +181,18 @@ function writeManifest(m: RawManifest): void {
     ...Object.fromEntries(Object.entries(m).filter(([k]) => k !== "version" && k !== "apps")),
   };
   atomicWrite(BRIDGE_JSON, JSON.stringify(ordered, null, 2) + "\n");
+  // Invalidate the auth cache so the next loadAuthConfig() sees the
+  // freshly-written value rather than the in-memory snapshot.
+  authCache = null;
 }
+
+// Short-lived cache for loadAuthConfig(). proxy.ts calls it on every
+// request including SSE keepalives; without caching that's a synchronous
+// readFileSync(BRIDGE_JSON) per request. The cache is invalidated
+// explicitly on every writeManifest, so the only stale window is the TTL
+// itself — too brief to matter for non-write paths.
+const AUTH_CACHE_TTL_MS = 1000;
+let authCache: { value: AuthConfig | null; expires: number } | null = null;
 
 function normalizeAuth(raw: Partial<AuthConfig> | undefined): AuthConfig | null {
   if (!raw || typeof raw !== "object") return null;
@@ -207,7 +218,11 @@ function normalizeAuth(raw: Partial<AuthConfig> | undefined): AuthConfig | null 
 }
 
 export function loadAuthConfig(): AuthConfig | null {
-  return normalizeAuth(readManifest().auth);
+  const now = Date.now();
+  if (authCache && authCache.expires > now) return authCache.value;
+  const value = normalizeAuth(readManifest().auth);
+  authCache = { value, expires: now + AUTH_CACHE_TTL_MS };
+  return value;
 }
 
 export function saveAuthConfig(next: AuthConfig): void {

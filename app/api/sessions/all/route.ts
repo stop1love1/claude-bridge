@@ -1,13 +1,42 @@
 import { NextResponse } from "next/server";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { resolveRepos } from "@/lib/repos";
 import { discoverOrphanProjects, listSessions, projectDirFor } from "@/lib/sessions";
-import { readMeta } from "@/lib/meta";
+import { readMeta, subscribeMetaAll } from "@/lib/meta";
 import { readGitBranch } from "@/lib/git";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "@/lib/paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
 
 export const dynamic = "force-dynamic";
+
+// Whole-response cache. The sessions browser polls this endpoint every
+// few seconds; without caching each call walks SESSIONS_DIR + every
+// .jsonl under ~/.claude/projects/<slug>/ to compute previews. Stale
+// data is acceptable for ~2 s — explicit invalidation through the meta
+// event bus keeps newly-spawned runs visible immediately.
+type SessionRow = {
+  sessionId: string;
+  repo: string;
+  repoPath: string;
+  branch: string | null;
+  isBridge: boolean;
+  mtime: number;
+  size: number;
+  preview: string;
+  link: LinkInfo | null;
+};
+const RESPONSE_TTL_MS = 2000;
+let responseCache: { value: SessionRow[]; expires: number } | null = null;
+
+// Invalidate on any meta change (writeMeta, appendRun, transition…).
+// `subscribeMetaAll` returns an unsubscribe but we hold the listener
+// for the process lifetime — same trick as the rest of the bridge's
+// global registries. HMR-safe via the underlying EventEmitter stash.
+const G = globalThis as unknown as { __bridgeSessionsAllSub?: boolean };
+if (!G.__bridgeSessionsAllSub) {
+  G.__bridgeSessionsAllSub = true;
+  subscribeMetaAll(() => { responseCache = null; });
+}
 
 interface LinkInfo { taskId: string; role: string }
 
@@ -54,7 +83,11 @@ function buildLinkIndex(): { links: Map<string, LinkInfo>; taskTitles: Map<strin
  * group on either.
  */
 export function GET() {
-  const md = readFileSync(BRIDGE_MD, "utf8");
+  const now = Date.now();
+  if (responseCache && responseCache.expires > now) {
+    return NextResponse.json(responseCache.value);
+  }
+  const md = readBridgeMd();
   const { links, taskTitles } = buildLinkIndex();
 
   const seen = new Set<string>();
@@ -86,17 +119,7 @@ export function GET() {
     repos.push({ name: orphan.name, path: orphan.path, isBridge: false });
   }
 
-  const out: Array<{
-    sessionId: string;
-    repo: string;
-    repoPath: string;
-    branch: string | null;
-    isBridge: boolean;
-    mtime: number;
-    size: number;
-    preview: string;
-    link: LinkInfo | null;
-  }> = [];
+  const out: SessionRow[] = [];
 
   // Cache branch reads — multiple sessions in the same repo only need
   // one .git/HEAD read.
@@ -130,5 +153,7 @@ export function GET() {
     }
   }
 
-  return NextResponse.json(out.sort((a, b) => b.mtime - a.mtime));
+  const sorted = out.sort((a, b) => b.mtime - a.mtime);
+  responseCache = { value: sorted, expires: now + RESPONSE_TTL_MS };
+  return NextResponse.json(sorted);
 }

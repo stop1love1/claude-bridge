@@ -247,6 +247,11 @@ function writeManifest(manifest: BridgeManifest): void {
     ),
   };
   atomicWrite(BRIDGE_JSON, JSON.stringify(ordered, null, 2) + "\n");
+  // Invalidate any in-process apps cache (loadApps() consumers) so a
+  // settings change is reflected on the very next call rather than
+  // after the TTL expires. Reaches every writeManifest path including
+  // git-policy patches, pinnedFiles edits, and the migration pass.
+  appsCache = null;
 }
 
 function normalizeGitSettings(raw: unknown): AppGitSettings {
@@ -443,14 +448,30 @@ export function serializeApps(apps: App[]): string {
   return JSON.stringify(manifest, null, 2) + "\n";
 }
 
+// Short-lived in-process cache for parsed apps. The post-exit flow
+// hits getApp() 6+ times in sequence — without this, each call re-reads
+// + JSON.parses bridge.json synchronously, which is the bulk of the
+// per-spawn overhead. Invalidated explicitly by saveApps() so a UI
+// edit takes effect immediately.
+const APPS_CACHE_TTL_MS = 1000;
+let appsCache: { value: App[]; expires: number } | null = null;
+
 export function loadApps(): App[] {
-  if (!existsSync(BRIDGE_JSON)) return [];
-  try {
-    return parseApps(readFileSync(BRIDGE_JSON, "utf8"));
-  } catch (err) {
-    console.error("apps: cannot read", BRIDGE_JSON, err);
-    return [];
+  const now = Date.now();
+  if (appsCache && appsCache.expires > now) return appsCache.value;
+  let value: App[];
+  if (!existsSync(BRIDGE_JSON)) {
+    value = [];
+  } else {
+    try {
+      value = parseApps(readFileSync(BRIDGE_JSON, "utf8"));
+    } catch (err) {
+      console.error("apps: cannot read", BRIDGE_JSON, err);
+      value = [];
+    }
   }
+  appsCache = { value, expires: now + APPS_CACHE_TTL_MS };
+  return value;
 }
 
 export function saveApps(apps: App[]): void {
@@ -476,6 +497,7 @@ export function saveApps(apps: App[]): void {
     return entry;
   });
   writeManifest(manifest);
+  appsCache = null;
 }
 
 export function getApp(name: string): App | null {
