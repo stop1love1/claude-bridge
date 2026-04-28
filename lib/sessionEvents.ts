@@ -79,6 +79,36 @@ export function emitPartial(sessionId: string, p: PartialEvent): void {
 export function emitAlive(sessionId: string, alive: boolean): void {
   registry.alive.set(sessionId, alive);
   getEmitter(sessionId).emit("alive", alive);
+  // Once a child has exited, the emitter and the alive flag are no
+  // longer load-bearing — but a tail SSE connection may still be
+  // subscribed for a few seconds while the UI shows the final state.
+  // Defer eviction so subscribers can drain, then drop the entries to
+  // keep the global Map bounded over a long-lived bridge.
+  if (!alive) scheduleEvict(sessionId);
+}
+
+const EVICT_DELAY_MS = 60_000;
+const evictTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function scheduleEvict(sessionId: string): void {
+  const existing = evictTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  const t = setTimeout(() => {
+    evictTimers.delete(sessionId);
+    const e = registry.emitters.get(sessionId);
+    if (e && e.listenerCount("partial") + e.listenerCount("alive") + e.listenerCount("status") > 0) {
+      // A late subscriber re-attached during the delay (e.g. user
+      // reopened the tab). Reschedule rather than evict.
+      scheduleEvict(sessionId);
+      return;
+    }
+    registry.emitters.delete(sessionId);
+    registry.alive.delete(sessionId);
+  }, EVICT_DELAY_MS);
+  // Allow Node to exit even if these timers are still pending.
+  if (typeof t === "object" && t !== null && "unref" in t) {
+    (t as { unref: () => void }).unref();
+  }
+  evictTimers.set(sessionId, t);
 }
 
 export function emitStatus(sessionId: string, s: StatusEvent): void {
