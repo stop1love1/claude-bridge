@@ -986,7 +986,19 @@ export async function spawnCoordinatorForTask(
         // prompts. Without this, the first tool call hangs waiting for
         // confirmation and the process eventually exits. The free-chat
         // permission hook is NOT attached here for the same reason.
-        settings: { mode: "bypassPermissions" },
+        //
+        // `disallowedTools: ["Task"]` is the cwd-isolation contract:
+        // when the coordinator uses Claude Code's built-in Task / Agent
+        // tool, the subagent runs IN-PROCESS sharing the coordinator's
+        // cwd (BRIDGE_ROOT). Any work it does lands in `claude-bridge/`
+        // instead of the target app folder, AND nothing about it is
+        // tracked in `meta.json`. The bridge's only sanctioned dispatch
+        // path is `POST /api/tasks/<id>/agents`, which spawns a real
+        // child claude with cwd = the app's path. Blocking Task at the
+        // CLI level guarantees that a coordinator template change /
+        // prompt drift can't quietly route work back to the in-process
+        // subagent and break the contract.
+        settings: { mode: "bypassPermissions", disallowedTools: ["Task"] },
       }));
     } catch (spawnErr) {
       try {

@@ -71,6 +71,66 @@ describe("buildCoordinatorArgs", () => {
     expect(args).not.toContain("--effort");
     expect(args).not.toContain("--model");
   });
+
+  // The coordinator passes `disallowedTools: ["Task"]` to hard-block the
+  // built-in Task / Agent tool at the CLI level — the only thing that
+  // survives a coordinator template change. Drift in `settingsArgs`
+  // would silently restore the broken in-process subagent path the
+  // bridge cannot track.
+  it("emits --disallowed-tools when settings.disallowedTools is set", () => {
+    const args = buildCoordinatorArgs(
+      {
+        role: "coordinator",
+        taskId: "t_x",
+        prompt: "",
+        settings: { mode: "bypassPermissions", disallowedTools: ["Task"] },
+      },
+      "id",
+    );
+    const idx = args.indexOf("--disallowed-tools");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("Task");
+  });
+
+  it("filters disallowedTools entries that don't match the tool-name charset", () => {
+    const args = buildCoordinatorArgs(
+      {
+        role: "coordinator",
+        taskId: "t_x",
+        prompt: "",
+        settings: {
+          // Mix of valid (Task, Bash(git *)), garbage (rm -rf, empty),
+          // and a wrong-shape entry (--inject-flag). Only the valid two
+          // should reach the argv.
+          disallowedTools: ["Task", "rm -rf /", "", "Bash(git *)", "--inject-flag"],
+        },
+      },
+      "id",
+    );
+    const idx = args.indexOf("--disallowed-tools");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args.slice(idx + 1, idx + 3)).toEqual(["Task", "Bash(git *)"]);
+    expect(args).not.toContain("rm -rf /");
+    expect(args).not.toContain("--inject-flag");
+  });
+
+  it("emits no --disallowed-tools when the array is empty or all entries are invalid", () => {
+    const a = buildCoordinatorArgs(
+      { role: "coordinator", taskId: "t_x", prompt: "", settings: { disallowedTools: [] } },
+      "id",
+    );
+    expect(a).not.toContain("--disallowed-tools");
+    const b = buildCoordinatorArgs(
+      {
+        role: "coordinator",
+        taskId: "t_x",
+        prompt: "",
+        settings: { disallowedTools: ["", "rm -rf", "--evil"] },
+      },
+      "id",
+    );
+    expect(b).not.toContain("--disallowed-tools");
+  });
 });
 
 /**

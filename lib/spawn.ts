@@ -21,6 +21,19 @@ export interface ChatSettings {
   mode?: "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions" | "dontAsk";
   effort?: "low" | "medium" | "high" | "max";
   model?: string;
+  /**
+   * Tool names to deny via `--disallowed-tools`. Used by the coordinator
+   * spawn path to hard-block the built-in `Task` (subagent) tool — the
+   * coordinator's only contract for parallel work is the bridge's
+   * `/api/tasks/<id>/agents` endpoint, which spawns a real child claude
+   * with cwd = the target app's path. The built-in Task tool runs
+   * subagents IN-PROCESS sharing the coordinator's cwd (`claude-bridge`),
+   * so any work it dispatches lands in the wrong directory and is
+   * invisible to `meta.json`. Blocking the tool at the CLI level is the
+   * only place that survives a coordinator that has been prompted to
+   * "use whatever subagent feature is available".
+   */
+  disallowedTools?: string[];
 }
 
 const VALID_MODES = new Set<NonNullable<ChatSettings["mode"]>>([
@@ -29,6 +42,7 @@ const VALID_MODES = new Set<NonNullable<ChatSettings["mode"]>>([
 const VALID_EFFORT = new Set<NonNullable<ChatSettings["effort"]>>([
   "low", "medium", "high", "max",
 ]);
+const TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_]*(\([^)]*\))?$/;
 
 function settingsArgs(s: ChatSettings | undefined): string[] {
   const args: string[] = [];
@@ -36,6 +50,15 @@ function settingsArgs(s: ChatSettings | undefined): string[] {
   if (s.mode && VALID_MODES.has(s.mode)) args.push("--permission-mode", s.mode);
   if (s.effort && VALID_EFFORT.has(s.effort)) args.push("--effort", s.effort);
   if (s.model && /^[a-zA-Z0-9._-]+$/.test(s.model)) args.push("--model", s.model);
+  if (Array.isArray(s.disallowedTools) && s.disallowedTools.length > 0) {
+    // claude accepts space-separated tool names after --disallowed-tools
+    // (multi-arg <tools...>). Filter to a tight charset so a hostile
+    // ChatSettings can't smuggle additional flags through.
+    const clean = s.disallowedTools.filter(
+      (t) => typeof t === "string" && TOOL_NAME_RE.test(t),
+    );
+    if (clean.length > 0) args.push("--disallowed-tools", ...clean);
+  }
   return args;
 }
 
