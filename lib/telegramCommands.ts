@@ -39,7 +39,7 @@ import {
   deleteTask,
 } from "./tasksStore";
 import { readMeta, applyManyRuns } from "./meta";
-import { BRIDGE_MD, BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { spawnCoordinatorForTask } from "./coordinator";
 import { resumeClaude } from "./spawn";
 import { killChild } from "./spawnRegistry";
@@ -747,8 +747,7 @@ async function commandUsage(idArg: string | undefined): Promise<string> {
   const meta = readMeta(dir);
   if (!meta) return `Task not found: \`${idArg}\``;
 
-  let bridgeMd = "";
-  try { bridgeMd = readFileSync(BRIDGE_MD, "utf8"); } catch { /* fall through */ }
+  const bridgeMd = readBridgeMd();
 
   let total: SessionUsage = {
     inputTokens: 0, outputTokens: 0,
@@ -1104,13 +1103,13 @@ async function shouldDispatchUserMessage(msg: InboundMessage): Promise<boolean> 
   // by typing `/help` (or just chatting) in an unrelated group.
   if (!msg.isPrivate) return false;
   const target = (await import("./apps")).getManifestTelegramSettings().user.targetChatId;
-  // Strict allowlist when targetChatId is a numeric id: sender MUST
-  // match. Otherwise (empty / @username) any private chat passes —
-  // operator's responsibility to set targetChatId for security.
-  if (/^-?\d+$/.test(target)) {
-    return msg.senderId === target || msg.chatId === target;
-  }
-  return true;
+  // Hard requirement: a numeric chat id must be configured before the
+  // user-client listener will dispatch any command. Without it we have
+  // no way to verify the sender is the operator — anyone who DMs the
+  // operator's Telegram account would otherwise be able to run
+  // `/delete`, `/kill`, `/new`, etc.
+  if (!/^-?\d+$/.test(target)) return false;
+  return msg.senderId === target || msg.chatId === target;
 }
 
 /**
