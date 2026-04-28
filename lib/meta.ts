@@ -353,7 +353,26 @@ function emit(ev: MetaChangeEvent): void {
   // setImmediate-equivalent: emit synchronously so subscribers see the
   // mutation in the same tick. SSE consumers buffer their own writes.
   events.emitter.emit("meta:changed", ev);
+  // Any change to a task's meta.json must drop the cached snapshot for
+  // that task — otherwise readMeta can return a stale Meta to callers
+  // that ran in the same TTL window as the write.
+  if (ev.taskId) {
+    const dirSuffix = `${SEP}${ev.taskId}`;
+    for (const key of metaCache.keys()) {
+      if (key.endsWith(dirSuffix) || key === ev.taskId) metaCache.delete(key);
+    }
+  }
 }
+
+// In-process cache for readMeta() — same TTL pattern as appsCache /
+// authCache. Hot callers (coordinator post-exit flow, listTasks, the
+// SSE meta route) hit the same dir multiple times within one event
+// loop tick; without this each call is a separate readFileSync +
+// JSON.parse. Invalidated explicitly by emit() above so writeMeta
+// transitions are visible immediately.
+const META_CACHE_TTL_MS = 500;
+const SEP = "/";
+const metaCache = new Map<string, { value: Meta | null; expires: number }>();
 
 /**
  * CRIT-2: per-task-directory async mutex around the read-modify-write
@@ -450,9 +469,36 @@ export function createMeta(dir: string, header: Omit<Meta, "runs">): void {
 }
 
 export function readMeta(dir: string): Meta | null {
+  const now = Date.now();
+  const cached = metaCache.get(dir);
+  if (cached && cached.expires > now) return cached.value;
+
   const p = join(dir, FILE);
-  if (!existsSync(p)) return null;
-  return JSON.parse(readFileSync(p, "utf8")) as Meta;
+  if (!existsSync(p)) {
+    metaCache.set(dir, { value: null, expires: now + META_CACHE_TTL_MS });
+    return null;
+  }
+  // A truncated meta.json (mid-rename power-cut, hand-edit, sync race)
+  // would otherwise throw a SyntaxError that propagates through every
+  // listTasks() / boot sweep / SSE route caller and freezes the
+  // dashboard until the file is deleted manually. Treat parse failure
+  // as "missing" so the rest of the bridge keeps working — the next
+  // writeMeta cycle will recreate a clean copy.
+  let value: Meta | null;
+  try {
+    value = JSON.parse(readFileSync(p, "utf8")) as Meta;
+  } catch (err) {
+    console.warn(`readMeta: corrupt meta.json at ${p}`, err);
+    value = null;
+  }
+  metaCache.set(dir, { value, expires: now + META_CACHE_TTL_MS });
+  // Bound the cache so a long-running bridge with thousands of tasks
+  // doesn't accumulate stale entries beyond what TTL alone evicts.
+  if (metaCache.size > 256) {
+    const oldest = metaCache.keys().next().value;
+    if (oldest !== undefined) metaCache.delete(oldest);
+  }
+  return value;
 }
 
 export function writeMeta(dir: string, meta: Meta): void {
