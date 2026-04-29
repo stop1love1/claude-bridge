@@ -530,8 +530,11 @@ function Faq() {
       q: "Can I bring my own coordinator prompt?",
       a: (
         <>
-          Yes — <Code>bridge/coordinator.md</Code> is just a prompt template you can edit. The
-          bridge loads it on every coordinator spawn.
+          Yes — <Code>bridge/coordinator.md</Code> is the kernel prompt the bridge loads on
+          every coordinator spawn (with task / session variables substituted). The longer
+          static reference (recipe table, error codes, finalization procedure, hard rules) is
+          in <Code>bridge/coordinator-playbook.md</Code>, which the coordinator reads on
+          demand. Edit either to tune behaviour.
         </>
       ),
     },

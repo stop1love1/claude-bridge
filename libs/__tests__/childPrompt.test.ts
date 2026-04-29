@@ -99,6 +99,32 @@ describe("buildChildPrompt", () => {
     expect(out).toContain(`/api/tasks/${baseOpts.taskId}/link`);
   });
 
+  // Race-fix: child must NOT be told to self-POST status:"done" — that
+  // races wireRunLifecycle and flips the UI badge to DONE while the
+  // final summary is still streaming. The bridge owns the running→done
+  // transition on clean exit. See `bridge/coordinator.md` §0 for the
+  // matching rule on the coordinator side.
+  it("does not instruct the child to re-POST status:\"done\" at end of run", () => {
+    const out = buildChildPrompt(baseOpts);
+    // The old contract told children: `When done, re-POST the same body
+    // with "status":"done"`. That instruction must be gone, even though
+    // the prompt now contains a *negative* instruction ("Do NOT re-POST
+    // status:done") which is allowed.
+    expect(out).not.toMatch(/When done, re-POST/i);
+    // No instruction-style phrasing that tells the child to send a done
+    // status (matches "POST … status … done" with no `Do NOT` directly
+    // before it). Prefix-anchored to "POST" / "send" verbs only.
+    expect(out).not.toMatch(/(?<!Do NOT[^.]{0,30})(re-?POST|send).+status.{0,5}done/i);
+    // Forbidding instruction is explicitly present.
+    expect(out).toContain('Do NOT re-POST `status:"done"`');
+  });
+
+  it("tells the child to stop calling tools after the chat reply", () => {
+    const out = buildChildPrompt(baseOpts);
+    expect(out).toMatch(/Strict end-of-turn order/);
+    expect(out).toMatch(/no link re-POST/);
+  });
+
   it("includes the report path in the report contract using bridgeFolder", () => {
     const out = buildChildPrompt(baseOpts);
     expect(out).toContain(

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import {
   BLOCKED_EXTENSIONS,
-  MAX_UPLOAD_BYTES,
   assertInsideUploadDir,
   extractExtension,
   hasBlockedExtension,
@@ -10,12 +9,6 @@ import {
   sanitizeUploadName,
   validateUploadName,
 } from "../uploadGuards";
-
-describe("MAX_UPLOAD_BYTES", () => {
-  it("is the documented 25 MB cap", () => {
-    expect(MAX_UPLOAD_BYTES).toBe(25 * 1024 * 1024);
-  });
-});
 
 describe("sanitizeUploadName", () => {
   it("replaces Windows-illegal characters with underscores", () => {

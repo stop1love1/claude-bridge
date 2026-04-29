@@ -665,7 +665,7 @@ async function commandContinue(idArg: string | undefined): Promise<string> {
   if (coord) {
     // Mirror app/api/tasks/<id>/continue logic.
     const message =
-      `Continue from where you left off for bridge task ${idArg}. Read sessions/${idArg}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per coordinator.md §5. Otherwise re-orchestrate as needed.`;
+      `Continue from where you left off for bridge task ${idArg}. Read sessions/${idArg}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per bridge/coordinator-playbook.md §5. Otherwise re-orchestrate as needed.`;
     resumeClaude(BRIDGE_ROOT, coord.sessionId, message, { mode: "bypassPermissions" });
     return `▶️ Resumed coordinator for \`${idArg}\` \\(\`${coord.sessionId.slice(0, 8)}\`\\)`;
   }

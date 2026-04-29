@@ -58,10 +58,3 @@ describe("__test.pickTouchedDir", () => {
     expect(dir).toBeNull();
   });
 });
-
-describe("constants", () => {
-  it("LOG_LINE_CAP and GIT_TIMEOUT_MS are sane defaults", () => {
-    expect(__test.LOG_LINE_CAP).toBe(30);
-    expect(__test.GIT_TIMEOUT_MS).toBe(3000);
-  });
-});

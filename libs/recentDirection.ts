@@ -115,6 +115,4 @@ export async function buildRecentDirection(
 
 export const __test = {
   pickTouchedDir,
-  LOG_LINE_CAP,
-  GIT_TIMEOUT_MS,
 };

@@ -40,11 +40,19 @@ export const SESSIONS_DIR = join(BRIDGE_ROOT, "sessions");
 
 /**
  * All bridge-runtime markdown lives here:
- *   - `coordinator.md`     — the coordinator prompt template
- *   - `report-template.md` — the child agent report contract
+ *   - `coordinator.md`           — the coordinator KERNEL prompt template
+ *                                  (short, with `{{TASK_ID}}` / `{{SESSION_ID}}` /
+ *                                  `{{BRIDGE_URL}}` / `{{BRIDGE_FOLDER}}` substituted
+ *                                  at spawn time)
+ *   - `coordinator-playbook.md`  — static reference manual the coordinator `Read`s
+ *                                  on demand (recipe table, error codes, NEEDS-DECISION
+ *                                  procedure, hard rules). Not substituted; the kernel
+ *                                  tells the coordinator to mentally substitute its
+ *                                  template markers from the kernel.
+ *   - `report-template.md`       — the child agent report contract
  *   - `bugs.md`, `decisions.md`, `questions.md` —
- *     cross-repo registers the coordinator reads / writes
- *   - `tasks.md`           — legacy notebook (no longer runtime data)
+ *                                  cross-repo registers the coordinator reads / writes
+ *   - `tasks.md`                 — legacy notebook (no longer runtime data)
  */
 export const BRIDGE_LOGIC_DIR = join(BRIDGE_ROOT, "bridge");
 

@@ -5,8 +5,8 @@ import { dispatchCommand } from "../telegramCommands";
  * These tests cover the pure dispatcher + parser + validation layer of
  * `lib/telegramCommands`. Side-effecting handlers (`/done`, `/new`,
  * `/clear`, …) are exercised by the underlying lib tests
- * (`tasksStore.test.ts`, `meta.test.ts`, etc.); duplicating them here
- * would couple this suite to disk state that other suites already cover.
+ * (`tasks.test.ts`, `meta.test.ts`, etc.); duplicating them here would
+ * couple this suite to disk state those suites already cover.
  *
  * What we DO assert:
  *   - command name parsing (leading slash, `@botname` suffix, args)

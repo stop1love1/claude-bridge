@@ -36,7 +36,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
       const coordinatorRun = meta.runs.find((r) => r.role === "coordinator");
       if (coordinatorRun) {
-        const message = `Continue from where you left off for bridge task ${id}. Read sessions/${id}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per coordinator.md §5. Otherwise re-orchestrate as needed.`;
+        const message = `Continue from where you left off for bridge task ${id}. Read sessions/${id}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per bridge/coordinator-playbook.md §5. Otherwise re-orchestrate as needed.`;
         // Resumed coordinator runs unattended too — without bypass, the
         // first tool call hangs on a non-existent permission TTY.
         resumeClaude(BRIDGE_ROOT, coordinatorRun.sessionId, message, { mode: "bypassPermissions" });

@@ -1,12 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRunIfNotDuplicate, readMeta, updateRun } from "@/lib/meta";
+import { appendRunIfNotDuplicate, readMeta, updateRun, type Run } from "@/lib/meta";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
 import { resolveRepoCwd, resolveRepos } from "@/lib/repos";
-import { spawnFreeSession } from "@/lib/spawn";
+import { resumeClaude, spawnFreeSession } from "@/lib/spawn";
 import { wireRunLifecycle } from "@/lib/coordinator";
 import { getApp } from "@/lib/apps";
 import { prepareBranch } from "@/lib/gitOps";
@@ -18,6 +19,7 @@ import {
   type DetectedScope,
 } from "@/lib/detect";
 import { buildChildPrompt } from "@/lib/childPrompt";
+import { buildResumePrompt } from "@/lib/resumePrompt";
 import { loadHouseRules } from "@/lib/houseRules";
 import { topMemoryEntries } from "@/lib/memory";
 import { loadPlaybook } from "@/lib/playbooks";
@@ -71,6 +73,23 @@ interface AgentBody {
    * `n` and clog the agent tree. Default `false`.
    */
   noSpeculative?: boolean;
+  /**
+   * Dispatch shape:
+   *   - `"spawn"` (default) — fresh child Claude session via
+   *     `spawnFreeSession`. Repo context is pre-warmed, the brief is
+   *     wrapped with the full child-prompt scaffolding, branch is
+   *     prepared, and a worktree is allocated when worktree mode is on.
+   *   - `"resume"` — continuation turn for a child that has already
+   *     finished. The bridge looks up the prior run by
+   *     `(parentSessionId, role, repo)`, calls `claude --resume <sid>`
+   *     with the operator's brief as the new user message, and reuses
+   *     the same `sessionId` / worktree (when still on disk). Skips
+   *     pre-warm + branch prep + the long child-prompt preamble since
+   *     the child already has all that context in its transcript.
+   *     Rejected when no completed prior run exists or when an active
+   *     duplicate is still running.
+   */
+  mode?: "spawn" | "resume";
 }
 
 interface SpeculativeDecision {
@@ -131,6 +150,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const requireUserApproval = body.requireUserApproval === true;
   const allowDuplicate = body.allowDuplicate === true;
   const noSpeculative = body.noSpeculative === true;
+  // Mode validation: only "spawn" / "resume" or absent are accepted. An
+  // unknown string would silently fall through to the spawn path with
+  // the wrong intent — fail loud instead.
+  let mode: "spawn" | "resume" = "spawn";
+  if (body.mode !== undefined) {
+    if (body.mode !== "spawn" && body.mode !== "resume") {
+      return badRequest("invalid mode (must be 'spawn' or 'resume')");
+    }
+    mode = body.mode;
+  }
 
   if (!role) {
     return NextResponse.json({ error: "role is required" }, { status: 400 });
@@ -212,6 +241,37 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { error: `unknown repo: ${repo}` },
       { status: 400 },
     );
+  }
+
+  // ─── Resume branch ──────────────────────────────────────────────────
+  // When mode==="resume" we do NOT spawn a fresh child. The bridge looks
+  // up the prior run by (parentSessionId, role, repo), reuses its
+  // sessionId, and calls `claude --resume <sid>` so the child continues
+  // its existing conversation with the operator's brief as the new user
+  // message. Saves the full child-prompt preamble (~5KB) plus repo
+  // pre-warm + git branch prep, since the child already has all that
+  // context in its transcript from the original spawn.
+  //
+  // Constraints:
+  //   - Exactly one *finished* (`done` / `failed`) prior run must match.
+  //     If zero match, the caller has no session to resume — return 400.
+  //   - No active sibling (`queued` / `running`) for the same triple
+  //     can be live; resuming alongside one would race the kid's stdout.
+  //   - Speculative losers are not resumable (their worktree was
+  //     destroyed by the winner-claim path).
+  if (mode === "resume") {
+    return handleResume({
+      sessionsDir,
+      taskId: id,
+      taskTitle: meta.taskTitle,
+      taskBody: meta.taskBody,
+      role,
+      repo,
+      repoCwd,
+      prompt,
+      parentSessionId: parentSessionId ?? null,
+      runs: meta.runs,
+    });
   }
 
   // Early dedup fast-path: rejects the common "coordinator double-POSTed
@@ -867,4 +927,192 @@ function waitForSpawnApproval(args: {
       createdAt: new Date().toISOString(),
     });
   });
+}
+
+/**
+ * Handle the `mode: "resume"` dispatch path. Looks up the prior run by
+ * `(parentSessionId, role, repo)`, validates it is resumable (no live
+ * sibling, not a speculative loser, sessionId still routable), updates
+ * meta.json to flip status back to running, and calls `resumeClaude`
+ * with a compact follow-up message.
+ *
+ * Failure modes (all return JSON with the bridge's standard error
+ * shape):
+ *   - 400 — no prior completed run for this triple.
+ *   - 409 — a sibling is currently running for this triple.
+ *   - 410 — prior run is a speculative loser (worktree destroyed).
+ *   - 500 — `resumeClaude` threw (claude binary missing, EAGAIN, …).
+ */
+async function handleResume(args: {
+  sessionsDir: string;
+  taskId: string;
+  taskTitle: string;
+  taskBody: string;
+  role: string;
+  repo: string;
+  repoCwd: string;
+  prompt: string;
+  parentSessionId: string | null;
+  runs: Run[];
+}): Promise<NextResponse> {
+  const {
+    sessionsDir,
+    taskId,
+    role,
+    repo,
+    repoCwd,
+    prompt,
+    parentSessionId,
+    runs,
+  } = args;
+
+  const matchTriple = (r: Run) =>
+    (r.parentSessionId ?? null) === parentSessionId &&
+    r.role === role &&
+    r.repo === repo;
+
+  // Reject if a sibling is still running. Resuming alongside an active
+  // run would race the .jsonl tail and confuse both turns' transcripts.
+  const liveSibling = runs.find(
+    (r) => matchTriple(r) && (r.status === "queued" || r.status === "running"),
+  );
+  if (liveSibling) {
+    return NextResponse.json(
+      {
+        error: "cannot resume while a sibling is running",
+        reason:
+          "a queued/running child with the same parentSessionId, role, and repo is already in flight; wait for it to finish (or kill it) before resuming",
+        liveSessionId: liveSibling.sessionId,
+        liveStatus: liveSibling.status,
+      },
+      { status: 409 },
+    );
+  }
+
+  // Pick the most recent completed prior run. `done` ranks above
+  // `failed` so we don't accidentally resume the failure when a
+  // successful turn followed it (rare; the post-exit gates can flip
+  // status mid-flight). Among same-status candidates, the latest
+  // endedAt wins.
+  const completed = runs.filter(
+    (r) => matchTriple(r) && (r.status === "done" || r.status === "failed"),
+  );
+  if (completed.length === 0) {
+    return NextResponse.json(
+      {
+        error: "no prior run to resume",
+        reason:
+          "resume requires a completed (done/failed) prior child for the same parentSessionId, role, and repo; none was found in this task",
+        role,
+        repo,
+        parentSessionId,
+      },
+      { status: 400 },
+    );
+  }
+  const prior = [...completed].sort((a, b) => {
+    const ra = a.status === "done" ? 0 : 1;
+    const rb = b.status === "done" ? 0 : 1;
+    if (ra !== rb) return ra - rb;
+    return (b.endedAt ?? "").localeCompare(a.endedAt ?? "");
+  })[0];
+
+  // Speculative losers had their worktree destroyed during winner
+  // selection. Their .jsonl transcript still exists, but the cwd they
+  // referenced is gone — resuming would either error on file ops or
+  // worse, edit the live tree as if it were the worktree.
+  if (prior.speculativeOutcome === "lost") {
+    return NextResponse.json(
+      {
+        error: "prior run is a speculative loser",
+        reason:
+          "this child was killed during speculative winner selection; its worktree was destroyed and its session cannot be safely resumed. Spawn fresh (omit `mode`) instead.",
+        priorSessionId: prior.sessionId,
+      },
+      { status: 410 },
+    );
+  }
+
+  // Pick spawn cwd: prefer the prior worktree when it still exists on
+  // disk (failure path that didn't run cleanup, or worktree mode + no
+  // post-exit merge yet). Otherwise fall back to repoCwd — the live
+  // tree typically holds the merged result of the prior turn anyway.
+  let spawnCwd = repoCwd;
+  if (prior.worktreePath && existsSync(prior.worktreePath)) {
+    spawnCwd = prior.worktreePath;
+  }
+
+  // Flip the prior run's status back to running. We DO NOT append a
+  // new run — resume reuses the same sessionId, same row. The .jsonl
+  // gets a new turn appended, the meta.json row's startedAt updates,
+  // endedAt clears.
+  try {
+    await updateRun(sessionsDir, prior.sessionId, {
+      status: "running",
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+    });
+  } catch (e) {
+    console.error("failed to flip resume run back to running", e);
+    return NextResponse.json(
+      { error: "meta update failed", reason: e instanceof Error ? e.message : String(e) },
+      { status: 500 },
+    );
+  }
+
+  // Per-session settings file with the same PreToolUse permission hook
+  // as the spawn path. The original spawn's settings file was reaped on
+  // exit, so we always write a fresh one for the resume turn.
+  const settingsPath = writeSessionSettings(freeSessionSettingsPath(prior.sessionId));
+
+  const resumePrompt = buildResumePrompt({
+    taskId,
+    role,
+    repo,
+    parentSessionId,
+    coordinatorBody: prompt,
+  });
+
+  let child;
+  try {
+    child = resumeClaude(
+      spawnCwd,
+      prior.sessionId,
+      resumePrompt,
+      { mode: "bypassPermissions" },
+      settingsPath,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Roll the meta row back to its prior terminal state so the UI
+    // doesn't show a phantom-running row.
+    try {
+      await updateRun(sessionsDir, prior.sessionId, {
+        status: prior.status,
+        endedAt: prior.endedAt,
+      });
+    } catch (uErr) {
+      console.error("failed to roll resume run back after spawn error", uErr);
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+
+  wireRunLifecycle(
+    sessionsDir,
+    prior.sessionId,
+    child,
+    `agent-resume ${taskId}/${prior.sessionId}`,
+  );
+
+  return NextResponse.json(
+    {
+      sessionId: prior.sessionId,
+      action: "resumed",
+      repo,
+      priorStatus: prior.status,
+      priorEndedAt: prior.endedAt,
+      cwd: spawnCwd,
+    },
+    { status: 201 },
+  );
 }
