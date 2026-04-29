@@ -5,6 +5,9 @@
       "PowerShell(*)",
       "Node(*)",
       "Bun(*)"
+    ],
+    "additionalDirectories": [
+      "D:\\Edusoft\\claude-bridge\\.git"
     ]
   }
 }

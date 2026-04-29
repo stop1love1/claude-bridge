@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -24,6 +24,7 @@ beforeEach(() => {
   originalHome = process.env.HOME;
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   vi.spyOn(require("node:os"), "homedir").mockReturnValue(tempHome);
   vi.resetModules();
 });

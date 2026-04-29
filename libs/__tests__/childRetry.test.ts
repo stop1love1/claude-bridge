@@ -17,6 +17,7 @@ beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), "bridge-childretry-test-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   vi.spyOn(require("node:os"), "homedir").mockReturnValue(tempHome);
   vi.resetModules();
 });

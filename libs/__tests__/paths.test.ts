@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 /**
  * paths.ts captures `process.cwd()` and `homedir()` at module load
