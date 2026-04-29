@@ -63,6 +63,21 @@ interface AgentBody {
    * (caller must have a good reason — usually it's a coordinator bug).
    */
   allowDuplicate?: boolean;
+  /**
+   * Force-disable speculative fan-out for this dispatch even when the
+   * app has `dispatch.speculative.enabled = true`. Used by retry
+   * spawners (`-vretry`, `-cretry`, …) so a verify-failure retry
+   * doesn't itself fan out — that would multiply the retry budget by
+   * `n` and clog the agent tree. Default `false`.
+   */
+  noSpeculative?: boolean;
+}
+
+interface SpeculativeDecision {
+  enabled: boolean;
+  n: number;
+  groupId: string | null;
+  reason: string;
 }
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -115,6 +130,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // to surface the dialog.
   const requireUserApproval = body.requireUserApproval === true;
   const allowDuplicate = body.allowDuplicate === true;
+  const noSpeculative = body.noSpeculative === true;
 
   if (!role) {
     return NextResponse.json({ error: "role is required" }, { status: 400 });
@@ -256,6 +272,30 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   }
 
+  // Decide whether to fan out N speculative siblings. Requires:
+  //   - app.dispatch.speculative.enabled === true
+  //   - role is in the configured roles set (default ["coder"])
+  //   - worktree mode is on (live-tree fan-out would race the shared HEAD)
+  //   - caller didn't opt out via noSpeculative or allowDuplicate
+  // Falls through to single-spawn (n=1) when any precondition fails.
+  const speculative = decideSpeculative({
+    app,
+    role,
+    useWorktree,
+    noSpeculative,
+    allowDuplicate,
+  });
+
+  // Per-sibling outputs the loop accumulates. Used to build the response
+  // and to clean up partial state if a mid-loop spawn fails.
+  const spawned: Array<{
+    sessionId: string;
+    repo: string;
+    worktreePath: string | null;
+    variantIndex: number;
+  }> = [];
+
+  for (let variantIndex = 0; variantIndex < speculative.n; variantIndex++) {
   // Pre-mint the child session UUID. Same fix as coordinator: avoids the
   // "newest .jsonl in project dir" race when other claude sessions are
   // active in the same cwd.
@@ -358,6 +398,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       })
     : null;
 
+  // For speculative siblings, inject a tiny variant nudge into the
+  // coordinator-supplied brief so the children explore *different*
+  // angles instead of all running the same path. The variant header is
+  // intentionally short — the agent's playbook + brief still does the
+  // heavy lifting; we just bias attention slightly. The bridge picks
+  // the first run that passes all post-exit gates as the winner.
+  const variantPrompt = speculative.enabled
+    ? renderSpeculativeVariantPrefix({
+        index: variantIndex,
+        total: speculative.n,
+        groupId: speculative.groupId ?? "",
+      }) + "\n\n" + prompt
+    : prompt;
+
   const prependedPrompt = buildChildPrompt({
     taskId: id,
     taskTitle: meta.taskTitle,
@@ -368,7 +422,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     repo,
     repoCwd: spawnCwd,
     contextBlock,
-    coordinatorBody: prompt,
+    coordinatorBody: variantPrompt,
     profile: profilesMap?.[repo],
     houseRules,
     playbookBody,
@@ -386,7 +440,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // (b) we have a parent session id to route the popup back to. Without
   // a parent, there's no SSE stream to fire on, so we'd just hang — fail
   // open in that case (CLI / programmatic invocation).
-  if (requireUserApproval && parentSessionId) {
+  // Speculative path: skip the popup. Asking N times for one logical
+  // dispatch is awful UX, and the operator already opted in to
+  // speculative at app-config time.
+  if (requireUserApproval && parentSessionId && !speculative.enabled) {
     const decision = await waitForSpawnApproval({
       parentSessionId,
       role,
@@ -430,6 +487,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     role,
     repo,
   };
+  // For speculative siblings 1..N-1 we bypass dedup — they intentionally
+  // share (parent, role, repo) with their sibling at index 0, and the
+  // group is identified by `speculativeGroup`. Sibling 0 still runs the
+  // normal dedup so a *different* group (e.g. a stale one from a prior
+  // dispatch) still 409s correctly.
+  const skipDedup = allowDuplicate || (speculative.enabled && variantIndex > 0);
   const dedupResult = await appendRunIfNotDuplicate(
     sessionsDir,
     {
@@ -443,9 +506,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       worktreePath: worktreePath ?? null,
       worktreeBranch: worktreeBranch ?? null,
       worktreeBaseBranch: worktreeBaseBranch ?? null,
+      speculativeGroup: speculative.groupId,
     },
     (existing) =>
-      !allowDuplicate &&
+      !skipDedup &&
       (existing.parentSessionId ?? null) === dedupKey.parentSessionId &&
       existing.role === dedupKey.role &&
       existing.repo === dedupKey.repo &&
@@ -521,19 +585,144 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   wireRunLifecycle(sessionsDir, sessionId, childHandle.child, `agent ${id}/${sessionId}`);
 
+  spawned.push({
+    sessionId,
+    repo,
+    worktreePath: worktreePath ?? null,
+    variantIndex,
+  });
+  } // end speculative for-loop
+
+  // Single-spawn path: preserve the legacy response shape so existing
+  // callers (coordinator playbook curl, scripts, tests) keep working.
+  if (!speculative.enabled) {
+    const only = spawned[0];
+    return NextResponse.json(
+      autoDetected
+        ? {
+            sessionId: only.sessionId,
+            action: "spawned",
+            repo,
+            autoDetected: true,
+            reason: autoDetectReason,
+            score: autoDetectScore,
+          }
+        : { sessionId: only.sessionId, action: "spawned", repo },
+      { status: 201 },
+    );
+  }
+
+  // Speculative path: aggregate response with the group id + every
+  // sibling's sessionId. The first sessionId is the "primary" from
+  // the caller's perspective so coordinators that hardcode `.sessionId`
+  // still pick something sensible to track.
   return NextResponse.json(
-    autoDetected
-      ? {
-          sessionId,
-          action: "spawned",
-          repo,
-          autoDetected: true,
-          reason: autoDetectReason,
-          score: autoDetectScore,
-        }
-      : { sessionId, action: "spawned", repo },
+    {
+      sessionId: spawned[0]?.sessionId,
+      action: "spawned-speculative",
+      repo,
+      group: speculative.groupId,
+      siblings: spawned.map((s) => ({
+        sessionId: s.sessionId,
+        variantIndex: s.variantIndex,
+      })),
+      ...(autoDetected
+        ? { autoDetected: true, reason: autoDetectReason, score: autoDetectScore }
+        : {}),
+    },
     { status: 201 },
   );
+}
+
+/**
+ * Decide whether speculative fan-out applies to this dispatch. Falls
+ * back to a single spawn (n=1, enabled=false) on any precondition miss.
+ *
+ * Live-tree fan-out is refused: prepareBranch + auto-create branch
+ * names mutate the shared HEAD, so two parallel siblings would race.
+ * Worktree mode is the only safe substrate.
+ */
+function decideSpeculative(args: {
+  app: ReturnType<typeof getApp> | null;
+  role: string;
+  useWorktree: boolean;
+  noSpeculative: boolean;
+  allowDuplicate: boolean;
+}): SpeculativeDecision {
+  const { app, role, useWorktree, noSpeculative, allowDuplicate } = args;
+  const off = (reason: string): SpeculativeDecision => ({
+    enabled: false,
+    n: 1,
+    groupId: null,
+    reason,
+  });
+  if (noSpeculative) return off("caller opted out via noSpeculative");
+  if (allowDuplicate) return off("allowDuplicate=true bypasses speculative");
+  if (!app) return off("no registered app");
+  const cfg = app.dispatch?.speculative;
+  if (!cfg || !cfg.enabled) return off("app.dispatch.speculative disabled");
+  if (!useWorktree) {
+    return off(
+      "speculative requires worktreeMode=enabled (live-tree fan-out races shared HEAD)",
+    );
+  }
+  const roles = cfg.roles ?? ["coder"];
+  if (!roles.includes(role)) {
+    return off(`role \`${role}\` not in speculative roles ${JSON.stringify(roles)}`);
+  }
+  const n = cfg.n ?? 2;
+  if (n < 2) return off("speculative n < 2");
+  return {
+    enabled: true,
+    n,
+    groupId: randomUUID(),
+    reason: `fan-out ${n} for ${role}`,
+  };
+}
+
+/**
+ * Build the small variant-nudge block prepended to each speculative
+ * sibling's coordinator brief. Intentionally short — the coordinator's
+ * own brief and the role playbook still drive the agent. We just bias
+ * each sibling toward a different angle so the bridge gets divergent
+ * attempts to pick from instead of N near-identical clones.
+ */
+function renderSpeculativeVariantPrefix(args: {
+  index: number;
+  total: number;
+  groupId: string;
+}): string {
+  // Variant angles. We rotate through these by `index % len`. Adding
+  // more here is a no-op — only the first `total` are visible per
+  // dispatch and each sibling still sees the same full brief.
+  const angles: ReadonlyArray<{ label: string; nudge: string }> = [
+    {
+      label: "Conservative",
+      nudge: "Prefer the smallest, most surgical change that satisfies the brief. Touch the fewest files. Reuse existing helpers without refactoring them.",
+    },
+    {
+      label: "Refactor-friendly",
+      nudge: "If the brief reveals a pattern that's already off in this codebase, fix it as part of the work — within the scope of the task. Extracting a helper or renaming a misleading symbol is in-scope here.",
+    },
+    {
+      label: "Defensive",
+      nudge: "Treat every input boundary as untrusted. Add explicit validation + error paths even when the immediate caller looks safe. Lean toward fewer assumptions about pre-conditions.",
+    },
+    {
+      label: "Idiomatic",
+      nudge: "Match this codebase's existing patterns even when there's a textbook 'cleaner' approach. The team's conventions outrank generic best-practices for this task.",
+    },
+  ];
+  const angle = angles[args.index % angles.length];
+  return [
+    "## Speculative variant",
+    "",
+    `You are variant **${args.index + 1} of ${args.total}** in speculative dispatch group \`${args.groupId.slice(0, 8)}\`. The bridge spawned ${args.total} parallel attempts at this brief and will pick the first one that passes all post-exit gates as the winner; the others will be killed once a winner emerges.`,
+    "",
+    `**Your variant angle: ${angle.label}.** ${angle.nudge}`,
+    "",
+    "Don't try to second-guess the other variants — focus on YOUR angle. Honest divergence beats hedged consensus here.",
+  ].join("\n");
 }
 
 const GIT_TIMEOUT_MS = 3000;

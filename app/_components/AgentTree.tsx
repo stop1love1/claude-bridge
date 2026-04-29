@@ -169,6 +169,16 @@ function buildTree(runs: Run[]): TreeNode[] {
   return [rooted, ...orphans];
 }
 
+/**
+ * Trim a stream-json `task_started.description` to a one-line preview
+ * for the live label. Some descriptions Claude attaches are full
+ * paragraphs; we want a single concise line under the run row.
+ */
+function truncateLabel(s: string, max: number): string {
+  const oneLine = s.replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? oneLine.slice(0, max - 1) + "…" : oneLine;
+}
+
 function StatusPill({ run }: { run: Run }) {
   const pill = RUN_STATUS_PILL[run.status];
   return (
@@ -194,6 +204,7 @@ function AgentNode({
   onKill,
   onDiff,
   branchByRepo,
+  liveStatusBySession,
 }: {
   node: TreeNode;
   depth: number;
@@ -202,6 +213,7 @@ function AgentNode({
   onKill?: (run: Run) => void;
   onDiff?: (run: Run) => void;
   branchByRepo?: Record<string, string | null>;
+  liveStatusBySession?: Map<string, { kind: string; label?: string }>;
 }) {
   const { run } = node;
   const iconCls = roleColor(run.role);
@@ -209,6 +221,19 @@ function AgentNode({
   const active = activeSessionId === run.sessionId;
   const canKill = run.status === "running" && !!onKill;
   const branch = branchByRepo?.[run.repo] ?? null;
+  // Live tool / activity label streamed from the child's stream-json
+  // events. Only shown while the run is `running` — terminal-state runs
+  // get their final label from meta.json's status pill.
+  const live =
+    run.status === "running"
+      ? liveStatusBySession?.get(run.sessionId) ?? null
+      : null;
+  const liveLabel =
+    live && live.kind === "running" && live.label
+      ? `Running: ${truncateLabel(live.label, 80)}`
+      : live && live.kind === "thinking"
+      ? "Thinking…"
+      : null;
 
   return (
     <li className="list-none">
@@ -268,6 +293,15 @@ function AgentNode({
         )}
       </div>
 
+      {liveLabel && (
+        <p
+          className="mt-0.5 ml-7 text-[10px] font-mono text-fg-dim italic truncate"
+          title={liveLabel}
+        >
+          {liveLabel}
+        </p>
+      )}
+
       {node.children.length > 0 && (
         <ul className="mt-1 ml-4 pl-3 border-l border-border space-y-1">
           {node.children.map((c) => (
@@ -277,6 +311,7 @@ function AgentNode({
               depth={depth + 1}
               activeSessionId={activeSessionId}
               onSelectRun={onSelectRun}
+              liveStatusBySession={liveStatusBySession}
               onKill={onKill}
               onDiff={onDiff}
               branchByRepo={branchByRepo}
@@ -308,6 +343,7 @@ function AgentTreeInner({
   onSelectRun,
   onKill,
   branchByRepo,
+  liveStatusBySession,
 }: {
   meta: Meta | null;
   taskId?: string;
@@ -315,6 +351,7 @@ function AgentTreeInner({
   onSelectRun: (run: Run) => void;
   onKill?: (run: Run) => void;
   branchByRepo?: Record<string, string | null>;
+  liveStatusBySession?: Map<string, { kind: string; label?: string }>;
 }) {
   const tree = useMemo(() => buildTree(meta?.runs ?? []), [meta?.runs]);
   const [diffRun, setDiffRun] = useState<Run | null>(null);
@@ -341,6 +378,7 @@ function AgentTreeInner({
             onKill={onKill}
             onDiff={onDiff}
             branchByRepo={branchByRepo}
+            liveStatusBySession={liveStatusBySession}
           />
         ))}
       </ul>

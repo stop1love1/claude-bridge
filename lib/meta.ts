@@ -125,6 +125,21 @@ export interface Run {
    * merge and just remove the worktree.
    */
   worktreeBaseBranch?: string | null;
+  /**
+   * Speculative dispatch group id. Set when this run is one of N
+   * parallel siblings spawned by `app.dispatch.speculative.enabled`.
+   * All siblings share the same `speculativeGroup` so the winner
+   * selection (in coordinator.ts:postExitFlow) can find them. Absent
+   * on regular (non-speculative) runs.
+   */
+  speculativeGroup?: string | null;
+  /**
+   * Set to `"won"` on the run that the bridge picked as the
+   * speculative winner; `"lost"` on the killed siblings. Absent until
+   * winner selection runs. Surfaced in the UI so operators can see
+   * which path the bridge committed.
+   */
+  speculativeOutcome?: "won" | "lost" | null;
 }
 
 /**

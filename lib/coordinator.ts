@@ -102,6 +102,11 @@ export function wireRunLifecycle(
       const meta = readMeta(sessionsDir);
       const failedRun = meta?.runs.find((r) => r.sessionId === sessionId);
       if (!failedRun || failedRun.status !== "failed") return;
+      // Speculative loser: the bridge SIGTERM'd this child as part of
+      // winner-selection, not because the agent crashed. Retrying
+      // would just waste tokens running a path the user already
+      // committed (via the winner). Skip auto-retry for losers.
+      if (failedRun.speculativeOutcome === "lost") return;
       // Lazy import: childRetry → coordinator (this file) → … breaks
       // the cycle if loaded eagerly at module top.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -645,6 +650,66 @@ export function wireRunLifecycle(
           status: "done",
           endedAt: new Date().toISOString(),
         });
+      }
+    }
+
+    // Speculative winner selection. When this run is part of a fan-out
+    // group (Run.speculativeGroup set), atomically claim the win or
+    // accept that a sibling already won. Losers skip auto-commit + merge
+    // — only the winner's diff lands in the live tree.
+    if (run.speculativeGroup) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { claimSpeculativeWinner } = require("./speculative") as typeof import("./speculative");
+        const claim = await claimSpeculativeWinner({ taskId: tid, run });
+        console.log(
+          `[speculative] ${t}: ${claim.outcome} — ${claim.reason}` +
+            (claim.killed.length > 0
+              ? ` — killed ${claim.killed.length} sibling(s)`
+              : ""),
+        );
+        if (!claim.proceed) {
+          // Lost the race. Skip auto-commit + worktree merge entirely.
+          // Worktree was already removed by claim() above.
+          return;
+        }
+      } catch (err) {
+        console.error(`[speculative] claim crashed for ${t}`, err);
+        // Fail-soft: if claim throws, fall through and let auto-commit
+        // run normally. Worst case both winner and laggard sibling
+        // commit; the operator can untangle in git. Better than
+        // blocking ALL auto-commit on a transient bug.
+      }
+    }
+
+    // Auto-memory distillation. Opt-in per app via `memory.distill`. Runs
+    // BEFORE auto-commit so the agent sees the still-uncommitted diff via
+    // `git diff HEAD`. Skipped on retry runs (the lesson belongs to the
+    // original primary attempt, not the retry that fixed it).
+    if (
+      app &&
+      app.memory?.distill === true &&
+      !vcGuard.isAlreadyRetryRun(run.role)
+    ) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { runMemoryDistill } = require("./memoryDistill") as typeof import("./memoryDistill");
+        const distillResult = await runMemoryDistill({
+          appPath: run.worktreePath ?? app.path,
+          taskId: tid,
+          finishedRun: run,
+          taskTitle: title,
+          taskBody: readMeta(dir)?.taskBody ?? "",
+        });
+        if (distillResult.appended > 0) {
+          console.log(
+            `[memory-distill] ${t}: ${distillResult.reason} (sid ${distillResult.distillSessionId})`,
+          );
+        } else {
+          console.log(`[memory-distill] ${t}: ${distillResult.reason}`);
+        }
+      } catch (err) {
+        console.error(`memory-distill crashed for ${t}`, err);
       }
     }
 

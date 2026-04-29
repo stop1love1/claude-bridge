@@ -60,6 +60,10 @@ describe("apps.verify (D1)", () => {
       symbolDirs: [],
       verify: {},
       quality: {},
+      capabilities: [],
+      retry: {},
+      memory: {},
+      dispatch: {},
     }];
     const out = serializeApps(apps);
     expect(out).not.toContain("verify");
@@ -77,6 +81,10 @@ describe("apps.verify (D1)", () => {
       symbolDirs: [],
       verify: { test: "bun test", typecheck: "tsc --noEmit" },
       quality: {},
+      capabilities: [],
+      retry: {},
+      memory: {},
+      dispatch: {},
     }];
     const parsed = JSON.parse(serializeApps(apps)) as {
       apps: Array<{ verify?: Record<string, string> }>;
@@ -98,6 +106,10 @@ describe("apps.verify (D1)", () => {
       symbolDirs: [],
       verify: { test: "bun test --reporter=verbose", lint: "eslint src/" },
       quality: {},
+      capabilities: [],
+      retry: {},
+      memory: {},
+      dispatch: {},
     }];
     const after = parseApps(serializeApps(before));
     expect(after[0].verify).toEqual(before[0].verify);

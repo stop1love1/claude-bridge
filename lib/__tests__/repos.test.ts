@@ -73,6 +73,8 @@ describe("serializeApps + round-trip", () => {
         quality: {},
         capabilities: [],
         retry: {},
+        memory: {},
+        dispatch: {},
       },
       {
         name: "app-web",
@@ -86,6 +88,8 @@ describe("serializeApps + round-trip", () => {
         quality: {},
         capabilities: [],
         retry: {},
+        memory: {},
+        dispatch: {},
       },
     ];
     const json = serializeApps(apps);
@@ -110,6 +114,8 @@ describe("serializeApps + round-trip", () => {
         quality: {},
         capabilities: [],
         retry: {},
+        memory: {},
+        dispatch: {},
       },
     ]);
     const parsed = JSON.parse(json) as { apps: Array<Record<string, unknown>> };
@@ -144,6 +150,8 @@ describe("serializeApps + round-trip", () => {
         quality: {},
         capabilities: [],
         retry: {},
+        memory: {},
+        dispatch: {},
       },
     ];
     const json = serializeApps(apps);
@@ -184,6 +192,8 @@ describe("serializeApps + round-trip", () => {
         quality: {},
         capabilities: [],
         retry: {},
+        memory: {},
+        dispatch: {},
       },
     ];
     const json = serializeApps(apps);

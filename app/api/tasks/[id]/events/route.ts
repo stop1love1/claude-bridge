@@ -4,6 +4,7 @@ import { readMeta, subscribeMeta, type MetaChangeEvent } from "@/lib/meta";
 import { SESSIONS_DIR } from "@/lib/paths";
 import { isValidTaskId } from "@/lib/tasks";
 import { badRequest } from "@/lib/validate";
+import { subscribeSession, type StatusEvent } from "@/lib/sessionEvents";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       let closed = false;
       let ka: ReturnType<typeof setInterval> | null = null;
       let unsub: (() => void) | null = null;
+      // Per-child status subscriptions. We attach one for every run
+      // already in meta.json at connect time, plus one for every
+      // newly-spawned run we see via the meta event stream. Cleanup
+      // tears them all down on close().
+      const childStatusUnsubs = new Map<string, () => void>();
 
       const close = () => {
         if (closed) return;
@@ -53,6 +59,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
           try { unsub(); } catch { /* ignore */ }
           unsub = null;
         }
+        for (const [, off] of childStatusUnsubs) {
+          try { off(); } catch { /* ignore */ }
+        }
+        childStatusUnsubs.clear();
         if (ka !== null) {
           clearInterval(ka);
           ka = null;
@@ -78,9 +88,40 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         }
       };
 
+      /**
+       * Forward per-child stream-json status (`thinking` / `running:
+       * <tool description>` / `idle`) as a `child-status` SSE event
+       * scoped to this task. The child's status is already routed
+       * through `lib/sessionEvents` by the spawn parser; we just
+       * fan it out to per-task subscribers so the UI can render
+       * "coder is running git status" mid-task instead of waiting
+       * for the final report.
+       */
+      const attachChildStatus = (sessionId: string) => {
+        if (childStatusUnsubs.has(sessionId)) return;
+        const off = subscribeSession(sessionId, {
+          onStatus: (s: StatusEvent) => {
+            if (closed) return;
+            send("child-status", { sessionId, status: s });
+          },
+          onAlive: (alive: boolean) => {
+            if (closed) return;
+            send("child-alive", { sessionId, alive });
+          },
+        });
+        childStatusUnsubs.set(sessionId, off);
+      };
+
       // Initial snapshot — UI doesn't need a separate /meta fetch.
       const snap = readMeta(sessionsDir);
-      if (snap) send("snapshot", snap);
+      if (snap) {
+        send("snapshot", snap);
+        // Wire status fan-out for every run already in meta.json.
+        // Done runs also get a subscription: a re-spawned retry on
+        // the same sessionId is rare but possible, and the cost is a
+        // single emitter listener that evicts on session close.
+        for (const r of snap.runs) attachChildStatus(r.sessionId);
+      }
 
       // Helper: piggyback the full Meta snapshot onto every lifecycle
        // event so the client never needs a follow-up `GET /api/tasks/<id>`
@@ -95,10 +136,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       unsub = subscribeMeta(id, (ev: MetaChangeEvent) => {
         if (closed) return;
         if (ev.kind === "spawned") {
+          // New child landed in meta — wire its status stream so the UI
+          // sees mid-task progress for it too.
+          if (ev.sessionId) attachChildStatus(ev.sessionId);
           sendWithMeta("spawned", { sessionId: ev.sessionId, run: ev.run });
           return;
         }
         if (ev.kind === "retried") {
+          if (ev.sessionId) attachChildStatus(ev.sessionId);
           sendWithMeta("retried", {
             sessionId: ev.sessionId,
             retryOf: ev.retryOf,

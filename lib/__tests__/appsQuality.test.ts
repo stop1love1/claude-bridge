@@ -19,6 +19,10 @@ const baseApp = (overrides: Partial<App>): App => ({
   pinnedFiles: [],
   symbolDirs: [],
   quality: {},
+  capabilities: [],
+  retry: {},
+  memory: {},
+  dispatch: {},
   ...overrides,
 });
 

@@ -193,6 +193,52 @@ export interface AppRetry {
 
 export const DEFAULT_APP_RETRY: AppRetry = {};
 
+/**
+ * Per-app auto-memory settings. After a task succeeds (no retry
+ * scheduled, all gates passed), the bridge can spawn a small distill
+ * agent that reads the run's report + diff + verdict and proposes
+ * 1-3 durable rules for `<appPath>/.bridge/memory.md`. Subsequent
+ * spawns inject those rules via the existing `## Memory` section.
+ *
+ *   distill — opt-in (default off). When true, post-success runs
+ *             on this app trigger an automatic `memory-distill`
+ *             agent. Failed gates / retries skip distillation.
+ *
+ * Empty/missing object = off → behavior identical to pre-feature.
+ */
+export interface AppMemory {
+  distill?: boolean;
+}
+
+export const DEFAULT_APP_MEMORY: AppMemory = {};
+
+/**
+ * Per-app speculative dispatch settings. When enabled, the bridge fans
+ * out N parallel children for the same role (e.g. coder) on each
+ * dispatch. The first run that passes the post-exit gates wins; siblings
+ * are killed and their worktrees cleaned up. Trades token cost for
+ * lower wall-time on tasks where multiple plausible approaches exist.
+ *
+ *   enabled — feature switch (default false).
+ *   n       — fan-out count, clamped to [2, 4]. Defaults to 2 when
+ *             enabled and unspecified.
+ *   roles   — which roles trigger fan-out. Defaults to ["coder"].
+ *             Coordinator / reviewer / planner roles are typically
+ *             unsuitable (they orchestrate / read; one truth wins).
+ *
+ * Empty/missing object or `enabled:false` = behavior identical to
+ * pre-feature (one child per dispatch).
+ */
+export interface AppDispatch {
+  speculative?: {
+    enabled?: boolean;
+    n?: number;
+    roles?: string[];
+  };
+}
+
+export const DEFAULT_APP_DISPATCH: AppDispatch = {};
+
 export interface App {
   name: string;
   path: string;          // absolute, resolved against BRIDGE_ROOT
@@ -226,6 +272,17 @@ export interface App {
    */
   retry: AppRetry;
   /**
+   * Auto-memory settings — when `distill: true`, the post-exit flow
+   * spawns a memory-distill agent on success runs. See `AppMemory`.
+   */
+  memory: AppMemory;
+  /**
+   * Speculative dispatch — when `speculative.enabled`, the agents
+   * route fans out N parallel children for matching roles. See
+   * `AppDispatch`.
+   */
+  dispatch: AppDispatch;
+  /**
    * (Detect) Free-form domain capability tags this app owns. Used by
    * `lib/detect` to score this app against task bodies that mention
    * the same concepts. Examples:
@@ -250,6 +307,8 @@ interface ManifestAppEntry {
   quality?: AppQuality;
   capabilities?: string[];
   retry?: AppRetry;
+  memory?: AppMemory;
+  dispatch?: AppDispatch;
 }
 
 export interface BridgeManifest {
@@ -445,6 +504,62 @@ function serializeQuality(q: AppQuality | undefined): AppQuality | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function normalizeMemory(raw: unknown): AppMemory {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_APP_MEMORY };
+  const r = raw as Partial<Record<keyof AppMemory, unknown>>;
+  const out: AppMemory = {};
+  if (r.distill === true) out.distill = true;
+  return out;
+}
+
+function serializeMemory(m: AppMemory | undefined): AppMemory | undefined {
+  if (!m) return undefined;
+  const out: AppMemory = {};
+  if (m.distill === true) out.distill = true;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+const SPECULATIVE_MIN_N = 2;
+const SPECULATIVE_MAX_N = 4;
+const SPECULATIVE_DEFAULT_N = 2;
+const SPECULATIVE_DEFAULT_ROLES: readonly string[] = ["coder"];
+
+function normalizeDispatch(raw: unknown): AppDispatch {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_APP_DISPATCH };
+  const r = raw as { speculative?: unknown };
+  const sRaw = r.speculative;
+  if (!sRaw || typeof sRaw !== "object") return {};
+  const s = sRaw as { enabled?: unknown; n?: unknown; roles?: unknown };
+  const enabled = s.enabled === true;
+  if (!enabled) return {};
+  let n = SPECULATIVE_DEFAULT_N;
+  if (typeof s.n === "number" && Number.isFinite(s.n)) {
+    n = Math.max(SPECULATIVE_MIN_N, Math.min(SPECULATIVE_MAX_N, Math.floor(s.n)));
+  }
+  const rolesRaw = s.roles;
+  let roles: string[];
+  if (Array.isArray(rolesRaw)) {
+    roles = rolesRaw
+      .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      .map((x) => x.trim());
+    if (roles.length === 0) roles = [...SPECULATIVE_DEFAULT_ROLES];
+  } else {
+    roles = [...SPECULATIVE_DEFAULT_ROLES];
+  }
+  return { speculative: { enabled: true, n, roles } };
+}
+
+function serializeDispatch(d: AppDispatch | undefined): AppDispatch | undefined {
+  if (!d || !d.speculative || !d.speculative.enabled) return undefined;
+  return {
+    speculative: {
+      enabled: true,
+      n: d.speculative.n ?? SPECULATIVE_DEFAULT_N,
+      roles: d.speculative.roles ?? [...SPECULATIVE_DEFAULT_ROLES],
+    },
+  };
+}
+
 /**
  * Mirror of `serializeGitSettings` / `serializeVerify`: drop the key
  * entirely when the list is empty so `bridge.json` stays terse.
@@ -528,6 +643,8 @@ function parseAppsFromManifest(parsed: Partial<BridgeManifest> | Record<string, 
     const qualityRaw = (raw as { quality?: unknown }).quality;
     const capabilitiesRaw = (raw as { capabilities?: unknown }).capabilities;
     const retryRaw = (raw as { retry?: unknown }).retry;
+    const memoryRaw = (raw as { memory?: unknown }).memory;
+    const dispatchRaw = (raw as { dispatch?: unknown }).dispatch;
     if (!isValidAppName(name)) continue;
     if (typeof rawPath !== "string" || !rawPath.trim()) continue;
     out.push({
@@ -542,6 +659,8 @@ function parseAppsFromManifest(parsed: Partial<BridgeManifest> | Record<string, 
       quality: normalizeQuality(qualityRaw),
       capabilities: normalizeStringList(capabilitiesRaw),
       retry: normalizeRetry(retryRaw),
+      memory: normalizeMemory(memoryRaw),
+      dispatch: normalizeDispatch(dispatchRaw),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -574,6 +693,10 @@ export function serializeApps(apps: App[]): string {
       if (capabilities) entry.capabilities = capabilities;
       const retry = serializeRetry(a.retry);
       if (retry) entry.retry = retry;
+      const memory = serializeMemory(a.memory);
+      if (memory) entry.memory = memory;
+      const dispatch = serializeDispatch(a.dispatch);
+      if (dispatch) entry.dispatch = dispatch;
       return entry;
     }),
   };
@@ -633,6 +756,12 @@ export function saveApps(apps: App[]): void {
     if (quality) entry.quality = quality;
     const capabilities = serializeStringList(a.capabilities);
     if (capabilities) entry.capabilities = capabilities;
+    const retry = serializeRetry(a.retry);
+    if (retry) entry.retry = retry;
+    const memory = serializeMemory(a.memory);
+    if (memory) entry.memory = memory;
+    const dispatch = serializeDispatch(a.dispatch);
+    if (dispatch) entry.dispatch = dispatch;
     return entry;
   });
   writeManifest(manifest);
@@ -680,6 +809,8 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     quality: { ...DEFAULT_QUALITY },
     capabilities: [],
     retry: { ...DEFAULT_APP_RETRY },
+    memory: { ...DEFAULT_APP_MEMORY },
+    dispatch: { ...DEFAULT_APP_DISPATCH },
   };
   apps.push(app);
   apps.sort((a, b) => a.name.localeCompare(b.name));

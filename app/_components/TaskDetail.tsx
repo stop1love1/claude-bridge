@@ -33,6 +33,12 @@ interface TaskDetailProps {
   onSelectRun: (run: Run) => void;
   onDelete: () => Promise<void>;
   onToggleComplete: (next: boolean) => Promise<void>;
+  /**
+   * Per-child live status (Thinking… / Running: <tool>) sourced from
+   * the per-task SSE `child-status` event. Optional — undefined / empty
+   * map renders the tree exactly as before. Keys are sessionIds.
+   */
+  liveStatusBySession?: Map<string, { kind: string; label?: string }>;
 }
 
 // Outer keys the inner by task.id so switching between tasks
@@ -57,6 +63,7 @@ function TaskDetailInner({
   onSelectRun,
   onDelete,
   onToggleComplete,
+  liveStatusBySession,
 }: TaskDetailProps) {
   const [continuing, setContinuing] = useState(false);
   const [toggling, setToggling] = useState(false);
@@ -360,6 +367,7 @@ function TaskDetailInner({
             onSelectRun={onSelectRun}
             onKill={handleKill}
             branchByRepo={branchByRepo}
+            liveStatusBySession={liveStatusBySession}
           />
         ) : (
           <p className="text-xs text-fg-dim italic">No sessions linked yet.</p>

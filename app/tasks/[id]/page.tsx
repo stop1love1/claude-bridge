@@ -29,6 +29,14 @@ function TaskPageInner() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loading, setLoading] = useState(true);
+  // Per-child live status (Thinking… / Running: <tool>) populated by the
+  // per-task SSE `child-status` event. Plain useState<Map>: each SSE
+  // event swaps in a fresh Map identity so consumers re-render via
+  // normal React reactivity. The functional updater closure keeps the
+  // SSE handler stable across renders.
+  const [liveStatusBySession, setLiveStatusBySession] = useState<
+    Map<string, { kind: string; label?: string }>
+  >(new Map());
   // Mobile (< lg) shows ONE of TaskDetail / SessionLog at full height
   // via a tab bar; lg+ keeps the side-by-side split. The lazy initializer
   // reads from the same `useSearchParams()` snapshot the rest of the
@@ -156,6 +164,40 @@ function TaskPageInner() {
       try {
         const data = JSON.parse(ev.data) as Meta;
         setMeta(data);
+      } catch { /* ignore */ }
+    });
+    // #2 — per-child live status. Each event carries `{sessionId,
+    // status: {kind, label?}}`. We swap the whole Map identity per
+    // update so React re-renders consumers without ref-during-render
+    // shenanigans. child-status fires at most a few times a second
+    // per active child, so the per-event Map clone is cheap.
+    es.addEventListener("child-status", (ev: MessageEvent) => {
+      try {
+        const data = JSON.parse(ev.data) as {
+          sessionId: string;
+          status: { kind: string; label?: string };
+        };
+        setLiveStatusBySession((prev) => {
+          const next = new Map(prev);
+          if (data.status.kind === "idle") next.delete(data.sessionId);
+          else next.set(data.sessionId, data.status);
+          return next;
+        });
+      } catch { /* ignore */ }
+    });
+    es.addEventListener("child-alive", (ev: MessageEvent) => {
+      try {
+        const data = JSON.parse(ev.data) as { sessionId: string; alive: boolean };
+        if (!data.alive) {
+          // Child exited — drop the live label so the row stops showing
+          // a stale "Running:…" tail.
+          setLiveStatusBySession((prev) => {
+            if (!prev.has(data.sessionId)) return prev;
+            const next = new Map(prev);
+            next.delete(data.sessionId);
+            return next;
+          });
+        }
       } catch { /* ignore */ }
     });
     es.onerror = () => { /* browser auto-retries; polling fallback covers gaps */ };
@@ -401,6 +443,7 @@ function TaskPageInner() {
             onDelete={handleDelete}
             onSelectRun={handleSelectRun}
             onToggleComplete={handleToggleComplete}
+            liveStatusBySession={liveStatusBySession}
           />
         </div>
         <div
