@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LogOut, ShieldCheck, User as UserIcon } from "lucide-react";
+import Link from "next/link";
+import { Gauge, LogOut, ShieldCheck, User as UserIcon } from "lucide-react";
 import { Button } from "./ui/button";
 import {
   DropdownMenu,
@@ -89,6 +90,13 @@ export function UserMenu() {
             </div>
           </>
         ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/usage" className="cursor-pointer">
+            <Gauge size={12} />
+            <span>Usage</span>
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={logout}

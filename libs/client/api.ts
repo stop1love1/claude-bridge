@@ -12,6 +12,7 @@ import type {
   TunnelProvider,
   TunnelProviderStatus,
   TunnelInstallResult,
+  UsageSnapshot,
 } from "./types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -51,6 +52,7 @@ export const api = {
       `/sessions/${sessionId}/tail?repo=${encodeURIComponent(repo)}&before=${beforeOffset}`,
     ),
   allSessions: () => req<SessionSummary[]>("/sessions/all"),
+  usage: (force = false) => req<UsageSnapshot>(force ? "/usage?force=1" : "/usage"),
   sendMessage: (
     sessionId: string,
     body: { message: string; repo: string; settings?: ChatSettings },

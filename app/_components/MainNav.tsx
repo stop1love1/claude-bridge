@@ -40,7 +40,13 @@ export function MainNav({
   active,
   badges,
 }: {
-  active: MainNavSection;
+  /**
+   * The currently-active top-level section, if any. Off-nav pages
+   * (e.g. `/usage`, opened from the account menu) pass nothing so no
+   * pill gets highlighted — that's the right UX, since the user isn't
+   * on one of the listed sections.
+   */
+  active?: MainNavSection;
   badges?: Partial<Record<MainNavSection, React.ReactNode>>;
 }) {
   return (

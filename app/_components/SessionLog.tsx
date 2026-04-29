@@ -1,15 +1,15 @@
 "use client";
 
 import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Repo } from "@/lib/client/types";
-import { api } from "@/lib/client/api";
+import type { Repo } from "@/libs/client/types";
+import { api } from "@/libs/client/api";
 import {
   Terminal, Copy, Check, ArrowDown,
   Wrench, FileText, Brain, ChevronDown, ChevronRight, AlertCircle,
-  Undo2, ListTodo, Square, CheckSquare, Asterisk,
+  Undo2, ListTodo, Square, CheckSquare, Asterisk, Sparkles, OctagonAlert,
   Search, X, ArrowUp, Download, MoreVertical, RotateCw,
 } from "lucide-react";
-import { exportSessionMarkdown, downloadFile } from "@/lib/client/exportTask";
+import { exportSessionMarkdown, downloadFile } from "@/libs/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -23,6 +23,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 
 type ActiveRun = {
   sessionId: string;
@@ -30,6 +31,13 @@ type ActiveRun = {
   role: string;
   repo: string;
 };
+
+interface ImageSource {
+  type?: string;             // "base64" | "url"
+  media_type?: string;       // image/png, image/jpeg…
+  data?: string;             // base64 payload (sans data: prefix)
+  url?: string;              // when source.type === "url"
+}
 
 interface ContentBlock {
   type?: string;
@@ -41,6 +49,8 @@ interface ContentBlock {
   content?: unknown;
   tool_use_id?: string;
   is_error?: boolean;
+  /** Present on `image` content blocks (Anthropic vision). */
+  source?: ImageSource;
 }
 
 interface UsageBlock {
@@ -54,19 +64,28 @@ interface LogEntry {
   type?: string;
   timestamp?: string;
   uuid?: string;
+  /** Present on `ai-title` entries — Claude Code's auto-generated session title. */
+  aiTitle?: string;
   message?: {
     role?: string;
     id?: string;
     content?: string | ContentBlock[];
     /** Present on assistant turns; carries per-turn token accounting. */
     usage?: UsageBlock;
+    /** Anthropic API stop reason: end_turn / tool_use / max_tokens / refusal / stop_sequence. */
+    stop_reason?: string;
   };
 }
 
 // .jsonl is a stream of every event; most are noise to a chat reader.
+// `ai-title` carries the auto-generated session title (surfaced in the
+// header instead of as a chat row); `last-prompt` is the leaf-pointer
+// stub Claude writes to track resume targets; `file-history-snapshot`
+// is the Edit-tool's per-file diff cache. None belong in the transcript.
 const HIDDEN_TYPES = new Set([
   "queue-operation", "attachment", "summary",
   "system-prompt-injection", "command-message",
+  "ai-title", "last-prompt", "file-history-snapshot",
 ]);
 
 const MAX_RENDERED = 300;
@@ -424,11 +443,39 @@ function TodoWriteView({ block }: { block: ContentBlock }) {
   );
 }
 
+/**
+ * Dedicated renderer for `Skill` tool calls. Skills (superpowers, claude-md,
+ * etc.) are first-class enough in Claude Code that the CLI shows them as
+ * "Using <skill> to <purpose>" rather than a generic Wrench row. Mirror
+ * that — pull the skill name out of the input and surface it with a
+ * Sparkles icon so it stands apart from Bash / Read / Edit calls.
+ */
+function SkillToolUseView({ block }: { block: ContentBlock }) {
+  const input = (block.input ?? {}) as Record<string, unknown>;
+  const skillName = typeof input.skill === "string" ? input.skill : "(unknown)";
+  const args = typeof input.args === "string" ? input.args.trim() : "";
+  return (
+    <div className="my-0.5">
+      <div className="flex items-center gap-1.5 px-2 py-1 -mx-2 rounded text-[11px] text-muted-foreground">
+        <Sparkles size={11} className="text-info shrink-0" />
+        <span className="font-medium text-foreground shrink-0">Using skill</span>
+        <code className="font-mono text-foreground truncate">{skillName}</code>
+        {args && (
+          <span className="text-fg-dim italic truncate opacity-80" title={args}>
+            · {args.length > 80 ? args.slice(0, 80) + "…" : args}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ToolUseView({ block }: { block: ContentBlock }) {
   const [open, setOpen] = useState(false);
   const rawName = block.name ?? "tool";
   if (rawName === "Bash") return <BashToolUseView block={block} />;
   if (rawName === "TodoWrite") return <TodoWriteView block={block} />;
+  if (rawName === "Skill") return <SkillToolUseView block={block} />;
   const displayName = prettyToolName(rawName);
   const summary = summarizeInput(block.input);
   return (
@@ -579,6 +626,13 @@ function ActivityRow({
   activity: { kind: "thinking" | "running" | "idle"; label?: string };
 }) {
   const [verbIdx, setVerbIdx] = useState(0);
+  // Wall-clock seconds since the current activity started — same spinner
+  // counter the Claude Code CLI shows beside its verb. Reset whenever the
+  // activity kind flips so a thinking→running transition restarts the
+  // count instead of carrying the prior interval over.
+  const [elapsed, setElapsed] = useState(0);
+  const startedAtRef = useRef<number | null>(null);
+
   // Rotate the filler verb every 2.4s while in thinking state. We don't
   // rotate during "running" — the task description is the actual signal.
   useEffect(() => {
@@ -588,6 +642,21 @@ function ActivityRow({
     }, 2400);
     return () => clearInterval(t);
   }, [activity.kind]);
+
+  useEffect(() => {
+    if (activity.kind === "idle") {
+      startedAtRef.current = null;
+      setElapsed(0);
+      return;
+    }
+    startedAtRef.current = Date.now();
+    setElapsed(0);
+    const t = setInterval(() => {
+      if (startedAtRef.current === null) return;
+      setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [activity.kind, activity.label]);
 
   if (activity.kind === "idle") return null;
   const isThinking = activity.kind === "thinking";
@@ -608,6 +677,9 @@ function ActivityRow({
       <span className={isThinking ? "italic" : "font-medium text-foreground"}>
         {verb}…
       </span>
+      {elapsed > 0 && (
+        <span className="text-fg-dim tabular-nums">· {elapsed}s</span>
+      )}
     </div>
   );
 }
@@ -716,6 +788,78 @@ function extractAttachments(text: string): { stripped: string; items: ParsedAtta
   return { stripped: kept.join("\n"), items };
 }
 
+/**
+ * Render a base64 image content block (Anthropic vision input). Same look
+ * as `AttachmentChip` so a paste / IDE-attached screenshot is visually
+ * indistinguishable from a composer-uploaded one. Click to open full
+ * size in a new tab.
+ */
+function InlineImage({ src }: { src: { mediaType: string; data: string } }) {
+  const url = `data:${src.mediaType};base64,${src.data}`;
+  // Read natural dimensions on load so the chip can label the image
+  // `544×395` like Slack / Discord attachments. base64 inflates ~33%
+  // so payload bytes ≈ data.length * 0.75.
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const approxKb = Math.round((src.data.length * 0.75) / 1024);
+  const ext = src.mediaType.replace(/^image\//, "").toLowerCase();
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md border border-border bg-background hover:bg-accent text-[11px] max-w-full"
+          title="Click to preview"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt="pasted image"
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (img.naturalWidth && img.naturalHeight) {
+                setDims({ w: img.naturalWidth, h: img.naturalHeight });
+              }
+            }}
+            className="h-5 w-5 rounded object-cover shrink-0"
+          />
+          <span className="font-medium text-foreground truncate">image.{ext}</span>
+          <span className="text-muted-foreground tabular-nums shrink-0">
+            {dims ? `${dims.w}×${dims.h}` : `${approxKb.toLocaleString()} KB`}
+          </span>
+        </button>
+      </DialogTrigger>
+      {/* `max-w-[min(92vw,1200px)]` overrides DialogContent's default
+          `max-w-lg` so a screenshot can use the full viewport. `p-2`
+          tightens the chrome so the image is the focus, not the frame. */}
+      <DialogContent className="max-w-[min(92vw,1200px)] p-2 gap-2">
+        {/* Radix requires a DialogTitle on every DialogContent for screen
+            readers. The visual chrome is already obvious (image + caption),
+            so hide the title visually with `sr-only`. */}
+        <DialogTitle className="sr-only">image.{ext} preview</DialogTitle>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block"
+          title="Open in a new tab"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt="pasted image preview"
+            className="max-h-[80vh] w-auto mx-auto rounded object-contain"
+          />
+        </a>
+        <div className="text-[11px] text-muted-foreground font-mono text-center">
+          image.{ext}
+          {dims && <span className="ml-2">{dims.w}×{dims.h}</span>}
+          <span className="ml-2">{approxKb.toLocaleString()} KB</span>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AttachmentChip({
   att,
   sessionId,
@@ -789,17 +933,32 @@ const LogRow = memo(function LogRow({
 
   // Right-aligned user bubble, ChatGPT/Claude style. Attachments are
   // pulled out and rendered as image previews / file chips above the text.
+  // Three sources of images on a user message:
+  //   - composer-upload `Attached file: \`<path>\`` text marker → AttachmentChip
+  //   - inline `image` content blocks (paste, IDE attach, API direct) → InlineImage
+  //   - none of the above + only text → plain bubble
   if (kind === "user") {
-    const raw = blocks
-      .filter((b) => b.type === "text" && typeof b.text === "string")
-      .map((b) => b.text!)
-      .join("\n\n");
+    const textParts: string[] = [];
+    const inlineImages: Array<{ mediaType: string; data: string }> = [];
+    for (const b of blocks) {
+      if (b.type === "text" && typeof b.text === "string") {
+        textParts.push(b.text);
+      } else if (
+        b.type === "image" &&
+        b.source?.type === "base64" &&
+        typeof b.source.data === "string" &&
+        typeof b.source.media_type === "string"
+      ) {
+        inlineImages.push({ mediaType: b.source.media_type, data: b.source.data });
+      }
+    }
+    const raw = textParts.join("\n\n");
     const { stripped, items: attachments } = extractAttachments(raw);
     // Strip system-reminder / task-notification / IDE breadcrumbs etc.
     // before checking emptiness — if all that's left is scaffolding,
     // suppress the row entirely.
     const cleaned = stripSystemTags(stripped);
-    if (!cleaned.trim() && attachments.length === 0) return null;
+    if (!cleaned.trim() && attachments.length === 0 && inlineImages.length === 0) return null;
     return (
       <div className="group flex justify-end gap-1.5 my-3" data-user-uuid={entry.uuid ?? ""}>
         {canRewind && (
@@ -812,6 +971,13 @@ const LogRow = memo(function LogRow({
           </button>
         )}
         <div className="max-w-[80%] flex flex-col items-end gap-1.5">
+          {inlineImages.length > 0 && (
+            <div className="flex flex-col items-end gap-1.5 max-w-full">
+              {inlineImages.map((img, i) => (
+                <InlineImage key={`img-${i}`} src={img} />
+              ))}
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="flex flex-col items-end gap-1.5">
               {attachments.map((a, i) => (
@@ -889,6 +1055,16 @@ const LogRow = memo(function LogRow({
     if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return undefined;
     return (b - a) / 1000;
   })();
+  // Surface non-routine stop reasons. `end_turn` and `tool_use` are the
+  // expected paths (model finished or yielded for a tool); anything else
+  // (`max_tokens`, `refusal`, `stop_sequence`, `pause_turn`) means the
+  // reply was cut short or model declined — the user needs to know the
+  // bubble above isn't a complete answer.
+  const stopReason = entry.message?.stop_reason;
+  const showStopBadge =
+    typeof stopReason === "string" &&
+    stopReason !== "end_turn" &&
+    stopReason !== "tool_use";
   return (
     <div className="my-2 space-y-1">
       {merged.map((m, i) => {
@@ -896,6 +1072,12 @@ const LogRow = memo(function LogRow({
         if (m.kind === "thinking") return <ThinkingBlockView key={i} text={m.text} durationSec={thoughtDurationSec} />;
         return <ToolUseView key={i} block={m.block} />;
       })}
+      {showStopBadge && (
+        <div className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-warning/10 text-warning border border-warning/30">
+          <OctagonAlert size={10} />
+          stopped: {stopReason}
+        </div>
+      )}
     </div>
   );
 }, (prev, next) => {
@@ -1404,6 +1586,20 @@ function SessionLogInner({
     return t;
   }, [entries]);
 
+  // Most-recent `ai-title` Claude Code wrote into the .jsonl. Used as a
+  // human-readable session label in the header — replaces "session
+  // 4fdb723a…" with e.g. "Fix sessions page loading issue". Walks back
+  // because the model can refresh the title mid-conversation.
+  const sessionTitle = useMemo(() => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (e.type === "ai-title" && typeof e.aiTitle === "string" && e.aiTitle.trim()) {
+        return e.aiTitle.trim();
+      }
+    }
+    return null;
+  }, [entries]);
+
   // Map every `tool_use_id` we've seen to its tool `name` so tool_result
   // blocks can look up which tool they are answering. Used for F.2
   // (suppressing TodoWrite confirmation noise).
@@ -1687,7 +1883,15 @@ function SessionLogInner({
         <Terminal size={13} className="text-muted-foreground shrink-0" />
         <span className="font-medium whitespace-nowrap shrink-0">{run.role}</span>
         {repo && (
-          <span className="text-muted-foreground truncate min-w-0">@ {repo.name}</span>
+          <span className="text-muted-foreground whitespace-nowrap shrink-0">@ {repo.name}</span>
+        )}
+        {sessionTitle && (
+          <span
+            className="text-muted-foreground italic truncate min-w-0"
+            title={sessionTitle}
+          >
+            · {sessionTitle}
+          </span>
         )}
         {isResponding && (
           <span className="inline-flex items-center gap-1 text-warning text-[10.5px] whitespace-nowrap shrink-0">

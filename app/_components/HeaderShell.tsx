@@ -29,7 +29,8 @@ export function HeaderShell({
   active,
   badges,
 }: {
-  active: MainNavSection;
+  /** Omit on off-nav pages (e.g. /usage) so no top-nav pill highlights. */
+  active?: MainNavSection;
   badges?: Partial<Record<MainNavSection, React.ReactNode>>;
 }) {
   const { pref, resolved, setPref, mounted } = useTheme();

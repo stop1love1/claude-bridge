@@ -208,7 +208,7 @@ export interface ChatSettings {
 
 /**
  * Auto-detect candidate as it travels over the SSE stream. Mirror of
- * `DetectCandidate` in `lib/apps.ts`; lifted here so the dialog can
+ * `DetectCandidate` in `libs/apps.ts`; lifted here so the dialog can
  * type the parsed `event.data` payloads without importing server code.
  */
 export interface DetectCandidate {
@@ -223,7 +223,7 @@ export interface DetectCandidate {
 }
 
 /**
- * Public-facing shape of `lib/tunnels.ts#TunnelEntry`. Mirrored here
+ * Public-facing shape of `libs/tunnels.ts#TunnelEntry`. Mirrored here
  * so the `/tunnels` page and the `api` client can type tunnel rows
  * without dragging server-only `child_process` imports into the bundle.
  */
@@ -245,7 +245,7 @@ export interface TunnelEntry {
 }
 
 /**
- * Per-provider availability snapshot — see `lib/tunnels#detectProviders`.
+ * Per-provider availability snapshot — see `libs/tunnels#detectProviders`.
  * The Tunnels page uses these fields to render install / authtoken
  * affordances next to the provider select.
  */
@@ -270,3 +270,78 @@ export type DetectEvent =
   | { type: "candidate"; candidate: DetectCandidate }
   | { type: "skipped"; path: string; reason: "not-a-repo" | "already-scanned" | "permission" | "max-dirs" }
   | { type: "done"; candidates: number; alreadyRegistered: number; scanned: number };
+
+/** Per-model token totals out of `~/.claude/stats-cache.json`. */
+export interface UsageModel {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  webSearchRequests: number;
+  costUSD: number;
+  contextWindow: number;
+  maxOutputTokens: number;
+}
+
+/** Single quota window from `/api/oauth/usage`. */
+export interface QuotaWindow {
+  utilization: number;
+  resetsAt: string | null;
+}
+
+/** Extra-usage / overage credit status. */
+export interface ExtraUsage {
+  isEnabled: boolean;
+  monthlyLimit: number | null;
+  usedCredits: number | null;
+  utilization: number | null;
+  currency: string | null;
+}
+
+/**
+ * Live `/usage` panel — same data Anthropic returns to the CLI's
+ * `/usage › Usage` tab and to claude.ai/settings/usage.
+ * `weeklyClaudeDesign` is the server's `seven_day_omelette` codename.
+ */
+export interface QuotaPanel {
+  fiveHour: QuotaWindow | null;
+  weeklyAllModels: QuotaWindow | null;
+  weeklySonnet: QuotaWindow | null;
+  weeklyOpus: QuotaWindow | null;
+  weeklyClaudeDesign: QuotaWindow | null;
+  weeklyOauthApps: QuotaWindow | null;
+  weeklyCowork: QuotaWindow | null;
+  extraUsage: ExtraUsage | null;
+  error: string | null;
+  fetchedAt: string;
+}
+
+/** Server response for `/api/usage` — see `libs/usageStats.ts`. */
+export interface UsageSnapshot {
+  source: "stats-cache" | "missing";
+  cacheUpdatedAt: string | null;
+  lastComputedDate: string | null;
+  totalSessions: number;
+  totalMessages: number;
+  firstSessionDate: string | null;
+  modelUsage: Record<string, UsageModel>;
+  dailyActivity: Array<{
+    date: string;
+    messageCount: number;
+    sessionCount: number;
+    toolCallCount: number;
+  }>;
+  dailyModelTokens: Array<{
+    date: string;
+    tokensByModel: Record<string, number>;
+  }>;
+  longestSession: {
+    sessionId: string;
+    duration: number;
+    messageCount: number;
+    timestamp: string;
+  } | null;
+  hourCounts: Record<string, number>;
+  plan: { subscriptionType: string; rateLimitTier: string } | null;
+  quota: QuotaPanel | null;
+}

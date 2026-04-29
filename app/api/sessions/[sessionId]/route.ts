@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { resolveRepos } from "@/lib/repos";
-import { discoverOrphanProjects, projectDirFor } from "@/lib/sessions";
-import { removeSessionFromTask } from "@/lib/meta";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
-import { badRequest, isValidSessionId } from "@/lib/validate";
+import { resolveRepos } from "@/libs/repos";
+import { discoverOrphanProjects, projectDirFor } from "@/libs/sessions";
+import { removeSessionFromTask } from "@/libs/meta";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { bustSessionsListCache } from "@/libs/sessionListCache";
+import { badRequest, isValidSessionId } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -94,7 +95,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   // TODO: O(N) scan over every task dir on every delete. A reverse
   // index (sessionId → taskId) — see `buildLinkIndex` in
   // app/api/sessions/all/route.ts — could turn this into a single
-  // lookup. Punted: factoring that helper into `lib/meta.ts` is wider
+  // lookup. Punted: factoring that helper into `libs/meta.ts` is wider
   // than this brief.
   const unlinkedFromTasks: string[] = [];
   if (existsSync(SESSIONS_DIR)) {
@@ -108,6 +109,11 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   if (!removedFile && unlinkedFromTasks.length === 0) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }
+  // Drop the /api/sessions/all 2 s response cache. removeSessionFromTask
+  // already emits meta:changed when a link existed, but pure orphan
+  // deletes never touch meta — without an explicit bust the next poll
+  // would still surface the just-deleted row for up to TTL.
+  bustSessionsListCache();
   return NextResponse.json({
     ok: true,
     fileRemoved: removedFile,

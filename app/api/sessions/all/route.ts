@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { readdirSync, existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { resolveRepos } from "@/lib/repos";
-import { discoverOrphanProjects, listSessions, projectDirFor } from "@/lib/sessions";
-import { readMeta, subscribeMetaAll } from "@/lib/meta";
-import { readGitBranch } from "@/lib/git";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
+import { resolveRepos } from "@/libs/repos";
+import { discoverOrphanProjects, listSessions, projectDirFor } from "@/libs/sessions";
+import { readMeta, subscribeMetaAll } from "@/libs/meta";
+import { readGitBranch } from "@/libs/git";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { setSessionsListBuster } from "@/libs/sessionListCache";
 
 export const dynamic = "force-dynamic";
 
@@ -32,11 +33,16 @@ let responseCache: { value: SessionRow[]; expires: number } | null = null;
 // `subscribeMetaAll` returns an unsubscribe but we hold the listener
 // for the process lifetime — same trick as the rest of the bridge's
 // global registries. HMR-safe via the underlying EventEmitter stash.
+// We also expose the bust as a globally-callable function so routes
+// that mutate raw .jsonl files (e.g. orphan-session DELETE) can drop
+// the cache without going through the meta event bus — orphan files
+// never trigger meta:changed by definition.
 const G = globalThis as unknown as { __bridgeSessionsAllSub?: boolean };
 if (!G.__bridgeSessionsAllSub) {
   G.__bridgeSessionsAllSub = true;
   subscribeMetaAll(() => { responseCache = null; });
 }
+setSessionsListBuster(() => { responseCache = null; });
 
 interface LinkInfo { taskId: string; role: string }
 

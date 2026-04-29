@@ -1,6 +1,7 @@
 import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 /**
  * Convert an absolute path to Claude Code's project slug convention.
@@ -251,6 +252,69 @@ function extractText(content: unknown): string {
 }
 
 /**
+ * Stream a .jsonl session file in 16 KB chunks, returning whether it
+ * contains at least one real conversation turn (`user` / `assistant` /
+ * `summary`) and the first user-line preview if present. Bounded at
+ * `MAX_BYTES` so a runaway file can't pin the bridge — at that point we
+ * conservatively treat whatever we've seen so far as the answer (almost
+ * always: a real session whose user line lives even further in, included).
+ *
+ * Streaming (vs. a fixed-size head slice) is required because modern
+ * Claude Code transcripts begin with a `queue-operation` + a multi-KB
+ * `attachment` payload — the first user/assistant/summary entry routinely
+ * lives well past byte 8192. A small head window silently hides every such
+ * session as a "stub".
+ */
+function scanSessionHead(filePath: string): { hasRealEntry: boolean; preview: string } {
+  let fd: number;
+  try { fd = openSync(filePath, "r"); }
+  catch { return { hasRealEntry: false, preview: "" }; }
+
+  const CHUNK = 16 * 1024;
+  const MAX_BYTES = 4 * 1024 * 1024;
+  const buf = Buffer.alloc(CHUNK);
+  const decoder = new StringDecoder("utf8");
+  let leftover = "";
+  let preview = "";
+  let hasRealEntry = false;
+  let pos = 0;
+
+  const consume = (line: string) => {
+    if (!line.trim()) return;
+    try {
+      const obj = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
+      if (obj.type === "user" || obj.type === "assistant" || obj.type === "summary") {
+        hasRealEntry = true;
+        if (!preview && obj.type === "user") {
+          preview = extractText(obj.message?.content).trim().replace(/\s+/g, " ").slice(0, 120);
+        }
+      }
+    } catch { /* partial / malformed — keep scanning */ }
+  };
+
+  try {
+    while (pos < MAX_BYTES) {
+      const n = readSync(fd, buf, 0, CHUNK, pos);
+      if (n === 0) break;
+      pos += n;
+      const text = leftover + decoder.write(buf.subarray(0, n));
+      const lastNl = text.lastIndexOf("\n");
+      if (lastNl < 0) { leftover = text; continue; }
+      const ready = text.slice(0, lastNl);
+      leftover = text.slice(lastNl + 1);
+      for (const line of ready.split("\n")) {
+        consume(line);
+        if (hasRealEntry && preview) return { hasRealEntry, preview };
+      }
+    }
+    consume(leftover + decoder.end());
+    return { hasRealEntry, preview };
+  } finally {
+    try { closeSync(fd); } catch { /* best-effort */ }
+  }
+}
+
+/**
  * List all Claude Code sessions (.jsonl) under a project directory.
  * Uses the standard ~/.claude/projects/<slug>/ layout — we never create
  * our own session files; we just read what claude wrote.
@@ -266,30 +330,15 @@ export function listSessions(projectDir: string): SessionEntry[] {
     let st;
     try { st = statSync(p); } catch { continue; }
 
-    let preview = "";
     // Claude Code writes leaf-pointer stub files (`{"type":"last-prompt",…}`)
     // to track resume/rewind targets — they share the .jsonl extension but
     // contain no real conversation. Surface only files that have at least
     // one user/assistant/summary turn so these stubs don't show up as empty
-    // "orphan" sessions in the panel.
-    let hasRealEntry = false;
-    try {
-      const head = readFileSync(p, "utf8").slice(0, 8192);
-      for (const line of head.split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          const obj = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
-          if (obj.type === "user" || obj.type === "assistant" || obj.type === "summary") {
-            hasRealEntry = true;
-            if (!preview && obj.type === "user") {
-              preview = extractText(obj.message?.content).trim().replace(/\s+/g, " ").slice(0, 120);
-            }
-            if (preview) break;
-          }
-        } catch { /* partial line — keep scanning */ }
-      }
-    } catch { /* unreadable → leave preview empty */ }
-
+    // "orphan" sessions in the panel. We must stream chunks (not slice a
+    // fixed-size head) because modern transcripts begin with a
+    // `queue-operation` + multi-KB `attachment` line that can push the
+    // first real entry well past any small head window.
+    const { hasRealEntry, preview } = scanSessionHead(p);
     if (!hasRealEntry) continue;
 
     out.push({

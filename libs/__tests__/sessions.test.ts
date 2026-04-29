@@ -125,6 +125,25 @@ describe("listSessions", () => {
     expect(sessions.map((s) => s.sessionId)).toEqual(["asst"]);
     expect(sessions[0]?.preview).toBe("");
   });
+
+  it("keeps real sessions whose first user line is past the 8 KB head (huge attachment up front)", () => {
+    // Reproduces the regression where modern Claude Code transcripts
+    // begin with `queue-operation` + a multi-KB `attachment` line, pushing
+    // the first user/assistant/summary entry past whatever head-window
+    // the scanner was using. The session must still be surfaced.
+    const dir = mkdtempSync(join(tmpdir(), "sessions-"));
+    const file = join(dir, "huge-head.jsonl");
+    const bigBlob = "x".repeat(64 * 1024); // 64 KB attachment payload
+    const lines = [
+      `{"type":"queue-operation","op":"enqueue"}`,
+      `{"type":"attachment","data":"${bigBlob}"}`,
+      `{"type":"user","message":{"role":"user","content":"hello past 8KB"}}`,
+    ].join("\n") + "\n";
+    writeFileSync(file, lines);
+    const sessions = listSessions(dir);
+    expect(sessions.map((s) => s.sessionId)).toEqual(["huge-head"]);
+    expect(sessions[0]?.preview).toBe("hello past 8KB");
+  });
 });
 
 describe("findSessionByPrefix", () => {

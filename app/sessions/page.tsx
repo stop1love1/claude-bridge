@@ -2,8 +2,8 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api } from "@/lib/client/api";
-import type { Repo, SessionSummary } from "@/lib/client/types";
+import { api } from "@/libs/client/api";
+import type { Repo, SessionSummary } from "@/libs/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { SessionLog } from "../_components/SessionLog";
 import { SessionsBrowser } from "../_components/SessionsBrowser";
@@ -152,25 +152,6 @@ function SessionsPageInner() {
     await refreshSessions();
   }, [activeRun, refreshSessions, toast, confirm, setActiveRun]);
 
-  const handleDelete = useCallback(async (s: SessionSummary) => {
-    const linkedNote = s.link ? `Currently linked to ${s.link.taskId} (${s.link.role}). The link will be removed.\n\n` : "";
-    const ok = await confirm({
-      title: `Delete session ${s.sessionId.slice(0, 8)}…?`,
-      description: `${linkedNote}The .jsonl file is removed from ~/.claude/projects/. The bridge task entry stays.`,
-      confirmLabel: "Delete",
-      destructive: true,
-    });
-    if (!ok) return;
-    try {
-      const r = await api.deleteSession(s.sessionId, s.repo);
-      toast("info", r.fileRemoved ? "Session deleted" : "Session unlinked");
-      if (activeRun?.sessionId === s.sessionId) setActiveRun(null);
-      await refreshSessions();
-    } catch (e) {
-      toast("error", (e as Error).message);
-    }
-  }, [activeRun, refreshSessions, toast, confirm, setActiveRun]);
-
   const handleCreate = useCallback(({ repo }: { repo: string }) => {
     // Generate the session UUID client-side and jump straight into an
     // empty SessionLog. The actual `claude` spawn is deferred until
@@ -251,7 +232,6 @@ function SessionsPageInner() {
             activeSessionId={activeRun?.sessionId ?? null}
             onQueryChange={setQuery}
             onSelect={handleSelectSession}
-            onDelete={handleDelete}
             onBulkDelete={handleBulkDelete}
             repos={repos}
             defaultRepo={repos.find((r) => r.isBridge)?.name ?? repos[0]?.name}
