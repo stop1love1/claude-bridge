@@ -1,7 +1,8 @@
-import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { isValidSessionId } from "./validate";
 
 /**
  * Convert an absolute path to Claude Code's project slug convention.
@@ -37,6 +38,56 @@ export function projectDirFor(cwd: string): string {
     }
   } catch { /* projects root may not exist yet */ }
   return direct;
+}
+
+/**
+ * Resolve and validate a session-jsonl file path for a given
+ * (`repoPath`, `sessionId`) pair coming off an HTTP request. Returns
+ * the absolute file path the caller may safely read from, or `null` if
+ * the request looks pathological / unauthorized.
+ *
+ * Why a dedicated helper instead of inlining `join(projectDirFor(repo),
+ * sid + ".jsonl")` per route:
+ *
+ *   - **Path-traversal defense in depth.** `pathToSlug` already strips
+ *     `/` `\` `:` `.` so the slug can't contain a separator, but a
+ *     future change to that substitution must not silently re-open the
+ *     hole. We re-verify the resolved path stays inside
+ *     `CLAUDE_PROJECTS_ROOT` after `path.resolve` normalization.
+ *   - **No probing arbitrary Claude project dirs.** Without this check,
+ *     an authenticated client could pass `repo=/some/other/project` and
+ *     read its session transcripts. We require the slug to point at a
+ *     directory that already exists on disk — i.e. a real Claude Code
+ *     project the bridge would surface in `/api/sessions/all` anyway.
+ *     New / fictional paths get a 400 instead of a probe-by-status-code.
+ *   - **Input shape.** Reject NUL bytes and oversize repo strings up
+ *     front; reject malformed session ids via `isValidSessionId`.
+ *
+ * Callers turn `null` into `400 Bad Request` (or 404 — both are
+ * acceptable; the helper deliberately doesn't distinguish so the wire
+ * doesn't leak which check failed).
+ */
+export function resolveSessionFile(
+  repoPath: unknown,
+  sessionId: unknown,
+): string | null {
+  if (typeof repoPath !== "string" || typeof sessionId !== "string") return null;
+  if (!repoPath || repoPath.length > 4096) return null;
+  if (repoPath.includes("\0")) return null;
+  if (!isValidSessionId(sessionId)) return null;
+
+  const dir = projectDirFor(repoPath);
+  const root = resolve(CLAUDE_PROJECTS_ROOT);
+  const dirResolved = resolve(dir);
+  // Containment: path.resolve normalizes any `..` that survived slug
+  // substitution; the result must still be under CLAUDE_PROJECTS_ROOT.
+  if (dirResolved !== root && !dirResolved.startsWith(root + sep)) return null;
+  // The slugged dir must already exist. This is what restricts callers
+  // to project dirs the user has actually used Claude Code in — no
+  // fishing for arbitrary slugs.
+  if (!existsSync(dirResolved)) return null;
+
+  return join(dirResolved, `${sessionId}.jsonl`);
 }
 
 export interface TailResult {

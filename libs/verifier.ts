@@ -22,26 +22,15 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRun, readMeta, type Run, type RunVerifier } from "./meta";
-import { wireRunLifecycle } from "./coordinator";
+import { readMeta, type Run, type RunVerifier } from "./meta";
 import { resolveRepoCwd } from "./repos";
-import { spawnFreeSession } from "./spawn";
-import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
-import { readOriginalPrompt } from "./promptStore";
 import { isAlreadyRetryRun } from "./verifyChain";
-import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { getApp } from "./apps";
-import {
-  checkEligibility,
-  maxAttemptsFor,
-  nextRetryRole,
-  parseRole,
-  renderStrategyPrefix,
-} from "./retryLadder";
+import { checkEligibility } from "./retryLadder";
+import { spawnRetry } from "./retrySpawn";
 
 const execFileP = promisify(execFile);
 const CRETRY_SUFFIX = "-cretry";
@@ -365,76 +354,15 @@ export async function spawnClaimRetry(args: {
   finishedRun: Run;
   verifier: RunVerifier;
 }): Promise<{ sessionId: string; run: Run } | null> {
-  const { taskId, finishedRun, verifier } = args;
-  const sessionsDir = join(SESSIONS_DIR, taskId);
-
-  const md = readBridgeMd();
-  const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
-  if (!liveRepoCwd) return null;
-  const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
-
-  const app = getApp(finishedRun.repo);
-  const meta = readMeta(sessionsDir);
-  if (!meta) return null;
-  const elig = checkEligibility({
-    finishedRun,
-    meta,
+  return spawnRetry({
+    taskId: args.taskId,
+    finishedRun: args.finishedRun,
     gate: "claim",
-    retry: app?.retry,
+    ctxBlock: renderClaimRetryContextBlock(args.verifier),
+    fallbackBody:
+      "(original prompt unavailable — repo state and the failure context above are the only signals you have. Re-read the report at sessions/<task>/reports/<role>-<repo>.md, fix the discrepancy, and re-attempt.)",
+    logLabel: "claim-retry",
   });
-  if (!elig.eligible) return null;
-  const parsed = parseRole(finishedRun.role);
-  const maxAttempts = maxAttemptsFor(app?.retry, "claim");
-
-  const strategyPrefix = renderStrategyPrefix({
-    gate: "claim",
-    attempt: elig.nextAttempt,
-    maxAttempts,
-  });
-  const ctxBlock = renderClaimRetryContextBlock(verifier);
-  const originalPrompt = readOriginalPrompt(taskId, finishedRun);
-  const body =
-    originalPrompt.trim() ||
-    "(original prompt unavailable — repo state and the failure context above are the only signals you have. Re-read the report at sessions/<task>/reports/<role>-<repo>.md, fix the discrepancy, and re-attempt.)";
-  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
-
-  const sessionId = randomUUID();
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
-
-  let childHandle;
-  try {
-    childHandle = spawnFreeSession(
-      spawnCwd,
-      retryPrompt,
-      { mode: "bypassPermissions" },
-      settingsPath,
-      sessionId,
-    );
-  } catch (e) {
-    console.error("claim-retry spawn failed for", taskId, finishedRun.sessionId, e);
-    return null;
-  }
-
-  const retryRun: Run = {
-    sessionId,
-    role: nextRetryRole(parsed.baseRole, "claim", elig.nextAttempt),
-    repo: finishedRun.repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: finishedRun.parentSessionId ?? null,
-    retryOf: finishedRun.sessionId,
-    retryAttempt: elig.nextAttempt,
-    ...inheritWorktreeFields(finishedRun),
-  };
-  await appendRun(sessionsDir, retryRun);
-  wireRunLifecycle(
-    sessionsDir,
-    sessionId,
-    childHandle.child,
-    `claim-retry ${taskId}/${sessionId}`,
-  );
-  return { sessionId, run: retryRun };
 }
 
 export const CLAIM_RETRY_SUFFIX = CRETRY_SUFFIX;

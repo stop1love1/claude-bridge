@@ -1,0 +1,49 @@
+name: Test
+
+# Gate every push + PR with the same checks the operator runs locally:
+# typecheck (`tsc --noEmit`), unit tests (`vitest run`), and lint. Build
+# is intentionally NOT in this matrix because it shells out to a real
+# `claude` binary in some test fixtures and the runner doesn't have one
+# installed; we keep `next build` as a developer pre-deploy step.
+#
+# We run on Ubuntu only — the suite covers cross-platform code paths
+# (Windows tree-kill, POSIX file locks) but the runtime exercised here
+# is Linux. If a Windows-specific regression slips past, the local
+# author hits it before merge anyway since the bridge developers run on
+# both.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel any older runs of the same ref when a new commit lands. Saves
+# Actions minutes when someone pushes a fixup commit on a hot PR.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test

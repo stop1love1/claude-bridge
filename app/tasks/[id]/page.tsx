@@ -10,6 +10,7 @@ import { TaskDetail } from "@/app/_components/TaskDetail";
 import { SessionLog } from "@/app/_components/SessionLog";
 import { useToast } from "@/app/_components/Toasts";
 import { useConfirm } from "@/app/_components/ConfirmProvider";
+import { useEventSource } from "@/app/_components/useEventSource";
 
 type ActiveRun = {
   sessionId: string;
@@ -134,79 +135,76 @@ function TaskPageInner() {
     // edited in another tab while this one was hidden).
     void Promise.resolve().then(refreshTask);
     const h = setInterval(loadMeta, 30000);
+    return () => clearInterval(h);
+  }, [visible, id, loadMeta, refreshTask]);
 
-    // Lifecycle SSE: every server-side event piggybacks the full Meta
-    // snapshot via `payload.meta`, so we never need a follow-up
-    // /api/tasks/<id> round-trip — just patch state straight from the
-    // event payload.
-    const url = `/api/tasks/${encodeURIComponent(id)}/events`;
-    const es = new EventSource(url);
-    es.addEventListener("snapshot", (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as Meta;
-        setMeta(data);
-      } catch { /* ignore */ }
-    });
-    const applyMetaFromEvent = (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as { meta?: Meta };
-        if (data.meta) setMeta(data.meta);
-        else void loadMeta(); // legacy payload — fall back to refetch
-      } catch { /* ignore */ }
-    };
-    es.addEventListener("spawned", applyMetaFromEvent);
-    es.addEventListener("done", applyMetaFromEvent);
-    es.addEventListener("failed", applyMetaFromEvent);
-    es.addEventListener("stale", applyMetaFromEvent);
-    es.addEventListener("updated", applyMetaFromEvent);
-    es.addEventListener("retried", applyMetaFromEvent);
-    es.addEventListener("meta", (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as Meta;
-        setMeta(data);
-      } catch { /* ignore */ }
-    });
-    // #2 — per-child live status. Each event carries `{sessionId,
-    // status: {kind, label?}}`. We swap the whole Map identity per
-    // update so React re-renders consumers without ref-during-render
-    // shenanigans. child-status fires at most a few times a second
-    // per active child, so the per-event Map clone is cheap.
-    es.addEventListener("child-status", (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as {
-          sessionId: string;
-          status: { kind: string; label?: string };
-        };
+  // Lifecycle SSE: every server-side event piggybacks the full Meta
+  // snapshot via `payload.meta`, so we never need a follow-up
+  // /api/tasks/<id> round-trip — just patch state straight from the
+  // event payload. Wired through the shared `useEventSource` hook so
+  // the open/close + listener-attach lifecycle is consistent across
+  // the bridge's three SSE consumers (this page, SessionLog, and
+  // usePermissionQueue).
+  const applyMetaFromEvent = useCallback((ev: MessageEvent) => {
+    try {
+      const data = JSON.parse(ev.data) as { meta?: Meta };
+      if (data.meta) setMeta(data.meta);
+      else void loadMeta(); // legacy payload — fall back to refetch
+    } catch { /* ignore */ }
+  }, [loadMeta]);
+  const applySnapshotFromEvent = useCallback((ev: MessageEvent) => {
+    try {
+      setMeta(JSON.parse(ev.data) as Meta);
+    } catch { /* ignore */ }
+  }, []);
+  const applyChildStatus = useCallback((ev: MessageEvent) => {
+    try {
+      const data = JSON.parse(ev.data) as {
+        sessionId: string;
+        status: { kind: string; label?: string };
+      };
+      setLiveStatusBySession((prev) => {
+        const next = new Map(prev);
+        if (data.status.kind === "idle") next.delete(data.sessionId);
+        else next.set(data.sessionId, data.status);
+        return next;
+      });
+    } catch { /* ignore */ }
+  }, []);
+  const applyChildAlive = useCallback((ev: MessageEvent) => {
+    try {
+      const data = JSON.parse(ev.data) as { sessionId: string; alive: boolean };
+      if (!data.alive) {
+        // Child exited — drop the live label so the row stops showing
+        // a stale "Running:…" tail.
         setLiveStatusBySession((prev) => {
+          if (!prev.has(data.sessionId)) return prev;
           const next = new Map(prev);
-          if (data.status.kind === "idle") next.delete(data.sessionId);
-          else next.set(data.sessionId, data.status);
+          next.delete(data.sessionId);
           return next;
         });
-      } catch { /* ignore */ }
-    });
-    es.addEventListener("child-alive", (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as { sessionId: string; alive: boolean };
-        if (!data.alive) {
-          // Child exited — drop the live label so the row stops showing
-          // a stale "Running:…" tail.
-          setLiveStatusBySession((prev) => {
-            if (!prev.has(data.sessionId)) return prev;
-            const next = new Map(prev);
-            next.delete(data.sessionId);
-            return next;
-          });
-        }
-      } catch { /* ignore */ }
-    });
-    es.onerror = () => { /* browser auto-retries; polling fallback covers gaps */ };
-
-    return () => {
-      clearInterval(h);
-      es.close();
-    };
-  }, [visible, id, loadMeta, refreshTask]);
+      }
+    } catch { /* ignore */ }
+  }, []);
+  const eventListeners = useMemo(
+    () => ({
+      snapshot: applySnapshotFromEvent,
+      meta: applySnapshotFromEvent,
+      spawned: applyMetaFromEvent,
+      done: applyMetaFromEvent,
+      failed: applyMetaFromEvent,
+      stale: applyMetaFromEvent,
+      updated: applyMetaFromEvent,
+      retried: applyMetaFromEvent,
+      "child-status": applyChildStatus,
+      "child-alive": applyChildAlive,
+    }),
+    [applyMetaFromEvent, applySnapshotFromEvent, applyChildStatus, applyChildAlive],
+  );
+  useEventSource(
+    visible && id ? `/api/tasks/${encodeURIComponent(id)}/events` : null,
+    { listeners: eventListeners },
+  );
 
   // If no `?sid=` is in the URL yet, default to the coordinator's session
   // by writing it to the URL — that opens the chat panel immediately AND

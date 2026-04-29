@@ -124,27 +124,24 @@ export function SlashActionsPalette({
 
   useEffect(() => {
     if (!open || !repo?.trim()) return;
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       await Promise.resolve();
-      if (cancelled) return;
+      if (ac.signal.aborted) return;
       setSlashItems([]);
       setSlashLoading(true);
       try {
-        const r = await api.repoSlashCommands(repo);
-        if (!cancelled) setSlashItems(r.items);
+        const r = await api.repoSlashCommands(repo, { signal: ac.signal });
+        if (!ac.signal.aborted) setSlashItems(r.items);
       } catch {
-        if (!cancelled) {
-          setSlashItems([]);
-          toast("error", "Could not load slash commands.");
-        }
+        if (ac.signal.aborted) return;
+        setSlashItems([]);
+        toast("error", "Could not load slash commands.");
       } finally {
-        if (!cancelled) setSlashLoading(false);
+        if (!ac.signal.aborted) setSlashLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [open, repo, toast]);
 
   const runBuiltinSlug = useCallback(

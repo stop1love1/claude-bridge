@@ -1,9 +1,7 @@
 import type { NextRequest } from "next/server";
 import { existsSync, watch, type FSWatcher } from "node:fs";
-import { join } from "node:path";
-import { projectDirFor, tailJsonl } from "@/libs/sessions";
+import { resolveSessionFile, tailJsonl } from "@/libs/sessions";
 import { isAlive, subscribeSession, type PartialEvent, type StatusEvent } from "@/libs/sessionEvents";
-import { isValidSessionId } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -136,17 +134,14 @@ function replayFrom(
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
-  if (!isValidSessionId(sessionId)) {
-    return new Response("invalid sessionId", { status: 400 });
-  }
   const { searchParams } = new URL(req.url);
   const repoPath = searchParams.get("repo");
   const since = Number(searchParams.get("since") ?? 0) || 0;
 
-  if (!repoPath) {
-    return new Response("repo query param required", { status: 400 });
+  const file = resolveSessionFile(repoPath, sessionId);
+  if (!file) {
+    return new Response("invalid session repo", { status: 400 });
   }
-  const file = join(projectDirFor(repoPath), `${sessionId}.jsonl`);
   const bufferKey = `${repoPath}::${sessionId}`;
   const buffer = getBuffer(bufferKey);
 

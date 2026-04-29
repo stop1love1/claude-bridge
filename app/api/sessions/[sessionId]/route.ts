@@ -7,6 +7,7 @@ import { removeSessionFromTask } from "@/libs/meta";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { bustSessionsListCache } from "@/libs/sessionListCache";
 import { badRequest, isValidSessionId } from "@/libs/validate";
+import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -82,7 +83,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
         removedFile = candidate;
         break;
       } catch (e) {
-        return NextResponse.json({ error: `delete failed: ${(e as Error).message}` }, { status: 500 });
+        return NextResponse.json({ error: `delete failed: ${safeErrorMessage(e)}` }, { status: 500 });
       }
     }
   }

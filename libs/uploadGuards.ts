@@ -39,19 +39,42 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
  * is intentionally inclusive — a `.dll` upload is uncommon enough that
  * blocking it is fine, and a hostile chain (`Read` → exec via shim)
  * isn't worth the convenience.
+ *
+ * Beyond direct executables, we also block formats that are technically
+ * "documents" but execute scripts when opened (`.html`, `.svg`,
+ * `.htm`), or that mount as drives / register handlers on Windows
+ * (`.iso`, `.img`, `.vhd`, `.url`, `.appx`). The bridge stages uploads
+ * and then exposes their absolute paths to the model — anything that
+ * could trigger code execution if the model `Read`s/serves the file
+ * is unsafe to land on disk.
  */
 export const BLOCKED_EXTENSIONS: ReadonlySet<string> = new Set([
   // Windows native executables / installers
   ".exe", ".bat", ".cmd", ".com", ".scr", ".msi", ".msp",
-  ".dll", ".sys", ".lnk",
-  // PowerShell / VBScript / WScript
+  ".dll", ".sys", ".lnk", ".url",
+  // Windows shortcut / installer variants that run code on open.
+  ".appx", ".appxbundle", ".msu", ".msix", ".msixbundle",
+  // Windows registry edits (double-click → applies). Reject up front.
+  ".reg",
+  // PowerShell / VBScript / WScript / HTA
   ".ps1", ".psm1", ".psd1",
-  ".vbs", ".vbe", ".wsf", ".wsh",
+  ".vbs", ".vbe", ".wsf", ".wsh", ".hta", ".chm",
   // JavaScript-on-disk variants (browser-side `.js` is fine; Windows'
   // wscript will execute it, so refuse to land it on disk).
   ".js", ".jse",
+  // Java bytecode containers — `java -jar` executes; `.class` may be
+  // loaded by an existing JVM workflow. Both are out.
+  ".jar", ".class",
   // POSIX shells
   ".sh",
+  // Disk images that mount as a drive on Windows / macOS, exposing
+  // arbitrary contents (autorun hooks, signed installers, etc.).
+  ".iso", ".img", ".vhd", ".vhdx",
+  // Active web content. SVG can carry inline `<script>`; HTML hosted
+  // out of `.uploads/` would run in the bridge's same-origin context
+  // if ever served as static. XHTML, XML and SHTML are XSS vectors
+  // for the same reason.
+  ".html", ".htm", ".xhtml", ".shtml", ".svg", ".svgz", ".mhtml",
 ]);
 
 /**

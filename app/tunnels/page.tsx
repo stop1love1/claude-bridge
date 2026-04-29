@@ -79,9 +79,13 @@ function TunnelsPage() {
    */
   const announcedRef = useRef<Set<string>>(new Set());
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [t, p] = await Promise.all([api.tunnels(), api.tunnelProviders()]);
+      const [t, p] = await Promise.all([
+        api.tunnels({ signal }),
+        api.tunnelProviders({ signal }),
+      ]);
+      if (signal?.aborted) return;
       // Detect starting → running transitions and announce them once.
       for (const row of t.tunnels) {
         if (row.status === "running" && row.url && !announcedRef.current.has(row.id)) {
@@ -92,37 +96,39 @@ function TunnelsPage() {
       setTunnels(t.tunnels);
       setProviders(p.providers);
     } catch (e) {
+      if (signal?.aborted) return;
       toast("error", (e as Error).message);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [toast]);
 
   useEffect(() => {
-    void Promise.resolve().then(refresh);
+    const ac = new AbortController();
+    void refresh(ac.signal);
+    return () => ac.abort();
   }, [refresh]);
 
   // Fast poll while any tunnel is in `starting` (we're waiting for the
   // URL to land); slow poll otherwise to keep the row count fresh.
-  // The `cancelled` flag closes the gap where `refresh()` was already
-  // in-flight at unmount: cleanup-only-on-clearTimeout would still let
-  // the in-flight promise schedule the next tick after the component
-  // had been torn down.
+  // The AbortController both stops the timer chain AND aborts any
+  // in-flight refresh() — so a teardown that races a network read
+  // never sets state on an unmounted component.
   const tunnelsRef = useRef(tunnels);
   useEffect(() => { tunnelsRef.current = tunnels; }, [tunnels]);
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     let h: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
-      if (cancelled) return;
+      if (ac.signal.aborted) return;
       const anyStarting = tunnelsRef.current.some((t) => t.status === "starting");
-      await refresh();
-      if (cancelled) return;
+      await refresh(ac.signal);
+      if (ac.signal.aborted) return;
       h = setTimeout(() => { void tick(); }, anyStarting ? 1_000 : 4_000);
     };
     h = setTimeout(() => { void tick(); }, 2_000);
     return () => {
-      cancelled = true;
+      ac.abort();
       if (h) clearTimeout(h);
     };
   }, [refresh]);

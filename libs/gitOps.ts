@@ -21,7 +21,7 @@
  * canonical `t_YYYYMMDD_NNN` shape passes the regex unchanged).
  */
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { AppGitSettings } from "./apps";
@@ -44,6 +44,13 @@ const AUTO_BRANCH_PREFIX = "claude/";
  * The chain is HMR-safe via globalThis (same trick as
  * `__bridgeMetaWriteQueues`) so a Next.js hot reload doesn't drop
  * the in-flight serialization head.
+ *
+ * On top of the in-process queue we also acquire a cross-process
+ * advisory lock (`acquireFileLock`) so the bridge dev server and a
+ * developer running `git commit` by hand in the same repo don't race
+ * each other. The in-process queue makes contention within the
+ * bridge cheap; the file lock catches contention that crosses the
+ * process boundary.
  */
 const GW = globalThis as unknown as {
   __bridgeGitQueues?: Map<string, Promise<unknown>>;
@@ -52,15 +59,113 @@ const gitQueues: Map<string, Promise<unknown>> =
   GW.__bridgeGitQueues ?? new Map<string, Promise<unknown>>();
 GW.__bridgeGitQueues = gitQueues;
 
+const LOCK_DIRNAME = ".bridge-git-lock";
+const LOCK_STALE_MS = 5 * 60 * 1000;
+const LOCK_RETRY_MS = 100;
+const LOCK_MAX_WAIT_MS = 30 * 1000;
+
+interface FileLockHandle {
+  release: () => void;
+}
+
+/**
+ * Pick the directory the lock will live in. Prefer `<cwd>/.git/` so
+ * the lock travels with the working tree, doesn't pollute the
+ * project root listing, and is automatically gitignored by virtue
+ * of being inside `.git`. Fall back to `<cwd>` itself when `.git`
+ * is absent (a worktree's `.git` is a file, not a dir; in that case
+ * we use the cwd directly).
+ */
+function lockDirFor(cwd: string): string {
+  const dotGit = join(cwd, ".git");
+  let useDotGit = false;
+  try {
+    useDotGit = statSync(dotGit).isDirectory();
+  } catch { /* missing or .git is a file (worktree pointer) */ }
+  return join(useDotGit ? dotGit : cwd, LOCK_DIRNAME);
+}
+
+/**
+ * Acquire an OS-level advisory lock by creating a sentinel directory
+ * — `mkdir` is atomic across processes on every supported platform.
+ * Returns a handle on success, or `null` if the lock couldn't be
+ * acquired within `LOCK_MAX_WAIT_MS`. Writes a small `owner` file
+ * inside the directory so a future stale-lock pass can decide to
+ * forcibly evict an abandoned lock.
+ */
+async function acquireFileLock(cwd: string): Promise<FileLockHandle | null> {
+  const lockDir = lockDirFor(cwd);
+  const start = Date.now();
+  while (Date.now() - start < LOCK_MAX_WAIT_MS) {
+    try {
+      mkdirSync(lockDir);
+      try {
+        writeFileSync(
+          join(lockDir, "owner"),
+          JSON.stringify({ pid: process.pid, t: Date.now() }),
+        );
+      } catch { /* diagnostic-only — lock already held by us */ }
+      return {
+        release() {
+          try { rmSync(lockDir, { recursive: true, force: true }); }
+          catch { /* lock dir gone? fine */ }
+        },
+      };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") {
+        // ENOENT means the parent (.git/ or cwd) doesn't exist —
+        // surface as un-acquirable rather than throwing into the
+        // queue, since the caller can't do anything about it.
+        return null;
+      }
+      // Stale-lock detection: if the existing dir is older than
+      // LOCK_STALE_MS, the previous holder crashed before releasing.
+      // Try the owner file's timestamp first, fall back to dir mtime.
+      try {
+        const ownerPath = join(lockDir, "owner");
+        let ownerAge = Number.POSITIVE_INFINITY;
+        if (existsSync(ownerPath)) {
+          try {
+            const parsed = JSON.parse(readFileSync(ownerPath, "utf8")) as { t?: number };
+            if (typeof parsed.t === "number") ownerAge = Date.now() - parsed.t;
+          } catch { /* fall through to dir mtime */ }
+        }
+        if (!Number.isFinite(ownerAge)) {
+          try { ownerAge = Date.now() - statSync(lockDir).mtimeMs; }
+          catch { /* lock dir vanished between EEXIST and stat */ }
+        }
+        if (Number.isFinite(ownerAge) && ownerAge > LOCK_STALE_MS) {
+          try { rmSync(lockDir, { recursive: true, force: true }); }
+          catch { /* race with another waiter — fine, retry */ }
+          continue;
+        }
+      } catch { /* keep waiting */ }
+      await new Promise<void>((r) => setTimeout(r, LOCK_RETRY_MS));
+    }
+  }
+  return null;
+}
+
 export async function withGitLock<T>(
   cwd: string,
   fn: () => T | Promise<T>,
 ): Promise<T> {
+  const runWithCrossProcLock = async (): Promise<T> => {
+    const lock = await acquireFileLock(cwd);
+    if (!lock) {
+      throw new Error(
+        `gitOps: failed to acquire cross-process lock at ${lockDirFor(cwd)} within ${LOCK_MAX_WAIT_MS}ms`,
+      );
+    }
+    try {
+      return await fn();
+    } finally {
+      lock.release();
+    }
+  };
   const prev = gitQueues.get(cwd) ?? Promise.resolve();
-  const next: Promise<T> = prev.then(
-    () => fn(),
-    () => fn(),
-  );
+  const next: Promise<T> = prev.then(runWithCrossProcLock, runWithCrossProcLock);
   const tail = next.catch(() => {});
   gitQueues.set(cwd, tail);
   try {

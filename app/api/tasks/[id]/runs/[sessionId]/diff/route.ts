@@ -26,6 +26,7 @@ import { readMeta } from "@/libs/meta";
 import { resolveRepoCwd } from "@/libs/repos";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
+import { safeErrorMessage } from "@/libs/errorResponse";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 
 /** Defense-in-depth: only diff paths under the registered app root. */
@@ -90,8 +91,7 @@ async function gitDiff(
     }
     return { diff: body, truncated };
   } catch (err) {
-    const e = err as Error;
-    return { error: e.message ?? "git diff failed" };
+    return { error: safeErrorMessage(err, "git diff failed") };
   }
 }
 

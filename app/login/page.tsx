@@ -30,16 +30,16 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       try {
-        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        const r = await fetch("/api/auth/me", { cache: "no-store", signal: ac.signal });
         if (!r.ok) {
-          if (!cancelled) setSetupMode(false);
+          if (!ac.signal.aborted) setSetupMode(false);
           return;
         }
         const data = (await r.json()) as { configured?: boolean; user?: unknown };
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         // If the operator is already authed, redirect away — same UX
         // as most apps: the login page is a no-op for logged-in users.
         if (data.configured && data.user) {
@@ -48,10 +48,10 @@ export default function LoginPage() {
         }
         setSetupMode(!data.configured);
       } catch {
-        if (!cancelled) setSetupMode(false);
+        if (!ac.signal.aborted) setSetupMode(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => ac.abort();
   }, []);
 
   /** Pending-state info when login was held for trusted-device approval. */
@@ -111,13 +111,14 @@ export default function LoginPage() {
   // redirect; denied / expired → surface the reason and reset the form).
   useEffect(() => {
     if (!pending) return;
-    let cancelled = false;
+    const ac = new AbortController();
     const tick = async () => {
       try {
         const r = await fetch(`/api/auth/login/pending/${pending.id}`, {
           cache: "no-store",
+          signal: ac.signal,
         });
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         if (r.status === 202) return; // still pending — keep polling
         if (r.status === 200) {
           // approved + cookie attached
@@ -141,13 +142,14 @@ export default function LoginPage() {
         setError(msg);
         setPending(null);
       } catch {
-        // Network blip — keep polling, the next tick will retry.
+        // Abort during teardown OR a network blip — keep polling on
+        // the next interval tick.
       }
     };
     const handle = setInterval(() => { void tick(); }, 2000);
     void tick();
     return () => {
-      cancelled = true;
+      ac.abort();
       clearInterval(handle);
     };
   }, [pending]);

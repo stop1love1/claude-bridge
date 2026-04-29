@@ -1132,7 +1132,30 @@ export interface TelegramSettings {
   notificationLevel: TelegramNotificationLevel;
   /** Which forwarded chat lines pass the filter. See type docstring. */
   forwardChatFilter: TelegramForwardChatFilter;
+  /**
+   * Token list that gates `forwardChatFilter === "important-only"`. A
+   * forwarded message must contain ANY of these (case-insensitive
+   * substring match) to pass the filter. Defaults to the coordinator
+   * escalation tokens (`NEEDS-DECISION`, `BLOCKED`,
+   * `READY FOR REVIEW`) — the strings `prompts/coordinator.md`
+   * documents as "the coordinator MUST emit when it needs the
+   * operator". Operators with custom prompts can swap these via
+   * `~/.claude/bridge.json#telegram.forwardChatImportantPatterns`.
+   */
+  forwardChatImportantPatterns: string[];
 }
+
+/**
+ * Default tokens for `forwardChatImportantPatterns`. The coordinator
+ * is required by `prompts/coordinator.md` to use these literal strings
+ * for escalation, so any deployment using the stock prompt should
+ * leave the default in place.
+ */
+export const DEFAULT_FORWARD_CHAT_IMPORTANT_PATTERNS: ReadonlyArray<string> = [
+  "NEEDS-DECISION",
+  "BLOCKED",
+  "READY FOR REVIEW",
+];
 
 export const DEFAULT_TELEGRAM_SETTINGS: TelegramSettings = {
   botToken: "",
@@ -1142,6 +1165,7 @@ export const DEFAULT_TELEGRAM_SETTINGS: TelegramSettings = {
   forwardChatMinChars: DEFAULT_FORWARD_CHAT_MIN_CHARS,
   notificationLevel: DEFAULT_NOTIFICATION_LEVEL,
   forwardChatFilter: DEFAULT_FORWARD_CHAT_FILTER,
+  forwardChatImportantPatterns: [...DEFAULT_FORWARD_CHAT_IMPORTANT_PATTERNS],
 };
 
 /**
@@ -1189,6 +1213,35 @@ function normalizeForwardChatFilter(raw: unknown): TelegramForwardChatFilter {
   return DEFAULT_FORWARD_CHAT_FILTER;
 }
 
+/**
+ * Coerce raw `forwardChatImportantPatterns` from disk into a clean
+ * `string[]`. Drops empty entries, trims whitespace, dedupes, caps at
+ * 32 patterns / 200 chars each so a footgun config can't blow up the
+ * regex compile in `telegramChatForwarder`.
+ *
+ * Falls back to the default token list when the raw value is missing
+ * or doesn't normalize to at least one pattern.
+ */
+function normalizeForwardChatImportantPatterns(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [...DEFAULT_FORWARD_CHAT_IMPORTANT_PATTERNS];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const capped = trimmed.length > 200 ? trimmed.slice(0, 200) : trimmed;
+    const key = capped.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(capped);
+    if (out.length >= 32) break;
+  }
+  return out.length > 0 ? out : [...DEFAULT_FORWARD_CHAT_IMPORTANT_PATTERNS];
+}
+
 export function getManifestTelegramSettings(): TelegramSettings {
   const m = readManifest();
   const tg = (m as {
@@ -1200,6 +1253,7 @@ export function getManifestTelegramSettings(): TelegramSettings {
       forwardChatMinChars?: unknown;
       notificationLevel?: unknown;
       forwardChatFilter?: unknown;
+      forwardChatImportantPatterns?: unknown;
     };
   }).telegram;
   if (!tg || typeof tg !== "object") {
@@ -1213,6 +1267,7 @@ export function getManifestTelegramSettings(): TelegramSettings {
       forwardChatMinChars: DEFAULT_FORWARD_CHAT_MIN_CHARS,
       notificationLevel: DEFAULT_NOTIFICATION_LEVEL,
       forwardChatFilter: DEFAULT_FORWARD_CHAT_FILTER,
+      forwardChatImportantPatterns: [...DEFAULT_FORWARD_CHAT_IMPORTANT_PATTERNS],
     };
   }
   const botToken = typeof tg.botToken === "string" ? tg.botToken.trim() : "";
@@ -1222,6 +1277,9 @@ export function getManifestTelegramSettings(): TelegramSettings {
   const forwardChatMinChars = normalizeForwardChatMinChars(tg.forwardChatMinChars);
   const notificationLevel = normalizeNotificationLevel(tg.notificationLevel);
   const forwardChatFilter = normalizeForwardChatFilter(tg.forwardChatFilter);
+  const forwardChatImportantPatterns = normalizeForwardChatImportantPatterns(
+    tg.forwardChatImportantPatterns,
+  );
   // bridge.json takes precedence, but if EITHER bot field is empty we
   // still fall through to env for those (the user-client side has no
   // env fallback — it's strictly bridge.json).
@@ -1236,6 +1294,7 @@ export function getManifestTelegramSettings(): TelegramSettings {
       forwardChatMinChars,
       notificationLevel,
       forwardChatFilter,
+      forwardChatImportantPatterns,
     };
   }
   return {
@@ -1246,6 +1305,7 @@ export function getManifestTelegramSettings(): TelegramSettings {
     forwardChatMinChars,
     notificationLevel,
     forwardChatFilter,
+    forwardChatImportantPatterns,
   };
 }
 
@@ -1258,6 +1318,7 @@ export function setManifestTelegramSettings(
     forwardChatMinChars?: number;
     notificationLevel?: TelegramNotificationLevel;
     forwardChatFilter?: TelegramForwardChatFilter;
+    forwardChatImportantPatterns?: string[];
   },
 ): TelegramSettings {
   const current = getManifestTelegramSettings();
@@ -1306,6 +1367,10 @@ export function setManifestTelegramSettings(
       patch.forwardChatFilter !== undefined
         ? normalizeForwardChatFilter(patch.forwardChatFilter)
         : current.forwardChatFilter,
+    forwardChatImportantPatterns:
+      patch.forwardChatImportantPatterns !== undefined
+        ? normalizeForwardChatImportantPatterns(patch.forwardChatImportantPatterns)
+        : current.forwardChatImportantPatterns,
   };
   // Drop the section entirely when EVERY field is empty so bridge.json
   // doesn't carry a meaningless `telegram: { ... }`.
@@ -1314,11 +1379,17 @@ export function setManifestTelegramSettings(
     next.user.apiHash === "" &&
     next.user.session === "" &&
     next.user.targetChatId === "";
+  const importantPatternsDefault =
+    next.forwardChatImportantPatterns.length === DEFAULT_FORWARD_CHAT_IMPORTANT_PATTERNS.length &&
+    next.forwardChatImportantPatterns.every(
+      (p, i) => p === DEFAULT_FORWARD_CHAT_IMPORTANT_PATTERNS[i],
+    );
   const forwardChatDefault =
     next.forwardChat === DEFAULT_FORWARD_CHAT &&
     next.forwardChatMinChars === DEFAULT_FORWARD_CHAT_MIN_CHARS &&
     next.notificationLevel === DEFAULT_NOTIFICATION_LEVEL &&
-    next.forwardChatFilter === DEFAULT_FORWARD_CHAT_FILTER;
+    next.forwardChatFilter === DEFAULT_FORWARD_CHAT_FILTER &&
+    importantPatternsDefault;
   const allEmpty =
     next.botToken === "" && next.chatId === "" && userEmpty && forwardChatDefault;
   const manifest = readManifest();
@@ -1337,6 +1408,7 @@ export function setManifestTelegramSettings(
       forwardChatMinChars?: number;
       notificationLevel?: TelegramNotificationLevel;
       forwardChatFilter?: TelegramForwardChatFilter;
+      forwardChatImportantPatterns?: string[];
     } = {
       botToken: next.botToken,
       chatId: next.chatId,
@@ -1353,6 +1425,9 @@ export function setManifestTelegramSettings(
     }
     if (next.forwardChatFilter !== DEFAULT_FORWARD_CHAT_FILTER) {
       persisted.forwardChatFilter = next.forwardChatFilter;
+    }
+    if (!importantPatternsDefault) {
+      persisted.forwardChatImportantPatterns = next.forwardChatImportantPatterns;
     }
     (updatedManifest as { telegram?: typeof persisted }).telegram = persisted;
   }

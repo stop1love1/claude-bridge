@@ -110,14 +110,29 @@ function renderHeader(buf: SessionBuffer): string {
 }
 
 /**
- * Pattern matched against buffered assistant prose when
- * `forwardChatFilter === "important-only"`. The tokens come from the
- * coordinator escalation convention (see
- * `memory/feedback_escalate_ambiguity.md`) — these are the strings the
- * coordinator MUST use when it needs the operator. Anything else is
- * considered "thinking out loud" and stays in the bridge UI.
+ * Compile the configured `forwardChatImportantPatterns` token list into
+ * one alternation regex. Tokens are escaped for regex safety so an
+ * operator can include literal `.` / `?` etc. in their list without
+ * accidentally turning every short message into a match.
+ *
+ * The compile result is memoized by JOINED-key (`tokens.join("")`)
+ * so a stable settings shape doesn't recompile on every flush; a
+ * settings change invalidates automatically because the key changes.
  */
-const IMPORTANT_PATTERN = /NEEDS-DECISION|BLOCKED|READY FOR REVIEW/i;
+const importantRegexCache = new Map<string, RegExp>();
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function importantPatternFor(tokens: string[]): RegExp | null {
+  if (tokens.length === 0) return null;
+  const key = tokens.join("");
+  let cached = importantRegexCache.get(key);
+  if (!cached) {
+    cached = new RegExp(tokens.map(escapeRegex).join("|"), "i");
+    importantRegexCache.set(key, cached);
+  }
+  return cached;
+}
 
 /**
  * Flush whatever's currently buffered for this session as a single
@@ -134,11 +149,9 @@ function flushBuffer(buf: SessionBuffer, reason: "rotate" | "exit"): void {
   const settings = getManifestTelegramSettings();
   if (settings.forwardChat === "off") return;
   if (trimmed.length < settings.forwardChatMinChars) return;
-  if (
-    settings.forwardChatFilter === "important-only" &&
-    !IMPORTANT_PATTERN.test(trimmed)
-  ) {
-    return;
+  if (settings.forwardChatFilter === "important-only") {
+    const re = importantPatternFor(settings.forwardChatImportantPatterns);
+    if (!re || !re.test(trimmed)) return;
   }
 
   const header = renderHeader(buf);

@@ -475,31 +475,79 @@ export async function pruneStaleWorktrees(args: {
     if (!isUnderAppRoot(appPath, wt)) continue;
     if (activeSessions.has(entry.name)) continue;
     // The dir's own mtime only ticks on entry add/remove — an agent
-    // modifying existing files would otherwise look idle. Walk the
-    // immediate top-level children and take the max mtime as a
-    // cheap proxy for "last write activity inside the worktree".
-    let mtimeMs: number;
+    // editing files several levels deep (e.g. `src/components/foo.tsx`)
+    // never bumps the root. We instead walk the worktree depth-first
+    // and bail the moment we see any descendant with mtime > cutoff.
+    // Bounded by depth + a skip list so we don't pay node_modules
+    // /target/.next overhead just to decide reaping eligibility.
+    let recent = false;
     try {
-      mtimeMs = statSync(wt).mtimeMs;
-      let kids: import("node:fs").Dirent[] = [];
-      try {
-        kids = readdirSync(wt, { withFileTypes: true });
-      } catch { /* unreadable — fall through to root mtime only */ }
-      for (const k of kids) {
-        if (k.name === ".git") continue;
-        try {
-          const km = statSync(join(wt, k.name)).mtimeMs;
-          if (km > mtimeMs) mtimeMs = km;
-        } catch { /* ignore individual entry errors */ }
-      }
+      recent = statSync(wt).mtimeMs > cutoffMs
+        || hasRecentEdit(wt, cutoffMs);
     } catch {
       continue;
     }
-    if (mtimeMs > cutoffMs) continue;
+    if (recent) continue;
     const r = await removeWorktree({ appPath, worktreePath: wt });
     if (r.ok) removed += 1;
   }
   return removed;
+}
+
+/**
+ * Directories we never scan when deciding worktree staleness — they
+ * either pollute the signal (build outputs that get bumped on every
+ * reload) or are massive enough that scanning them dwarfs the cost
+ * of just leaving the worktree alone.
+ */
+const STALE_SCAN_SKIP_NAMES: ReadonlySet<string> = new Set([
+  ".git", ".hg", ".svn",
+  "node_modules", ".pnpm", ".yarn",
+  ".next", ".turbo", ".cache", ".parcel-cache",
+  "dist", "build", "out", "target",
+  "coverage", ".nyc_output",
+  "__pycache__", ".venv", "venv",
+  ".bridge-state",
+]);
+
+/**
+ * Hard ceiling on how deep we'll walk into a worktree to decide
+ * staleness. 5 covers `src/<package>/<feature>/<file>.ts`-style
+ * layouts comfortably; deeper edits still get the worktree kept by
+ * the active-session set.
+ */
+const STALE_SCAN_MAX_DEPTH = 5;
+
+/**
+ * Depth-first walk that returns `true` as soon as any file or
+ * directory under `dir` has `mtimeMs > cutoffMs`. Skips the heavy
+ * directories above. Returns `false` if no such entry exists within
+ * the depth budget.
+ */
+function hasRecentEdit(dir: string, cutoffMs: number): boolean {
+  const stack: Array<{ path: string; depth: number }> = [{ path: dir, depth: 0 }];
+  while (stack.length > 0) {
+    const { path, depth } = stack.pop()!;
+    let kids: import("node:fs").Dirent[];
+    try {
+      kids = readdirSync(path, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const k of kids) {
+      if (STALE_SCAN_SKIP_NAMES.has(k.name)) continue;
+      const child = join(path, k.name);
+      try {
+        if (statSync(child).mtimeMs > cutoffMs) return true;
+      } catch {
+        continue;
+      }
+      if (k.isDirectory() && depth + 1 < STALE_SCAN_MAX_DEPTH) {
+        stack.push({ path: child, depth: depth + 1 });
+      }
+    }
+  }
+  return false;
 }
 
 /** Test-only helper: expose the canonical normalized path. */

@@ -43,8 +43,16 @@ interface UserClientState {
    * silently keep the stale connection alive.
    */
   credsHash: string;
-  /** Inbound message handlers attached via `addEventHandler`. */
-  inboundHandlers: Set<InboundHandler>;
+  /**
+   * Inbound message handlers attached via `addEventHandler`, paired
+   * with the wrapped dispatcher we actually registered with gram-js.
+   * Keeping the wrapper handle is what lets us call
+   * `removeEventHandler` cleanly on unsubscribe — without it, gram-js's
+   * internal listener list keeps the closure alive forever and a
+   * settings-driven reconnect (which re-attaches new wrappers) silently
+   * accumulates dispatchers across reload.
+   */
+  inboundHandlers: Map<InboundHandler, (event: unknown) => void>;
 }
 
 const G = globalThis as unknown as {
@@ -55,7 +63,7 @@ const state: UserClientState =
     client: null,
     connecting: null,
     credsHash: "",
-    inboundHandlers: new Set(),
+    inboundHandlers: new Map(),
   };
 G.__bridgeTelegramUserClient = state;
 
@@ -147,9 +155,14 @@ async function buildAndConnect(): Promise<TelegramClient | null> {
     );
   }
   // Re-attach any registered inbound handlers to the new client so a
-  // settings swap doesn't drop them.
-  for (const h of state.inboundHandlers) {
-    client.addEventHandler(makeMessageDispatcher(h), new NewMessage({}));
+  // settings swap doesn't drop them. Replace the old wrapper handle
+  // (which pointed at the previous, now-disconnected client) with
+  // the freshly-registered one so a future unsubscribe removes the
+  // CURRENT listener, not the stale closure on the dead client.
+  for (const [h] of state.inboundHandlers) {
+    const dispatcher = makeMessageDispatcher(h);
+    client.addEventHandler(dispatcher, new NewMessage({}));
+    state.inboundHandlers.set(h, dispatcher);
   }
   return client;
 }
@@ -333,13 +346,20 @@ function makeMessageDispatcher(
 export async function subscribeUserMessages(
   handler: InboundHandler,
 ): Promise<() => void> {
-  state.inboundHandlers.add(handler);
+  // Reserve a slot in the registry up front so a reconnect that races
+  // the attach below still re-attaches us. The dispatcher slot is
+  // replaced once we actually register with gram-js.
+  if (!state.inboundHandlers.has(handler)) {
+    state.inboundHandlers.set(handler, () => { /* placeholder */ });
+  }
   if (isUserClientConfigured()) {
     try {
       const client = await getTelegramUserClient();
       if (client) {
         const { NewMessage } = await loadGramJs();
-        client.addEventHandler(makeMessageDispatcher(handler), new NewMessage({}));
+        const dispatcher = makeMessageDispatcher(handler);
+        client.addEventHandler(dispatcher, new NewMessage({}));
+        state.inboundHandlers.set(handler, dispatcher);
       }
     } catch (err) {
       console.warn(
@@ -349,10 +369,23 @@ export async function subscribeUserMessages(
     }
   }
   return () => {
+    const dispatcher = state.inboundHandlers.get(handler);
     state.inboundHandlers.delete(handler);
-    // We can't easily unregister from gram-js once attached without
-    // tracking the wrapped callback; the handler set is the source of
-    // truth, so a future reconnect won't re-attach this one. The
-    // dispatcher's outer try/catch makes the dangling callback inert.
+    // Pull the dispatcher OUT of gram-js's internal listener list.
+    // Without this, repeated subscribe/unsubscribe cycles (every
+    // settings reload triggers one) accumulate dead closures inside
+    // gram-js's dispatcher table, each one fired on every inbound
+    // message — eventually a measurable per-message overhead.
+    if (dispatcher && state.client) {
+      try {
+        // gram-js's `removeEventHandler` API matches by the function
+        // reference we passed to `addEventHandler`. We tracked that
+        // ref in the map specifically so this removal works.
+        (state.client as unknown as { removeEventHandler?: (fn: unknown) => void })
+          .removeEventHandler?.(dispatcher);
+      } catch (err) {
+        console.warn("[telegram-user] removeEventHandler failed:", (err as Error).message);
+      }
+    }
   };
 }

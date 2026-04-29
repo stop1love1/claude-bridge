@@ -17,6 +17,7 @@ import {
 } from "@/libs/detect";
 import { detectWithLLM } from "@/libs/detect/llm";
 import { SESSIONS_DIR } from "@/libs/paths";
+import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
       spawnError = "coordinator spawn returned null (see server logs)";
     }
   } catch (err) {
-    spawnError = err instanceof Error ? err.message : String(err);
+    spawnError = safeErrorMessage(err, "spawn_failed");
     console.error("spawnCoordinatorForTask threw for", task.id, err);
   }
 

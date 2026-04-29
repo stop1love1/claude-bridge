@@ -1,13 +1,25 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { getApp, isValidAppName, updateAppDescription } from "@/libs/apps";
 import { scanAppWithClaude } from "@/libs/scanApp";
+import { getClientIp } from "@/libs/clientIp";
+import { checkRateLimit } from "@/libs/rateLimit";
 
 export const dynamic = "force-dynamic";
 // Claude scans can run up to ~90s in scanApp.ts; give the route a
 // matching ceiling. Default Next.js request timeout is generous, but
 // some hosts cap shorter — be explicit.
 export const maxDuration = 120;
+
+/**
+ * Each scan spawns `claude -p` in the app's working tree (~90s of CPU
+ * + LLM cost). 3 scans per 5-minute window per IP is far above what a
+ * legitimate operator needs (you scan an app once, occasionally re-
+ * scan after big changes), and prevents an authenticated browser
+ * context being abused to fan out child-process floods.
+ */
+const SCAN_WINDOW_MS = 5 * 60 * 1000;
+const SCAN_LIMIT_PER_IP = 3;
 
 /**
  * Run `claude -p` inside the app's working directory and ask the
@@ -22,9 +34,14 @@ export const maxDuration = 120;
  *   - 404 { error }
  */
 export async function POST(
-  _req: Request,
+  req: NextRequest,
   ctx: { params: Promise<{ name: string }> },
 ) {
+  const ip = getClientIp(req.headers);
+  const denied = checkRateLimit("apps:scan:ip", ip, SCAN_LIMIT_PER_IP, SCAN_WINDOW_MS);
+  if (denied) {
+    return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
+  }
   const { name } = await ctx.params;
   if (!isValidAppName(name)) {
     return NextResponse.json({ error: "invalid app name" }, { status: 400 });

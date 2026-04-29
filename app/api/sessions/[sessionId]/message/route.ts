@@ -9,6 +9,7 @@ import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permission
 import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
 import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
 import { isValidAppName } from "@/libs/apps";
+import { serverError } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -103,6 +104,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
     return NextResponse.json({ ok: true, sessionId });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(serverError(e, "sessions:message"), { status: 500 });
   }
 }

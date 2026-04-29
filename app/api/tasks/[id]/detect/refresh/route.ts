@@ -8,6 +8,7 @@ import {
   loadDetectInput,
   refreshScope,
 } from "@/libs/detect";
+import { serverError } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,6 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     );
     return NextResponse.json({ scope }, { status: 200 });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json(serverError(err, "tasks:detect-refresh"), { status: 500 });
   }
 }

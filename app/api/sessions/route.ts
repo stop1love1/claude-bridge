@@ -6,6 +6,7 @@ import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/sp
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
 import { isValidAppName } from "@/libs/apps";
 import { badRequest, isValidUserPermissionMode } from "@/libs/validate";
+import { serverError } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +105,6 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ sessionId, repo: body.repo, cwd }, { status: 201 });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(serverError(e, "sessions:create"), { status: 500 });
   }
 }

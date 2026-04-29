@@ -73,10 +73,37 @@ describe("hasBlockedExtension", () => {
       "code.ts",
       "code.tsx",
       "data.json",
-      "diagram.svg",
+      "image.gif",
+      "image.webp",
+      "doc.docx",
+      "table.csv",
     ]) {
       expect(hasBlockedExtension(safe)).toBe(false);
     }
+  });
+
+  it("blocks active-web-content extensions (XSS / cross-origin frame risk)", () => {
+    for (const ext of [".svg", ".svgz", ".html", ".htm", ".xhtml", ".shtml", ".mhtml"]) {
+      expect(hasBlockedExtension(`evil${ext}`)).toBe(true);
+      expect(hasBlockedExtension(`Evil${ext.toUpperCase()}`)).toBe(true);
+    }
+  });
+
+  it("blocks Windows shortcut / installer / handler variants", () => {
+    for (const ext of [".url", ".lnk", ".appx", ".appxbundle", ".msu", ".msix", ".msixbundle", ".reg", ".hta", ".chm"]) {
+      expect(hasBlockedExtension(`payload${ext}`)).toBe(true);
+    }
+  });
+
+  it("blocks disk-image extensions that auto-mount on Windows / macOS", () => {
+    for (const ext of [".iso", ".img", ".vhd", ".vhdx"]) {
+      expect(hasBlockedExtension(`disk${ext}`)).toBe(true);
+    }
+  });
+
+  it("blocks Java bytecode containers", () => {
+    expect(hasBlockedExtension("evil.jar")).toBe(true);
+    expect(hasBlockedExtension("Foo.class")).toBe(true);
   });
 
   it("does not block a name that lacks an extension entirely", () => {

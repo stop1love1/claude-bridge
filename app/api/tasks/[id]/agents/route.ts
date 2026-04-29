@@ -30,6 +30,7 @@ import { attachReferences } from "@/libs/contextAttach";
 import { buildRecentDirection } from "@/libs/recentDirection";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest, isValidAgentRole, isValidSessionId } from "@/libs/validate";
+import { safeErrorMessage, serverError } from "@/libs/errorResponse";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
@@ -619,7 +620,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       sessionId,
     );
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
     try {
       await updateRun(sessionsDir, sessionId, {
         status: "failed",
@@ -628,7 +628,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     } catch (uErr) {
       console.error("failed to mark queued run failed after spawn error", uErr);
     }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json(serverError(e, "tasks:agent-spawn"), { status: 500 });
   }
 
   // Spawn succeeded — promote queued → running and stamp startedAt now
@@ -1055,7 +1055,7 @@ async function handleResume(args: {
   } catch (e) {
     console.error("failed to flip resume run back to running", e);
     return NextResponse.json(
-      { error: "meta update failed", reason: e instanceof Error ? e.message : String(e) },
+      { error: "meta update failed", reason: safeErrorMessage(e) },
       { status: 500 },
     );
   }
@@ -1083,7 +1083,6 @@ async function handleResume(args: {
       settingsPath,
     );
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
     // Roll the meta row back to its prior terminal state so the UI
     // doesn't show a phantom-running row.
     try {
@@ -1094,7 +1093,7 @@ async function handleResume(args: {
     } catch (uErr) {
       console.error("failed to roll resume run back after spawn error", uErr);
     }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json(serverError(e, "tasks:agent-resume"), { status: 500 });
   }
 
   wireRunLifecycle(

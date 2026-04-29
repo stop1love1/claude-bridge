@@ -83,21 +83,19 @@ function DiffViewerBody({
   // attempt counter. Setters inside `.then` / `.catch` callbacks fire
   // asynchronously, which the React 19 hooks linter accepts.
   useEffect(() => {
-    let cancelled = false;
-    api.runDiff(taskId, sessionId)
+    const ac = new AbortController();
+    api.runDiff(taskId, sessionId, { signal: ac.signal })
       .then((r) => {
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         setData(r);
         setLoading(false);
       })
       .catch((e) => {
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         setError((e as Error).message);
         setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [taskId, sessionId, attempt]);
 
   const refresh = useCallback(() => {

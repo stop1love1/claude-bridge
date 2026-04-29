@@ -17,29 +17,12 @@
  * claim-vs-diff HONESTY without an LLM spawn. The critic is opt-in and
  * costs ~30-100K tokens per task on top of the coder.
  */
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { appendRun, readMeta, type Run, type RunStyleCritic } from "./meta";
-import { wireRunLifecycle } from "./coordinator";
-import { resolveRepoCwd } from "./repos";
-import { spawnFreeSession } from "./spawn";
-import {
-  freeSessionSettingsPath,
-  writeSessionSettings,
-} from "./permissionSettings";
-import { readOriginalPrompt } from "./promptStore";
+import { type Run, type RunStyleCritic } from "./meta";
 import { isAlreadyRetryRun } from "./verifyChain";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
-import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
-import { getApp } from "./apps";
-import {
-  checkEligibility,
-  maxAttemptsFor,
-  nextRetryRole,
-  parseRole,
-  renderStrategyPrefix,
-} from "./retryLadder";
+import { spawnRetry } from "./retrySpawn";
+import { checkEligibility } from "./retryLadder";
 
 export const STYLE_CRITIC_ROLE = "style-critic";
 export const STYLE_CRITIC_RETRY_SUFFIX = "-stretry";
@@ -204,74 +187,13 @@ export async function spawnStyleCriticRetry(args: {
   finishedRun: Run;
   critic: RunStyleCritic;
 }): Promise<{ sessionId: string; run: Run } | null> {
-  const { taskId, finishedRun, critic } = args;
-  const sessionsDir = join(SESSIONS_DIR, taskId);
-
-  const md = readBridgeMd();
-  const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
-  if (!liveRepoCwd) return null;
-  const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
-
-  const app = getApp(finishedRun.repo);
-  const meta = readMeta(sessionsDir);
-  if (!meta) return null;
-  const elig = checkEligibility({
-    finishedRun,
-    meta,
+  return spawnRetry({
+    taskId: args.taskId,
+    finishedRun: args.finishedRun,
     gate: "style",
-    retry: app?.retry,
+    ctxBlock: renderStyleRetryContextBlock(args.critic),
+    fallbackBody:
+      "(original prompt unavailable — repo state and the failure context above are the only signals you have. Inspect the repo, infer the intent, and try to make forward progress while addressing the style issues.)",
+    logLabel: "style-retry",
   });
-  if (!elig.eligible) return null;
-  const parsed = parseRole(finishedRun.role);
-  const maxAttempts = maxAttemptsFor(app?.retry, "style");
-
-  const strategyPrefix = renderStrategyPrefix({
-    gate: "style",
-    attempt: elig.nextAttempt,
-    maxAttempts,
-  });
-  const ctxBlock = renderStyleRetryContextBlock(critic);
-  const originalPrompt = readOriginalPrompt(taskId, finishedRun);
-  const body =
-    originalPrompt.trim() ||
-    "(original prompt unavailable — repo state and the failure context above are the only signals you have. Inspect the repo, infer the intent, and try to make forward progress while addressing the style issues.)";
-  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
-
-  const sessionId = randomUUID();
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
-
-  let childHandle;
-  try {
-    childHandle = spawnFreeSession(
-      spawnCwd,
-      retryPrompt,
-      { mode: "bypassPermissions" },
-      settingsPath,
-      sessionId,
-    );
-  } catch (e) {
-    console.error("style-retry spawn failed for", taskId, finishedRun.sessionId, e);
-    return null;
-  }
-
-  const retryRun: Run = {
-    sessionId,
-    role: nextRetryRole(parsed.baseRole, "style", elig.nextAttempt),
-    repo: finishedRun.repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: finishedRun.parentSessionId ?? null,
-    retryOf: finishedRun.sessionId,
-    retryAttempt: elig.nextAttempt,
-    ...inheritWorktreeFields(finishedRun),
-  };
-  await appendRun(sessionsDir, retryRun);
-  wireRunLifecycle(
-    sessionsDir,
-    sessionId,
-    childHandle.child,
-    `style-retry ${taskId}/${sessionId}`,
-  );
-  return { sessionId, run: retryRun };
 }

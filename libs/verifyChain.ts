@@ -17,25 +17,14 @@
  * step's stdout+stderr injected at the top of the prompt so the model
  * sees the ground-truth error before re-reading the original brief.
  */
-import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
-import { getApp, type App, type AppVerify } from "./apps";
-import { appendRun, readMeta, type Run, type RunVerify, type RunVerifyStep } from "./meta";
-import { wireRunLifecycle } from "./coordinator";
-import { resolveRepoCwd } from "./repos";
-import { spawnFreeSession } from "./spawn";
-import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
-import { readOriginalPrompt } from "./promptStore";
-import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { type App, type AppVerify } from "./apps";
+import { readMeta, type Run, type RunVerify, type RunVerifyStep } from "./meta";
+import { treeKill } from "./processKill";
+import { spawnRetry } from "./retrySpawn";
 import {
   checkEligibility,
   isAnyRetryRole,
-  maxAttemptsFor,
-  nextRetryRole,
-  parseRole,
-  renderStrategyPrefix,
 } from "./retryLadder";
 
 /** Canonical order — matches the `## Verify commands` section in childPrompt. */
@@ -146,11 +135,15 @@ interface ExecResult {
  * commands like `bun test --reporter=verbose` work unmodified across
  * platforms — Node delegates to `cmd /c` on Windows and `sh -c` on POSIX.
  *
- * Hard timeout via AbortController. On Windows, killing the shell does
- * NOT always reap grandchild processes — we accept this as a known
- * limitation (Risk 3 in the explorer report) and document the recommended
- * `verify` shape (commands that respect SIGTERM / completion signals).
+ * Hard timeout uses `treeKill` so the entire process subtree is reaped
+ * on Windows (where `child.kill()` only terminates `cmd.exe`, leaving
+ * grandchildren like `bun test` running). The previous AbortController
+ * approach orphaned grandchildren — see `libs/processKill.ts` for the
+ * platform-specific reasoning. After SIGTERM we schedule a SIGKILL
+ * backstop in case the runner ignores polite termination.
  */
+const KILL_GRACE_MS = 2000;
+
 function execStep(
   cmd: string,
   cwd: string,
@@ -173,15 +166,13 @@ function execStep(
       });
       return;
     }
-    const ac = new AbortController();
     const spawnOpts: SpawnOptionsWithoutStdio = {
       cwd,
       shell: true,
       windowsHide: true,
-      signal: ac.signal,
     };
 
-    let child;
+    let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn(cmd, [], spawnOpts);
     } catch (err) {
@@ -215,13 +206,21 @@ function execStep(
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
 
+    let timedOut = false;
+    let killBackstop: ReturnType<typeof setTimeout> | null = null;
     const timer = setTimeout(() => {
-      ac.abort();
+      timedOut = true;
+      treeKill(child, "SIGTERM");
+      // Grandchildren that ignore SIGTERM (rare but possible — long
+      // teardown hooks, swallow handlers) get a hard SIGKILL.
+      killBackstop = setTimeout(() => treeKill(child, "SIGKILL"), KILL_GRACE_MS);
+      if (typeof killBackstop.unref === "function") killBackstop.unref();
     }, timeoutMs);
     if (typeof timer.unref === "function") timer.unref();
 
     const settle = (exitCode: number | null, suffixNote?: string) => {
       clearTimeout(timer);
+      if (killBackstop) clearTimeout(killBackstop);
       let output = collected;
       if (truncated) {
         output += `\n\n…(bridge: output truncated at ${outputCap} bytes)`;
@@ -233,18 +232,10 @@ function execStep(
     };
 
     child.once("error", (err) => {
-      const aborted = (err as NodeJS.ErrnoException).name === "AbortError";
-      settle(
-        null,
-        aborted
-          ? `(bridge: aborted after ${timeoutMs}ms timeout)`
-          : `(bridge: child error — ${err.message})`,
-      );
+      settle(null, `(bridge: child error — ${err.message})`);
     });
     child.once("exit", (code) => {
-      // When AbortController fires, "exit" still arrives with a non-zero
-      // code — surface the timeout marker either way.
-      settle(code, ac.signal.aborted ? `(bridge: aborted after ${timeoutMs}ms timeout)` : undefined);
+      settle(code, timedOut ? `(bridge: aborted after ${timeoutMs}ms timeout)` : undefined);
     });
   });
 }
@@ -322,85 +313,13 @@ export async function spawnVerifyRetry(args: {
   finishedRun: Run;
   verify: RunVerify;
 }): Promise<{ sessionId: string; run: Run } | null> {
-  const { taskId, finishedRun, verify } = args;
-  const sessionsDir = join(SESSIONS_DIR, taskId);
-
-  const md = readBridgeMd();
-  const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
-  if (!liveRepoCwd) return null;
-  // P4/F1: retries inherit the parent's worktree so they edit the same
-  // sandbox the original run started in.
-  const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
-
-  // Re-derive eligibility + nextAttempt at spawn time (the eligibility
-  // check at the call site decided we should retry, but it doesn't pass
-  // back the attempt number). Bail if a concurrent spawn raced us past
-  // the budget.
-  const app = getApp(finishedRun.repo);
-  const meta = readMeta(sessionsDir);
-  if (!meta) return null;
-  const elig = checkEligibility({
-    finishedRun,
-    meta,
+  return spawnRetry({
+    taskId: args.taskId,
+    finishedRun: args.finishedRun,
     gate: "verify",
-    retry: app?.retry,
+    ctxBlock: renderVerifyRetryContextBlock(args.verify),
+    logLabel: "verify-retry",
   });
-  if (!elig.eligible) return null;
-  const parsed = parseRole(finishedRun.role);
-  const maxAttempts = maxAttemptsFor(app?.retry, "verify");
-
-  const strategyPrefix = renderStrategyPrefix({
-    gate: "verify",
-    attempt: elig.nextAttempt,
-    maxAttempts,
-  });
-  const ctxBlock = renderVerifyRetryContextBlock(verify);
-  const originalPrompt = readOriginalPrompt(taskId, finishedRun);
-  const body =
-    originalPrompt.trim() ||
-    "(original prompt unavailable — repo state and the failure context above are the only signals you have. Inspect the repo, infer the intent, and try to make forward progress.)";
-  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
-
-  const sessionId = randomUUID();
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
-
-  let childHandle;
-  try {
-    childHandle = spawnFreeSession(
-      spawnCwd,
-      retryPrompt,
-      { mode: "bypassPermissions" },
-      settingsPath,
-      sessionId,
-    );
-  } catch (e) {
-    console.error("verify-retry spawn failed for", taskId, finishedRun.sessionId, e);
-    return null;
-  }
-
-  const retryRun: Run = {
-    sessionId,
-    role: nextRetryRole(parsed.baseRole, "verify", elig.nextAttempt),
-    repo: finishedRun.repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: finishedRun.parentSessionId ?? null,
-    retryOf: finishedRun.sessionId,
-    retryAttempt: elig.nextAttempt,
-    ...inheritWorktreeFields(finishedRun),
-  };
-  // Async per-task lock: must await before wiring lifecycle so an
-  // early `exit` from the freshly-spawned child can't fire updateRun
-  // against a sessionId not yet visible in meta.json.
-  await appendRun(sessionsDir, retryRun);
-  wireRunLifecycle(
-    sessionsDir,
-    sessionId,
-    childHandle.child,
-    `verify-retry ${taskId}/${sessionId}`,
-  );
-  return { sessionId, run: retryRun };
 }
 
 /**

@@ -1,23 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { appendRun, emitRetried, readMeta, type Run } from "./meta";
-import { wireRunLifecycle } from "./coordinator";
+import { emitRetried, readMeta, type Run } from "./meta";
 import { resolveRepoCwd } from "./repos";
-import { spawnFreeSession } from "./spawn";
-import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
 import { projectDirFor } from "./sessions";
-import { readOriginalPrompt } from "./promptStore";
-import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { getApp } from "./apps";
-import {
-  checkEligibility,
-  maxAttemptsFor,
-  nextRetryRole,
-  parseRole,
-  renderStrategyPrefix,
-} from "./retryLadder";
+import { spawnRetry } from "./retrySpawn";
+import { checkEligibility } from "./retryLadder";
 
 /**
  * Phase D — auto-retry for failed children.
@@ -38,7 +27,7 @@ const MAX_TOOL_USE_ENTRIES = 5;
  */
 const KILL_DETECTION_WINDOW_MS = 5000;
 
-interface ToolUseEntry {
+export interface ToolUseEntry {
   tool: string;
   input: string;
 }
@@ -75,7 +64,7 @@ function isEligibleForRetry(
   return { nextAttempt: elig.nextAttempt };
 }
 
-interface FailedSessionContext {
+export interface FailedSessionContext {
   lastAssistantText: string;
   recentToolUses: ToolUseEntry[];
 }
@@ -89,12 +78,20 @@ interface FailedSessionContext {
  * Both default to empty/[] on any failure — the retry prompt then just
  * omits the missing block.
  *
- * We single-pass the file in reverse, since the failure context lives at
- * the tail. The .jsonl can be megabytes; we accept the read cost because
- * the file is bounded by the agent's session length and this only runs
- * on a failed-run lifecycle event.
+ * We tail-stream the file backwards in 64 KB chunks because failure
+ * context lives at the very end and a session jsonl can grow to many
+ * MB after a long agent run. Reading the whole file into RAM (the
+ * previous behavior) burnt 100+ MB for the longest sessions and
+ * blocked the lifecycle hook for hundreds of ms; the streaming
+ * version reads on average ~1 page and exits as soon as we have
+ * both the last assistant text and enough tool_use blocks. We cap
+ * the total bytes pulled at 1 MB so a pathological file can't hang
+ * the lifecycle.
  */
-function readFailedSessionContext(
+const TAIL_CHUNK_BYTES = 64 * 1024;
+const TAIL_MAX_BYTES = 1024 * 1024;
+
+export function readFailedSessionContext(
   failedSessionId: string,
   repoCwd: string,
 ): FailedSessionContext {
@@ -102,81 +99,122 @@ function readFailedSessionContext(
     lastAssistantText: "",
     recentToolUses: [],
   };
-  try {
-    const projectDir = projectDirFor(repoCwd);
-    const jsonlPath = join(projectDir, `${failedSessionId}.jsonl`);
-    if (!existsSync(jsonlPath)) return empty;
+  const projectDir = projectDirFor(repoCwd);
+  const jsonlPath = join(projectDir, `${failedSessionId}.jsonl`);
+  if (!existsSync(jsonlPath)) return empty;
 
-    const raw = readFileSync(jsonlPath, "utf8");
-    const lines = raw.split(/\r?\n/);
+  let lastAssistantText = "";
+  const toolUses: ToolUseEntry[] = [];
 
-    let lastAssistantText = "";
-    const toolUses: ToolUseEntry[] = [];
+  /** Apply the parse logic to one fully-buffered jsonl line. */
+  const consumeLine = (line: string): "done" | "continue" => {
+    if (!line || !line.trim()) return "continue";
+    let obj: { type?: string; message?: { content?: unknown } };
+    try { obj = JSON.parse(line) as typeof obj; } catch { return "continue"; }
+    if (obj.type !== "assistant") return "continue";
 
-    // Walk backwards. Stop once we have BOTH the last assistant text and
-    // enough tool_use entries.
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lastAssistantText && toolUses.length >= MAX_TOOL_USE_ENTRIES) break;
-      const line = lines[i];
-      if (!line || !line.trim()) continue;
-      let obj: { type?: string; message?: { content?: unknown } };
-      try { obj = JSON.parse(line); } catch { continue; }
-      if (obj.type !== "assistant") continue;
-
-      const content = obj.message?.content;
-      if (Array.isArray(content)) {
-        // Collect tool_use blocks in this assistant message (still walking
-        // backwards across messages, but within one message we want the
-        // textual order — so iterate forward inside, then prepend to the
-        // already-collected tail-first list).
-        const localTools: ToolUseEntry[] = [];
-        let combinedText = "";
-        for (const block of content) {
-          if (typeof block === "string") {
-            combinedText += block;
-            continue;
+    const content = obj.message?.content;
+    if (Array.isArray(content)) {
+      // Collect tool_use blocks in this assistant message in document
+      // order, then merge into the tail-first global list.
+      const localTools: ToolUseEntry[] = [];
+      let combinedText = "";
+      for (const block of content) {
+        if (typeof block === "string") { combinedText += block; continue; }
+        if (!block || typeof block !== "object") continue;
+        const b = block as { type?: string; text?: string; name?: string; input?: unknown };
+        if (b.type === "text" && typeof b.text === "string") {
+          combinedText += b.text;
+        } else if (b.type === "tool_use" && typeof b.name === "string") {
+          let snippet = "";
+          try { snippet = JSON.stringify(b.input ?? {}); } catch { snippet = "(unserializable)"; }
+          if (snippet.length > MAX_TOOL_INPUT_SNIPPET) {
+            snippet = snippet.slice(0, MAX_TOOL_INPUT_SNIPPET) + "…";
           }
-          if (!block || typeof block !== "object") continue;
-          const b = block as {
-            type?: string;
-            text?: string;
-            name?: string;
-            input?: unknown;
-          };
-          if (b.type === "text" && typeof b.text === "string") {
-            combinedText += b.text;
-          } else if (b.type === "tool_use" && typeof b.name === "string") {
-            let snippet = "";
-            try {
-              snippet = JSON.stringify(b.input ?? {});
-            } catch {
-              snippet = "(unserializable)";
-            }
-            if (snippet.length > MAX_TOOL_INPUT_SNIPPET) {
-              snippet = snippet.slice(0, MAX_TOOL_INPUT_SNIPPET) + "…";
-            }
-            localTools.push({ tool: b.name, input: snippet });
-          }
-        }
-        if (!lastAssistantText && combinedText) {
-          lastAssistantText = combinedText.slice(0, MAX_LAST_ASSISTANT_CHARS);
-        }
-        // Reverse-walk semantics: messages later in the file should appear
-        // last in the final list. We walk back, so PREPEND (in reverse).
-        for (let t = localTools.length - 1; t >= 0; t--) {
-          if (toolUses.length >= MAX_TOOL_USE_ENTRIES) break;
-          toolUses.unshift(localTools[t]);
-        }
-      } else if (typeof content === "string") {
-        if (!lastAssistantText) {
-          lastAssistantText = content.slice(0, MAX_LAST_ASSISTANT_CHARS);
+          localTools.push({ tool: b.name, input: snippet });
         }
       }
+      if (!lastAssistantText && combinedText) {
+        lastAssistantText = combinedText.slice(0, MAX_LAST_ASSISTANT_CHARS);
+      }
+      // We walk the FILE backwards, so messages we encounter LATER
+      // (= earlier in the file) need to appear earlier in the
+      // tool-use list. PREPEND in reverse to preserve in-message
+      // ordering.
+      for (let t = localTools.length - 1; t >= 0; t--) {
+        if (toolUses.length >= MAX_TOOL_USE_ENTRIES) break;
+        toolUses.unshift(localTools[t]);
+      }
+    } else if (typeof content === "string") {
+      if (!lastAssistantText) {
+        lastAssistantText = content.slice(0, MAX_LAST_ASSISTANT_CHARS);
+      }
+    }
+    return (lastAssistantText && toolUses.length >= MAX_TOOL_USE_ENTRIES)
+      ? "done"
+      : "continue";
+  };
+
+  let fd = -1;
+  try {
+    fd = openSync(jsonlPath, "r");
+    const size = fstatSync(fd).size;
+    if (size === 0) return empty;
+
+    let pos = size;
+    let bytesRead = 0;
+    /** Partial line whose head still lives in the unread (earlier) bytes. */
+    let pending = "";
+    let earlyExit = false;
+
+    while (pos > 0 && bytesRead < TAIL_MAX_BYTES && !earlyExit) {
+      const readLen = Math.min(TAIL_CHUNK_BYTES, pos);
+      const buf = Buffer.alloc(readLen);
+      readSync(fd, buf, 0, readLen, pos - readLen);
+      pos -= readLen;
+      bytesRead += readLen;
+      const text = buf.toString("utf8") + pending;
+
+      // The bytes BEFORE the first \n are still partial — its head
+      // lives in the unread region. Save it for the next iteration.
+      const firstNl = text.indexOf("\n");
+      if (firstNl === -1) {
+        // Whole chunk is one ongoing partial line. Keep accumulating.
+        pending = text;
+        continue;
+      }
+      pending = text.slice(0, firstNl);
+      const rest = text.slice(firstNl + 1);
+
+      // Lines after the first \n are guaranteed complete in this
+      // buffer; well-formed JSONL ends every record with \n so the
+      // trailing element is "" — drop it.
+      const lines = rest.split("\n");
+      if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (consumeLine(lines[i]) === "done") {
+          earlyExit = true;
+          break;
+        }
+      }
+    }
+
+    // Loop exits at pos === 0 (or budget exhausted). The remaining
+    // `pending` is the very-first line of the file — process it iff
+    // we still need data and we actually hit byte 0.
+    if (!earlyExit && pos === 0 && pending) {
+      // Strip a possible leading BOM and any stray \r at the end.
+      const head = pending.replace(/^﻿/, "").replace(/\r$/, "");
+      if (head) consumeLine(head);
     }
 
     return { lastAssistantText, recentToolUses: toolUses };
   } catch {
     return empty;
+  } finally {
+    if (fd !== -1) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
   }
 }
 
@@ -247,38 +285,11 @@ function renderRetryContextBlock(args: {
 }
 
 /**
- * Compose the retry prompt: a structured retry-context block at the TOP
- * (so the model sees what failed before reading the original brief),
- * then the original prompt body. The retry context block is prepended
- * because retry runs go through the same `buildChildPrompt` wrapper at
- * the next spawn — but auto-retry currently spawns directly without the
- * wrapper, so we keep the original-prompt body intact so the model still
- * has the boilerplate (task header, role, report contract, etc.) it
- * received the first time.
- */
-function buildRetryPrompt(
-  originalPrompt: string,
-  retryContextBlock: string,
-): string {
-  const body = originalPrompt.trim() ||
-    "(original prompt unavailable — repo state and the failure context " +
-      "below are the only signals you have. Inspect the repo, infer the " +
-      "intent, and try to make forward progress.)";
-
-  return [retryContextBlock, "---", "", body].join("\n");
-}
-
-/**
- * Spawn the retry. Mirrors the inner spawn logic from
- * `app/api/tasks/[id]/agents/route.ts`, minus the user-approval popup
- * (auto-retry is a follow-up to an already-approved spawn) and minus
- * the repo-context pre-warm (we already have failure context to feed
- * the model).
- *
- * Sibling-not-child: `parentSessionId` is set to the SAME parent the
- * failed run had (the coordinator), not the failed run itself, so the
- * tree visualizer renders both attempts as siblings under the
- * coordinator.
+ * Spawn the retry. Crash gate carries an exit-code + last-assistant-
+ * text + recent-tool-uses block at the top of the prompt; everything
+ * else (eligibility, role suffix, sibling parent linkage, worktree
+ * inheritance, lifecycle wiring) is shared across all retry gates and
+ * lives in `libs/retrySpawn.ts`.
  */
 async function spawnRetryRun(args: {
   taskId: string;
@@ -287,80 +298,32 @@ async function spawnRetryRun(args: {
   nextAttempt: number;
 }): Promise<{ sessionId: string; run: Run } | null> {
   const { taskId, failedRun, exitCode, nextAttempt } = args;
-  const sessionsDir = join(SESSIONS_DIR, taskId);
 
-  // Resolve the same repo the failed run targeted. If the repo isn't
-  // resolvable any more (renamed / deleted between the original spawn
-  // and the failure), we can't retry — bail.
+  // Resolve the same cwd the failed run used so the .jsonl tail-read
+  // for context picks up the right transcript (worktree path takes
+  // precedence over the live tree, same as the spawn cwd).
   const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, failedRun.repo);
   if (!liveRepoCwd) return null;
-  // P4/F1: when the failed run executed in a worktree, the retry runs
-  // in the SAME worktree so it inherits the WIP edits. The transcript
-  // (.jsonl) lives under projectDirFor(<spawnCwd>), so we use the same
-  // cwd to locate it as we do to spawn.
-  const spawnCwd = failedRun.worktreePath ?? liveRepoCwd;
+  const transcriptCwd = failedRun.worktreePath ?? liveRepoCwd;
 
-  const app = getApp(failedRun.repo);
-  const parsed = parseRole(failedRun.role);
-  const maxAttempts = maxAttemptsFor(app?.retry, "crash");
-
-  const sessionContext = readFailedSessionContext(failedRun.sessionId, spawnCwd);
+  const sessionContext = readFailedSessionContext(failedRun.sessionId, transcriptCwd);
   const killedByUser = looksKilledByUser(failedRun);
-  const strategyPrefix = renderStrategyPrefix({
-    gate: "crash",
-    attempt: nextAttempt,
-    maxAttempts,
-  });
-  const retryContextBlock = renderRetryContextBlock({
+  const ctxBlock = renderRetryContextBlock({
     exitCode,
     lastAssistantText: sessionContext.lastAssistantText,
     recentToolUses: sessionContext.recentToolUses,
     killedByUser,
   });
-  const originalPrompt = readOriginalPrompt(taskId, failedRun);
-  const retryPrompt = buildRetryPrompt(
-    originalPrompt,
-    `${strategyPrefix}${retryContextBlock}`,
-  );
 
-  const sessionId = randomUUID();
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
-
-  let childHandle;
-  try {
-    childHandle = spawnFreeSession(
-      spawnCwd,
-      retryPrompt,
-      { mode: "bypassPermissions" },
-      settingsPath,
-      sessionId,
-    );
-  } catch (e) {
-    console.error("auto-retry spawn failed for", taskId, failedRun.sessionId, e);
-    return null;
-  }
-
-  const retryRun: Run = {
-    sessionId,
-    role: nextRetryRole(parsed.baseRole, "crash", nextAttempt),
-    repo: failedRun.repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: failedRun.parentSessionId ?? null,
-    retryOf: failedRun.sessionId,
-    retryAttempt: nextAttempt,
-    ...inheritWorktreeFields(failedRun),
-  };
-  await appendRun(sessionsDir, retryRun);
-  wireRunLifecycle(
-    sessionsDir,
-    sessionId,
-    childHandle.child,
-    `auto-retry ${taskId}/${sessionId}`,
-  );
-  return { sessionId, run: retryRun };
+  return spawnRetry({
+    taskId,
+    finishedRun: failedRun,
+    gate: "crash",
+    ctxBlock,
+    logLabel: "auto-retry",
+    precomputedAttempt: { nextAttempt },
+  });
 }
 
 /**

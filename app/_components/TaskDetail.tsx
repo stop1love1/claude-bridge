@@ -85,11 +85,11 @@ function TaskDetailInner({
   // claude actually billed.
   useEffect(() => {
     if (!task?.id) return;
-    let cancelled = false;
-    api.taskUsage(task.id)
-      .then((r) => { if (!cancelled) setUsage(r.total); })
-      .catch(() => { /* 404 ok if meta hasn't landed yet */ });
-    return () => { cancelled = true; };
+    const ac = new AbortController();
+    api.taskUsage(task.id, { signal: ac.signal })
+      .then((r) => { if (!ac.signal.aborted) setUsage(r.total); })
+      .catch(() => { /* 404 ok if meta hasn't landed yet, or aborted */ });
+    return () => ac.abort();
   }, [task?.id, meta?.runs?.length, meta?.runs]);
 
   const continueTask = async () => {

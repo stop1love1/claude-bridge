@@ -50,13 +50,13 @@ export function LoginApprovalDialog() {
   const toast = useToast();
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     const tick = async () => {
       try {
-        const r = await fetch("/api/auth/approvals", { cache: "no-store" });
+        const r = await fetch("/api/auth/approvals", { cache: "no-store", signal: ac.signal });
         if (!r.ok) return;
         const data = (await r.json()) as { pending?: PendingApproval[] };
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         const fresh = (data.pending ?? []).filter(
           (p) => !handledRef.current.has(p.id),
         );
@@ -72,13 +72,14 @@ export function LoginApprovalDialog() {
           return fresh;
         });
       } catch {
-        // network blip — keep polling.
+        // abort during teardown OR a network blip — either way, keep
+        // polling on the next interval tick.
       }
     };
     void tick();
     const handle = setInterval(() => { void tick(); }, POLL_MS);
     return () => {
-      cancelled = true;
+      ac.abort();
       clearInterval(handle);
     };
   }, []);

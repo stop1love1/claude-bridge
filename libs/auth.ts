@@ -84,6 +84,31 @@ export const TRUSTED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const INTERNAL_TOKEN_HEADER = "x-bridge-internal-token";
 
 /**
+ * Constant-time equality for two opaque ASCII secrets (HMAC keys,
+ * bypass tokens, etc.). Returns false on any null/undefined/empty
+ * input or length mismatch — both branches are O(1) so they leak no
+ * timing information about the secret. The inner comparison goes
+ * through `crypto.timingSafeEqual` which is constant-time for buffers
+ * of equal length.
+ *
+ * Use this everywhere a request-supplied string must be compared
+ * against a server-side secret. Plain `===` short-circuits at the
+ * first byte mismatch and lets a network-adjacent attacker recover
+ * the secret one byte at a time via response-latency measurements.
+ */
+export function constantTimeStringEqual(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length === 0 || b.length === 0) return false;
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+/**
  * Centralized cookie attribute set so every auth route — login, setup,
  * pending-approval, logout — agrees on flags. `secure` flips on under
  * `NODE_ENV === "production"` because the bridge is now meant to be
@@ -456,7 +481,7 @@ export function verifyRequestAuthOrInternal(
   const cfg = loadAuthConfig();
   if (!cfg || !cfg.internalToken) return null;
   const internal = req.headers?.get(INTERNAL_TOKEN_HEADER);
-  if (!internal || internal !== cfg.internalToken) return null;
+  if (!constantTimeStringEqual(internal, cfg.internalToken)) return null;
   return {
     sub: cfg.email,
     exp: Number.MAX_SAFE_INTEGER,

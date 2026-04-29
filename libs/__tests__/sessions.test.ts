@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { pathToSlug, tailJsonl, tailJsonlBefore, findSessionByPrefix, listSessions } from "../sessions";
 import { join } from "node:path";
-import { mkdtempSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 describe("pathToSlug", () => {
@@ -159,5 +159,98 @@ describe("findSessionByPrefix", () => {
 
     const match = await findSessionByPrefix(dir, "[ROLE: coder] [TASK: t_20260424_001]");
     expect(match).toBe(neu);
+  });
+});
+
+describe("resolveSessionFile", () => {
+  // Each test redirects homedir to a fresh temp dir, then re-imports
+  // sessions.ts so CLAUDE_PROJECTS_ROOT (captured at module load) points
+  // at the temp tree. We mkdir the per-repo project dirs we want to
+  // accept and leave others absent to test the existence check.
+  let tempHome: string;
+  const VALID_SID = "0123abcd-4567-89ef-cdef-0123456789ab";
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "bridge-sessions-test-"));
+    process.env.HOME = tempHome;
+    process.env.USERPROFILE = tempHome;
+    vi.spyOn(require("node:os"), "homedir").mockReturnValue(tempHome);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    try {
+      rmSync(tempHome, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  function mkProjectDir(repoPath: string): string {
+    const dir = join(tempHome, ".claude", "projects", pathToSlug(repoPath));
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  it("resolves to <projects>/<slug>/<sid>.jsonl when the project dir exists", async () => {
+    const repo = "/home/u/proj-a";
+    const dir = mkProjectDir(repo);
+    const { resolveSessionFile } = await import("../sessions");
+    const file = resolveSessionFile(repo, VALID_SID);
+    expect(file).toBe(join(dir, `${VALID_SID}.jsonl`));
+  });
+
+  it("returns null when the project dir does not exist", async () => {
+    const { resolveSessionFile } = await import("../sessions");
+    expect(resolveSessionFile("/home/u/never-claude-here", VALID_SID)).toBeNull();
+  });
+
+  it("returns null for an invalid sessionId", async () => {
+    const repo = "/home/u/proj-b";
+    mkProjectDir(repo);
+    const { resolveSessionFile } = await import("../sessions");
+    expect(resolveSessionFile(repo, "not-a-uuid")).toBeNull();
+    expect(resolveSessionFile(repo, "")).toBeNull();
+    expect(resolveSessionFile(repo, "../etc")).toBeNull();
+  });
+
+  it("rejects non-string repo / session inputs", async () => {
+    const { resolveSessionFile } = await import("../sessions");
+    expect(resolveSessionFile(null, VALID_SID)).toBeNull();
+    expect(resolveSessionFile(undefined, VALID_SID)).toBeNull();
+    expect(resolveSessionFile(42, VALID_SID)).toBeNull();
+    expect(resolveSessionFile("/x", null)).toBeNull();
+  });
+
+  it("rejects empty repo, oversize repo, and NUL-byte repo", async () => {
+    const { resolveSessionFile } = await import("../sessions");
+    expect(resolveSessionFile("", VALID_SID)).toBeNull();
+    expect(resolveSessionFile("a".repeat(5000), VALID_SID)).toBeNull();
+    expect(resolveSessionFile("/home/u/proj\0evil", VALID_SID)).toBeNull();
+  });
+
+  it("rejects probe-by-guess: a `repoPath` whose slug points outside the projects root", async () => {
+    // pathToSlug already rewrites separators, but defense-in-depth: if
+    // a future change loosened that, the resolved containment check
+    // must still reject. We can't easily monkeypatch pathToSlug here,
+    // so this test asserts the existence-of-dir guard alone:
+    // a path whose slug doesn't correspond to a real dir is rejected.
+    const { resolveSessionFile } = await import("../sessions");
+    expect(resolveSessionFile("/etc", VALID_SID)).toBeNull();
+    expect(resolveSessionFile("../../etc/passwd", VALID_SID)).toBeNull();
+    expect(resolveSessionFile("/var/log/secret", VALID_SID)).toBeNull();
+  });
+
+  it("does NOT require the .jsonl file itself to exist (caller decides)", async () => {
+    // The helper returns the candidate path even when the specific
+    // sessionId.jsonl is missing — the route reads with `existsSync`
+    // separately and emits an empty result. Only the *project dir*
+    // must exist (existence check is the whitelist mechanism).
+    const repo = "/home/u/proj-c";
+    const dir = mkProjectDir(repo);
+    const { resolveSessionFile } = await import("../sessions");
+    const file = resolveSessionFile(repo, VALID_SID);
+    expect(file).toBe(join(dir, `${VALID_SID}.jsonl`));
   });
 });

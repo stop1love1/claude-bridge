@@ -18,26 +18,14 @@
  * mode that produces alien-looking output.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { appendRun, readMeta, type Run } from "./meta";
+import { readMeta, type Run } from "./meta";
 import { projectDirFor } from "./sessions";
 import { isAlreadyRetryRun } from "./verifyChain";
-import { wireRunLifecycle } from "./coordinator";
-import { resolveRepoCwd } from "./repos";
-import { spawnFreeSession } from "./spawn";
-import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
-import { readOriginalPrompt } from "./promptStore";
-import { inheritWorktreeFields } from "./worktrees";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { SESSIONS_DIR } from "./paths";
 import { getApp } from "./apps";
-import {
-  checkEligibility,
-  maxAttemptsFor,
-  nextRetryRole,
-  parseRole,
-  renderStrategyPrefix,
-} from "./retryLadder";
+import { spawnRetry } from "./retrySpawn";
+import { checkEligibility } from "./retryLadder";
 
 /** Default required Read count before any Edit/Write. Overridable per
  * app via `App.preflightReads`. */
@@ -262,90 +250,23 @@ export function isEligibleForPreflightRetry(args: {
 }
 
 /**
- * Spawn a preflight-fail retry. Mirrors `verifier.spawnClaimRetry`
- * (which itself mirrors `verifyChain.spawnVerifyRetry`) — the spawn
- * boilerplate is intentionally duplicated across the three retry
- * paths because each carries different context-block content. A
- * future refactor may extract `spawnRetryGeneric(suffix, ctxBlock)`
- * once a fourth retry kind is added; for now duplication is cheaper
- * than premature abstraction.
+ * Spawn a preflight-fail retry. Same shape as crash/verify/claim/style
+ * retries — see `libs/retrySpawn.ts`. The preflight gate routes through
+ * the `-cretry` budget slot; the rendered context block lists what the
+ * preflight checker found wrong.
  */
 export async function spawnPreflightRetry(args: {
   taskId: string;
   finishedRun: Run;
   preflight: PreflightResult;
 }): Promise<{ sessionId: string; run: Run } | null> {
-  const { taskId, finishedRun, preflight } = args;
-  const sessionsDir = join(SESSIONS_DIR, taskId);
-
-  const md = readBridgeMd();
-  const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
-  if (!liveRepoCwd) return null;
-  const spawnCwd = finishedRun.worktreePath ?? liveRepoCwd;
-
-  const app = getApp(finishedRun.repo);
-  const meta = readMeta(sessionsDir);
-  if (!meta) return null;
-  const elig = checkEligibility({
-    finishedRun,
-    meta,
+  return spawnRetry({
+    taskId: args.taskId,
+    finishedRun: args.finishedRun,
     gate: "preflight",
-    retry: app?.retry,
+    ctxBlock: renderPreflightRetryContextBlock(args.preflight),
+    fallbackBody:
+      "(original prompt unavailable — repo state and the failure context above are the only signals you have. Read several relevant files first, then re-attempt.)",
+    logLabel: "preflight-retry",
   });
-  if (!elig.eligible) return null;
-  const parsed = parseRole(finishedRun.role);
-  const maxAttempts = maxAttemptsFor(app?.retry, "preflight");
-
-  const strategyPrefix = renderStrategyPrefix({
-    gate: "preflight",
-    attempt: elig.nextAttempt,
-    maxAttempts,
-  });
-  const ctxBlock = renderPreflightRetryContextBlock(preflight);
-  const originalPrompt = readOriginalPrompt(taskId, finishedRun);
-  const body =
-    originalPrompt.trim() ||
-    "(original prompt unavailable — repo state and the failure context above are the only signals you have. Read several relevant files first, then re-attempt.)";
-  const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
-
-  const sessionId = randomUUID();
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
-
-  let childHandle;
-  try {
-    childHandle = spawnFreeSession(
-      spawnCwd,
-      retryPrompt,
-      { mode: "bypassPermissions" },
-      settingsPath,
-      sessionId,
-    );
-  } catch (e) {
-    console.error("preflight-retry spawn failed for", taskId, finishedRun.sessionId, e);
-    return null;
-  }
-
-  const retryRun: Run = {
-    sessionId,
-    // preflight gate shares the `-cretry` suffix; the ladder routes both
-    // through the same budget slot but reports `gate: "preflight"` here
-    // for log clarity. The role still serializes to `-cretry[N]`.
-    role: nextRetryRole(parsed.baseRole, "preflight", elig.nextAttempt),
-    repo: finishedRun.repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: finishedRun.parentSessionId ?? null,
-    retryOf: finishedRun.sessionId,
-    retryAttempt: elig.nextAttempt,
-    ...inheritWorktreeFields(finishedRun),
-  };
-  await appendRun(sessionsDir, retryRun);
-  wireRunLifecycle(
-    sessionsDir,
-    sessionId,
-    childHandle.child,
-    `preflight-retry ${taskId}/${sessionId}`,
-  );
-  return { sessionId, run: retryRun };
 }

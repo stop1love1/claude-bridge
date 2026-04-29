@@ -12,10 +12,24 @@ import {
   consumePendingLogin,
   getPendingLogin,
 } from "@/libs/loginApprovals";
+import { getClientIp } from "@/libs/clientIp";
+import { checkRateLimit } from "@/libs/rateLimit";
 
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/**
+ * The new device polls this endpoint roughly once per second while the
+ * operator decides on the approval. 30/minute/IP keeps the legitimate
+ * polling cadence comfortably (typical: 60 polls in 60s but the entry
+ * is consumed on terminal status, so real usage averages well below).
+ * The cap mostly stops a hostile client from enumerating valid pending
+ * IDs — pending IDs are random UUIDs, but rate-limiting still raises
+ * the cost of any future ID-shape weakening.
+ */
+const PENDING_WINDOW_MS = 60 * 1000;
+const PENDING_LIMIT_PER_IP = 30;
 
 /**
  * GET /api/auth/login/pending/[id]
@@ -35,10 +49,16 @@ type Ctx = { params: Promise<{ id: string }> };
  * after delivery so a stale poll can't replay a stale approval. The new
  * device is expected to stop polling on any non-202 response.
  */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!id) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  const ip = getClientIp(req.headers);
+  const denied = checkRateLimit("auth:pending-poll:ip", ip, PENDING_LIMIT_PER_IP, PENDING_WINDOW_MS);
+  if (denied) {
+    return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
   }
 
   const cfg = loadAuthConfig();

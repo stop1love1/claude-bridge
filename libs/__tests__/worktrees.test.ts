@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,8 @@ import {
   worktreePathFor,
 } from "../worktrees";
 import type { AppGitSettings } from "../apps";
+import { gitInit } from "./helpers/git";
+import { mktmp } from "./helpers/fs";
 
 const SETTINGS: AppGitSettings = {
   branchMode: "auto-create",
@@ -21,15 +23,6 @@ const SETTINGS: AppGitSettings = {
   mergeTargetBranch: "",
   integrationMode: "none",
 };
-
-function gitInit(dir: string): void {
-  execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "wt@test.local"], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["config", "user.name", "wt-test"], { cwd: dir, stdio: "ignore" });
-  writeFileSync(join(dir, "README.md"), "# tmp\n");
-  execFileSync("git", ["add", "."], { cwd: dir, stdio: "ignore" });
-  execFileSync("git", ["commit", "-m", "init"], { cwd: dir, stdio: "ignore" });
-}
 
 describe("worktreePathFor", () => {
   it("places the worktree under <appPath>/.worktrees/<sessionId>", () => {
@@ -76,7 +69,7 @@ integration("createWorktreeForRun + removeWorktree (real git)", () => {
   let appPath: string;
 
   beforeEach(() => {
-    appPath = mkdtempSync(join(tmpdir(), "bridge-wt-"));
+    appPath = mktmp("wt");
     gitInit(appPath);
   });
 
@@ -217,6 +210,35 @@ integration("createWorktreeForRun + removeWorktree (real git)", () => {
       appPath,
       // Cutoff far in the past — nothing should match.
       staleAfterMs: 24 * 60 * 60 * 1000,
+    });
+    expect(removed).toBe(0);
+    expect(existsSync(handle!.path)).toBe(true);
+  });
+
+  it("pruneStaleWorktrees keeps worktrees with recent DEEP edits even when root mtime is old", async () => {
+    const handle = await createWorktreeForRun({
+      appPath,
+      settings: SETTINGS,
+      taskId: "t_test_007",
+      sessionId: "77777777-7777-7777-7777-777777777777",
+    });
+    expect(handle).not.toBeNull();
+
+    // Backdate root + everything we wrote initially so a
+    // root-mtime-only check would treat the worktree as stale.
+    const oneHourAgoSec = Date.now() / 1000 - 3600;
+    utimesSync(handle!.path, oneHourAgoSec, oneHourAgoSec);
+
+    // Now edit a deeply-nested file. Walking only the root mtime
+    // would still see "an hour ago" — only a depth-aware scan picks
+    // this up.
+    const deepDir = join(handle!.path, "src", "components", "deep");
+    mkdirSync(deepDir, { recursive: true });
+    writeFileSync(join(deepDir, "edit.ts"), "// fresh edit\n");
+
+    const removed = await pruneStaleWorktrees({
+      appPath,
+      staleAfterMs: 60 * 1000, // 60s — root would be reaped without deep scan
     });
     expect(removed).toBe(0);
     expect(existsSync(handle!.path)).toBe(true);

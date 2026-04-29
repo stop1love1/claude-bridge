@@ -8,6 +8,7 @@ import { BRIDGE_ROOT, SESSIONS_DIR } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest } from "@/libs/validate";
 import { withInFlight } from "@/libs/inFlight";
+import { serverError } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +49,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       void spawnCoordinatorForTask(task);
       return NextResponse.json({ action: "spawned" });
     } catch (err) {
-      return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+      return NextResponse.json(serverError(err, "tasks:continue"), { status: 500 });
     }
   });
   if (result === null) {

@@ -102,22 +102,21 @@ function PublicUrlSection() {
   const toast = useToast();
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       try {
-        const s = await api.bridgeSettings();
-        if (cancelled) return;
+        const s = await api.bridgeSettings({ signal: ac.signal });
+        if (ac.signal.aborted) return;
         setPublicUrl(s.publicUrl);
         setDraft(s.publicUrl);
       } catch (e) {
-        if (!cancelled) toast("error", (e as Error).message);
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ac.signal.aborted) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [toast]);
 
   const submit = async () => {
@@ -213,20 +212,19 @@ function DetectSettingsSection() {
   const toast = useToast();
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       try {
-        const s = await api.detectSettings();
-        if (!cancelled) setSource(s.source);
+        const s = await api.detectSettings({ signal: ac.signal });
+        if (!ac.signal.aborted) setSource(s.source);
       } catch (e) {
-        if (!cancelled) toast("error", (e as Error).message);
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ac.signal.aborted) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [toast]);
 
   const choose = async (next: DetectSource) => {
@@ -332,11 +330,11 @@ function TelegramSettingsSection() {
   const toast = useToast();
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       try {
-        const s = await api.telegramSettings();
-        if (cancelled) return;
+        const s = await api.telegramSettings({ signal: ac.signal });
+        if (ac.signal.aborted) return;
         setMaskedToken(s.botToken);
         setTokenAlreadySet(s.botTokenSet);
         setChatId(s.chatId);
@@ -345,14 +343,13 @@ function TelegramSettingsSection() {
         setNotificationLevel(s.notificationLevel);
         setForwardChatFilter(s.forwardChatFilter);
       } catch (e) {
-        if (!cancelled) toast("error", (e as Error).message);
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ac.signal.aborted) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [toast]);
 
   const submit = async () => {
@@ -619,11 +616,11 @@ function TelegramUserSection() {
   const toast = useToast();
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       try {
-        const s = await api.telegramUserSettings();
-        if (cancelled) return;
+        const s = await api.telegramUserSettings({ signal: ac.signal });
+        if (ac.signal.aborted) return;
         setApiId(s.apiId > 0 ? String(s.apiId) : "");
         setMaskedApiHash(s.apiHash);
         setMaskedSession(s.session);
@@ -631,14 +628,13 @@ function TelegramUserSection() {
         setSessionSet(s.sessionSet);
         setTargetChatId(s.targetChatId);
       } catch (e) {
-        if (!cancelled) toast("error", (e as Error).message);
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ac.signal.aborted) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [toast]);
 
   const submit = async () => {
@@ -881,20 +877,19 @@ function TrustedDevicesSection() {
   };
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       try {
-        const r = await api.authDevices();
-        if (!cancelled) setDevices(r.devices);
+        const r = await api.authDevices({ signal: ac.signal });
+        if (!ac.signal.aborted) setDevices(r.devices);
       } catch (e) {
-        if (!cancelled) toast("error", (e as Error).message);
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ac.signal.aborted) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [toast]);
 
   const revoke = async (id: string) => {

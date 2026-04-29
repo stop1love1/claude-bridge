@@ -104,3 +104,42 @@ export function rateLimit(
 export function rateLimitClear(bucket: string, key: string): void {
   store.buckets.delete(`${bucket}|${key}`);
 }
+
+/**
+ * Shape returned by `checkRateLimit` when the request is over budget.
+ * Routes wrap this in `NextResponse.json(d.body, { status: d.status, headers: d.headers })`.
+ * Kept as a plain JSON object so this module has no dep on `next/server`.
+ */
+export interface RateLimitDenial {
+  body: { error: string; hint: string };
+  status: 429;
+  headers: Record<string, string>;
+}
+
+/**
+ * Increment a bucket and return either:
+ *   - `null` — request is within budget; proceed.
+ *   - a `RateLimitDenial` — over budget; wrap in NextResponse and return.
+ *
+ * Single-call pattern lets API routes early-out with one `if`:
+ *
+ *   const denied = checkRateLimit("apps:scan:ip", ip, 3, 5*60_000);
+ *   if (denied) return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
+ *
+ * The `Retry-After` header is rendered in seconds (HTTP/1.1 spec)
+ * and is at least 1 so a tight window doesn't surface as `0`.
+ */
+export function checkRateLimit(
+  bucket: string,
+  key: string,
+  limit: number,
+  windowMs: number,
+): RateLimitDenial | null {
+  const r = rateLimit(bucket, key, limit, windowMs);
+  if (r.ok) return null;
+  return {
+    body: { error: "too many requests", hint: "wait a few minutes before retrying" },
+    status: 429,
+    headers: { "Retry-After": String(Math.max(1, Math.ceil(r.retryAfterMs / 1000))) },
+  };
+}

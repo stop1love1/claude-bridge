@@ -15,6 +15,16 @@ import type {
   UsageSnapshot,
 } from "./types";
 
+/**
+ * Optional cancellation handle accepted by every read-side `api.*` helper.
+ * Components in long-lived effects pass `ac.signal` so that on unmount we
+ * actually abort the network request, not just discard its result.
+ *
+ * Aborted requests reject with a `DOMException("AbortError")`; callers
+ * either ignore the rejection (nothing to display anyway) or rethrow.
+ */
+export type ReqOpts = { signal?: AbortSignal };
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
     ...init,
@@ -71,9 +81,10 @@ export const api = {
       `/repos/${encodeURIComponent(repo)}/files?q=${encodeURIComponent(query)}`,
     ),
   /** Built-in list (JSON) + `~/.claude` + repo `.claude/commands` & skills — same sources Claude Code loads. */
-  repoSlashCommands: (name: string) =>
+  repoSlashCommands: (name: string, opts?: ReqOpts) =>
     req<{ items: SlashCommandsItemDto[] }>(
       `/repos/${encodeURIComponent(name)}/slash-commands`,
+      { signal: opts?.signal },
     ),
   uploadFile: async (sessionId: string, file: File) => {
     const fd = new FormData();
@@ -181,11 +192,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ roots }),
     }),
-  runDiff: (taskId: string, sessionId: string) =>
+  runDiff: (taskId: string, sessionId: string, opts?: ReqOpts) =>
     req<{ kind: "worktree" | "live"; cwd: string; diff: string; truncated?: boolean }>(
       `/tasks/${taskId}/runs/${sessionId}/diff`,
+      { signal: opts?.signal },
     ),
-  taskUsage: (taskId: string) =>
+  taskUsage: (taskId: string, opts?: ReqOpts) =>
     req<{
       taskId: string;
       total: {
@@ -205,7 +217,7 @@ export const api = {
         cacheReadTokens: number;
         turns: number;
       }>;
-    }>(`/tasks/${taskId}/usage`),
+    }>(`/tasks/${taskId}/usage`, { signal: opts?.signal }),
   telegramTest: () =>
     req<{ ok: true } | { ok: false; reason: string }>(`/telegram/test`, { method: "POST" })
       .catch((e: Error) => {
@@ -219,8 +231,8 @@ export const api = {
         }
         return { ok: false, reason: e.message };
       }),
-  tunnels: () =>
-    req<{ tunnels: TunnelEntry[] }>(`/tunnels`),
+  tunnels: (opts?: ReqOpts) =>
+    req<{ tunnels: TunnelEntry[] }>(`/tunnels`, { signal: opts?.signal }),
   startTunnel: (body: {
     port: number;
     provider: TunnelProvider;
@@ -236,8 +248,8 @@ export const api = {
       `/tunnels/${encodeURIComponent(id)}${purge ? "?purge=1" : ""}`,
       { method: "DELETE" },
     ),
-  tunnelProviders: () =>
-    req<{ providers: TunnelProviderStatus[] }>(`/tunnels/providers`),
+  tunnelProviders: (opts?: ReqOpts) =>
+    req<{ providers: TunnelProviderStatus[] }>(`/tunnels/providers`, { signal: opts?.signal }),
   installNgrok: () =>
     req<TunnelInstallResult>(`/tunnels/providers/ngrok/install`, {
       method: "POST",
@@ -247,14 +259,14 @@ export const api = {
       `/tunnels/providers/ngrok/authtoken`,
       { method: "PUT", body: JSON.stringify({ authtoken }) },
     ),
-  bridgeSettings: () =>
-    req<{ publicUrl: string }>(`/bridge/settings`),
+  bridgeSettings: (opts?: ReqOpts) =>
+    req<{ publicUrl: string }>(`/bridge/settings`, { signal: opts?.signal }),
   updateBridgeSettings: (patch: { publicUrl?: string }) =>
     req<{ publicUrl: string }>(`/bridge/settings`, {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
-  telegramSettings: () =>
+  telegramSettings: (opts?: ReqOpts) =>
     req<{
       botToken: string;
       botTokenSet: boolean;
@@ -263,7 +275,7 @@ export const api = {
       forwardChatMinChars: number;
       notificationLevel: "minimal" | "normal" | "verbose";
       forwardChatFilter: "important-only" | "all";
-    }>(`/telegram/settings`),
+    }>(`/telegram/settings`, { signal: opts?.signal }),
   updateTelegramSettings: (patch: {
     botToken?: string;
     chatId?: string;
@@ -281,7 +293,7 @@ export const api = {
       notificationLevel: "minimal" | "normal" | "verbose";
       forwardChatFilter: "important-only" | "all";
     }>(`/telegram/settings`, { method: "PUT", body: JSON.stringify(patch) }),
-  telegramUserSettings: () =>
+  telegramUserSettings: (opts?: ReqOpts) =>
     req<{
       apiId: number;
       apiHash: string;
@@ -289,7 +301,7 @@ export const api = {
       session: string;
       sessionSet: boolean;
       targetChatId: string;
-    }>(`/telegram/user/settings`),
+    }>(`/telegram/user/settings`, { signal: opts?.signal }),
   updateTelegramUserSettings: (
     patch: { apiId?: number; apiHash?: string; session?: string; targetChatId?: string },
   ) =>
@@ -322,8 +334,8 @@ export const api = {
         }
         return { ok: false, reason: e.message };
       }),
-  detectSettings: () =>
-    req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`),
+  detectSettings: (opts?: ReqOpts) =>
+    req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`, { signal: opts?.signal }),
   updateDetectSettings: (patch: { source: "auto" | "llm" | "heuristic" }) =>
     req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`, {
       method: "PUT",
@@ -337,7 +349,7 @@ export const api = {
       description: string;
       reason?: string;
     }>(`/apps/${encodeURIComponent(name)}/scan`, { method: "POST" }),
-  authDevices: () =>
+  authDevices: (opts?: ReqOpts) =>
     req<{
       currentDeviceId: string | null;
       devices: Array<{
@@ -348,7 +360,7 @@ export const api = {
         expiresAt: string;
         isCurrent: boolean;
       }>;
-    }>(`/auth/devices`),
+    }>(`/auth/devices`, { signal: opts?.signal }),
   revokeAuthDevice: (id: string) =>
     req<{ ok: boolean }>(`/auth/devices?id=${encodeURIComponent(id)}`, {
       method: "DELETE",

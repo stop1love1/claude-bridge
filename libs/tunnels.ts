@@ -65,15 +65,40 @@ const MAX_CONCURRENT = 8;
 
 /**
  * URL extraction patterns. Both providers print the public URL on
- * stdout shortly after start; we just regex the first match.
+ * stdout shortly after start, but ngrok also writes its structured
+ * log (success AND error) to stderr in non-TTY mode. A bare-URL match
+ * would flip status="running" on lines like
+ *   `lvl=eror msg="failed to start tunnel" url=https://...`
+ * even though the tunnel never came up.
  *
+ * Each pattern below is anchored on the success-context cue so an
+ * error line that happens to contain the URL doesn't qualify:
  *   - localtunnel: `your url is: https://shaggy-radios-watch.loca.lt`
  *   - ngrok:       `... msg="started tunnel" ... url=https://abc.ngrok-free.app`
+ *
+ * The captured URL is in group 1 (the success cue is matched but
+ * discarded). Bare-URL extraction for diagnostic logging stays in
+ * `pushLog` — only the status flip is gated.
  */
 const URL_RES: Record<TunnelProvider, RegExp> = {
-  localtunnel: /https?:\/\/[a-z0-9-]+\.loca\.lt/i,
-  ngrok: /https?:\/\/[a-z0-9-]+\.ngrok[a-z0-9.-]*\b/i,
+  localtunnel: /your url is:\s+(https?:\/\/[a-z0-9-]+\.loca\.lt)/i,
+  ngrok: /msg="?started tunnel"?[^\n]*?url=(https?:\/\/[a-z0-9-]+\.ngrok[a-z0-9.-]*)/i,
 };
+
+/**
+ * Pure helper: extract the public URL from a single log line, but
+ * ONLY when the line carries the provider-specific success cue. Use
+ * this in tests to lock in the false-positive guard without spawning
+ * a real provider process.
+ */
+export function extractTunnelUrl(
+  provider: TunnelProvider,
+  line: string,
+): string | null {
+  if (typeof line !== "string" || !line) return null;
+  const m = URL_RES[provider]?.exec(line);
+  return m && m[1] ? m[1] : null;
+}
 
 function pushLog(entry: TunnelEntry, line: string): void {
   const trimmed = line.replace(/\r?\n$/, "");
@@ -201,8 +226,8 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
       if (!line) continue;
       pushLog(entry, line);
       const m = matchUrl.exec(line);
-      if (m && !entry.url) {
-        entry.url = m[0];
+      if (m && m[1] && !entry.url) {
+        entry.url = m[1];
         entry.status = "running";
       }
     }
@@ -211,11 +236,13 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
     for (const line of chunk.split(/\r?\n/)) {
       if (!line) continue;
       pushLog(entry, `[stderr] ${line}`);
-      // ngrok prints recoverable warnings to stderr too — only flip
-      // to error if we never got a URL.
+      // ngrok writes its structured success log to stderr too — accept
+      // matches only when the regex includes the success cue (group 1
+      // is the URL). Pure error lines that mention the URL no longer
+      // flip status="running".
       const m = matchUrl.exec(line);
-      if (m && !entry.url) {
-        entry.url = m[0];
+      if (m && m[1] && !entry.url) {
+        entry.url = m[1];
         entry.status = "running";
       }
     }

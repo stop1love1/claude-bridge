@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { projectDirFor, tailJsonl, tailJsonlBefore } from "@/libs/sessions";
-import { badRequest, isValidSessionId } from "@/libs/validate";
+import { resolveSessionFile, tailJsonl, tailJsonlBefore } from "@/libs/sessions";
+import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -10,16 +9,13 @@ type Ctx = { params: Promise<{ sessionId: string }> };
 
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
-  if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
   const { searchParams } = new URL(req.url);
   const repoPath = searchParams.get("repo");
   const sinceParam = searchParams.get("since");
   const beforeParam = searchParams.get("before");
 
-  if (!repoPath) {
-    return NextResponse.json({ error: "repo query param required" }, { status: 400 });
-  }
-  const file = join(projectDirFor(repoPath), `${sessionId}.jsonl`);
+  const file = resolveSessionFile(repoPath, sessionId);
+  if (!file) return badRequest("invalid session repo");
 
   // Backward-paging mode: caller wants the slice ENDING at `before` bytes.
   if (beforeParam !== null) {

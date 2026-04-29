@@ -31,16 +31,16 @@ export function UserMenu() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     void (async () => {
       try {
-        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        const r = await fetch("/api/auth/me", { cache: "no-store", signal: ac.signal });
         if (!r.ok) return;
         const data = (await r.json()) as MeResponse;
-        if (!cancelled) setMe(data);
-      } catch { /* leave me === null, the menu hides */ }
+        if (!ac.signal.aborted) setMe(data);
+      } catch { /* abort or network error — leave me === null, the menu hides */ }
     })();
-    return () => { cancelled = true; };
+    return () => ac.abort();
   }, []);
 
   const logout = async () => {

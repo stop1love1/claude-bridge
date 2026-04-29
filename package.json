@@ -10,6 +10,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
     "telegram:login": "bun scripts/telegram-login.ts",
     "set:password": "bun scripts/set-password.ts",
     "approve:login": "bun scripts/approve-login.ts"

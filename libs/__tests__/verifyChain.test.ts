@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir, platform } from "node:os";
+import { rmSync } from "node:fs";
+import { platform } from "node:os";
 import { join } from "node:path";
 import {
   hasAnyVerifyCommand,
@@ -13,10 +13,7 @@ import {
 } from "../verifyChain";
 import type { Run, RunVerify } from "../meta";
 import type { App } from "../apps";
-
-function mktmp(label: string): string {
-  return mkdtempSync(join(tmpdir(), `bridge-verify-${label}-`));
-}
+import { mktmp } from "./helpers/fs";
 
 const isWindows = platform() === "win32";
 
@@ -333,11 +330,10 @@ describe("runVerifyChain", () => {
     }
   }, 15_000);
 
-  // Skip the timeout test on Windows — process.kill() doesn't reliably
-  // reap shell grandchildren there (Risk 3 in the explorer report), so a
-  // truly hung node subprocess can outlive the test. The behavior is
-  // intentionally a known limitation.
-  (isWindows ? it.skip : it)(
+  // execStep now uses treeKill (libs/processKill.ts) which shells out
+  // to `taskkill /T /F` on Windows — so the timeout abort works on
+  // every platform.
+  it(
     "aborts a long-running step at the timeout and surfaces a marker",
     async () => {
       const cwd = mktmp("timeout");
@@ -358,6 +354,55 @@ describe("runVerifyChain", () => {
       }
     },
     10_000,
+  );
+
+  it(
+    "reaps grandchildren on timeout (no heartbeat after kill)",
+    async () => {
+      // The verify command is a node script that writes a millisecond
+      // heartbeat to <cwd>/beat.txt every 50ms forever. After the
+      // timeout fires, treeKill must reap the entire subtree —
+      // otherwise the grandchild keeps writing past the abort.
+      const cwd = mktmp("treekill");
+      const beatFile = join(cwd, "beat.txt");
+      try {
+        const script = [
+          "const fs = require('node:fs');",
+          `setInterval(() => fs.writeFileSync(${JSON.stringify(beatFile)}, String(Date.now())), 50);`,
+        ].join("");
+        const result = await runVerifyChain({
+          cwd,
+          verify: { test: nodeCmd(script) },
+          timeoutMs: 400,
+        });
+        expect(result.passed).toBe(false);
+        expect(result.steps[0].output).toContain("aborted after 400ms");
+
+        // Wait past the SIGKILL backstop (2s) + a comfort margin so any
+        // surviving grandchild has plenty of time to write again. Then
+        // sample the heartbeat file and confirm it stays frozen.
+        await new Promise((r) => setTimeout(r, 3000));
+        const { readFileSync } = await import("node:fs");
+        let snapshot: string;
+        try {
+          snapshot = readFileSync(beatFile, "utf8");
+        } catch {
+          // File may never have been created if the kill was very fast.
+          snapshot = "";
+        }
+        await new Promise((r) => setTimeout(r, 600));
+        let after: string;
+        try {
+          after = readFileSync(beatFile, "utf8");
+        } catch {
+          after = "";
+        }
+        expect(after).toBe(snapshot);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+    20_000,
   );
 });
 
