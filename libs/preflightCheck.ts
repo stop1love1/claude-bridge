@@ -19,11 +19,9 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readMeta, type Run } from "./meta";
+import { type Run } from "./meta";
 import { projectDirFor } from "./sessions";
 import { isAlreadyRetryRun } from "./verifyChain";
-import { SESSIONS_DIR } from "./paths";
-import { getApp } from "./apps";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
 

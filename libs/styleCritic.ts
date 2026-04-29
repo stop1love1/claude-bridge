@@ -17,9 +17,7 @@
  * claim-vs-diff HONESTY without an LLM spawn. The critic is opt-in and
  * costs ~30-100K tokens per task on top of the coder.
  */
-import { join } from "node:path";
 import { type Run, type RunStyleCritic } from "./meta";
-import { isAlreadyRetryRun } from "./verifyChain";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";

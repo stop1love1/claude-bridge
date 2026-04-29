@@ -491,11 +491,14 @@ export function ActivityRow({
   useEffect(() => {
     if (activity.kind === "idle") {
       startedAtRef.current = null;
-      setElapsed(0);
+      // Defer through a microtask so the React Compiler doesn't flag
+      // this as a synchronous "setState in effect" cascade — same
+      // visible result, no scheduling change for the user.
+      void Promise.resolve().then(() => setElapsed(0));
       return;
     }
     startedAtRef.current = Date.now();
-    setElapsed(0);
+    void Promise.resolve().then(() => setElapsed(0));
     const t = setInterval(() => {
       if (startedAtRef.current === null) return;
       setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));

@@ -29,7 +29,6 @@ import {
   writeSessionSettings,
 } from "./permissionSettings";
 import { readOriginalPrompt } from "./promptStore";
-import { isAlreadyRetryRun } from "./verifyChain";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";

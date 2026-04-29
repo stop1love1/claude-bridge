@@ -19,7 +19,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { type App, type AppVerify } from "./apps";
-import { readMeta, type Run, type RunVerify, type RunVerifyStep } from "./meta";
+import { type Run, type RunVerify, type RunVerifyStep } from "./meta";
 import { treeKill } from "./processKill";
 import { spawnRetry } from "./retrySpawn";
 import {

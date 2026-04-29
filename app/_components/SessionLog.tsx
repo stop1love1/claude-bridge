@@ -25,7 +25,6 @@ import {
   asBlocks,
   classify,
   extractAttachments,
-  HIDDEN_TYPES,
   MAX_RENDERED,
   stripSystemTags,
   type ActiveRun,
@@ -534,6 +533,11 @@ function SessionLogInner({
         document.removeEventListener("visibilitychange", onVis);
       }
     };
+    // We intentionally key on `run.sessionId` + `run.repoPath` — the only
+    // identifying fields. A whole-`run`-object dep would re-tear-down the
+    // SSE on every parent re-render that produced a new object identity,
+    // even when the underlying session hasn't changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.sessionId, run?.repoPath]);
 
   // Backward fetch: load a chunk of older entries and prepend.
@@ -729,16 +733,15 @@ function SessionLogInner({
   // Most-recent `ai-title` Claude Code wrote into the .jsonl. Used as a
   // human-readable session label in the header — replaces "session
   // 4fdb723a…" with e.g. "Fix sessions page loading issue". Walks back
-  // because the model can refresh the title mid-conversation.
-  const sessionTitle = useMemo(() => {
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i];
-      if (e.type === "ai-title" && typeof e.aiTitle === "string" && e.aiTitle.trim()) {
-        return e.aiTitle.trim();
-      }
-    }
-    return null;
-  }, [entries]);
+  // (`findLast`) because the model can refresh the title mid-conversation.
+  const sessionTitle = useMemo(
+    () => entries
+      .findLast(
+        (e) => e.type === "ai-title" && typeof e.aiTitle === "string" && e.aiTitle.trim().length > 0,
+      )
+      ?.aiTitle?.trim() ?? null,
+    [entries],
+  );
 
   // Map every `tool_use_id` we've seen to its tool `name` so tool_result
   // blocks can look up which tool they are answering. Used for F.2

@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { rmSync } from "node:fs";
-import { platform } from "node:os";
 import { join } from "node:path";
 import {
   hasAnyVerifyCommand,
@@ -14,8 +13,6 @@ import {
 import type { Run, RunVerify } from "../meta";
 import type { App } from "../apps";
 import { mktmp } from "./helpers/fs";
-
-const isWindows = platform() === "win32";
 
 /**
  * Build a portable shell command that exits with the given code AND

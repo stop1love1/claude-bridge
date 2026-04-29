@@ -24,13 +24,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { readMeta, type Run, type RunVerifier } from "./meta";
-import { resolveRepoCwd } from "./repos";
+import { type Run, type RunVerifier } from "./meta";
 import { isAlreadyRetryRun } from "./verifyChain";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
-import { getApp } from "./apps";
-import { checkEligibility } from "./retryLadder";
+import { SESSIONS_DIR } from "./paths";
 import { spawnRetry } from "./retrySpawn";
+import { checkEligibility } from "./retryLadder";
 
 const execFileP = promisify(execFile);
 const CRETRY_SUFFIX = "-cretry";

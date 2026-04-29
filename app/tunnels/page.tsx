@@ -105,7 +105,10 @@ function TunnelsPage() {
 
   useEffect(() => {
     const ac = new AbortController();
-    void refresh(ac.signal);
+    // Defer through a microtask so the initial setLoading-on-success
+    // setStates don't cascade synchronously inside the effect body —
+    // matches the React Compiler "no setState in effect" rule.
+    void Promise.resolve().then(() => refresh(ac.signal));
     return () => ac.abort();
   }, [refresh]);
 

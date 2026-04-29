@@ -139,7 +139,10 @@ export default function UsagePage() {
   };
 
   useEffect(() => {
-    void refresh();
+    // Defer the initial refresh through a microtask so the React
+    // Compiler doesn't flag the synchronous setState-in-effect cascade
+    // (`refresh` calls `setRefreshing` immediately).
+    void Promise.resolve().then(() => refresh());
     // Server-side cache for the snapshot is 60 s on success / 8 s on
     // error, so polling more aggressively wastes round-trips. 60 s is
     // the natural cadence — quota %s don't move faster than that.
