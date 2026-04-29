@@ -14,7 +14,7 @@ import { NextResponse } from "next/server";
  *   - All helpers reject non-strings, empty strings, and anything past
  *     the documented charset/length window.
  *   - These add an early gate; existing safety nets (e.g. `safeSessionDir`
- *     in `lib/tasksStore.ts`) stay in place — defense in depth.
+ *     in `libs/tasksStore.ts`) stay in place — defense in depth.
  */
 
 /** UUID v4-ish shape used by Claude Code session ids. */
@@ -35,7 +35,7 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 
 /**
  * Allowed values for `ChatSettings.mode` — kept in sync with the enum
- * declared in `lib/spawn.ts` (the canonical list, since that module
+ * declared in `libs/spawn.ts` (the canonical list, since that module
  * actually shells out to `claude --permission-mode`). Duplicated here
  * as a frozen tuple so route handlers can validate untrusted bodies
  * without pulling in the full spawn module.

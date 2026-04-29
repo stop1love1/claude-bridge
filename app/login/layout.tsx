@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { DEMO_MODE } from "@/lib/demoMode";
+import { DEMO_MODE } from "@/libs/demoMode";
 
 /**
  * Demo deployments don't run a real auth backend (no persistent disk

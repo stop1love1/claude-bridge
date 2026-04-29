@@ -6,7 +6,7 @@ export interface ResolvedRepo extends RepoEntry { path: string }
 
 /**
  * The apps registry lives in `~/.claude/bridge.json` and is owned by
- * `lib/apps.ts`. `parseReposTable` / `resolveRepos` are thin wrappers
+ * `libs/apps.ts`. `parseReposTable` / `resolveRepos` are thin wrappers
  * kept so existing call sites (coordinator, profile loader, route
  * handlers) don't scatter `loadApps()` everywhere.
  *

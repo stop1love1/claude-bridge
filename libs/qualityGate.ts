@@ -1,8 +1,8 @@
 /**
  * P2b-2 — shared runner for agent-driven quality gates.
  *
- * Both the style critic (`lib/styleCritic.ts`) and the semantic verifier
- * (`lib/semanticVerifier.ts`) follow the same shape:
+ * Both the style critic (`libs/styleCritic.ts`) and the semantic verifier
+ * (`libs/semanticVerifier.ts`) follow the same shape:
  *
  *   1. Skip if preconditions aren't met (role is a retry, app missing,
  *      playbook missing, etc.) — return a `skipped` verdict.
@@ -159,7 +159,7 @@ export async function runAgentGate(
   if (!playbook) {
     return {
       kind: "skipped",
-      reason: `playbook \`bridge/playbooks/${opts.role}.md\` is missing`,
+      reason: `playbook \`prompts/playbooks/${opts.role}.md\` is missing`,
     };
   }
 

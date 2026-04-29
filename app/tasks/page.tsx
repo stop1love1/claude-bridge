@@ -2,14 +2,14 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api } from "@/lib/client/api";
+import { api } from "@/libs/client/api";
 import {
   type App,
   type Meta,
   type Repo,
   type SessionSummary,
   type Task,
-} from "@/lib/client/types";
+} from "@/libs/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { NewTaskDialog } from "../_components/NewTaskDialog";
 import { TaskGrid } from "../_components/TaskGrid";
@@ -212,7 +212,7 @@ function Dashboard() {
   }, [confirm, refreshTasks, refreshAllMeta, toast]);
 
   const handleMoveTask = useCallback(
-    async (id: string, section: import("@/lib/client/types").TaskSection) => {
+    async (id: string, section: import("@/libs/client/types").TaskSection) => {
       // Optimistic update so the card visibly snaps into the new column
       // before the network round-trip lands; refreshTasks() reconciles
       // a few hundred ms later.
@@ -243,7 +243,7 @@ function Dashboard() {
     [refreshTasks, refreshAllMeta, toast],
   );
 
-  const handleBulkMove = useCallback(async (ids: string[], section: import("@/lib/client/types").TaskSection) => {
+  const handleBulkMove = useCallback(async (ids: string[], section: import("@/libs/client/types").TaskSection) => {
     let moved = 0;
     let failed = 0;
     for (const id of ids) {

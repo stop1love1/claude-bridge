@@ -1,4 +1,4 @@
-import type { RunStatus } from "@/lib/client/types";
+import type { RunStatus } from "@/libs/client/types";
 
 const COLOR: Record<RunStatus, string> = {
   queued: "bg-fg-dim",

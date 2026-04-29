@@ -256,7 +256,7 @@ export default function LoginPage() {
  * bridge.json. POSTs to `/api/auth/setup` which:
  *   - requires the one-time setup token printed in the bridge boot
  *     banner (defends against Host-header spoofing on LAN-bound
- *     bridges — see `lib/setupToken.ts`),
+ *     bridges — see `libs/setupToken.ts`),
  *   - keeps the loopback Host check as defense-in-depth so the LAN
  *     case is awkward even before a token is acquired,
  *   - refuses to overwrite an existing `auth` block (to rotate the

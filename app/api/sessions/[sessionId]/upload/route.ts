@@ -1,13 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BRIDGE_ROOT } from "@/lib/paths";
-import { badRequest, isValidSessionId } from "@/lib/validate";
+import { BRIDGE_ROOT } from "@/libs/paths";
+import { badRequest, isValidSessionId } from "@/libs/validate";
 import {
   MAX_UPLOAD_BYTES,
   assertInsideUploadDir,
   validateUploadName,
-} from "@/lib/uploadGuards";
+} from "@/libs/uploadGuards";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,7 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  * Trust model: a name that lands here is later passed to `Read` / `Bash`
  * by the model. We block executable extensions, Windows reserved
  * device names, and surrounding `.` / space tricks (see
- * `lib/uploadGuards.ts`) to keep that boundary safe.
+ * `libs/uploadGuards.ts`) to keep that boundary safe.
  *
  * `request.formData()` still buffers the body into memory before
  * `file.size` is reachable, but we now refuse the request up-front

@@ -1,13 +1,13 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GitBranch, Plus, Bookmark, BookmarkPlus, X } from "lucide-react";
-import type { App, Repo } from "@/lib/client/types";
+import type { App, Repo } from "@/libs/client/types";
 import {
   type TaskTemplate,
   allTemplates,
   addUserTemplate,
   removeUserTemplate,
-} from "@/lib/client/taskTemplates";
+} from "@/libs/client/taskTemplates";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {

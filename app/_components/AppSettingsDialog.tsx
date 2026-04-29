@@ -8,8 +8,8 @@ import type {
   AppRetry,
   GitBranchMode,
   GitIntegrationMode,
-} from "@/lib/client/types";
-import { api } from "@/lib/client/api";
+} from "@/libs/client/types";
+import { api } from "@/libs/client/api";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -80,7 +80,7 @@ const INTEGRATION_OPTIONS: Array<{
   },
 ];
 
-// Mirrors `MAX_RETRY_PER_GATE` in lib/retryLadder.ts — kept inline here so
+// Mirrors `MAX_RETRY_PER_GATE` in libs/retryLadder.ts — kept inline here so
 // the slider UI doesn't have to import server code.
 const MAX_RETRY_PER_GATE = 5;
 
@@ -158,7 +158,7 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
 
   // Switching integration mode promotes the matching git settings so the
   // mode is internally consistent the moment it lands. Mirrors the
-  // server-side normalize rules in lib/apps.ts.
+  // server-side normalize rules in libs/apps.ts.
   const onIntegrationModeChange = (mode: GitIntegrationMode) => {
     setGit((g) => {
       if (!g) return g;

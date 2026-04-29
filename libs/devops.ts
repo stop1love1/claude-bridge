@@ -318,7 +318,7 @@ interface BriefArgs {
 
 /**
  * Render the task-specific brief the devops agent sees. The agent's
- * playbook (bridge/playbooks/devops.md) covers process; this block is
+ * playbook (prompts/playbooks/devops.md) covers process; this block is
  * the per-run wiring (head/base, cli choice, verdict contract).
  */
 function renderBrief(args: BriefArgs): string {

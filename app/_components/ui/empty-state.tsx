@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { cn } from "@/lib/cn";
+import { cn } from "@/libs/cn";
 
 /**
  * Standardized empty placeholder for "no data yet" panels — used by

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   getManifestPublicUrl,
   setManifestPublicUrl,
-} from "@/lib/apps";
+} from "@/libs/apps";
 
 export const dynamic = "force-dynamic";
 

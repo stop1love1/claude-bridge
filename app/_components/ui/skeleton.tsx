@@ -1,4 +1,4 @@
-import { cn } from "@/lib/cn";
+import { cn } from "@/libs/cn";
 
 /**
  * Animated skeleton placeholder. Use in place of "Loading…" text while

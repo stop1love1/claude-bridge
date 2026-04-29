@@ -3,12 +3,12 @@ import {
   getManifestTelegramSettings,
   setManifestTelegramSettings,
   type TelegramUserSettings,
-} from "@/lib/apps";
-import { disconnectTelegramUserClient } from "@/lib/telegramUserClient";
+} from "@/libs/apps";
+import { disconnectTelegramUserClient } from "@/libs/telegramUserClient";
 import {
   ensureTelegramNotifier,
   teardownTelegramNotifier,
-} from "@/lib/telegramNotifier";
+} from "@/libs/telegramNotifier";
 
 export const dynamic = "force-dynamic";
 

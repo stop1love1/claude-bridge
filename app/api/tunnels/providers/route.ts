@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { detectProviders } from "@/lib/tunnels";
+import { detectProviders } from "@/libs/tunnels";
 
 export const dynamic = "force-dynamic";
 

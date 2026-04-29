@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
-import { resolveRepos } from "@/lib/repos";
-import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
-import { ensureFreshOrAuto, type RepoLike } from "@/lib/profileStore";
+import { resolveRepos } from "@/libs/repos";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { ensureFreshOrAuto, type RepoLike } from "@/libs/profileStore";
 
 export const dynamic = "force-dynamic";
 

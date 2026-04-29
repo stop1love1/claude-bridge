@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { loadApps } from "@/lib/apps";
-import { BRIDGE_ROOT } from "@/lib/paths";
-import { readGitBranch } from "@/lib/git";
+import { loadApps } from "@/libs/apps";
+import { BRIDGE_ROOT } from "@/libs/paths";
+import { readGitBranch } from "@/libs/git";
 
 export const dynamic = "force-dynamic";
 

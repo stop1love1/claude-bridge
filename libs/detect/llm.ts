@@ -5,14 +5,14 @@
  *
  * Why `claude -p` (the CLI) and not the Anthropic SDK?
  *   1. Zero new dependency — the CLI is already a hard requirement
- *      for the bridge, and `lib/scanApp.ts` already shells out to it.
+ *      for the bridge, and `libs/scanApp.ts` already shells out to it.
  *   2. Same auth path as everything else — operators don't have to
  *      provision a separate API key.
  *   3. Bypasses the OS-level keyring / session juggling the SDK would
  *      need on Windows.
  *
  * Failure modes (timeout, non-zero exit, malformed JSON) all resolve
- * to `null`. The caller (`lib/detect/index.ts`) uses that as the cue
+ * to `null`. The caller (`libs/detect/index.ts`) uses that as the cue
  * to fall back to the heuristic detector — detection NEVER blocks
  * task creation, just degrades gracefully.
  */

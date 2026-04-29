@@ -2,7 +2,7 @@
 
 Every child agent spawned via `POST /api/tasks/<id>/agents` MUST write its report to `../<bridge-folder>/sessions/<task-id>/reports/<role>-<repo>.md` before exiting (`mkdir -p` the dir first), where `<bridge-folder>` is the basename of the bridge repo (the wrapper in `lib/childPrompt.ts` substitutes the actual name at spawn time, so children see the real path in their wrapped prompt). The coordinator parses these section headers exactly when aggregating — adding sections is fine, removing or renaming is NOT.
 
-The wrapper in `lib/childPrompt.ts` (function `buildChildPrompt`) already injects this contract into every child prompt; this file is the canonical standalone copy that the coordinator can `cat bridge/report-template.md` to refresh its memory, and that future hooks (e.g., a CI lint) can read.
+The wrapper in `lib/childPrompt.ts` (function `buildChildPrompt`) already injects this contract into every child prompt; this file is the canonical standalone copy that the coordinator can `cat prompts/report-template.md` to refresh its memory, and that future hooks (e.g., a CI lint) can read.
 
 ```markdown
 # <role> @ <repo>

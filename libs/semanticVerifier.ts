@@ -14,7 +14,7 @@
  *   verdict = skipped  → preconditions not met (no playbook, gate
  *                        crashed, no verdict file) — commit proceeds
  *
- * Distinct from `lib/verifier.ts`:
+ * Distinct from `libs/verifier.ts`:
  *   - inline verifier  — "did the agent claim what they actually edited?"
  *   - semantic verifier (this) — "do the edits actually do what the task asked?"
  */

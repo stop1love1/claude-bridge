@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { FileSearch, FileText } from "lucide-react";
-import { api } from "@/lib/client/api";
+import { api } from "@/libs/client/api";
 
 export interface MentionMatch { rel: string; path: string }
 

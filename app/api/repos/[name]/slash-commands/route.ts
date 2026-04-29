@@ -1,13 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getBuiltinSlashCommands } from "@/lib/claudeBuiltinSlash";
+import { getBuiltinSlashCommands } from "@/libs/claudeBuiltinSlash";
 import {
   discoverProjectSlashCommands,
   discoverUserSlashCommands,
   type SlashDiscoverySource,
-} from "@/lib/claudeSlashDiscovery";
-import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
-import { resolveRepoCwd } from "@/lib/repos";
-import { isValidAppName } from "@/lib/apps";
+} from "@/libs/claudeSlashDiscovery";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { resolveRepoCwd } from "@/libs/repos";
+import { isValidAppName } from "@/libs/apps";
 
 export const dynamic = "force-dynamic";
 

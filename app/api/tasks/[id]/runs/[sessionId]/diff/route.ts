@@ -21,12 +21,12 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { getApp } from "@/lib/apps";
-import { readMeta } from "@/lib/meta";
-import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest, isValidSessionId } from "@/lib/validate";
+import { getApp } from "@/libs/apps";
+import { readMeta } from "@/libs/meta";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest, isValidSessionId } from "@/libs/validate";
 
 /** Defense-in-depth: only diff paths under the registered app root. */
 function isUnderAppRoot(appPath: string, candidate: string): boolean {

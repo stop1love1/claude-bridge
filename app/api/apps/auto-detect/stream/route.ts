@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { detectAppCandidates, type DetectEvent } from "@/lib/apps";
+import { detectAppCandidates, type DetectEvent } from "@/libs/apps";
 
 export const dynamic = "force-dynamic";
 

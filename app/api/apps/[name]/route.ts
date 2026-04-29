@@ -15,9 +15,9 @@ import {
   type AppVerify,
   type GitBranchMode,
   type GitIntegrationMode,
-} from "@/lib/apps";
-import { migrateTaskApp } from "@/lib/tasksStore";
-import { MAX_RETRY_PER_GATE } from "@/lib/retryLadder";
+} from "@/libs/apps";
+import { migrateTaskApp } from "@/libs/tasksStore";
+import { MAX_RETRY_PER_GATE } from "@/libs/retryLadder";
 
 export const dynamic = "force-dynamic";
 

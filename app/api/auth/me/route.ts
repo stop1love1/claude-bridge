@@ -4,7 +4,7 @@ import {
   findTrustedDevice,
   loadAuthConfig,
   verifySession,
-} from "@/lib/auth";
+} from "@/libs/auth";
 
 export const dynamic = "force-dynamic";
 

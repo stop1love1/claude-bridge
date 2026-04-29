@@ -20,7 +20,7 @@ import type { DetectedScope, DetectedScopeCacheEntry } from "./types";
 
 // Re-export so existing imports of `DetectedScopeCacheEntry` from this
 // module keep working — the canonical type now lives in `./types` to
-// break the import cycle with `lib/meta.ts`.
+// break the import cycle with `libs/meta.ts`.
 export type { DetectedScopeCacheEntry };
 
 /**

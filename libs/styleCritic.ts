@@ -13,7 +13,7 @@
  *   verdict = skipped  → preconditions not met (no playbook, gate
  *                        crashed, no verdict file) — commit proceeds
  *
- * Distinct from the inline verifier (`lib/verifier.ts`) which checks
+ * Distinct from the inline verifier (`libs/verifier.ts`) which checks
  * claim-vs-diff HONESTY without an LLM spawn. The critic is opt-in and
  * costs ~30-100K tokens per task on top of the coder.
  */

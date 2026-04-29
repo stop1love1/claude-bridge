@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Meta, Repo, Run, Task } from "@/lib/client/types";
+import type { Meta, Repo, Run, Task } from "@/libs/client/types";
 import {
   Hash,
   Copy,
@@ -15,13 +15,13 @@ import {
   RotateCw,
   Download,
 } from "lucide-react";
-import { exportTaskMarkdown, downloadFile } from "@/lib/client/exportTask";
+import { exportTaskMarkdown, downloadFile } from "@/libs/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
 import { StatusDot } from "./StatusDot";
-import { relativeTime, duration } from "@/lib/client/time";
+import { relativeTime, duration } from "@/libs/client/time";
 import { useToast } from "./Toasts";
 import { useConfirm } from "./ConfirmProvider";
-import { api } from "@/lib/client/api";
+import { api } from "@/libs/client/api";
 import { AgentTree } from "./AgentTree";
 import { Button } from "./ui/button";
 

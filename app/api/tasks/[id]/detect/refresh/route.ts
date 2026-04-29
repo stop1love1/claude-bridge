@@ -1,13 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
-import { SESSIONS_DIR } from "@/lib/paths";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest } from "@/lib/validate";
-import { readMeta } from "@/lib/meta";
+import { SESSIONS_DIR } from "@/libs/paths";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest } from "@/libs/validate";
+import { readMeta } from "@/libs/meta";
 import {
   loadDetectInput,
   refreshScope,
-} from "@/lib/detect";
+} from "@/libs/detect";
 
 export const dynamic = "force-dynamic";
 

@@ -7,11 +7,11 @@ import {
   loadAuthConfig,
   sessionCookieOptions,
   signSession,
-} from "@/lib/auth";
+} from "@/libs/auth";
 import {
   consumePendingLogin,
   getPendingLogin,
-} from "@/lib/loginApprovals";
+} from "@/libs/loginApprovals";
 
 export const dynamic = "force-dynamic";
 

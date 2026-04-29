@@ -10,9 +10,9 @@ import {
   sessionCookieOptions,
   setOperatorCredentials,
   signSession,
-} from "@/lib/auth";
-import { checkCsrf } from "@/lib/csrf";
-import { clearSetupToken, verifySetupToken } from "@/lib/setupToken";
+} from "@/libs/auth";
+import { checkCsrf } from "@/libs/csrf";
+import { clearSetupToken, verifySetupToken } from "@/libs/setupToken";
 
 export const dynamic = "force-dynamic";
 
@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
  * connection), so a LAN visitor could send `Host: localhost` and
  * pass this gate trivially when the bridge is bound to `0.0.0.0`.
  * That's exactly why the real gate is now the boot-banner setup
- * token — see `lib/setupToken.ts`. Keeping the Host check costs
+ * token — see `libs/setupToken.ts`. Keeping the Host check costs
  * nothing and blocks the trivial case where someone navigated to
  * `http://<lan-ip>:7777/login` without bothering to forge headers.
  *

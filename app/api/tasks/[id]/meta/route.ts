@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
-import { SESSIONS_DIR } from "@/lib/paths";
-import { reapStaleRunsForDir } from "@/lib/staleRunReaper";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest } from "@/lib/validate";
+import { SESSIONS_DIR } from "@/libs/paths";
+import { reapStaleRunsForDir } from "@/libs/staleRunReaper";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

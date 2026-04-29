@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { existsSync } from "node:fs";
-import { getApp, isValidAppName, updateAppDescription } from "@/lib/apps";
-import { scanAppWithClaude } from "@/lib/scanApp";
+import { getApp, isValidAppName, updateAppDescription } from "@/libs/apps";
+import { scanAppWithClaude } from "@/libs/scanApp";
 
 export const dynamic = "force-dynamic";
 // Claude scans can run up to ~90s in scanApp.ts; give the route a

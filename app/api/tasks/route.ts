@@ -1,22 +1,22 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { listTasks, createTask } from "@/lib/tasksStore";
-import { spawnCoordinatorForTask } from "@/lib/coordinator";
-import { loadApps } from "@/lib/apps";
+import { listTasks, createTask } from "@/libs/tasksStore";
+import { spawnCoordinatorForTask } from "@/libs/coordinator";
+import { loadApps } from "@/libs/apps";
 import {
   profileStoreExists,
   refreshAll,
   type RepoLike,
-} from "@/lib/profileStore";
+} from "@/libs/profileStore";
 import {
   getDetectSource,
   heuristicDetector,
   loadDetectInput,
   writeScopeCache,
-} from "@/lib/detect";
-import { detectWithLLM } from "@/lib/detect/llm";
-import { SESSIONS_DIR } from "@/lib/paths";
+} from "@/libs/detect";
+import { detectWithLLM } from "@/libs/detect/llm";
+import { SESSIONS_DIR } from "@/libs/paths";
 
 export const dynamic = "force-dynamic";
 

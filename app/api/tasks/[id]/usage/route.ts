@@ -1,12 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
-import { readMeta } from "@/lib/meta";
-import { resolveRepoCwd } from "@/lib/repos";
-import { projectDirFor } from "@/lib/sessions";
-import { addUsage, sumUsageFromJsonl, type SessionUsage } from "@/lib/sessionUsage";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest } from "@/lib/validate";
+import { readMeta } from "@/libs/meta";
+import { resolveRepoCwd } from "@/libs/repos";
+import { projectDirFor } from "@/libs/sessions";
+import { addUsage, sumUsageFromJsonl, type SessionUsage } from "@/libs/sessionUsage";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

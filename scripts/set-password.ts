@@ -27,7 +27,7 @@ import {
   loadAuthConfig,
   saveAuthConfig,
   setOperatorCredentials,
-} from "../lib/auth";
+} from "../libs/auth";
 
 const rl = createInterface({ input, output });
 const ROTATE = process.argv.includes("--rotate-secret");

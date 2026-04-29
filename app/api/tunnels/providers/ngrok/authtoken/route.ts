@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { detectProviders, setNgrokAuthtoken } from "@/lib/tunnels";
+import { detectProviders, setNgrokAuthtoken } from "@/libs/tunnels";
 
 export const dynamic = "force-dynamic";
 

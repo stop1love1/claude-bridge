@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
-import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
-import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/lib/spawn";
-import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
-import { isValidAppName } from "@/lib/apps";
-import { badRequest, isValidUserPermissionMode } from "@/lib/validate";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/spawn";
+import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
+import { isValidAppName } from "@/libs/apps";
+import { badRequest, isValidUserPermissionMode } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

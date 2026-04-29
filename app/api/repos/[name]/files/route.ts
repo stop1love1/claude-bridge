@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { readdirSync } from "node:fs";
 import { basename as pathBasename, join, relative } from "node:path";
-import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
-import { isValidAppName } from "@/lib/apps";
-import { badRequest } from "@/lib/validate";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { isValidAppName } from "@/libs/apps";
+import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

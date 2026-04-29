@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { listAllPending, subscribeAll } from "@/lib/permissionStore";
+import { listAllPending, subscribeAll } from "@/libs/permissionStore";
 
 export const dynamic = "force-dynamic";
 

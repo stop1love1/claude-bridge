@@ -14,7 +14,7 @@ import {
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
-import { api } from "@/lib/client/api";
+import { api } from "@/libs/client/api";
 import { useToast } from "./Toasts";
 import { AutoDetectDialog } from "./AutoDetectDialog";
 

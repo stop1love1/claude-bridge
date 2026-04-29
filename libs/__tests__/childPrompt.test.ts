@@ -102,7 +102,7 @@ describe("buildChildPrompt", () => {
   // Race-fix: child must NOT be told to self-POST status:"done" — that
   // races wireRunLifecycle and flips the UI badge to DONE while the
   // final summary is still streaming. The bridge owns the running→done
-  // transition on clean exit. See `bridge/coordinator.md` §0 for the
+  // transition on clean exit. See `prompts/coordinator.md` §0 for the
   // matching rule on the coordinator side.
   it("does not instruct the child to re-POST status:\"done\" at end of run", () => {
     const out = buildChildPrompt(baseOpts);

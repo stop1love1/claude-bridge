@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
  * The `turbopackIgnore` hint stops Turbopack from treating this `cwd()`
  * as a dynamic import path and pulling the entire project into the NFT
  * (Node File Trace) bundle for every API route that transitively imports
- * `lib/paths.ts`. Without it, builds emit a noisy "whole project was
+ * `libs/paths.ts`. Without it, builds emit a noisy "whole project was
  * traced unintentionally" warning even though we never use these
  * constants as import targets — they're just runtime FS paths.
  */
@@ -54,7 +54,7 @@ export const SESSIONS_DIR = join(BRIDGE_ROOT, "sessions");
  *                                  cross-repo registers the coordinator reads / writes
  *   - `tasks.md`                 — legacy notebook (no longer runtime data)
  */
-export const BRIDGE_LOGIC_DIR = join(BRIDGE_ROOT, "bridge");
+export const BRIDGE_LOGIC_DIR = join(BRIDGE_ROOT, "prompts");
 
 /**
  * Where standalone Node hook scripts live. The bridge writes a
@@ -107,7 +107,7 @@ export const USER_CLAUDE_DIR = join(/* turbopackIgnore: true */ homedir(), ".cla
  * CLAUDE.md / BRIDGE.md.
  *
  * Spawned children call the bridge back over HTTP (self-register, agent
- * spawn, task patch); they need the SAME port. `lib/spawn.ts` injects
+ * spawn, task patch); they need the SAME port. `libs/spawn.ts` injects
  * `BRIDGE_PORT` into every child's env so the hook scripts and the
  * coordinator template both see the right value, regardless of which
  * variable the operator originally set.
@@ -150,13 +150,13 @@ export const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://localhost:${BRIDGE_P
  *      `http://localhost:<port>`. Last-resort fallback.
  *
  * Lazy-imported `getManifestPublicUrl` to avoid a circular dep
- * (`lib/apps.ts` doesn't import paths.ts at module load, but the
+ * (`libs/apps.ts` doesn't import paths.ts at module load, but the
  * Telegram notifier paths through both).
  */
 export function getPublicBridgeUrl(): string {
   const envExplicit = process.env.BRIDGE_PUBLIC_URL?.trim();
   if (envExplicit) return stripTrailingSlash(envExplicit);
-  // Lazy require so this module stays cheap to import — `lib/apps.ts`
+  // Lazy require so this module stays cheap to import — `libs/apps.ts`
   // pulls in fs / JSON parsing that not every caller needs.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports

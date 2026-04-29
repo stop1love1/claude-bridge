@@ -3,7 +3,7 @@ import {
   getManifestDetectSource,
   setManifestDetectSource,
   type DetectManifestSource,
-} from "@/lib/apps";
+} from "@/libs/apps";
 
 export const dynamic = "force-dynamic";
 

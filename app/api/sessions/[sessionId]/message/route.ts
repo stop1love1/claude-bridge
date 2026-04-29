@@ -1,14 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
-import { resumeClaude, spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/lib/spawn";
-import { projectDirFor } from "@/lib/sessions";
-import { freeSessionSettingsPath, writeSessionSettings } from "@/lib/permissionSettings";
-import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/lib/validate";
-import { findTaskBySessionId, updateTask } from "@/lib/tasksStore";
-import { isValidAppName } from "@/lib/apps";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { resumeClaude, spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/spawn";
+import { projectDirFor } from "@/libs/sessions";
+import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
+import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
+import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
+import { isValidAppName } from "@/libs/apps";
 
 export const dynamic = "force-dynamic";
 

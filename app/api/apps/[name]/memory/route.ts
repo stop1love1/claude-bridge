@@ -5,12 +5,12 @@
  *   POST → appends a new entry. Body: `{ "entry": "When X → do Y because Z" }`.
  *
  * Storage lives at `<appPath>/.bridge/memory.md`. The bridge owns the
- * file shape (see `lib/memory.ts`); this route just validates the
+ * file shape (see `libs/memory.ts`); this route just validates the
  * boundary.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { getApp, isValidAppName } from "@/lib/apps";
-import { appendMemory, topMemoryEntries } from "@/lib/memory";
+import { getApp, isValidAppName } from "@/libs/apps";
+import { appendMemory, topMemoryEntries } from "@/libs/memory";
 
 export const dynamic = "force-dynamic";
 

@@ -42,7 +42,7 @@ export type RunStatus = "queued" | "running" | "done" | "failed" | "stale";
  * "coder", "reviewer", "researcher", "fixer", ...) — not a closed enum.
  * `repo` is the registered app name (from `~/.claude/bridge.json`) the
  * session runs against; for orchestration runs it's the bridge folder's
- * own basename (`BRIDGE_FOLDER` from `lib/paths.ts`).
+ * own basename (`BRIDGE_FOLDER` from `libs/paths.ts`).
  * `parentSessionId` is the coordinator session UUID that spawned this run
  * via `POST /api/tasks/<id>/agents`. `null` / absent means the run was
  * spawned directly by the bridge (the coordinator itself). The agent

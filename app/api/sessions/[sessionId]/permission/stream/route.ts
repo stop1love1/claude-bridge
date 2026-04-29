@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { listPending, subscribe } from "@/lib/permissionStore";
-import { isValidSessionId } from "@/lib/validate";
+import { listPending, subscribe } from "@/libs/permissionStore";
+import { isValidSessionId } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

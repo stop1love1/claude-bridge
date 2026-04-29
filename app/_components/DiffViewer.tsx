@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { GitBranch, RotateCw, Copy, Check, AlertCircle } from "lucide-react";
-import { api } from "@/lib/client/api";
+import { api } from "@/libs/client/api";
 import { Button } from "./ui/button";
 import {
   Dialog,

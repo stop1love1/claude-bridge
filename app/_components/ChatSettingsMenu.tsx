@@ -3,9 +3,9 @@
 import { useState } from "react";
 import { Hand, Code2, ListTree, Zap, Check, ShieldOff } from "lucide-react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import type { ChatSettings, PermissionMode, EffortLevel } from "@/lib/client/types";
+import type { ChatSettings, PermissionMode, EffortLevel } from "@/libs/client/types";
 import { Button } from "./ui/button";
-import { cn } from "@/lib/cn";
+import { cn } from "@/libs/cn";
 
 const MODE_OPTIONS: Array<{
   value: PermissionMode;

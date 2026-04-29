@@ -5,8 +5,8 @@ import {
   revokeTrustedDevice,
   sessionCookieOptions,
   verifySession,
-} from "@/lib/auth";
-import { checkCsrf } from "@/lib/csrf";
+} from "@/libs/auth";
+import { checkCsrf } from "@/libs/csrf";
 
 export const dynamic = "force-dynamic";
 

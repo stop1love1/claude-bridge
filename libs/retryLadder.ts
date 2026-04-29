@@ -7,12 +7,12 @@
  *
  *   gate            module                 suffix       AppRetry key
  *   ─────           ──────                 ──────       ────────────
- *   crash           lib/childRetry.ts      `-retry`     crash
- *   verify          lib/verifyChain.ts     `-vretry`    verify
- *   claim-vs-diff   lib/verifier.ts        `-cretry`    claim
- *   preflight       lib/preflightCheck.ts  `-cretry`*   preflight
- *   style critic    lib/styleCritic.ts     `-stretry`   style
- *   semantic verif. lib/semanticVerifier.ts `-svretry`  semantic
+ *   crash           libs/childRetry.ts      `-retry`     crash
+ *   verify          libs/verifyChain.ts     `-vretry`    verify
+ *   claim-vs-diff   libs/verifier.ts        `-cretry`    claim
+ *   preflight       libs/preflightCheck.ts  `-cretry`*   preflight
+ *   style critic    libs/styleCritic.ts     `-stretry`   style
+ *   semantic verif. libs/semanticVerifier.ts `-svretry`  semantic
  *
  *   * preflight piggy-backs on the `-cretry` suffix because both gates
  *     are claim-shaped agent-process drift; one shared budget covers

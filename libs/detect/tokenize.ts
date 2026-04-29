@@ -2,9 +2,9 @@
  * Single bilingual tokenizer + stopword set used by every detector
  * surface. Replaces the three independent tokenize/stopword pairs that
  * existed before:
- *   - `lib/repoProfile.tokenize` (English-only, code-token oriented)
- *   - `lib/repoHeuristic` (no tokenizer, just substring `indexOf`)
- *   - `lib/contextAttach.tokenize` (English-only, prompt-shaped)
+ *   - `libs/repoProfile.tokenize` (English-only, code-token oriented)
+ *   - `libs/repoHeuristic` (no tokenizer, just substring `indexOf`)
+ *   - `libs/contextAttach.tokenize` (English-only, prompt-shaped)
  *
  * Vietnamese support: we don't try real word segmentation (would need
  * a dictionary). Instead we strip diacritics and split on whitespace —

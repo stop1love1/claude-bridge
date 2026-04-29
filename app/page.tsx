@@ -6,8 +6,8 @@ import {
   findTrustedDevice,
   loadAuthConfig,
   verifySession,
-} from "@/lib/auth";
-import { DEMO_MODE } from "@/lib/demoMode";
+} from "@/libs/auth";
+import { DEMO_MODE } from "@/libs/demoMode";
 import {
   FAQ,
   Features,

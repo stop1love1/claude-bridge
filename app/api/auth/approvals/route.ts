@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { verifyRequestAuth } from "@/lib/auth";
-import { listPendingLogins } from "@/lib/loginApprovals";
+import { verifyRequestAuth } from "@/libs/auth";
+import { listPendingLogins } from "@/libs/loginApprovals";
 
 export const dynamic = "force-dynamic";
 

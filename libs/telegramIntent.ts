@@ -27,7 +27,7 @@
  * sends both back to the operator.
  *
  * Why `claude -p` and not the Anthropic SDK:
- *   Same reason as `lib/scanApp.ts` and `lib/detect/llm.ts` —
+ *   Same reason as `libs/scanApp.ts` and `libs/detect/llm.ts` —
  *   zero new dependency, reuses the operator's existing Claude
  *   credentials, no separate API key provisioning.
  */

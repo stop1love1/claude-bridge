@@ -2,7 +2,7 @@
  * Render a `DetectedScope` into a single canonical markdown block.
  *
  * One renderer is used by both the coordinator prompt
- * (`lib/coordinator.ts`) and every child prompt (`lib/childPrompt.ts`),
+ * (`libs/coordinator.ts`) and every child prompt (`libs/childPrompt.ts`),
  * so coordinator and children always see the SAME detected scope.
  * This is the contract that closes the drift between the two layers.
  *

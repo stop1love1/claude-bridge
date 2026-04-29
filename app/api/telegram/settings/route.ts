@@ -5,11 +5,11 @@ import {
   type TelegramForwardChat,
   type TelegramForwardChatFilter,
   type TelegramNotificationLevel,
-} from "@/lib/apps";
+} from "@/libs/apps";
 import {
   ensureTelegramNotifier,
   teardownTelegramNotifier,
-} from "@/lib/telegramNotifier";
+} from "@/libs/telegramNotifier";
 
 export const dynamic = "force-dynamic";
 

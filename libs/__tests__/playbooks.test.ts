@@ -29,9 +29,9 @@ describe("playbooks", () => {
   });
 
   it("loads a playbook by role name", async () => {
-    mkdirSync(join(tmpRoot, "bridge", "playbooks"), { recursive: true });
+    mkdirSync(join(tmpRoot, "prompts", "playbooks"), { recursive: true });
     writeFileSync(
-      join(tmpRoot, "bridge", "playbooks", "reviewer.md"),
+      join(tmpRoot, "prompts", "playbooks", "reviewer.md"),
       "Reviewer rubric: ship/needs-rework/blocked.",
     );
     const { loadPlaybook } = await import("../playbooks");
@@ -47,15 +47,15 @@ describe("playbooks", () => {
   });
 
   it("treats whitespace-only files as missing", async () => {
-    mkdirSync(join(tmpRoot, "bridge", "playbooks"), { recursive: true });
-    writeFileSync(join(tmpRoot, "bridge", "playbooks", "coder.md"), "   \n\n  ");
+    mkdirSync(join(tmpRoot, "prompts", "playbooks"), { recursive: true });
+    writeFileSync(join(tmpRoot, "prompts", "playbooks", "coder.md"), "   \n\n  ");
     const { loadPlaybook } = await import("../playbooks");
     expect(loadPlaybook("coder")).toBeNull();
   });
 
-  it("playbookPath builds the canonical path under bridge/playbooks/", async () => {
+  it("playbookPath builds the canonical path under prompts/playbooks/", async () => {
     const { playbookPath } = await import("../playbooks");
     const p = playbookPath("style-critic");
-    expect(p.endsWith(join("bridge", "playbooks", "style-critic.md"))).toBe(true);
+    expect(p.endsWith(join("prompts", "playbooks", "style-critic.md"))).toBe(true);
   });
 });

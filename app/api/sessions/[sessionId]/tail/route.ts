@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { projectDirFor, tailJsonl, tailJsonlBefore } from "@/lib/sessions";
-import { badRequest, isValidSessionId } from "@/lib/validate";
+import { projectDirFor, tailJsonl, tailJsonlBefore } from "@/libs/sessions";
+import { badRequest, isValidSessionId } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

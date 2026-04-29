@@ -10,7 +10,7 @@ import { join } from "node:path";
  * `process.cwd()`. We mock `process.cwd()` (no real chdir — the spy
  * just changes the return value) BEFORE importing the module so the
  * fresh import resolves `BRIDGE_LOGIC_DIR` against our temp dir
- * without touching the real `bridge/` directory.
+ * without touching the real `prompts/` directory.
  */
 function mktmp(label: string): string {
   return mkdtempSync(join(tmpdir(), `bridge-houserules-${label}-`));
@@ -40,9 +40,9 @@ describe("houseRules", () => {
   });
 
   it("loads only the global file when no per-app file exists", async () => {
-    mkdirSync(join(tmpRoot, "bridge"), { recursive: true });
+    mkdirSync(join(tmpRoot, "prompts"), { recursive: true });
     writeFileSync(
-      join(tmpRoot, "bridge", "house-rules.md"),
+      join(tmpRoot, "prompts", "house-rules.md"),
       "- Prefer named exports.\n- No emojis in code.",
     );
     const { loadHouseRules } = await import("../houseRules");
@@ -68,8 +68,8 @@ describe("houseRules", () => {
   });
 
   it("merges global before per-app with a separator", async () => {
-    mkdirSync(join(tmpRoot, "bridge"), { recursive: true });
-    writeFileSync(join(tmpRoot, "bridge", "house-rules.md"), "GLOBAL CONTENT");
+    mkdirSync(join(tmpRoot, "prompts"), { recursive: true });
+    writeFileSync(join(tmpRoot, "prompts", "house-rules.md"), "GLOBAL CONTENT");
     const appDir = mktmp("app2");
     mkdirSync(join(appDir, ".bridge"), { recursive: true });
     writeFileSync(join(appDir, ".bridge", "house-rules.md"), "APP CONTENT");
@@ -89,8 +89,8 @@ describe("houseRules", () => {
   });
 
   it("treats whitespace-only files as missing", async () => {
-    mkdirSync(join(tmpRoot, "bridge"), { recursive: true });
-    writeFileSync(join(tmpRoot, "bridge", "house-rules.md"), "   \n\n  ");
+    mkdirSync(join(tmpRoot, "prompts"), { recursive: true });
+    writeFileSync(join(tmpRoot, "prompts", "house-rules.md"), "   \n\n  ");
     const { loadHouseRules } = await import("../houseRules");
     expect(loadHouseRules(null)).toBeNull();
   });

@@ -173,14 +173,14 @@ export const DEFAULT_QUALITY: AppQuality = {};
  * `MAX_RETRY_PER_GATE` from `retryLadder.ts` regardless of value here.
  *
  * Defaults (when missing) preserve historical 1-shot behavior. See
- * `lib/retryLadder.ts` for the ladder logic and the strategy registry.
+ * `libs/retryLadder.ts` for the ladder logic and the strategy registry.
  *
- *   crash     — child crash retry (lib/childRetry.ts)
- *   verify    — verify-chain failure retry (lib/verifyChain.ts)
- *   claim     — claim-vs-diff retry (lib/verifier.ts)
- *   preflight — preflight (read-before-edit) retry (lib/preflightCheck.ts)
- *   style     — style critic retry (lib/styleCritic.ts)
- *   semantic  — semantic verifier retry (lib/semanticVerifier.ts)
+ *   crash     — child crash retry (libs/childRetry.ts)
+ *   verify    — verify-chain failure retry (libs/verifyChain.ts)
+ *   claim     — claim-vs-diff retry (libs/verifier.ts)
+ *   preflight — preflight (read-before-edit) retry (libs/preflightCheck.ts)
+ *   style     — style critic retry (libs/styleCritic.ts)
+ *   semantic  — semantic verifier retry (libs/semanticVerifier.ts)
  */
 export interface AppRetry {
   crash?: number;
@@ -1079,7 +1079,7 @@ export const DEFAULT_FORWARD_CHAT: TelegramForwardChat = "off";
 export const DEFAULT_FORWARD_CHAT_MIN_CHARS = 40;
 
 /**
- * Notification volume preset. Drives `lib/telegramNotifier`'s gating of
+ * Notification volume preset. Drives `libs/telegramNotifier`'s gating of
  * lifecycle / section / permission events.
  *
  *   "minimal"  — only what the operator must act on:

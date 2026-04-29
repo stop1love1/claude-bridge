@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
-import type { Repo } from "@/lib/client/types";
-import { useLocalStorage } from "@/lib/client/useLocalStorage";
+import type { Repo } from "@/libs/client/types";
+import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { Button } from "./ui/button";
 import {
   Select,

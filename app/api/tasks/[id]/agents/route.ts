@@ -4,41 +4,41 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRunIfNotDuplicate, readMeta, updateRun, type Run } from "@/lib/meta";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/lib/paths";
-import { resolveRepoCwd, resolveRepos } from "@/lib/repos";
-import { resumeClaude, spawnFreeSession } from "@/lib/spawn";
-import { wireRunLifecycle } from "@/lib/coordinator";
-import { getApp } from "@/lib/apps";
-import { prepareBranch } from "@/lib/gitOps";
-import { createWorktreeForRun, removeWorktree } from "@/lib/worktrees";
-import { loadProfiles } from "@/lib/profileStore";
+import { appendRunIfNotDuplicate, readMeta, updateRun, type Run } from "@/libs/meta";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { resolveRepoCwd, resolveRepos } from "@/libs/repos";
+import { resumeClaude, spawnFreeSession } from "@/libs/spawn";
+import { wireRunLifecycle } from "@/libs/coordinator";
+import { getApp } from "@/libs/apps";
+import { prepareBranch } from "@/libs/gitOps";
+import { createWorktreeForRun, removeWorktree } from "@/libs/worktrees";
+import { loadProfiles } from "@/libs/profileStore";
 import {
   getOrComputeScope,
   loadDetectInput,
   type DetectedScope,
-} from "@/lib/detect";
-import { buildChildPrompt } from "@/lib/childPrompt";
-import { buildResumePrompt } from "@/lib/resumePrompt";
-import { loadHouseRules } from "@/lib/houseRules";
-import { topMemoryEntries } from "@/lib/memory";
-import { loadPlaybook } from "@/lib/playbooks";
-import { loadPinnedFiles } from "@/lib/pinnedFiles";
-import { ensureFreshSymbolIndex } from "@/lib/symbolStore";
-import { ensureFreshStyleFingerprint } from "@/lib/styleStore";
-import { attachReferences } from "@/lib/contextAttach";
-import { buildRecentDirection } from "@/lib/recentDirection";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest, isValidAgentRole, isValidSessionId } from "@/lib/validate";
+} from "@/libs/detect";
+import { buildChildPrompt } from "@/libs/childPrompt";
+import { buildResumePrompt } from "@/libs/resumePrompt";
+import { loadHouseRules } from "@/libs/houseRules";
+import { topMemoryEntries } from "@/libs/memory";
+import { loadPlaybook } from "@/libs/playbooks";
+import { loadPinnedFiles } from "@/libs/pinnedFiles";
+import { ensureFreshSymbolIndex } from "@/libs/symbolStore";
+import { ensureFreshStyleFingerprint } from "@/libs/styleStore";
+import { attachReferences } from "@/libs/contextAttach";
+import { buildRecentDirection } from "@/libs/recentDirection";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest, isValidAgentRole, isValidSessionId } from "@/libs/validate";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
-} from "@/lib/permissionSettings";
+} from "@/libs/permissionSettings";
 import {
   announcePending,
   subscribe,
   type PendingRequest,
-} from "@/lib/permissionStore";
+} from "@/libs/permissionStore";
 
 export const dynamic = "force-dynamic";
 // `waitForSpawnApproval` blocks for up to APPROVAL_TIMEOUT_MS (180s) when
@@ -314,7 +314,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // unnecessarily or, worse, claim the same branch the worktree wants
   // to check out (branches can't be checked out in two places at once).
   // Skip prepareBranch in worktree mode — the worktree handles branch
-  // policy via `resolveTargetBranch` in `lib/worktrees.ts`.
+  // policy via `resolveTargetBranch` in `libs/worktrees.ts`.
   const app = getApp(repo);
   const useWorktree = !!(app && app.git.worktreeMode === "enabled");
   if (app && app.git.branchMode !== "current" && !useWorktree) {
@@ -592,7 +592,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { cleanupSessionSettings } = require("@/lib/permissionSettings") as typeof import("@/lib/permissionSettings");
+      const { cleanupSessionSettings } = require("@/libs/permissionSettings") as typeof import("@/libs/permissionSettings");
       cleanupSessionSettings(sessionId);
     } catch { /* ignore */ }
     return NextResponse.json(

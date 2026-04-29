@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { SESSIONS_DIR } from "@/lib/paths";
-import { reapStaleRunsForDir } from "@/lib/staleRunReaper";
+import { SESSIONS_DIR } from "@/libs/paths";
+import { reapStaleRunsForDir } from "@/libs/staleRunReaper";
 
 export const dynamic = "force-dynamic";
 

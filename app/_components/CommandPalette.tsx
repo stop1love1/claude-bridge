@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SessionSummary, Task } from "@/lib/client/types";
+import type { SessionSummary, Task } from "@/libs/client/types";
 import {
   Search,
   Plus,

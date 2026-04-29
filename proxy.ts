@@ -6,9 +6,9 @@ import {
   loadAuthConfig,
   touchTrustedDevice,
   verifySession,
-} from "@/lib/auth";
-import { checkCsrf } from "@/lib/csrf";
-import { DEMO_MODE } from "@/lib/demoMode";
+} from "@/libs/auth";
+import { checkCsrf } from "@/libs/csrf";
+import { DEMO_MODE } from "@/libs/demoMode";
 
 /**
  * Paths the demo-mode gate redirects to `/`. Anything here is part of

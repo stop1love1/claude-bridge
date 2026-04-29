@@ -2,9 +2,9 @@ import { type NextRequest } from "next/server";
 import { existsSync, statSync, createReadStream } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { Readable } from "node:stream";
-import { BRIDGE_ROOT } from "@/lib/paths";
-import { isValidSessionId } from "@/lib/validate";
-import { assertInsideUploadDir } from "@/lib/uploadGuards";
+import { BRIDGE_ROOT } from "@/libs/paths";
+import { isValidSessionId } from "@/libs/validate";
+import { assertInsideUploadDir } from "@/libs/uploadGuards";
 
 export const dynamic = "force-dynamic";
 

@@ -1,6 +1,6 @@
 /**
  * @deprecated since the detect layer landed. Kept as a thin shim around
- * `lib/detect/heuristic.ts` so existing test files keep working without
+ * `libs/detect/heuristic.ts` so existing test files keep working without
  * being rewritten. New callers MUST use `lib/detect.detectScope` /
  * `lib/detect.heuristicDetector` directly — those are the standardized
  * surface that handles bilingual matching, declared capabilities, LLM

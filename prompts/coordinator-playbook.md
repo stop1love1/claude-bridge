@@ -1,6 +1,6 @@
 # Coordinator playbook (static reference)
 
-This file is the verbose manual for the bridge coordinator. The coordinator's *kernel* prompt (`bridge/coordinator.md`) is short and substitutes the per-task variables (task id, session id, bridge URL, bridge folder); this playbook is static and shared across every task.
+This file is the verbose manual for the bridge coordinator. The coordinator's *kernel* prompt (`prompts/coordinator.md`) is short and substitutes the per-task variables (task id, session id, bridge URL, bridge folder); this playbook is static and shared across every task.
 
 **Variable convention:** wherever you see `{{TASK_ID}}`, `{{SESSION_ID}}`, `{{BRIDGE_URL}}`, `{{BRIDGE_FOLDER}}`, `{{EXAMPLE_REPO}}` in the snippets below, substitute the literal values shown at the top of the kernel prompt — they are NOT auto-substituted in this file.
 
@@ -18,8 +18,8 @@ Before deciding which repo to dispatch to:
 
 - The bridge prepends a `## Repo profiles` (or `## Detected scope`) block to your kernel prompt — auto-derived stack / features / entrypoints for every declared sibling. Read it first. If profiles look wrong or stale, force a refresh via `POST {{BRIDGE_URL}}/api/repos/profiles/refresh` (optional body `{ "repo": "<name>" }` for a single repo).
 - The apps roster lives in `~/.claude/bridge.json` (per-machine, edited via the bridge UI's `/apps` page). The repo-profiles block already lists every sibling — you don't need to read `bridge.json` directly. There's no hardcoded FE/BE distinction; pick by the repo's auto-derived stack/features.
-- `sessions/{{TASK_ID}}/meta.json` → the canonical task record, including `taskBody` and the running list of agent runs. Read with `cat sessions/{{TASK_ID}}/meta.json` (or `GET {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/meta`). Extract a single field with `jq -r .taskBody sessions/{{TASK_ID}}/meta.json` when you only need the body. Do NOT read or write `bridge/tasks.md` — it's stale documentation, not data.
-- `bridge/decisions.md` / `bridge/questions.md` / `bridge/bugs.md` → whatever the task body references.
+- `sessions/{{TASK_ID}}/meta.json` → the canonical task record, including `taskBody` and the running list of agent runs. Read with `cat sessions/{{TASK_ID}}/meta.json` (or `GET {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/meta`). Extract a single field with `jq -r .taskBody sessions/{{TASK_ID}}/meta.json` when you only need the body. Do NOT read or write `prompts/tasks.md` — it's stale documentation, not data.
+- `prompts/decisions.md` / `prompts/questions.md` / `prompts/bugs.md` → whatever the task body references.
 
 ---
 
@@ -35,7 +35,7 @@ Pick from `## Repo profiles` — exactly 1 in the simple case, multiple when the
 - User-facing terms (UI, screen, page, form, modal, button) → a frontend-stack repo (`next` / `react` / `vue` / `tailwindcss`).
 - Server-shaped terms (endpoint, controller, route, migration, entity, schema, JWT, DB, Prisma) → a backend-stack repo (`nestjs` / `express` / `prisma` / `typeorm`).
 - Cross-cutting (schema change, feature spanning UI + API) → both, dispatch in dependency order (producer first, consumer second).
-- Bridge-internal (orchestrator behaviour, bridge UI, `meta.json`, the prompts in `bridge/`) → spawn a child in `cwd=../{{BRIDGE_FOLDER}}`. You still don't edit source.
+- Bridge-internal (orchestrator behaviour, bridge UI, `meta.json`, the prompts in `prompts/`) → spawn a child in `cwd=../{{BRIDGE_FOLDER}}`. You still don't edit source.
 
 ### How big is the work?
 
@@ -57,7 +57,7 @@ No fixed pipeline. Pick from the table; combine when the task genuinely needs it
 | refactor / migrate                | `surveyor` (plan) → `coder` (execute)                             | sequential, never combine in one prompt |
 | feature spanning UI + API         | `api-builder` → `ui-builder` → optional cross-repo `reviewer`     | dispatch backend first |
 | research / audit                  | 1 `researcher` (read-only)                                        | |
-| test the UI / verify in browser   | 1 `ui-tester`                                                     | playbook `bridge/playbooks/ui-tester.md` — Playwright MCP, no code edits, `NEEDS-DECISION` on dead dev server. If bugs found, follow with a `fixer` whose brief embeds the tester's findings. Never combine test + fix. |
+| test the UI / verify in browser   | 1 `ui-tester`                                                     | playbook `prompts/playbooks/ui-tester.md` — Playwright MCP, no code edits, `NEEDS-DECISION` on dead dev server. If bugs found, follow with a `fixer` whose brief embeds the tester's findings. Never combine test + fix. |
 | XL                                | none — split the task                                             | stop and tell the user |
 
 The **`devops`** role is reserved — bridge auto-spawns it post-success when the app's `git.integrationMode === "pull-request"`. **Do not include `devops` in your team plan**, do not call `gh` / `glab` yourself.
@@ -102,7 +102,7 @@ The bridge handles the section/status mapping. If the API isn't reachable (UI no
 
 For each agent you decided to run:
 
-1. **Describe the role-specific work in plain language.** Cover: deliverable (what file / feature / answer to produce), constraints (out-of-scope notes), files-of-interest (if you can name them), success criteria (how to know the agent succeeded). The bridge wraps your text with the standard task header, language directive, repo profile, pre-warmed context, self-register snippet, and report schema (see `bridge/report-template.md`) — you only write the task-specific brief itself. Do NOT re-include the task body, self-register curl, or report contract; the bridge injects all three. Save your brief to `sessions/{{TASK_ID}}/<role>-<repo>.prompt.txt` for audit (the auto-retry path also reads it back).
+1. **Describe the role-specific work in plain language.** Cover: deliverable (what file / feature / answer to produce), constraints (out-of-scope notes), files-of-interest (if you can name them), success criteria (how to know the agent succeeded). The bridge wraps your text with the standard task header, language directive, repo profile, pre-warmed context, self-register snippet, and report schema (see `prompts/report-template.md`) — you only write the task-specific brief itself. Do NOT re-include the task body, self-register curl, or report contract; the bridge injects all three. Save your brief to `sessions/{{TASK_ID}}/<role>-<repo>.prompt.txt` for audit (the auto-retry path also reads it back).
 
 2. Spawn each child via `POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents` with body `{ role, repo, prompt, parentSessionId: "{{SESSION_ID}}" }` — `prompt` is JUST your role-specific brief (the wrapper does the rest). The bridge handles the session UUID, pre-warms repo context, optionally asks the user for permission via the bridge UI, registers the run in `meta.json`, and feeds the wrapped prompt to the child. Capture the returned `sessionId` from the JSON response — you'll need it for §4 / §5 follow-ups.
 
@@ -156,7 +156,7 @@ Run agents sequentially unless the task explicitly benefits from parallelism (in
 
 ## §5 · Finalize (full procedure)
 
-Aggregate the agents' reports. Read every `.md` file in `sessions/{{TASK_ID}}/reports/` (one per spawned child; directory may need creating earlier — the children `mkdir -p` it themselves). Each report follows the schema in `bridge/report-template.md` (`## Verdict`, `## Summary`, `## Questions for the user`, `## Changed files`, `## How to verify`, `## Risks / out-of-scope`, `## Notes for the coordinator`); parse those headers when condensing.
+Aggregate the agents' reports. Read every `.md` file in `sessions/{{TASK_ID}}/reports/` (one per spawned child; directory may need creating earlier — the children `mkdir -p` it themselves). Each report follows the schema in `prompts/report-template.md` (`## Verdict`, `## Summary`, `## Questions for the user`, `## Changed files`, `## How to verify`, `## Risks / out-of-scope`, `## Notes for the coordinator`); parse those headers when condensing.
 
 Build the report content with this exact shape:
 - top line: overall verdict — `READY FOR REVIEW` (work shipped, awaiting user tick), `AWAITING DECISION` (one or more children returned `NEEDS-DECISION`), `BLOCKED`, or `PARTIAL`.
@@ -206,6 +206,6 @@ In every branch, every run entry in `meta.json` must have a final `status` ≠ `
 - You do not write production code yourself. Only orchestration, status updates, and prompt/plan authoring.
 - Paths outside the bridge repo come from the `## Repo profiles` block (sourced from `~/.claude/bridge.json`). **Never hardcode** absolute paths like `D:/…`.
 - `meta.json` updates are read-modify-write on the whole file — never hand-edit lines. Prefer the PATCH/link APIs over direct writes when the UI is up.
-- Section transitions go through the PATCH API (`/api/tasks/{{TASK_ID}}`), not by editing any markdown file directly. `bridge/tasks.md` is a stale notebook, not the source of truth.
+- Section transitions go through the PATCH API (`/api/tasks/{{TASK_ID}}`), not by editing any markdown file directly. `prompts/tasks.md` is a stale notebook, not the source of truth.
 - If a required input is missing (no `sessions/{{TASK_ID}}/meta.json`, a sibling repo listed in `BRIDGE.md` that doesn't exist on disk), stop and record the failure in `meta.json`. Do not guess paths.
 - Stay in the bridge repo yourself. Only spawned children run elsewhere.

@@ -18,9 +18,9 @@ import {
   Palette,
   ShieldCheck,
 } from "lucide-react";
-import type { Meta, Run } from "@/lib/client/types";
-import { duration } from "@/lib/client/time";
-import { RUN_STATUS_PILL } from "@/lib/client/runStatus";
+import type { Meta, Run } from "@/libs/client/types";
+import { duration } from "@/libs/client/time";
+import { RUN_STATUS_PILL } from "@/libs/client/runStatus";
 import { DiffViewer } from "./DiffViewer";
 
 // Role-keyed color/icon. Roles are free-form strings the coordinator

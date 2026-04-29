@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { answer, consume, getPending } from "@/lib/permissionStore";
+import { answer, consume, getPending } from "@/libs/permissionStore";
 import {
   badRequest,
   isValidRequestId,
   isValidSessionId,
-} from "@/lib/validate";
+} from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

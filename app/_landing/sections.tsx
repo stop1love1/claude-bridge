@@ -15,7 +15,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { Button } from "../_components/ui/button";
-import { DEMO_MODE } from "@/lib/demoMode";
+import { DEMO_MODE } from "@/libs/demoMode";
 import {
   AUTHOR_URL,
   FAQS,

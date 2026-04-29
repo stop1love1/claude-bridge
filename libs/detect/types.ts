@@ -4,9 +4,9 @@
  * shape across heuristic + LLM impls + cache + render layers.
  *
  * Replaces the ad-hoc trio:
- *   - `lib/repoHeuristic.suggestRepo` (pick repo)
- *   - `lib/repoProfile.FEATURE_RULES` (pick features per repo)
- *   - `lib/contextAttach.attachReferences` (pick relevant files)
+ *   - `libs/repoHeuristic.suggestRepo` (pick repo)
+ *   - `libs/repoProfile.FEATURE_RULES` (pick features per repo)
+ *   - `libs/contextAttach.attachReferences` (pick relevant files)
  *
  * with a single detection pass whose result is cached in
  * `sessions/<task-id>/meta.json` and rendered identically into both the
@@ -84,7 +84,7 @@ export interface DetectInput {
   /** Allowlist of repo names — only these can win. */
   repos: string[];
   /**
-   * Cached repo profiles (`lib/profileStore`). Required for any impl to
+   * Cached repo profiles (`libs/profileStore`). Required for any impl to
    * score above zero — without profile data there's no signal.
    */
   profiles?: Record<string, RepoProfile>;

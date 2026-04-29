@@ -10,7 +10,7 @@ import {
   Trash2,
   User,
 } from "lucide-react";
-import { api } from "@/lib/client/api";
+import { api } from "@/libs/client/api";
 import { HeaderShell } from "../_components/HeaderShell";
 import { Button } from "../_components/ui/button";
 import { Input } from "../_components/ui/input";

@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import {
   getManifestDetectScanRoots,
   setManifestDetectScanRoots,
-} from "@/lib/apps";
-import { BRIDGE_ROOT } from "@/lib/paths";
+} from "@/libs/apps";
+import { BRIDGE_ROOT } from "@/libs/paths";
 
 export const dynamic = "force-dynamic";
 

@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
-import { readMeta, updateRun } from "@/lib/meta";
-import { SESSIONS_DIR } from "@/lib/paths";
-import { killChild } from "@/lib/spawnRegistry";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest, isValidSessionId } from "@/lib/validate";
+import { readMeta, updateRun } from "@/libs/meta";
+import { SESSIONS_DIR } from "@/libs/paths";
+import { killChild } from "@/libs/spawnRegistry";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest, isValidSessionId } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

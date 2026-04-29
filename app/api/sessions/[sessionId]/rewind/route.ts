@@ -2,11 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { projectDirFor } from "@/lib/sessions";
-import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
-import { badRequest, isValidSessionId } from "@/lib/validate";
-import { getChild } from "@/lib/spawnRegistry";
+import { projectDirFor } from "@/libs/sessions";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { badRequest, isValidSessionId } from "@/libs/validate";
+import { getChild } from "@/libs/spawnRegistry";
 
 export const dynamic = "force-dynamic";
 

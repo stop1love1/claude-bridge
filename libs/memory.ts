@@ -15,7 +15,7 @@
  *   - Total file capped at MAX_FILE_BYTES (32 KB). On overflow, the
  *     oldest entries get dropped on append.
  *
- * Distinct from `lib/houseRules.ts`:
+ * Distinct from `libs/houseRules.ts`:
  *   - houseRules = STATIC team constraints, hand-written.
  *   - memory     = DYNAMIC learnings, accreted via `appendMemory`.
  */

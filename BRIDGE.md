@@ -26,7 +26,7 @@ Before starting any task with **cross-repo signals**:
 - The user mentions another repo ("repo-A returns the wrong field X", "repo-B needs endpoint Y")
 - The user says "integrate", "connect", "sync" between repos
 
-→ Read `bridge/decisions.md` first (recent decisions that may affect this work), then any other notebook the task body references.
+→ Read `prompts/decisions.md` first (recent decisions that may affect this work), then any other notebook the task body references.
 
 ## When to write to the bridge
 
@@ -35,9 +35,9 @@ After finishing a cross-repo task:
 | Situation | Write to |
 |---|---|
 | Just shipped a new endpoint or changed an API shape | Create a follow-up task for the consumer repo via the UI |
-| Just locked in a decision that isn't obvious from the code (naming, format, pagination style…) | `bridge/decisions.md` (append, dated) |
-| Need to ask another repo something before continuing | `bridge/questions.md` (OPEN section) |
-| Found a bug whose root cause is in another repo | `bridge/bugs.md` (OPEN section) |
+| Just locked in a decision that isn't obvious from the code (naming, format, pagination style…) | `prompts/decisions.md` (append, dated) |
+| Need to ask another repo something before continuing | `prompts/questions.md` (OPEN section) |
+| Found a bug whose root cause is in another repo | `prompts/bugs.md` (OPEN section) |
 
 ## Task lifecycle
 
@@ -50,19 +50,19 @@ After finishing a cross-repo task:
 | File | Purpose | Who writes | Frequency |
 |---|---|---|---|
 | `BRIDGE.md` | This playbook | Bridge maintainers | very low |
-| `bridge/coordinator.md` | Coordinator prompt template | Bridge maintainers | very low |
-| `bridge/report-template.md` | Child agent report contract (canonical copy; `lib/childPrompt.ts` injects it into every child) | Bridge maintainers | very low |
-| `bridge/playbooks/<role>.md` | Per-role playbook (style-critic, semantic-verifier, ui-tester, devops, …). Auto-injected into a child whose role matches the file's basename. | Bridge maintainers | low |
-| `bridge/tasks.md` | Legacy notebook — runtime state lives in `sessions/<id>/meta.json` | (none — bridge writes meta.json) | n/a |
-| `bridge/decisions.md` | Decisions log (append-only, dated) | Any repo | low |
-| `bridge/questions.md` | Open questions between repos | Repo that asks | low |
-| `bridge/bugs.md` | Cross-repo bugs | Repo that finds the bug | low |
+| `prompts/coordinator.md` | Coordinator prompt template | Bridge maintainers | very low |
+| `prompts/report-template.md` | Child agent report contract (canonical copy; `libs/childPrompt.ts` injects it into every child) | Bridge maintainers | very low |
+| `prompts/playbooks/<role>.md` | Per-role playbook (style-critic, semantic-verifier, ui-tester, devops, …). Auto-injected into a child whose role matches the file's basename. | Bridge maintainers | low |
+| `prompts/tasks.md` | Legacy notebook — runtime state lives in `sessions/<id>/meta.json` | (none — bridge writes meta.json) | n/a |
+| `prompts/decisions.md` | Decisions log (append-only, dated) | Any repo | low |
+| `prompts/questions.md` | Open questions between repos | Repo that asks | low |
+| `prompts/bugs.md` | Cross-repo bugs | Repo that finds the bug | low |
 | `~/.claude/bridge.json` | Apps registry + per-app git workflow settings. Outside the project tree so a `git pull` on the bridge never overwrites it. Edited via the bridge UI. | Bridge UI | low |
 
 ## Conventions
 
 - **Plain markdown** — no JSON / YAML, so both humans and AI can read it.
 - **Always date entries** with `YYYY-MM-DD`.
-- **`bridge/decisions.md` is append-only.** To reverse an old decision, write a new entry that references the old one (`Supersedes: #YYYY-MM-DD-slug`).
+- **`prompts/decisions.md` is append-only.** To reverse an old decision, write a new entry that references the old one (`Supersedes: #YYYY-MM-DD-slug`).
 - **Cross-link.** Link tasks → questions / decisions, using relative paths.
 - **Don't dump everything.** The bridge holds only what **cannot be derived** from the source code or git history of any repo.

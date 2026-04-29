@@ -24,7 +24,7 @@ import { StringSession } from "telegram/sessions";
 import {
   getManifestTelegramSettings,
   setManifestTelegramSettings,
-} from "../lib/apps";
+} from "../libs/apps";
 
 const rl = createInterface({ input, output });
 

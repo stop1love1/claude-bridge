@@ -22,10 +22,10 @@ import {
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
-import { api } from "@/lib/client/api";
-import type { DetectCandidate, DetectEvent } from "@/lib/client/types";
+import { api } from "@/libs/client/api";
+import type { DetectCandidate, DetectEvent } from "@/libs/client/types";
 import { useToast } from "./Toasts";
-import { cn } from "@/lib/cn";
+import { cn } from "@/libs/cn";
 
 type Mode = "config" | "scanning" | "review" | "adding";
 

@@ -25,17 +25,17 @@ export async function register(): Promise<void> {
   // (we don't `await` it). Notifier install is synchronous-ish, so
   // doing it second keeps any "telegram notifier installed" log next
   // to the matching banner line. Both swallow their own errors.
-  const { runStartupChecks } = await import("./lib/startupChecks");
+  const { runStartupChecks } = await import("./libs/startupChecks");
   void runStartupChecks().catch((err: unknown) => {
     console.warn("[bridge] startup checks failed:", (err as Error).message);
   });
 
-  const { ensureTelegramNotifier } = await import("./lib/telegramNotifier");
+  const { ensureTelegramNotifier } = await import("./libs/telegramNotifier");
   ensureTelegramNotifier();
 
   // Tunnel shutdown handlers live behind a dynamic import so the Node-
   // only `process.once` / `process.exit` calls stay invisible to the
   // Edge runtime static analyzer.
-  const { installShutdownHandlers } = await import("./lib/shutdownHandler");
+  const { installShutdownHandlers } = await import("./libs/shutdownHandler");
   installShutdownHandlers();
 }

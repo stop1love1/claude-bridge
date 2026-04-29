@@ -1,15 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { readMeta } from "@/lib/meta";
-import { SESSIONS_DIR } from "@/lib/paths";
-import { isValidTaskId } from "@/lib/tasks";
+import { readMeta } from "@/libs/meta";
+import { SESSIONS_DIR } from "@/libs/paths";
+import { isValidTaskId } from "@/libs/tasks";
 import {
   badRequest,
   isValidAgentRole,
   isValidRepoLabel,
   isValidSessionId,
-} from "@/lib/validate";
+} from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 

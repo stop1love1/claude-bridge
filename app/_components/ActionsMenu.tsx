@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Plus, Upload, FileText } from "lucide-react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Button } from "./ui/button";
-import { cn } from "@/lib/cn";
+import { cn } from "@/libs/cn";
 
 /**
  * Composer "+" — Claude Desktop short menu: upload + @ mention for context.

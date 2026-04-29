@@ -2,9 +2,9 @@ import { type NextRequest } from "next/server";
 import { existsSync, statSync, createReadStream } from "node:fs";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
-import { resolveRepoCwd } from "@/lib/repos";
-import { BRIDGE_ROOT, readBridgeMd } from "@/lib/paths";
-import { isValidAppName } from "@/lib/apps";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { isValidAppName } from "@/libs/apps";
 
 export const dynamic = "force-dynamic";
 

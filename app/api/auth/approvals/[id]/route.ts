@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { verifyRequestAuthOrInternal } from "@/lib/auth";
-import { checkCsrf } from "@/lib/csrf";
-import { answerPendingLogin } from "@/lib/loginApprovals";
+import { verifyRequestAuthOrInternal } from "@/libs/auth";
+import { checkCsrf } from "@/libs/csrf";
+import { answerPendingLogin } from "@/libs/loginApprovals";
 
 export const dynamic = "force-dynamic";
 

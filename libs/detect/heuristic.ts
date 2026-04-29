@@ -216,7 +216,7 @@ function scoreRepos(
     }
 
     // 2a. Profile boost — keywords / stack / features harvested from
-    //     the repo itself by `lib/repoProfile.ts`.
+    //     the repo itself by `libs/repoProfile.ts`.
     if (profile) {
       for (const kw of profile.keywords) {
         if (kw.length < 3) continue;

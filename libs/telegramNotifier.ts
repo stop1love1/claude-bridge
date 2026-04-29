@@ -12,7 +12,7 @@
  * The notifier installs once per process (HMR-safe) and never throws —
  * any send error is logged to the bridge's console with a brief reason.
  *
- * What fires is gated by `notificationLevel` (see `lib/apps`):
+ * What fires is gated by `notificationLevel` (see `libs/apps`):
  *   - "minimal" — coordinator done/failed, ANY child failure, section
  *                 → BLOCKED / DONE, permission requests (per-tool
  *                 coalesced).

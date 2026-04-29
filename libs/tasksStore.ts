@@ -186,7 +186,7 @@ export async function updateTask(id: string, patch: TaskPatch): Promise<Task | n
   // racing a child's appendRun (or any other run-row mutator) can't
   // silently overwrite the just-appended row. meta.runs and the task
   // header live in the same JSON, so the read-modify-write window
-  // must be serialized against everything in lib/meta.ts that
+  // must be serialized against everything in libs/meta.ts that
   // takes the same lock.
   return withTaskLock(dir, () => {
     const meta = readMeta(dir);

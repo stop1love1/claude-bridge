@@ -2,7 +2,7 @@
 
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
 import * as React from "react";
-import { cn } from "@/lib/cn";
+import { cn } from "@/libs/cn";
 
 /**
  * shadcn-style AlertDialog adapted to the bridge's theme tokens

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { autoDetectApps } from "@/lib/apps";
+import { autoDetectApps } from "@/libs/apps";
 
 export const dynamic = "force-dynamic";
 

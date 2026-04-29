@@ -3,7 +3,7 @@
  *
  * A playbook is a markdown template the bridge prepends to a child's
  * `## Your role` section when the dispatched role has a matching file
- * under `bridge/playbooks/<role>.md`. Lets the team codify how a given
+ * under `prompts/playbooks/<role>.md`. Lets the team codify how a given
  * role (`reviewer`, `coder`, `style-critic`, …) should approach work
  * without forcing the coordinator to re-explain it in every spawn.
  *

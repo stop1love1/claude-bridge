@@ -2,15 +2,15 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Send, Loader2, Square, Image as ImageIcon, FileText, X } from "lucide-react";
-import { api } from "@/lib/client/api";
-import { useLocalStorage } from "@/lib/client/useLocalStorage";
+import { api } from "@/libs/client/api";
+import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { useToast } from "./Toasts";
 import { ChatSettingsMenu } from "./ChatSettingsMenu";
 import { QuickAddMenu } from "./ActionsMenu";
 import { SlashActionsPalette } from "./SlashActionsPalette";
 import { MentionPicker, type MentionMatch } from "./MentionPicker";
 import { MicButton } from "./MicButton";
-import type { ChatSettings } from "@/lib/client/types";
+import type { ChatSettings } from "@/libs/client/types";
 
 const MIN_H = 34;
 const MAX_H = 220;

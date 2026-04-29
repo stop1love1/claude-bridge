@@ -3,7 +3,7 @@ import {
   getUserClientSelf,
   isUserClientConfigured,
   sendUserMessage,
-} from "@/lib/telegramUserClient";
+} from "@/libs/telegramUserClient";
 
 export const dynamic = "force-dynamic";
 

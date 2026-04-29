@@ -41,7 +41,7 @@ curl -s -X POST http://localhost:7777/api/tasks/<task-id>/link \
     '{sessionId:$sid, role:"coordinator", repo:$repo, status:"running"}')"
 ```
 
-The Next.js app (`bun dev`) runs from this same directory — `app/`, `lib/`, `package.json` all live at the bridge root.
+The Next.js app (`bun dev`) runs from this same directory — `app/`, `libs/`, `package.json` all live at the bridge root.
 
 Replace `role` with whatever label fits the work you're doing (`coordinator`, `coder`, `reviewer`, `planner`, `doc-writer`, …). The UI displays whatever you pick.
 
@@ -51,17 +51,17 @@ Update `status` to `"done"` (or `"failed"`) and set `endedAt` when you finish.
 
 ## When spawning sub-agents
 
-If the coordinator prompt in `bridge/coordinator.md` tells you to spawn sub-agents (coder/reviewer/…), each child `claude -p` process must also register itself — either have the child run the curl above, or do it yourself after capturing the child's session UUID from its stdout.
+If the coordinator prompt in `prompts/coordinator.md` tells you to spawn sub-agents (coder/reviewer/…), each child `claude -p` process must also register itself — either have the child run the curl above, or do it yourself after capturing the child's session UUID from its stdout.
 
 ## What *not* to do
 
 - Don't invent a new session format. Sessions are the plain `.jsonl` files Claude Code writes to `~/.claude/projects/<slug>/`.
 - Don't hardcode absolute paths or repo names. The apps registry lives in `bridge.json` (committed to git), edited via the UI's "Add app" / "Auto-detect" buttons. The bridge folder itself is referenced via `basename "$PWD"`, never a hardcoded string.
 - Don't edit files inside `../<other-repo>/` from here — spawn a child `claude` in that repo instead.
-- Don't edit `bridge/tasks.md` to move tasks between sections. Use `PATCH /api/tasks/<id>` with `{"section": "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived", ...}` — the bridge writes the canonical state to `sessions/<id>/meta.json`.
+- Don't edit `prompts/tasks.md` to move tasks between sections. Use `PATCH /api/tasks/<id>` with `{"section": "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived", ...}` — the bridge writes the canonical state to `sessions/<id>/meta.json`.
 - Don't run `git checkout` / `git commit` / `git push` from inside a child agent. The bridge runs those automatically per the app's settings — duplicating them races the lifecycle hook.
 - Don't auto-PATCH a task to `DONE — not yet archived` from the coordinator. Completion is user-confirmed; auto-promoting bypasses the review gate.
 - **Don't drop screenshots, scratch images, or downloaded binaries at the bridge root.** UI test screenshots (Playwright MCP, manual `browser_take_screenshot`, etc.) go in [`.playwright-mcp/`](.playwright-mcp/) — that path is already gitignored alongside the console-log files the MCP server writes there. Anything else throwaway (HAR captures, design refs, paste-ins) belongs in `.bridge-state/` or a task's `sessions/<task-id>/` folder, not the repo root. The root is reserved for source + config; loose `*.png` clutters `git status`, slips into commits via `git add .`, and bloats the workspace listing.
 - **Don't dispatch work via Claude Code's built-in `Task` / `Agent` tool from the coordinator.** That tool spawns subagents in-process — they share the coordinator's cwd (`claude-bridge/`), bypass `meta.json`, and never reach the target app folder. The coordinator is launched with `--disallowed-tools Task` to hard-block this; if you find Task available anyway, don't use it. The only sanctioned dispatch path is `POST /api/tasks/<id>/agents`. Same rule for direct `claude -p` shell-outs and `cd ../<repo> && …` Bash calls — both escape the bridge's cwd / tracking / permission contract.
 
-See `bridge/coordinator.md` for the full orchestration playbook.
+See `prompts/coordinator.md` for the full orchestration playbook.

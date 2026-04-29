@@ -3,8 +3,8 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Hash } from "lucide-react";
-import { api } from "@/lib/client/api";
-import type { Meta, Repo, Run, Task } from "@/lib/client/types";
+import { api } from "@/libs/client/api";
+import type { Meta, Repo, Run, Task } from "@/libs/client/types";
 import { HeaderShell } from "@/app/_components/HeaderShell";
 import { TaskDetail } from "@/app/_components/TaskDetail";
 import { SessionLog } from "@/app/_components/SessionLog";

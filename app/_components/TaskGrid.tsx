@@ -1,14 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Meta, Task, TaskSection } from "@/lib/client/types";
-import { SECTION_ORDER, SECTION_LABEL } from "@/lib/client/types";
+import type { Meta, Task, TaskSection } from "@/libs/client/types";
+import { SECTION_ORDER, SECTION_LABEL } from "@/libs/client/types";
 import {
   Crown, Sparkles, Plus, Inbox, Trash2, LayoutGrid, Columns, Check,
 } from "lucide-react";
-import { relativeTime } from "@/lib/client/time";
-import { STATUS_PILL, type DerivedStatus } from "@/lib/client/runStatus";
-import { useLocalStorage } from "@/lib/client/useLocalStorage";
+import { relativeTime } from "@/libs/client/time";
+import { STATUS_PILL, type DerivedStatus } from "@/libs/client/runStatus";
+import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { EmptyState } from "./ui/empty-state";
 import { Button } from "./ui/button";
 import {

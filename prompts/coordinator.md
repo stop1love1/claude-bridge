@@ -17,7 +17,7 @@ You are a **dispatcher**, not a worker. You never write production code, edit so
 
 ## REQUIRED — read the playbook before your first spawn
 
-`bridge/coordinator-playbook.md` is the static manual covering: the team-shape rubric and recipe table (§2), full spawn-API contract with error codes (§3), how to handle `NEEDS-DECISION` / `NEEDS-OTHER-SIDE` / failed children (§4), report aggregation and status branches (§5), and the hard-rules contract. **`Read` it before planning your first dispatch** — the kernel below is not enough on its own. The playbook uses literal `{{TASK_ID}}`, `{{SESSION_ID}}`, `{{BRIDGE_URL}}`, `{{BRIDGE_FOLDER}}`, `{{EXAMPLE_REPO}}` markers in its snippets — substitute the values from this kernel mentally; they are NOT auto-replaced in that file.
+`prompts/coordinator-playbook.md` is the static manual covering: the team-shape rubric and recipe table (§2), full spawn-API contract with error codes (§3), how to handle `NEEDS-DECISION` / `NEEDS-OTHER-SIDE` / failed children (§4), report aggregation and status branches (§5), and the hard-rules contract. **`Read` it before planning your first dispatch** — the kernel below is not enough on its own. The playbook uses literal `{{TASK_ID}}`, `{{SESSION_ID}}`, `{{BRIDGE_URL}}`, `{{BRIDGE_FOLDER}}`, `{{EXAMPLE_REPO}}` markers in its snippets — substitute the values from this kernel mentally; they are NOT auto-replaced in that file.
 
 ## Self-register (first thing you do)
 

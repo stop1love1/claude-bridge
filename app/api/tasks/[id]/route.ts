@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { updateTask, deleteTask, isValidSection } from "@/lib/tasksStore";
-import { isValidTaskId, type Task, type TaskSection } from "@/lib/tasks";
-import { SECTION_STATUS } from "@/lib/tasks";
-import { badRequest } from "@/lib/validate";
-import { verifyRequestAuth } from "@/lib/auth";
+import { updateTask, deleteTask, isValidSection } from "@/libs/tasksStore";
+import { isValidTaskId, type Task, type TaskSection } from "@/libs/tasks";
+import { SECTION_STATUS } from "@/libs/tasks";
+import { badRequest } from "@/libs/validate";
+import { verifyRequestAuth } from "@/libs/auth";
 
 export const dynamic = "force-dynamic";
 

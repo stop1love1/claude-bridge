@@ -3,7 +3,7 @@
  *
  * Two layers, both opt-in (missing = skip, no error):
  *
- *   - **Global** — `bridge/house-rules.md` in the bridge repo. Team-shared
+ *   - **Global** — `prompts/house-rules.md` in the bridge repo. Team-shared
  *     constraints that apply to every spawn regardless of target repo.
  *   - **Per-app** — `<appPath>/.bridge/house-rules.md` inside the sibling
  *     repo itself. Constraints specific to that codebase (committed by
@@ -11,7 +11,7 @@
  *
  * Both files are plain markdown — content is prepended verbatim to the
  * child prompt by `buildChildPrompt`. Pattern mirrors `safeReadText` in
- * `lib/repoProfile.ts`: synchronous read, fail-soft to `null`, capped at
+ * `libs/repoProfile.ts`: synchronous read, fail-soft to `null`, capped at
  * a fixed byte budget so a runaway markdown file can't blow out the
  * child's context window.
  */

@@ -80,7 +80,7 @@ export interface RunVerifierOptions {
  * is expected to look like `` - `path/to/file` — description ``. We
  * accept either backtick-wrapped or bare paths and ignore the
  * description text. The literal placeholder `(none — analysis only)`
- * (per `lib/childPrompt.ts` report template) maps to an empty list.
+ * (per `libs/childPrompt.ts` report template) maps to an empty list.
  */
 export function parseChangedFiles(report: string): string[] {
   const idx = report.indexOf("## Changed files");

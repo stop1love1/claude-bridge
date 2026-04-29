@@ -10,14 +10,14 @@ import {
   sessionCookieOptions,
   signSession,
   verifyPassword,
-} from "@/lib/auth";
+} from "@/libs/auth";
 import {
   APPROVAL_TTL_MS,
   createPendingLogin,
-} from "@/lib/loginApprovals";
-import { getClientIp } from "@/lib/clientIp";
-import { checkCsrf } from "@/lib/csrf";
-import { rateLimit, rateLimitClear } from "@/lib/rateLimit";
+} from "@/libs/loginApprovals";
+import { getClientIp } from "@/libs/clientIp";
+import { checkCsrf } from "@/libs/csrf";
+import { rateLimit, rateLimitClear } from "@/libs/rateLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
   if (liveTrusted.length > 0) {
     const label = pickDeviceLabel(req, body.label);
     // M2: only trust XFF / X-Real-IP when BRIDGE_TRUSTED_PROXY=1, else
-    // fall back to whatever Next exposes. See lib/clientIp.ts.
+    // fall back to whatever Next exposes. See libs/clientIp.ts.
     const remoteIp = ip;
     const userAgent = req.headers.get("user-agent") ?? "";
     const pending = createPendingLogin({

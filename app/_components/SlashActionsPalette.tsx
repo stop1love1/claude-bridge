@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import pkg from "../../package.json";
-import { api } from "@/lib/client/api";
-import type { SlashCommandsItemDto } from "@/lib/client/types";
+import { api } from "@/libs/client/api";
+import type { SlashCommandsItemDto } from "@/libs/client/types";
 import { useToast } from "./Toasts";
-import { cn } from "@/lib/cn";
+import { cn } from "@/libs/cn";
 import { Button } from "./ui/button";
 
 const VERSION = (pkg as { version?: string }).version ?? "0.0.0";

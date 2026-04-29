@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { listTunnels, startTunnel, type TunnelProvider } from "@/lib/tunnels";
+import { listTunnels, startTunnel, type TunnelProvider } from "@/libs/tunnels";
 
 export const dynamic = "force-dynamic";
 

@@ -16,12 +16,12 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import { api } from "@/lib/client/api";
+import { api } from "@/libs/client/api";
 import type {
   TunnelEntry,
   TunnelProvider,
   TunnelProviderStatus,
-} from "@/lib/client/types";
+} from "@/libs/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { Button } from "../_components/ui/button";
 import { Input } from "../_components/ui/input";

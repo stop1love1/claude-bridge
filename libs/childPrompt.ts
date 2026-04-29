@@ -50,7 +50,7 @@ export interface BuildChildPromptOpts {
    */
   houseRules?: string | null;
   /**
-   * (P1/H1) Pre-loaded `bridge/playbooks/<role>.md` markdown. When
+   * (P1/H1) Pre-loaded `prompts/playbooks/<role>.md` markdown. When
    * present, prepended to the coordinator brief inside `## Your role`
    * so the role contract is visible before the task-specific brief.
    * Null/undefined = render only the coordinator body (current behavior).

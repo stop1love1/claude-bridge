@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
 import { join } from "node:path";
-import { readMeta, subscribeMeta, type MetaChangeEvent } from "@/lib/meta";
-import { SESSIONS_DIR } from "@/lib/paths";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest } from "@/lib/validate";
-import { subscribeSession, type StatusEvent } from "@/lib/sessionEvents";
+import { readMeta, subscribeMeta, type MetaChangeEvent } from "@/libs/meta";
+import { SESSIONS_DIR } from "@/libs/paths";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest } from "@/libs/validate";
+import { subscribeSession, type StatusEvent } from "@/libs/sessionEvents";
 
 export const dynamic = "force-dynamic";
 
@@ -92,7 +92,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
        * Forward per-child stream-json status (`thinking` / `running:
        * <tool description>` / `idle`) as a `child-status` SSE event
        * scoped to this task. The child's status is already routed
-       * through `lib/sessionEvents` by the spawn parser; we just
+       * through `libs/sessionEvents` by the spawn parser; we just
        * fan it out to per-task subscribers so the UI can render
        * "coder is running git status" mid-task instead of waiting
        * for the final report.

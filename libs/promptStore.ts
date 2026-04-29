@@ -6,9 +6,9 @@
  * recompose the prompt without rerunning the coordinator. Three
  * different retry surfaces need to read this file:
  *
- *   - `lib/childRetry.ts` (crash retry — `-retry` suffix)
- *   - `lib/verifyChain.ts` (verify-fail retry — `-vretry` suffix)
- *   - `lib/verifier.ts` (claim-vs-diff retry — `-cretry` suffix)
+ *   - `libs/childRetry.ts` (crash retry — `-retry` suffix)
+ *   - `libs/verifyChain.ts` (verify-fail retry — `-vretry` suffix)
+ *   - `libs/verifier.ts` (claim-vs-diff retry — `-cretry` suffix)
  *
  * Extracted here so a future change to the prompt-file naming
  * convention is a single-file edit instead of three. Fail-soft to ""

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { addApp, isValidAppName, loadApps } from "@/lib/apps";
-import { pruneStaleWorktrees } from "@/lib/worktrees";
+import { addApp, isValidAppName, loadApps } from "@/libs/apps";
+import { pruneStaleWorktrees } from "@/libs/worktrees";
 
 export const dynamic = "force-dynamic";
 

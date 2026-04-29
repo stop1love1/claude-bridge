@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getTask } from "@/lib/tasksStore";
-import { spawnCoordinatorForTask } from "@/lib/coordinator";
-import { isValidTaskId } from "@/lib/tasks";
-import { badRequest } from "@/lib/validate";
-import { withInFlight } from "@/lib/inFlight";
+import { getTask } from "@/libs/tasksStore";
+import { spawnCoordinatorForTask } from "@/libs/coordinator";
+import { isValidTaskId } from "@/libs/tasks";
+import { badRequest } from "@/libs/validate";
+import { withInFlight } from "@/libs/inFlight";
 
 export const dynamic = "force-dynamic";
 

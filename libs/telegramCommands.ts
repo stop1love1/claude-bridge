@@ -1,7 +1,7 @@
 /**
  * Telegram bot command handler.
  *
- * Pairs with `lib/telegramNotifier.ts` (outbound side). This file is
+ * Pairs with `libs/telegramNotifier.ts` (outbound side). This file is
  * the inbound side: long-poll `getUpdates`, parse slash commands, run
  * the matching bridge action, and reply.
  *
@@ -203,7 +203,7 @@ async function handleUpdate(
   if (!text) return;
 
   // smartDispatch handles BOTH slash commands AND free-form NL —
-  // routing the latter through the `lib/telegramIntent` LLM.
+  // routing the latter through the `libs/telegramIntent` LLM.
   const reply = await smartDispatch(text);
   if (reply) await sendReply(cfg, mdLiteToHtml(reply), msg.message_id);
 }
@@ -370,7 +370,7 @@ const COMMAND_BY_NAME = new Map(COMMANDS.map((c) => [c.name, c] as const));
  * Smart dispatcher — accepts EITHER a slash command OR free-form
  * natural-language text. Slash commands go straight to the pure
  * dispatcher; free-form text is routed through the LLM middleware
- * (`lib/telegramIntent`) to pick a command + craft a wrapper reply.
+ * (`libs/telegramIntent`) to pick a command + craft a wrapper reply.
  *
  * The bot path and the user-client inbound path both use this so the
  * NL behavior is consistent across channels.
@@ -665,7 +665,7 @@ async function commandContinue(idArg: string | undefined): Promise<string> {
   if (coord) {
     // Mirror app/api/tasks/<id>/continue logic.
     const message =
-      `Continue from where you left off for bridge task ${idArg}. Read sessions/${idArg}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per bridge/coordinator-playbook.md §5. Otherwise re-orchestrate as needed.`;
+      `Continue from where you left off for bridge task ${idArg}. Read sessions/${idArg}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per prompts/coordinator-playbook.md §5. Otherwise re-orchestrate as needed.`;
     resumeClaude(BRIDGE_ROOT, coord.sessionId, message, { mode: "bypassPermissions" });
     return `▶️ Resumed coordinator for \`${idArg}\` \\(\`${coord.sessionId.slice(0, 8)}\`\\)`;
   }
@@ -1095,7 +1095,7 @@ const userListener: UserListenerState = (() => {
  */
 async function shouldDispatchUserMessage(msg: InboundMessage): Promise<boolean> {
   // We accept BOTH slash commands AND free-form natural-language text
-  // (the latter goes through `lib/telegramIntent` for LLM routing).
+  // (the latter goes through `libs/telegramIntent` for LLM routing).
   // Filter only on the channel-level constraints below.
   if (!msg.text.trim()) return false;
   // Only private chats (1-on-1 with the operator). Group / channel

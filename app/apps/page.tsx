@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Boxes, Folder, GitBranch, Settings, Sparkles, Trash2 } from "lucide-react";
-import { api } from "@/lib/client/api";
-import type { App, Meta, Task } from "@/lib/client/types";
+import { api } from "@/libs/client/api";
+import type { App, Meta, Task } from "@/libs/client/types";
 import { HeaderShell } from "../_components/HeaderShell";
 import { AddAppDialog } from "../_components/AddAppDialog";
 import { AppSettingsDialog } from "../_components/AppSettingsDialog";

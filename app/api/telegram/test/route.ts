@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ensureTelegramNotifier, pingTelegramTest } from "@/lib/telegramNotifier";
+import { ensureTelegramNotifier, pingTelegramTest } from "@/libs/telegramNotifier";
 
 export const dynamic = "force-dynamic";
 

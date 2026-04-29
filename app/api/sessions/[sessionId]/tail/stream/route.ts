@@ -1,9 +1,9 @@
 import type { NextRequest } from "next/server";
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
-import { projectDirFor, tailJsonl } from "@/lib/sessions";
-import { isAlive, subscribeSession, type PartialEvent, type StatusEvent } from "@/lib/sessionEvents";
-import { isValidSessionId } from "@/lib/validate";
+import { projectDirFor, tailJsonl } from "@/libs/sessions";
+import { isAlive, subscribeSession, type PartialEvent, type StatusEvent } from "@/libs/sessionEvents";
+import { isValidSessionId } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
