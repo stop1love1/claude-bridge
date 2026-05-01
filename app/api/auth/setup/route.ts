@@ -12,6 +12,8 @@ import {
   signSession,
 } from "@/libs/auth";
 import { checkCsrf } from "@/libs/csrf";
+import { getClientIp } from "@/libs/clientIp";
+import { checkRateLimit } from "@/libs/rateLimit";
 import { clearSetupToken, verifySetupToken } from "@/libs/setupToken";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +63,27 @@ const SETUP_TOKEN_HEADER = "x-bridge-setup-token";
  * i.e., never, after a successful first run).
  */
 export async function POST(req: NextRequest) {
+  // Rate-limit BEFORE any work — a LAN attacker who can reach the
+  // bridge port and spoof `Host: localhost` would otherwise get
+  // unconstrained guesses at the 32-byte setup token.
+  //
+  // Cap is intentionally generous (50 / 10 min) because when
+  // BRIDGE_TRUSTED_PROXY is unset, getClientIp() returns the literal
+  // "unknown" sentinel — every caller shares one bucket. A tight cap
+  // would let any clumsy operator (or a single misbehaving browser tab)
+  // lock out their own setup. The token itself is 32 bytes of base64url,
+  // so even 50/10min is computationally infeasible to brute force; the
+  // limiter exists to keep the endpoint cheap, not to substitute for
+  // the token's entropy.
+  const ip = getClientIp(req.headers);
+  const denied = checkRateLimit("auth:setup", ip, 50, 10 * 60_000);
+  if (denied) {
+    return NextResponse.json(denied.body, {
+      status: denied.status,
+      headers: denied.headers,
+    });
+  }
+
   const csrf = checkCsrf(req);
   if (!csrf.ok) {
     return NextResponse.json(

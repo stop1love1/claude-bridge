@@ -145,8 +145,20 @@ async function sendTelegram(text: string): Promise<void> {
  * ~30 msg/sec global; bursts get 429s that previously dropped messages
  * silently. Serializing per chat keeps us under the local limit, and
  * the retry loop below handles whatever 429 / 5xx still slips through.
+ *
+ * HMR-safe: pinned onto globalThis like every other stateful map in
+ * this codebase (permissionStore, spawnRegistry, meta write queues).
+ * Without this, a Next.js dev HMR reload mid-burst would drop the
+ * chain head and the new module instance's queue starts from a fresh
+ * `Promise.resolve()` — racing the orphan promise's `.finally` that
+ * still holds a closure over the old `botQueues` Map.
  */
-const botQueues = new Map<string, Promise<void>>();
+const G_NOTIFIER = globalThis as unknown as {
+  __bridgeTelegramBotQueues?: Map<string, Promise<void>>;
+};
+const botQueues: Map<string, Promise<void>> =
+  G_NOTIFIER.__bridgeTelegramBotQueues ?? new Map<string, Promise<void>>();
+G_NOTIFIER.__bridgeTelegramBotQueues = botQueues;
 function enqueueBotSend(
   chatId: string,
   job: () => Promise<void>,

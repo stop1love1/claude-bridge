@@ -125,11 +125,19 @@ async function checkTelegramBot(): Promise<CheckResult> {
       signal: ctrl.signal,
     });
     if (!r.ok) {
-      const body = await r.text().catch(() => "");
+      const rawBody = await r.text().catch(() => "");
+      // Telegram occasionally echoes the request URL (which carries the
+      // bot token) in some error response bodies. Scrub the token out
+      // before logging so the boot banner / log files never carry it
+      // in plaintext. Belt-and-suspenders: also redact any URL-shaped
+      // path that includes the literal `bot<digits>:` prefix.
+      const safeBody = rawBody
+        .split(botToken).join("[redacted]")
+        .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]");
       return {
         name: "telegram-bot",
         status: "error",
-        detail: `getMe HTTP ${r.status}: ${body.slice(0, 120) || "(no body)"}`,
+        detail: `getMe HTTP ${r.status}: ${safeBody.slice(0, 120) || "(no body)"}`,
       };
     }
     const data = (await r.json().catch(() => null)) as

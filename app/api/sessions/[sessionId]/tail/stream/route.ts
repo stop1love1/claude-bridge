@@ -237,7 +237,16 @@ export async function GET(req: NextRequest, ctx: Ctx) {
           void drain();
           return;
         }
-        waitTimer = setTimeout(waitForFile, 2000);
+        // Re-check `closed` inside the timer callback so a close()
+        // that fires AFTER setTimeout but BEFORE the callback runs
+        // doesn't re-arm the polling loop indefinitely. close()
+        // clears `waitTimer` synchronously, but the OS-level timer
+        // may still fire its callback if it was already on the
+        // event-loop's ready queue when clearTimeout landed.
+        waitTimer = setTimeout(() => {
+          if (closed) return;
+          waitForFile();
+        }, 2000);
       };
 
       // Replay-buffer fast path: if the cached endOffset is past the
@@ -287,12 +296,16 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       const close = () => {
         if (closed) return;
         closed = true;
-        if (pending) clearTimeout(pending);
-        if (waitTimer) clearTimeout(waitTimer);
+        if (pending) { clearTimeout(pending); pending = null; }
+        if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
         clearInterval(ka);
         try { unsub(); } catch { /* ignore */ }
         try { watcher?.close(); } catch { /* ignore */ }
         try { controller.close(); } catch { /* already closed */ }
+        // Idempotent listener removal so repeated aborts (defensive
+        // double-call from req.signal + controller.close upstream)
+        // don't accumulate stale listeners on the AbortSignal.
+        try { req.signal.removeEventListener("abort", close); } catch { /* ignore */ }
       };
 
       req.signal.addEventListener("abort", close);

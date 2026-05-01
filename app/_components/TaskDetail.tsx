@@ -182,13 +182,7 @@ function TaskDetailInner({
     });
     if (!ok) return;
     try {
-      const r = await fetch(`/api/tasks/${task.id}/runs/${run.sessionId}/kill`, {
-        method: "POST",
-      });
-      if (!r.ok) {
-        const text = await r.text();
-        throw new Error(`${r.status} ${text}`);
-      }
+      await api.killRun(task.id, run.sessionId);
       toast("info", `Killed ${run.role}`);
     } catch (e) {
       toast("error", (e as Error).message);

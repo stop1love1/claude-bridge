@@ -23,7 +23,7 @@
  * partial-state failures are logged and the safer path is chosen.
  */
 import { join } from "node:path";
-import { readMeta, updateRun, withTaskLock, type Run } from "./meta";
+import { emitRunUpdated, readMeta, withTaskLock, writeMeta, type Run } from "./meta";
 import { SESSIONS_DIR } from "./paths";
 import { killChild } from "./spawnRegistry";
 import { removeWorktree } from "./worktrees";
@@ -60,10 +60,12 @@ export async function claimSpeculativeWinner(args: {
   }
   const sessionsDir = join(SESSIONS_DIR, taskId);
 
-  // Atomic claim under the per-task lock. We can't compose two
-  // updateRun() calls without a race; this whole decision must hold
-  // the lock from "read meta" through "patch winner + losers" so a
-  // racing sibling can never see the same `none-won-yet` snapshot.
+  // Atomic claim under the per-task lock. The whole decision MUST
+  // hold the lock from "read meta" through "patch winner + losers
+  // and write meta" — a racing sibling that enters the lock after us
+  // must already see our `speculativeOutcome: "won"` mark on disk.
+  // Earlier code returned the decision and patched outside the lock;
+  // that race let two siblings both claim winner.
   const decision = await withTaskLock(sessionsDir, () => {
     const meta = readMeta(sessionsDir);
     if (!meta) {
@@ -77,18 +79,49 @@ export async function claimSpeculativeWinner(args: {
       (r) => r.speculativeOutcome === "won" && r.sessionId !== run.sessionId,
     );
     if (existingWinner) {
+      // Mark self lost in the same lock+write so the on-disk view of
+      // the group is final by the time we release.
+      const self = meta.runs.find((r) => r.sessionId === run.sessionId);
+      if (self && self.speculativeOutcome !== "lost") {
+        const prevStatus = self.status;
+        self.speculativeOutcome = "lost";
+        writeMeta(sessionsDir, meta);
+        // Surface the speculativeOutcome change as an `updated` SSE
+        // event so the UI's run chip flips to "lost" without waiting
+        // for the next poll cycle. writeMeta alone fires a generic
+        // `writeMeta` event with no per-run payload.
+        emitRunUpdated(sessionsDir, self, prevStatus);
+      }
       return {
         kind: "lost" as const,
         winnerId: existingWinner.sessionId,
         reason: `sibling ${existingWinner.sessionId.slice(0, 8)} already won`,
       };
     }
-    // First to claim — we win. Don't write yet; the caller's
-    // updateRun() does the actual patch outside the lock so this
-    // helper's side effects are clearer. We DO need to mark losers
-    // here (atomically) so a slower-but-still-passing sibling can't
-    // claim "won" between our read and our patch.
+    // First to claim — we win. Patch self AND every loser in the
+    // SAME write so any sibling that enters the lock after us sees a
+    // fully-decided group on disk. Without this, a slower-but-still-
+    // passing sibling reading meta in their own withTaskLock would
+    // see no winner yet and also claim "won".
     const losers = group.filter((r) => r.sessionId !== run.sessionId);
+    const self = meta.runs.find((r) => r.sessionId === run.sessionId);
+    const changed: Array<{ run: Run; prevStatus: Run["status"] }> = [];
+    if (self) {
+      changed.push({ run: self, prevStatus: self.status });
+      self.speculativeOutcome = "won";
+    }
+    for (const loser of losers) {
+      const lr = meta.runs.find((r) => r.sessionId === loser.sessionId);
+      if (lr) {
+        changed.push({ run: lr, prevStatus: lr.status });
+        lr.speculativeOutcome = "lost";
+      }
+    }
+    writeMeta(sessionsDir, meta);
+    // Per-run SSE notifications AFTER the on-disk write so subscribers
+    // never observe an event for a row that isn't yet persisted —
+    // matches the pattern in applyManyRuns / updateRun.
+    for (const c of changed) emitRunUpdated(sessionsDir, c.run, c.prevStatus);
     return {
       kind: "won" as const,
       losers,
@@ -106,18 +139,6 @@ export async function claimSpeculativeWinner(args: {
   }
 
   if (decision.kind === "lost") {
-    // Mark self lost. Best-effort worktree cleanup so the loser
-    // doesn't leave a stale dir behind.
-    try {
-      await updateRun(sessionsDir, run.sessionId, {
-        speculativeOutcome: "lost",
-      });
-    } catch (err) {
-      console.warn(
-        `[speculative] failed to mark loser ${run.sessionId}:`,
-        err,
-      );
-    }
     if (run.worktreePath) {
       const app = getApp(run.repo);
       if (app) {
@@ -142,36 +163,10 @@ export async function claimSpeculativeWinner(args: {
     };
   }
 
-  // We won. Patch self first, then deal with losers.
-  try {
-    await updateRun(sessionsDir, run.sessionId, {
-      speculativeOutcome: "won",
-    });
-  } catch (err) {
-    console.warn(
-      `[speculative] failed to mark winner ${run.sessionId}:`,
-      err,
-    );
-  }
-
-  // Kill + clean up siblings. We track which kills succeeded for the
-  // log, but a kill failure is non-fatal — the lifecycle hook on the
-  // sibling will eventually fire and we already marked it as lost.
+  // We won — winner+losers were already patched inside the lock above.
+  // Now do the side-effect work: kill siblings + clean up worktrees.
   const killed: string[] = [];
   for (const loser of decision.losers) {
-    // Mark "lost" first. This patches `speculativeOutcome` only — the
-    // sibling's status (running / done / failed) is left to its own
-    // lifecycle hook so we don't race a still-running gate.
-    try {
-      await updateRun(sessionsDir, loser.sessionId, {
-        speculativeOutcome: "lost",
-      });
-    } catch (err) {
-      console.warn(
-        `[speculative] failed to mark loser ${loser.sessionId}:`,
-        err,
-      );
-    }
     // Kill if still alive. killChild is idempotent; returns false when
     // the registry has nothing for this id (already exited / never
     // registered locally — e.g. this bridge restarted mid-flight).

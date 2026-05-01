@@ -54,6 +54,13 @@ yarn-error.log*
 .env*
 !.env.example
 
+# defense-in-depth: bridge.json normally lives at ~/.claude/bridge.json
+# (outside this tree). If anyone copies a sample into the repo root for
+# testing, never commit it — it carries password hashes, the HMAC
+# session secret, the internal-bypass token, the ngrok authtoken, and
+# Telegram MTProto session strings.
+/bridge.json
+
 # vercel
 .vercel
 

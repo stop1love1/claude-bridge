@@ -506,10 +506,24 @@ export function createMeta(dir: string, header: Omit<Meta, "runs">): void {
   emit(dir, { taskId: taskIdFromDir(dir), kind: "writeMeta" });
 }
 
+// Cap raised to 1024 — Meta is small (kb-range) and a long-running
+// bridge legitimately handles hundreds of active tasks. Combined with
+// the LRU eviction below this caps RAM at a few MB, well below noise.
+const META_CACHE_MAX_ENTRIES = 1024;
+
 export function readMeta(dir: string): Meta | null {
   const now = Date.now();
   const cached = metaCache.get(dir);
-  if (cached && cached.expires > now) return cached.value;
+  if (cached && cached.expires > now) {
+    // LRU bump: re-insert so this key moves to the Map's tail. JS Map
+    // preserves insertion order; without the delete+set dance, a
+    // hot key stays at the HEAD forever and is the first one evicted
+    // when the cap is hit. The agent's review flagged this as a
+    // steady-state churn at exactly the cap (256 → 255 in practice).
+    metaCache.delete(dir);
+    metaCache.set(dir, cached);
+    return cached.value;
+  }
 
   const p = join(dir, FILE);
   if (!existsSync(p)) {
@@ -522,17 +536,30 @@ export function readMeta(dir: string): Meta | null {
   // dashboard until the file is deleted manually. Treat parse failure
   // as "missing" so the rest of the bridge keeps working — the next
   // writeMeta cycle will recreate a clean copy.
+  //
+  // Distinguish ENOENT (race between the existsSync check above and
+  // this read — atomic rename in progress) from a real parse error:
+  // the rename case is benign, no warning needed; the parse error
+  // signals corruption that the operator should know about.
   let value: Meta | null;
   try {
     value = JSON.parse(readFileSync(p, "utf8")) as Meta;
   } catch (err) {
-    console.warn(`readMeta: corrupt meta.json at ${p}`, err);
+    const e = err as NodeJS.ErrnoException;
+    if (e?.code !== "ENOENT") {
+      console.warn(`readMeta: corrupt meta.json at ${p}`, err);
+    }
     value = null;
   }
+  // Always remove + re-insert so a refresh moves the entry to the
+  // tail (true LRU). New keys naturally land at the tail too.
+  metaCache.delete(dir);
   metaCache.set(dir, { value, expires: now + META_CACHE_TTL_MS });
   // Bound the cache so a long-running bridge with thousands of tasks
   // doesn't accumulate stale entries beyond what TTL alone evicts.
-  if (metaCache.size > 256) {
+  // The first key in iteration order is the least-recently-accessed
+  // one (because reads bump to the tail above).
+  if (metaCache.size > META_CACHE_MAX_ENTRIES) {
     const oldest = metaCache.keys().next().value;
     if (oldest !== undefined) metaCache.delete(oldest);
   }
@@ -543,6 +570,37 @@ export function writeMeta(dir: string, meta: Meta): void {
   mkdirSync(dir, { recursive: true });
   atomicWriteJson(join(dir, FILE), meta);
   emit(dir, { taskId: taskIdFromDir(dir), kind: "writeMeta" });
+}
+
+/**
+ * Emit a per-run `"updated"` event without going through `updateRun`.
+ *
+ * Callers that own their own write path (e.g. `speculative.ts` patches
+ * winner + every loser inside one `withTaskLock` callback so the
+ * decision is atomic) need to surface per-run change notifications to
+ * the SSE consumers — otherwise a `writeMeta` event lands without a
+ * per-run payload, and the UI's run chips don't update until the next
+ * poll cycle. Callers MUST already have written the new run state to
+ * disk before invoking this; the event is purely a notification.
+ *
+ * `prevStatus` lets subscribers distinguish a real transition from a
+ * pure attribute change. Pass `run.status` when you patched only
+ * non-status fields (e.g. `speculativeOutcome`); pass the previous
+ * status when status changed.
+ */
+export function emitRunUpdated(
+  dir: string,
+  run: Run,
+  prevStatus: RunStatus,
+): void {
+  const statusChanged = run.status !== prevStatus;
+  emit(dir, {
+    taskId: taskIdFromDir(dir),
+    kind: statusChanged ? "transition" : "updated",
+    sessionId: run.sessionId,
+    run: { ...run },
+    prevStatus,
+  });
 }
 
 export async function appendRun(dir: string, run: Run): Promise<void> {

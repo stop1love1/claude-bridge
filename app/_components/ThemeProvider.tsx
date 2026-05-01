@@ -51,7 +51,11 @@ function applyDom(t: ThemeResolved) {
  * navigation. Self-contained IIFE — see ThemeProvider for how it's
  * loaded from app/layout.tsx.
  */
-export const NO_FLASH_SCRIPT = `(function(){try{var k='${STORAGE_KEY}';var s=localStorage.getItem(k);var t;if(s==='dark'||s==='light'){t=s;}else{t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}var d=document.documentElement;d.setAttribute('data-theme',t);d.style.colorScheme=t;}catch(e){}})();`;
+// JSON.stringify the storage key rather than dropping it into a single-
+// quoted string literal raw — a future change that put a quote, a
+// newline, or `</script>` into STORAGE_KEY would otherwise break or
+// open a script-injection in the inlined boot script.
+export const NO_FLASH_SCRIPT = `(function(){try{var k=${JSON.stringify(STORAGE_KEY)};var s=localStorage.getItem(k);var t;if(s==='dark'||s==='light'){t=s;}else{t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}var d=document.documentElement;d.setAttribute('data-theme',t);d.style.colorScheme=t;}catch(e){}})();`;
 
 // External-store adapters — let `useSyncExternalStore` handle SSR
 // hydration without a `useState` + `useEffect(setX)` ladder, which

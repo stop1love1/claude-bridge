@@ -62,6 +62,39 @@ G.__bridgeTunnels = reg;
 
 const MAX_LOG_LINES = 50;
 const MAX_CONCURRENT = 8;
+// Cap on retained-history (stopped/error) entries so a long-lived
+// bridge that opens and closes many tunnels doesn't accumulate
+// `reg.tunnels` entries forever. Live (starting/running) entries are
+// never counted against this — they're bounded by MAX_CONCURRENT.
+const MAX_HISTORY_ENTRIES = 20;
+
+/**
+ * Evict the oldest stopped/error tunnels until at most
+ * MAX_HISTORY_ENTRIES remain. Live tunnels are preserved regardless
+ * of count. Called whenever we add a new tunnel or when an existing
+ * one transitions to a terminal state.
+ */
+function pruneTunnelHistory(): void {
+  const stopped: Array<[string, { entry: TunnelEntry; child: ChildProcess }]> = [];
+  for (const [id, slot] of reg.tunnels) {
+    if (slot.entry.status === "stopped" || slot.entry.status === "error") {
+      stopped.push([id, slot]);
+    }
+  }
+  if (stopped.length <= MAX_HISTORY_ENTRIES) return;
+  // Oldest endedAt first; falling back to startedAt for entries that
+  // somehow lost their endedAt timestamp (shouldn't happen but cheap
+  // belt-and-suspenders for an eviction routine).
+  stopped.sort(([, a], [, b]) => {
+    const ae = a.entry.endedAt ?? a.entry.startedAt;
+    const be = b.entry.endedAt ?? b.entry.startedAt;
+    return ae.localeCompare(be);
+  });
+  const toEvict = stopped.length - MAX_HISTORY_ENTRIES;
+  for (let i = 0; i < toEvict; i++) {
+    reg.tunnels.delete(stopped[i][0]);
+  }
+}
 
 /**
  * URL extraction patterns. Both providers print the public URL on
@@ -262,6 +295,9 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
     }
     entry.endedAt = new Date().toISOString();
     pushLog(entry, `[exit] code=${code ?? "null"} signal=${signal ?? "null"}`);
+    // Cap retained history so a long-running bridge with frequent
+    // tunnel restarts doesn't accumulate the full set forever.
+    pruneTunnelHistory();
   });
 
   return publicView(entry);

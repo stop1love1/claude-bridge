@@ -440,10 +440,19 @@ function SessionLogInner({
             text: string;
           };
           if (!p?.text) return;
-          setPartials((prev) => ({
-            ...prev,
-            [p.messageId]: (prev[p.messageId] ?? "") + p.text,
-          }));
+          setPartials((prev) => {
+            // Cap per-message buffer to ~256 KB. A pathologically long
+            // model response (10k+ tokens) would otherwise hold the
+            // entire stream in React state until the canonical .jsonl
+            // line lands and replaces the partial — burning memory
+            // and re-rendering every keystroke. The canonical line
+            // is the source of truth anyway; once we hit the cap,
+            // stop appending and keep what we have.
+            const PARTIAL_CAP_BYTES = 256 * 1024;
+            const cur = prev[p.messageId] ?? "";
+            if (cur.length >= PARTIAL_CAP_BYTES) return prev;
+            return { ...prev, [p.messageId]: cur + p.text };
+          });
           // Treat partial deltas as activity for the responding-indicator
           // fallback so the indicator stays warm on long replies.
           setLastTs(Date.now());

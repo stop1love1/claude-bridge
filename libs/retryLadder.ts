@@ -114,13 +114,19 @@ export interface ParsedRole {
  */
 export function parseRole(role: string): ParsedRole {
   // Strip any trailing digits first so the suffix match works on
-  // `coder-vretry2` → `coder-vretry`.
+  // `coder-vretry2` → `coder-vretry`. Convention is N=1 → no digit
+  // suffix, but accept `n >= 1` defensively so a future caller that
+  // normalizes "1" into the role string (e.g. `coder-vretry1`) still
+  // parses correctly. Without this, the digit "1" guard would skip
+  // the strip and the suffix loop would not match `coder-vretry1`,
+  // mis-classifying a real verify-retry as a base run and bypassing
+  // the retry-eligibility guards.
   let attempt = 1;
   let stripped = role;
   const digitMatch = role.match(TRAILING_DIGITS_RE);
   if (digitMatch) {
     const n = parseInt(digitMatch[1], 10);
-    if (Number.isFinite(n) && n >= 2 && n <= MAX_RETRY_PER_GATE) {
+    if (Number.isFinite(n) && n >= 1 && n <= MAX_RETRY_PER_GATE) {
       stripped = role.slice(0, -digitMatch[1].length);
       attempt = n;
     }

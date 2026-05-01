@@ -51,7 +51,17 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   return NextResponse.json(updated);
 }
 
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+/**
+ * Cookie-only — deliberately NOT verifyRequestAuthOrInternal.
+ * CLAUDE.md never grants child agents authority to delete tasks; if a
+ * coordinator could DELETE via the internal-token bypass, a compromised
+ * child could nuke any task in the system. The browser UI is the only
+ * sanctioned caller, so we require a real session cookie.
+ */
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  if (!verifyRequestAuth(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
   const result = deleteTask(id);

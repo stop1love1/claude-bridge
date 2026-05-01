@@ -135,6 +135,7 @@ async function postExitFlow(args: {
     !vc.isAlreadyRetryRun(run.role);
 
   let verifyResult: RunVerify | null = null;
+  let verifyCrashed = false;
   if (willRunVerify && verifyCfg && app) {
     try {
       verifyResult = await vc.runVerifyChain({
@@ -147,6 +148,7 @@ async function postExitFlow(args: {
     } catch (err) {
       console.error(`verify chain crashed for ${t}`, err);
       verifyResult = null;
+      verifyCrashed = true;
     }
 
     // Decide whether to retry BEFORE writing meta. We then collapse the
@@ -175,6 +177,25 @@ async function postExitFlow(args: {
 
     if (finalVerify) {
       await attachGateResult(dir, run.sessionId, "verify", finalVerify);
+    }
+
+    // If the verify chain itself crashed (not just a step failing —
+    // the whole runVerifyChain threw), we have no signal whether the
+    // agent's work passed or not. Treating that as "pass" would
+    // silently release the commit gate; treat it as an inconclusive
+    // failure that blocks the commit. Still flip the run to done so
+    // the UI doesn't hang on `running`.
+    if (verifyCrashed) {
+      console.warn(
+        `[verify] ${t}: chain crashed — blocking auto-commit (operator must verify manually)`,
+      );
+      await updateRun(
+        dir,
+        run.sessionId,
+        { status: "done", endedAt: new Date().toISOString() },
+        (r) => r.status === "running",
+      );
+      return;
     }
 
     if (verifyResult && !verifyResult.passed) {
@@ -879,6 +900,13 @@ export function wireRunLifecycle(
     // P2 — verify chain + commit gate. Wrapped in an async IIFE so the
     // `child.on("exit", ...)` handler stays sync; rejections surface via
     // .catch() rather than crashing the Next.js dev server (Risk 1).
+    //
+    // Safety net: if postExitFlow throws BEFORE any gate had a chance to
+    // call attachGateResult (which writes status:done), the run would
+    // stay status:running until the stale-run reaper kicks in (~30 min).
+    // The catch below explicitly flips status:done (precondition: still
+    // running) so a crash in loadVerifyChain / verifyConfigOf cannot
+    // ghost a successful child indefinitely.
     if (finishedRun && finishedRun.role !== "coordinator") {
       void postExitFlow({
         sessionsDir,
@@ -886,8 +914,18 @@ export function wireRunLifecycle(
         tag,
         finishedRun,
         taskTitle,
-      }).catch((err) => {
+      }).catch(async (err) => {
         console.error(`post-exit flow crashed for ${tag}`, err);
+        try {
+          await updateRun(
+            sessionsDir,
+            sessionId,
+            { status: "done", endedAt: new Date().toISOString() },
+            (r) => r.status === "running",
+          );
+        } catch (e) {
+          console.error(`safety-net status:done flip failed for ${tag}`, e);
+        }
       });
     }
   };
@@ -906,11 +944,20 @@ export function wireRunLifecycle(
       } catch { /* swallow */ }
     });
   });
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
     if (code === 0) {
       void succeedRun();
     } else if (code !== null) {
       void failRun(`exit code ${code}`, code);
+    } else {
+      // code === null means the child was terminated by a signal
+      // (e.g. SIGTERM from the stop button or speculative-loser
+      // selection). Without an explicit branch the run would stay
+      // status:running until the stale-run reaper fires (~30 min).
+      // Treat it as a failed run so failRun's tryAutoRetry logic
+      // (which knows about speculativeOutcome === "lost") can decide
+      // whether to retry or just terminate cleanly.
+      void failRun(`killed by signal ${signal ?? "unknown"}`, null);
     }
     // Always reap the per-session settings file on terminal exit —
     // success path included. The dir is owned exclusively by this

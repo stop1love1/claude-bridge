@@ -705,6 +705,13 @@ async function commandSummary(idArg: string | undefined): Promise<string> {
   ].join("\n");
 }
 
+// Acceptable role identifiers — matches the conventions used by the
+// coordinator playbooks (coder, reviewer, doc-writer, devops, …).
+// Bounding length and character set keeps an over-eager Telegram user
+// from sending pathological input (e.g. a 100kB string, traversal
+// segments) that the file-listing match has to walk.
+const ROLE_ARG_RE = /^[a-z0-9_-]{1,32}$/i;
+
 async function commandReport(
   idArg: string | undefined,
   roleArg: string | undefined,
@@ -713,6 +720,9 @@ async function commandReport(
     return "Usage: `/report t_YYYYMMDD_NNN <role>` \\(role like `coder`, `reviewer`\\)";
   }
   if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
+  if (!ROLE_ARG_RE.test(roleArg)) {
+    return `Invalid role: must match \`[a-z0-9_-]{1,32}\``;
+  }
   const dir = join(SESSIONS_DIR, idArg, "reports");
   if (!existsSync(dir)) return `No reports dir for \`${idArg}\``;
   // Reports are named `<role>-<repo>.md`. Match by role prefix to save

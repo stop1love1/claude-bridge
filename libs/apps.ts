@@ -35,7 +35,7 @@ import {
   BRIDGE_JSON,
   onBridgeManifestWrite,
   readBridgeManifest,
-  writeBridgeManifest,
+  updateBridgeManifest,
 } from "./bridgeManifest";
 
 /**
@@ -344,18 +344,6 @@ function readManifest(): BridgeManifest {
       Object.entries(raw).filter(([k]) => k !== "version" && k !== "apps"),
     ),
   };
-}
-
-function writeManifest(manifest: BridgeManifest): void {
-  writeBridgeManifest({
-    ...(manifest as unknown as Record<string, unknown>),
-    version: SCHEMA_VERSION,
-    apps: manifest.apps,
-  });
-  // appsCache invalidation is handled by the onBridgeManifestWrite
-  // subscriber registered alongside `let appsCache` below — that
-  // subscriber fires for writes from auth.ts and tunnels.ts as well,
-  // so a tunnel authtoken save can't strand a stale apps cache.
 }
 
 function normalizeGitSettings(raw: unknown): AppGitSettings {
@@ -737,8 +725,7 @@ export function loadApps(): App[] {
 }
 
 export function saveApps(apps: App[]): void {
-  const manifest = readManifest();
-  manifest.apps = apps.map((a) => {
+  const serialized: ManifestAppEntry[] = apps.map((a) => {
     const entry: ManifestAppEntry = {
       name: a.name,
       path: a.rawPath,
@@ -764,7 +751,17 @@ export function saveApps(apps: App[]): void {
     if (dispatch) entry.dispatch = dispatch;
     return entry;
   });
-  writeManifest(manifest);
+  // Atomic read-modify-write through bridgeManifest. Earlier code did
+  // readManifest() then writeManifest(manifest) as two separate calls,
+  // which clobbered concurrent writes from auth.ts / tunnels.ts when
+  // a non-apps key landed between the read and the write. Going
+  // through updateBridgeManifest reads fresh from disk inside the
+  // synchronous update closure, so any concurrent write is preserved.
+  updateBridgeManifest((m) => ({
+    ...m,
+    version: SCHEMA_VERSION,
+    apps: serialized,
+  }));
   appsCache = null;
 }
 
@@ -943,12 +940,7 @@ export function getManifestDetectSource(): DetectManifestSource {
  * intact.
  */
 export function setManifestDetectSource(source: DetectManifestSource): void {
-  const manifest = readManifest();
-  const next = {
-    ...manifest,
-    detect: { source },
-  };
-  writeManifest(next);
+  updateBridgeManifest((m) => ({ ...m, detect: { source } }));
 }
 
 /**
@@ -1003,8 +995,6 @@ export function setManifestPublicUrl(input: string): string {
   // Empty input is a deliberate clear — we still want to handle that
   // path explicitly rather than silently no-op.
   const explicitClear = typeof input === "string" && input.trim() === "";
-  const manifest = readManifest();
-  const updated: BridgeManifest = { ...manifest };
   if (!normalized && !explicitClear && typeof input === "string") {
     // Caller passed a non-empty value that failed validation — leave
     // the existing value alone rather than silently nuking it. The API
@@ -1012,12 +1002,15 @@ export function setManifestPublicUrl(input: string): string {
     // belt-and-suspenders for direct programmatic callers.
     return getManifestPublicUrl();
   }
-  if (normalized) {
-    (updated as { publicUrl?: string }).publicUrl = normalized;
-  } else {
-    delete (updated as { publicUrl?: string }).publicUrl;
-  }
-  writeManifest(updated);
+  updateBridgeManifest((m) => {
+    const next: BridgeManifest = { ...(m as BridgeManifest) };
+    if (normalized) {
+      (next as { publicUrl?: string }).publicUrl = normalized;
+    } else {
+      delete (next as { publicUrl?: string }).publicUrl;
+    }
+    return next;
+  });
   return normalized;
 }
 
@@ -1392,46 +1385,47 @@ export function setManifestTelegramSettings(
     importantPatternsDefault;
   const allEmpty =
     next.botToken === "" && next.chatId === "" && userEmpty && forwardChatDefault;
-  const manifest = readManifest();
-  const updatedManifest: BridgeManifest = { ...manifest };
-  if (allEmpty) {
-    delete (updatedManifest as { telegram?: TelegramSettings }).telegram;
-  } else {
-    // Build a terse on-disk shape: omit `user` when empty, and omit the
-    // forwardChat fields when they're at default values, so bot-only
-    // operators don't see noise in their manifest.
-    const persisted: {
-      botToken: string;
-      chatId: string;
-      user?: TelegramUserSettings;
-      forwardChat?: TelegramForwardChat;
-      forwardChatMinChars?: number;
-      notificationLevel?: TelegramNotificationLevel;
-      forwardChatFilter?: TelegramForwardChatFilter;
-      forwardChatImportantPatterns?: string[];
-    } = {
-      botToken: next.botToken,
-      chatId: next.chatId,
-    };
-    if (!userEmpty) persisted.user = next.user;
-    if (next.forwardChat !== DEFAULT_FORWARD_CHAT) {
-      persisted.forwardChat = next.forwardChat;
+  updateBridgeManifest((m) => {
+    const updatedManifest: BridgeManifest = { ...(m as BridgeManifest) };
+    if (allEmpty) {
+      delete (updatedManifest as { telegram?: TelegramSettings }).telegram;
+    } else {
+      // Build a terse on-disk shape: omit `user` when empty, and omit the
+      // forwardChat fields when they're at default values, so bot-only
+      // operators don't see noise in their manifest.
+      const persisted: {
+        botToken: string;
+        chatId: string;
+        user?: TelegramUserSettings;
+        forwardChat?: TelegramForwardChat;
+        forwardChatMinChars?: number;
+        notificationLevel?: TelegramNotificationLevel;
+        forwardChatFilter?: TelegramForwardChatFilter;
+        forwardChatImportantPatterns?: string[];
+      } = {
+        botToken: next.botToken,
+        chatId: next.chatId,
+      };
+      if (!userEmpty) persisted.user = next.user;
+      if (next.forwardChat !== DEFAULT_FORWARD_CHAT) {
+        persisted.forwardChat = next.forwardChat;
+      }
+      if (next.forwardChatMinChars !== DEFAULT_FORWARD_CHAT_MIN_CHARS) {
+        persisted.forwardChatMinChars = next.forwardChatMinChars;
+      }
+      if (next.notificationLevel !== DEFAULT_NOTIFICATION_LEVEL) {
+        persisted.notificationLevel = next.notificationLevel;
+      }
+      if (next.forwardChatFilter !== DEFAULT_FORWARD_CHAT_FILTER) {
+        persisted.forwardChatFilter = next.forwardChatFilter;
+      }
+      if (!importantPatternsDefault) {
+        persisted.forwardChatImportantPatterns = next.forwardChatImportantPatterns;
+      }
+      (updatedManifest as { telegram?: typeof persisted }).telegram = persisted;
     }
-    if (next.forwardChatMinChars !== DEFAULT_FORWARD_CHAT_MIN_CHARS) {
-      persisted.forwardChatMinChars = next.forwardChatMinChars;
-    }
-    if (next.notificationLevel !== DEFAULT_NOTIFICATION_LEVEL) {
-      persisted.notificationLevel = next.notificationLevel;
-    }
-    if (next.forwardChatFilter !== DEFAULT_FORWARD_CHAT_FILTER) {
-      persisted.forwardChatFilter = next.forwardChatFilter;
-    }
-    if (!importantPatternsDefault) {
-      persisted.forwardChatImportantPatterns = next.forwardChatImportantPatterns;
-    }
-    (updatedManifest as { telegram?: typeof persisted }).telegram = persisted;
-  }
-  writeManifest(updatedManifest);
+    return updatedManifest;
+  });
   return next;
 }
 
@@ -1935,17 +1929,18 @@ export function getManifestDetectScanRoots(): string[] {
  */
 export function setManifestDetectScanRoots(roots: string[]): string[] {
   const cleaned = normalizeStringList(roots);
-  const manifest = readManifest();
-  const detPrev = (manifest as { detect?: Record<string, unknown> }).detect ?? {};
-  const detNext: Record<string, unknown> = { ...detPrev };
-  if (cleaned.length === 0) delete detNext.scanRoots;
-  else detNext.scanRoots = cleaned;
-  const next = { ...manifest } as BridgeManifest;
-  if (Object.keys(detNext).length === 0) {
-    delete (next as { detect?: unknown }).detect;
-  } else {
-    (next as { detect?: Record<string, unknown> }).detect = detNext;
-  }
-  writeManifest(next);
+  updateBridgeManifest((m) => {
+    const detPrev = (m as { detect?: Record<string, unknown> }).detect ?? {};
+    const detNext: Record<string, unknown> = { ...detPrev };
+    if (cleaned.length === 0) delete detNext.scanRoots;
+    else detNext.scanRoots = cleaned;
+    const next = { ...(m as BridgeManifest) };
+    if (Object.keys(detNext).length === 0) {
+      delete (next as { detect?: unknown }).detect;
+    } else {
+      (next as { detect?: Record<string, unknown> }).detect = detNext;
+    }
+    return next;
+  });
   return cleaned;
 }

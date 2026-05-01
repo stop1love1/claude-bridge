@@ -58,6 +58,13 @@ function ensureSessionsDir(): void {
 function listMetaIds(): string[] {
   if (!existsSync(SESSIONS_DIR)) return [];
   return readdirSync(SESSIONS_DIR).filter((id) => {
+    // Reject anything that doesn't match the canonical
+    // `t_YYYYMMDD_NNN` shape. Without this, a stray manual directory
+    // (`t_20260501_001_backup`, a leftover archive folder, etc.)
+    // would end up parsed by `generateTaskId`'s sequence math and
+    // could overflow the 3-digit counter — silently breaking
+    // `isValidTaskId` for every subsequent ID minted that day.
+    if (!isValidTaskId(id)) return false;
     try {
       return statSync(join(SESSIONS_DIR, id)).isDirectory();
     } catch {

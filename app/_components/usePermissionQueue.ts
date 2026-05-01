@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "@/libs/client/api";
 
 /**
  * Shared client-side state machine for the three PreToolUse permission
@@ -115,6 +116,27 @@ export interface UsePermissionQueueResult {
 interface BacklogResponse { pending?: PendingRequest[] }
 
 /**
+ * Runtime shape guard for events arriving over SSE / backlog GET. The
+ * server is in our own tree, but a version mismatch between a long-
+ * lived dashboard tab and a freshly-deployed bridge could otherwise
+ * inject `{ requestId: undefined, tool: undefined }` into the queue
+ * and surface a permission card that says "execute undefined". The
+ * guard rejects anything missing the load-bearing string fields.
+ */
+function isValidPendingRequest(x: unknown): x is PendingRequest {
+  if (!x || typeof x !== "object") return false;
+  const r = x as Partial<PendingRequest>;
+  return (
+    typeof r.requestId === "string" && r.requestId.length > 0 &&
+    typeof r.tool === "string" && r.tool.length > 0 &&
+    // sessionId can legitimately be missing on per-session backlog
+    // responses (the hook injects it via injectSessionId), so we
+    // accept undefined here and validate downstream.
+    (r.sessionId === undefined || typeof r.sessionId === "string")
+  );
+}
+
+/**
  * Build the backlog GET / SSE URLs for a scope. Per-session shape comes
  * back without the sessionId in each entry (caller knows it from
  * context); the hook injects it back for uniform downstream handling.
@@ -176,17 +198,10 @@ export function usePermissionQueue(scope: Scope): UsePermissionQueueResult {
   const respond = useCallback(
     async (req: PendingRequest, decision: "allow" | "deny") => {
       try {
-        await fetch(
-          `/api/sessions/${encodeURIComponent(req.sessionId)}/permission/${encodeURIComponent(req.requestId)}`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              decision,
-              reason: decision === "deny" ? "User denied via bridge UI" : undefined,
-            }),
-          },
-        );
+        await api.respondPermission(req.sessionId, req.requestId, {
+          decision,
+          reason: decision === "deny" ? "User denied via bridge UI" : undefined,
+        });
       } catch {
         /* hook fails open on timeout; nothing to do */
       }
@@ -235,9 +250,17 @@ export function usePermissionQueue(scope: Scope): UsePermissionQueueResult {
       const req: PendingRequest = endpoints.injectSessionId
         ? { ...raw, sessionId: raw.sessionId ?? endpoints.injectSessionId }
         : raw;
+      // After the inject step, sessionId MUST be a non-empty string —
+      // `respond` calls api.respondPermission(req.sessionId, …) and
+      // would otherwise build `/api/sessions/undefined/permission/…`
+      // and surface a 400. The {all:true} scope provides sessionId in
+      // the event payload; the per-session scope injects it. If
+      // neither path produced one, the event is malformed — drop it
+      // rather than queue a card the user can't actually answer.
+      if (!req.sessionId || typeof req.sessionId !== "string") return;
       // {all:true} skips events for sessions that already have a
       // session-scoped consumer mounted, so we don't double-show.
-      if (reg && req.sessionId && reg.has(req.sessionId)) return;
+      if (reg && reg.has(req.sessionId)) return;
       handle(req);
     };
 
@@ -246,21 +269,25 @@ export function usePermissionQueue(scope: Scope): UsePermissionQueueResult {
         const r = await fetch(endpoints.backlog!);
         if (!r.ok) return;
         const j = (await r.json()) as BacklogResponse;
-        if (stopped || !j.pending) return;
-        for (const p of j.pending) ingest(p);
+        if (stopped || !Array.isArray(j.pending)) return;
+        for (const p of j.pending) {
+          if (isValidPendingRequest(p)) ingest(p);
+        }
       } catch { /* ignore — SSE is the live source of truth */ }
     })();
 
     const es = new EventSource(endpoints.stream!);
     es.addEventListener("pending", (ev: MessageEvent) => {
       try {
-        ingest(JSON.parse(ev.data) as PendingRequest);
+        const parsed = JSON.parse(ev.data);
+        if (isValidPendingRequest(parsed)) ingest(parsed);
       } catch { /* ignore malformed event */ }
     });
     es.addEventListener("answered", (ev: MessageEvent) => {
       try {
-        const data = JSON.parse(ev.data) as { requestId: string };
-        setQueue((q) => reduceQueue(q, { kind: "answered", requestId: data.requestId }));
+        const data = JSON.parse(ev.data) as { requestId?: unknown };
+        if (typeof data.requestId !== "string" || data.requestId.length === 0) return;
+        setQueue((q) => reduceQueue(q, { kind: "answered", requestId: data.requestId as string }));
       } catch { /* ignore */ }
     });
     es.onerror = () => { /* browser auto-retries */ };

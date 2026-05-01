@@ -8,13 +8,20 @@ import { assertInsideUploadDir } from "@/libs/uploadGuards";
 
 export const dynamic = "force-dynamic";
 
+// Note: `.svg` is INTENTIONALLY absent. uploadGuards.ts blocks SVG
+// uploads via BLOCKED_EXTENSIONS, so a legitimate upload pipeline can
+// never produce one — but a stray file dropped into `.uploads/` (test
+// fixture, manual paste) would otherwise be served as
+// `image/svg+xml` and could carry inline `<script>` that runs in the
+// bridge's origin. Without an entry here it falls through to
+// `application/octet-stream` and the browser will download rather
+// than render.
 const MIME: Record<string, string> = {
   ".png":  "image/png",
   ".jpg":  "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif":  "image/gif",
   ".webp": "image/webp",
-  ".svg":  "image/svg+xml",
   ".pdf":  "application/pdf",
   ".txt":  "text/plain; charset=utf-8",
   ".md":   "text/plain; charset=utf-8",
@@ -71,17 +78,17 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   //   - `nosniff` on every response prevents the browser from
   //     MIME-sniffing a `.txt` into HTML and running an XSS payload
   //     that was dragged into the upload dir.
-  //   - `attachment` for SVG: SVG is XML and can carry inline `<script>`
-  //     that executes in the bridge's origin if a top-level navigation
-  //     opens it. Forcing download neutralizes that without breaking
-  //     chat thumbnails (which load via `<img src>`, not navigation).
+  //   - `attachment` for any extension that fell back to
+  //     application/octet-stream (i.e. anything not in our explicit
+  //     allow-list above). SVG, HTML, and friends therefore download
+  //     rather than render in the bridge's origin context.
   const headers: Record<string, string> = {
     "content-type": mime,
     "content-length": String(stat.size),
     "cache-control": "private, max-age=3600",
     "x-content-type-options": "nosniff",
   };
-  if (ext === ".svg") {
+  if (mime === "application/octet-stream") {
     // Strip CR/LF (and quotes) from the filename before injecting it
     // into the header. Node 18+ already blocks CR/LF in header values
     // at runtime, but doing it here turns a 500 into a clean response

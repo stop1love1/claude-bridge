@@ -10,12 +10,11 @@
  * deployment runs behind a reverse proxy that I configured to set
  * these headers correctly".
  *
- * Fallback when no trusted proxy is configured: the upstream socket's
- * `remoteAddress`, which is what Next.js exposes via the synthetic
- * `x-forwarded-for` header it injects in dev. In production behind a
- * proxy without the env flag set, this returns the proxy's own IP —
- * still useful as a coarse rate-limit key (one bucket for the whole
- * proxy is better than none at all).
+ * Without that opt-in we return the `"unknown"` sentinel rather than
+ * reading XFF, so all unauthenticated traffic shares a single
+ * rate-limit bucket. That's deliberately conservative: better to
+ * collapse everyone into one bucket than to let an attacker pivot
+ * through unbounded fake IPs.
  */
 interface HeadersLike {
   get(name: string): string | null;
@@ -33,18 +32,5 @@ export function getClientIp(headers: HeadersLike): string {
     const real = headers.get("x-real-ip");
     if (real && real.trim()) return real.trim();
   }
-  // Best-effort fallback. Next exposes the socket via the same XFF
-  // header in dev, so even with the env flag off we still get
-  // *something* useful. If absolutely nothing is available, return
-  // a static "unknown" sentinel so per-IP buckets degrade gracefully
-  // into a single shared bucket (lock everyone out together) rather
-  // than skip rate-limiting entirely.
-  const xff = headers.get("x-forwarded-for");
-  if (xff) {
-    const first = xff.split(",")[0]?.trim();
-    if (first) return first;
-  }
-  const real = headers.get("x-real-ip");
-  if (real && real.trim()) return real.trim();
   return "unknown";
 }

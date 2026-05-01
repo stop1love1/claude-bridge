@@ -99,16 +99,25 @@ function CommandPaletteInner({
     coordinator: Crown,
   };
 
+  const optionId = (idx: number) => `cmdk-option-${idx}`;
+  const activeOptionId = items.length > 0 ? optionId(effCursor) : undefined;
+
   const renderItem = (it: Item, idx: number) => {
     const active = idx === effCursor;
     const base = `flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
       active ? "bg-primary/15" : "hover:bg-accent"
     }`;
+    const optionProps = {
+      id: optionId(idx),
+      role: "option" as const,
+      "aria-selected": active,
+      onMouseEnter: () => setCursor(idx),
+    };
 
     if (it.kind === "action") {
       const Icon = it.icon;
       return (
-        <div key={`a-${it.id}`} className={base} onMouseEnter={() => setCursor(idx)} onClick={it.run}>
+        <div key={`a-${it.id}`} className={base} {...optionProps} onClick={it.run}>
           <Icon size={14} className="text-muted-foreground shrink-0" />
           <span className="flex-1 text-sm">{it.label}</span>
           {it.hint && <kbd className="text-[10px] text-fg-dim font-mono">{it.hint}</kbd>}
@@ -119,7 +128,7 @@ function CommandPaletteInner({
     if (it.kind === "task") {
       const t = it.task;
       return (
-        <div key={`t-${t.id}`} className={base} onMouseEnter={() => setCursor(idx)} onClick={it.run}>
+        <div key={`t-${t.id}`} className={base} {...optionProps} onClick={it.run}>
           <ListTodo size={14} className="text-primary shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="text-sm truncate">{t.title}</div>
@@ -132,7 +141,7 @@ function CommandPaletteInner({
     const s = it.session;
     const RoleIcon = s.link ? (ROLE_ICON[s.link.role] ?? Sparkles) : Terminal;
     return (
-      <div key={`s-${s.sessionId}`} className={base} onMouseEnter={() => setCursor(idx)} onClick={it.run}>
+      <div key={`s-${s.sessionId}`} className={base} {...optionProps} onClick={it.run}>
         <RoleIcon size={14} className="text-muted-foreground shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="text-sm truncate">
@@ -161,14 +170,20 @@ function CommandPaletteInner({
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-start justify-center pt-24 px-4 pointer-events-none">
+    <div
+      className="fixed inset-0 z-60 flex items-start justify-center pt-24 px-4 pointer-events-none"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
+    >
       <div
         onClick={onClose}
         className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-slide-in pointer-events-auto"
+        aria-hidden="true"
       />
       <div className="relative w-full max-w-xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden animate-slide-in pointer-events-auto">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
-          <Search size={14} className="text-muted-foreground shrink-0" />
+          <Search size={14} className="text-muted-foreground shrink-0" aria-hidden="true" />
           <input
             ref={inputRef}
             value={q}
@@ -176,10 +191,21 @@ function CommandPaletteInner({
             onKeyDown={onKeyDown}
             placeholder="Search tasks, sessions, or actions…"
             className="flex-1 bg-transparent text-sm focus:outline-none"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="cmdk-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={activeOptionId}
+            aria-label="Search tasks, sessions, or actions"
           />
           <kbd className="text-[10px] text-fg-dim font-mono">Esc</kbd>
         </div>
-        <div className="max-h-96 overflow-y-auto">
+        <div
+          id="cmdk-listbox"
+          role="listbox"
+          aria-label="Command results"
+          className="max-h-96 overflow-y-auto"
+        >
           {items.length === 0 ? (
             <div className="p-6 text-center text-xs text-fg-dim">No matches</div>
           ) : (

@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { BRIDGE_FOLDER, BRIDGE_LOGIC_DIR, BRIDGE_ROOT, BRIDGE_URL, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { appendRun, readMeta, updateRun } from "./meta";
+import { sanitizeUserPromptContent } from "./childPrompt";
 import { spawnClaude } from "./spawn";
 import type { Task } from "./tasks";
 import { loadProfiles } from "./profileStore";
@@ -106,19 +107,30 @@ export async function spawnCoordinatorForTask(
     }
 
     // Substitute STRUCTURAL placeholders first (template-controlled
-    // values), USER CONTENT last. If we ran user content first, a task
-    // body containing the literal `{{SESSION_ID}}` would be substituted
-    // by the next pass — leaking the real session uuid into a malicious
-    // prompt or corrupting the template. By the time `task.title` /
-    // `task.body` are inlined, no further `replaceAll` runs over them.
+    // values), then splice in the auto-generated scope block, then USER
+    // CONTENT last. Ordering matters for two reasons:
+    //
+    //   1. If we ran user content first, a task body containing the
+    //      literal `{{SESSION_ID}}` would be substituted by the next
+    //      pass — leaking the real session uuid into a malicious
+    //      prompt or corrupting the template.
+    //   2. `spliceScopeBlock` searches for the literal `## Your job`
+    //      marker; doing the splice BEFORE the user-content pass means
+    //      a body containing that heading cannot relocate the
+    //      injection site.
+    //
+    // We also pass user content through `sanitizeUserPromptContent`
+    // which fullwidths `{{` / `}}` and degrades any stray `## Your
+    // job` heading via a zero-width space, defending in depth even if
+    // the ordering above is changed in the future.
+    const safeTitle = sanitizeUserPromptContent(task.title);
+    const safeBody = sanitizeUserPromptContent(task.body);
     const baseRendered = template
       .replaceAll("{{SESSION_ID}}", sessionId)
       .replaceAll("{{BRIDGE_URL}}", BRIDGE_URL)
       .replaceAll("{{BRIDGE_FOLDER}}", BRIDGE_FOLDER)
       .replaceAll("{{EXAMPLE_REPO}}", exampleRepo)
-      .replaceAll("{{TASK_ID}}", task.id)
-      .replaceAll("{{TASK_TITLE}}", task.title)
-      .replaceAll("{{TASK_BODY}}", task.body);
+      .replaceAll("{{TASK_ID}}", task.id);
     // Inject the canonical `## Detected scope` block — coordinator and
     // every spawned child see the same scope, no drift between the two.
     // Replaces the legacy `## Repo profiles` + `## Bridge hint` pair.
@@ -128,7 +140,10 @@ export async function spawnCoordinatorForTask(
       body: task.body,
       app: task.app ?? null,
     });
-    const renderedPrompt = spliceScopeBlock(baseRendered, scopeBlock);
+    const splicedTemplate = spliceScopeBlock(baseRendered, scopeBlock);
+    const renderedPrompt = splicedTemplate
+      .replaceAll("{{TASK_TITLE}}", safeTitle)
+      .replaceAll("{{TASK_BODY}}", safeBody);
 
     // Append the run BEFORE spawning — H4 orphan-window fix. If
     // `spawnClaude` throws (claude binary missing, fork EAGAIN, etc.)

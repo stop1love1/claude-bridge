@@ -88,6 +88,12 @@ loadEnv(`.env.${mode}.local`);
 (process.env as Record<string, string>)["NODE_ENV"] = mode;
 
 const [command, ...args] = rest;
+// `shell: true` is required on Windows so node finds `.cmd` shims like
+// `next` / `bunx` via PATH. Inputs here are NEVER user-supplied at
+// runtime — the only callers are `package.json` scripts that hardcode
+// `next dev` / `next start`. If you ever invoke this script directly,
+// note that arbitrary `command` / `args` will be word-split by the OS
+// shell.
 const child = spawn(command, args, { stdio: "inherit", shell: true });
 child.on("exit", (code, signal) => {
   if (signal) {

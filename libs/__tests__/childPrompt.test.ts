@@ -460,26 +460,42 @@ describe("buildChildPrompt", () => {
       (l, i) => i > openIdx && /^\s*```\s*$/.test(l),
     );
     const bodySlice = lines.slice(openIdx + 1, closeIdx);
-    // Every malicious payload line that started with backticks must now
-    // carry the ZWJ marker (U+200D) before the backticks.
+    // Every malicious payload line that started with backticks must
+    // be defanged: the leading whitespace+backticks pattern that
+    // markdown treats as a fence boundary must no longer match
+    // `/^\s*```/` after sanitization. The ZWSP + literal space
+    // injection breaks the fence rule (a space before the backticks
+    // disqualifies them as a fence opener / closer).
     const stillRawFence = bodySlice.filter((l) => /^\s*```/.test(l));
     expect(stillRawFence).toEqual([]);
-    expect(bodySlice.some((l) => l.includes("‍```"))).toBe(true);
+    // The ZWSP marker (U+200B) must be present in at least one of the
+    // sanitized payload lines so we know the substitution actually
+    // ran rather than the input simply not containing fences.
+    expect(bodySlice.some((l) => l.includes("​"))).toBe(true);
   });
 });
 
 describe("sanitizeTaskBodyForFence", () => {
   it("escapes triple backticks at the start of a line", () => {
     const out = sanitizeTaskBodyForFence("hello\n```\nbad\n```\n");
+    // No line in the output begins with bare ``` — that's the
+    // security invariant we care about (the markdown parser would
+    // close the wrapper fence on such a line). The original backticks
+    // survive elsewhere.
     expect(out).not.toMatch(/^```/m);
-    // Original triple-backtick characters survive (just preceded by ZWJ).
     expect(out).toContain("```");
-    expect(out).toContain("‍```");
+    // ZWSP (U+200B) is part of the sanitization marker.
+    expect(out).toContain("​");
   });
 
   it("escapes triple backticks even when indented", () => {
     const out = sanitizeTaskBodyForFence("  ```\nbad");
-    expect(out.startsWith("  ‍```")).toBe(true);
+    // After sanitization the leading whitespace prefix is preserved
+    // and ZWSP + space are injected before the backticks so the line
+    // no longer matches `/^\s*```/` as a fence opener.
+    expect(/^\s*```/.test(out)).toBe(false);
+    expect(out.includes("```")).toBe(true);
+    expect(out.includes("​")).toBe(true);
   });
 
   it("does not touch inline backticks within a line", () => {

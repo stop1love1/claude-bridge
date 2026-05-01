@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   COOKIE_NAME,
   INTERNAL_TOKEN_HEADER,
+  constantTimeStringEqual,
   findTrustedDevice,
   loadAuthConfig,
   touchTrustedDevice,
@@ -138,7 +139,11 @@ export function proxy(req: NextRequest) {
   // with the per-install random token to avoid header spoofing from
   // the browser).
   const internalToken = req.headers.get(INTERNAL_TOKEN_HEADER);
-  if (internalToken && cfg.internalToken && internalToken === cfg.internalToken) {
+  if (
+    internalToken &&
+    cfg.internalToken &&
+    constantTimeStringEqual(internalToken, cfg.internalToken)
+  ) {
     return NextResponse.next();
   }
 

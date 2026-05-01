@@ -406,7 +406,35 @@ async function autoCommitAndPushLocked(
   return tryPush(cwd);
 }
 
+/**
+ * Branches the bridge will NEVER auto-push to, even when `autoPush=true`
+ * and an upstream tracking ref already exists. With `branchMode=current`
+ * the operator's HEAD is whatever they left it on, and pushing
+ * AI-generated commits straight to a project's main / release branch
+ * is rarely what they actually want.
+ *
+ * Override per-app by setting `branchMode` to `fixed` or `auto-create`
+ * so the bridge places work on a non-protected branch first.
+ */
+const PROTECTED_BRANCHES = new Set([
+  "main",
+  "master",
+  "trunk",
+  "develop",
+  "production",
+  "prod",
+  "release",
+]);
+
 async function tryPush(cwd: string): Promise<GitOpResult> {
+  const branch = await currentBranch(cwd);
+  if (branch && PROTECTED_BRANCHES.has(branch.toLowerCase())) {
+    return {
+      ok: false,
+      message: `auto-push skipped: refusing to push to protected branch "${branch}"`,
+      error: `change branchMode to "fixed" or "auto-create" to land work on a non-protected branch`,
+    };
+  }
   const r = await runGit(cwd, ["push"], { timeoutMs: PUSH_TIMEOUT_MS });
   if (!r.ok) {
     // Distinguish "no upstream" from real push failures.

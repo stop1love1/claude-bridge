@@ -102,9 +102,23 @@ export interface TailResult {
 }
 
 export async function tailJsonl(filePath: string, fromOffset: number): Promise<TailResult> {
-  const size = statSync(filePath).size;
+  // The file may be deleted between this call and the next (task
+  // delete races a live SSE tail). Wrap stat + open in a try so a
+  // missing file degrades to "no new lines" rather than throwing
+  // ENOENT into the SSE handler and dropping the connection.
+  let size: number;
+  try {
+    size = statSync(filePath).size;
+  } catch {
+    return { lines: [], offset: fromOffset, lineOffsets: [] };
+  }
   if (fromOffset >= size) return { lines: [], offset: size, lineOffsets: [] };
-  const fd = openSync(filePath, "r");
+  let fd: number;
+  try {
+    fd = openSync(filePath, "r");
+  } catch {
+    return { lines: [], offset: fromOffset, lineOffsets: [] };
+  }
   try {
     // The file size we just read could shrink between stat and read (log
     // rotation, task delete, truncation). `readSync` reports the actual
@@ -170,12 +184,24 @@ export async function tailJsonlBefore(
   beforeOffset: number,
   maxBytes: number = 64 * 1024,
 ): Promise<TailBeforeResult> {
-  const size = statSync(filePath).size;
+  // Same race tolerance as tailJsonl: the file can disappear between
+  // the SSE-side check and our stat/open.
+  let size: number;
+  try {
+    size = statSync(filePath).size;
+  } catch {
+    return { lines: [], fromOffset: 0, beforeOffset, lineOffsets: [] };
+  }
   const ceiling = Math.min(beforeOffset, size);
   if (ceiling <= 0) return { lines: [], fromOffset: 0, beforeOffset: ceiling, lineOffsets: [] };
 
   const proposedStart = Math.max(0, ceiling - maxBytes);
-  const fd = openSync(filePath, "r");
+  let fd: number;
+  try {
+    fd = openSync(filePath, "r");
+  } catch {
+    return { lines: [], fromOffset: ceiling, beforeOffset: ceiling, lineOffsets: [] };
+  }
   try {
     const len = ceiling - proposedStart;
     const buf = Buffer.alloc(len);

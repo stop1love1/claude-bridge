@@ -76,6 +76,20 @@ export const api = {
       `/sessions/${sessionId}/kill`,
       { method: "POST" },
     ),
+  killRun: (taskId: string, sessionId: string) =>
+    req<{ ok: true }>(
+      `/tasks/${taskId}/runs/${sessionId}/kill`,
+      { method: "POST" },
+    ),
+  respondPermission: (
+    sessionId: string,
+    requestId: string,
+    body: { decision: "allow" | "deny"; reason?: string },
+  ) =>
+    req<{ ok: true }>(
+      `/sessions/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   files: (repo: string, query: string) =>
     req<Array<{ rel: string; path: string }>>(
       `/repos/${encodeURIComponent(repo)}/files?q=${encodeURIComponent(query)}`,

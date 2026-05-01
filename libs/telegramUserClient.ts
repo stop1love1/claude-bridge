@@ -168,6 +168,33 @@ async function buildAndConnect(): Promise<TelegramClient | null> {
 }
 
 /**
+ * Probe the cached client's MTProto connection state. gram-js 2.x
+ * exposes `connected` (boolean | undefined) and `disconnected`
+ * (boolean) as plain getters — there is no Promise we can `.then()`
+ * on, and no public event that fires when the underlying socket
+ * drops. So we eagerly probe on every getTelegramUserClient() call:
+ * if the cached client thinks it's disconnected, drop our reference
+ * so the next call rebuilds. This catches:
+ *   - server-side session revocation (Telegram closes the socket)
+ *   - long network outages where gram-js gives up reconnecting
+ *   - explicit `disconnect()` from another code path
+ *
+ * Returns true when the client is healthy, false when stale.
+ */
+function isClientLive(client: TelegramClient): boolean {
+  const w = client as TelegramClient & {
+    connected?: boolean;
+    disconnected?: boolean;
+  };
+  // `disconnected === true` is the explicit "we're not on a socket" signal.
+  // `connected === false` is the same thing seen from the other side.
+  // Either one means: don't trust this handle.
+  if (w.disconnected === true) return false;
+  if (w.connected === false) return false;
+  return true;
+}
+
+/**
  * Public entry. Returns a connected client, or null when not
  * configured. Throws only on a configured-but-broken auth — caller is
  * expected to catch + log + fall through to bot if appropriate.
@@ -176,6 +203,18 @@ export async function getTelegramUserClient(): Promise<TelegramClient | null> {
   const fp = credsFingerprint();
   // Cred change → drop the cached client; the new connect happens below.
   if (state.client && state.credsHash !== fp) {
+    try { await state.client.disconnect(); } catch { /* ignore */ }
+    state.client = null;
+    state.connecting = null;
+  }
+  // Liveness check — the cached client may be a zombie (socket dropped
+  // by Telegram, session revoked, network outage). Without this probe
+  // every subsequent sendMessage would throw against the dead handle
+  // and notifications would silently stop until process restart.
+  if (state.client && !isClientLive(state.client)) {
+    console.warn(
+      "[telegram-user] cached client is disconnected — rebuilding on next request",
+    );
     try { await state.client.disconnect(); } catch { /* ignore */ }
     state.client = null;
     state.connecting = null;

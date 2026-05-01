@@ -69,14 +69,21 @@ export async function GET(req: NextRequest) {
         }
       }, 15000);
 
+      let closed = false;
       const close = () => {
-        unsub();
+        if (closed) return;
+        closed = true;
+        try { unsub(); } catch { /* ignore */ }
         clearInterval(ka);
         try {
           controller.close();
         } catch {
           /* already closed */
         }
+        // Remove the abort listener so a Next.js framework that retains
+        // the request object beyond the stream's lifetime doesn't keep
+        // a dangling reference to this closure.
+        try { req.signal.removeEventListener("abort", close); } catch { /* ignore */ }
       };
 
       req.signal.addEventListener("abort", close);

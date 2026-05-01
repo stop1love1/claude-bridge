@@ -129,9 +129,27 @@ export function answer(
 /**
  * Drop a request from the store. Called by the hook's poll handler
  * after it has read the final answer — keeps the map from leaking.
+ *
+ * Also evicts the per-session EventEmitter when the session has no
+ * remaining pending entries AND no active subscribers. Without this,
+ * `store.emitters` grows monotonically across the bridge's lifetime
+ * (one entry per sessionId ever seen) since the previous cleanup
+ * only touched `store.pending`.
  */
 export function consume(sessionId: string, requestId: string): void {
   store.pending.delete(key(sessionId, requestId));
+  const e = store.emitters.get(sessionId);
+  if (!e) return;
+  // If anyone is still subscribed (an active SSE consumer) we must
+  // keep the emitter — discarding it would orphan their listeners.
+  if (e.listenerCount("pending") > 0 || e.listenerCount("answered") > 0) return;
+  // No listeners AND no remaining pending entries for this session →
+  // safe to drop. We scan once to confirm; the typical session has 0–2
+  // pending entries so this is cheap.
+  for (const v of store.pending.values()) {
+    if (v.sessionId === sessionId) return;
+  }
+  store.emitters.delete(sessionId);
 }
 
 export function subscribe(

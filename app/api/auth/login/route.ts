@@ -37,7 +37,12 @@ export const dynamic = "force-dynamic";
  * isn't punished after they finally type the right password.
  */
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
-const LOGIN_LIMIT_PER_IP = 10;
+// Per-IP cap is generous (50) because when BRIDGE_TRUSTED_PROXY isn't
+// set, getClientIp() returns the "unknown" sentinel and every caller
+// shares one bucket — a tight cap would let one clumsy tab lock out
+// the whole bridge. The per-email cap is the real brute-force gate
+// (5 attempts per email per 10 min) and stays load-bearing.
+const LOGIN_LIMIT_PER_IP = 50;
 const LOGIN_LIMIT_PER_EMAIL = 5;
 
 interface LoginBody {

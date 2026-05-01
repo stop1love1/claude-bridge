@@ -160,12 +160,47 @@ function sanitizeCoordinatorBody(body: string): string {
  * leading backticks ≥ 3). User-supplied content with a literal triple
  * backtick on its own line would otherwise close the wrapper fence
  * early and inject arbitrary markdown / instructions into the child
- * prompt. We replace the fence prefix with a non-terminating variant
- * (zero-width joiner) that the LLM still reads as backticks for
- * intent, but the markdown parser does not treat as a fence boundary.
+ * prompt.
+ *
+ * Earlier this used a zero-width joiner injection that some LLMs strip
+ * during input normalization, defeating the guard. Switched to a more
+ * robust substitution that breaks the fence syntax outright by
+ * inserting a U+200B (ZERO-WIDTH SPACE) between the prefix whitespace
+ * and the backticks AND degrading the fence to indented-code form via
+ * a leading regular space — markdown parsers treat ``` after a space
+ * as inline code or plain text, not a fence boundary, regardless of
+ * what the LLM does with the ZWSP.
  */
 export function sanitizeTaskBodyForFence(body: string): string {
-  return (body ?? "").replace(/^(\s*)(`{3,})/gm, "$1‍$2");
+  return (body ?? "").replace(/^(\s*)(`{3,})/gm, "$1​ ​$2");
+}
+
+/**
+ * Defang structural markers that would let user-supplied task content
+ * hijack the coordinator template. Two attack surfaces:
+ *
+ *   1. The `{{...}}` template placeholders: a body that contains the
+ *      literal text `{{TASK_BODY}}` could be substituted recursively
+ *      if the substitution order ever changed, leaking template state.
+ *   2. The `## Your job` splice marker the coordinator uses to insert
+ *      the detected-scope block: a body containing that line would
+ *      cause `spliceScopeBlock` to inject the scope at an
+ *      attacker-controlled position, and any subsequent `## Your job`
+ *      heading shifted into earlier substitution would alter intent.
+ *
+ * We replace both patterns with a visually-similar but inert variant
+ * (the LLM still reads them, but no template / splice code matches).
+ */
+export function sanitizeUserPromptContent(input: string): string {
+  if (!input) return "";
+  return input
+    // {{X}} → ｛｛X｝｝ (fullwidth braces — LLM-readable, not a placeholder)
+    .replace(/\{\{/g, "｛｛")
+    .replace(/\}\}/g, "｝｝")
+    // `## Your job` (and a couple of close variants) → degrade the
+    // heading by inserting a ZWSP after the leading hashes so it is
+    // no longer matched by `indexOf("## Your job")` anywhere.
+    .replace(/^(#{1,6})(\s+Your job\b)/gim, "$1​$2");
 }
 
 /**
