@@ -23,6 +23,7 @@ import { buildResumePrompt } from "@/libs/resumePrompt";
 import { loadHouseRules } from "@/libs/houseRules";
 import { topMemoryEntries } from "@/libs/memory";
 import { loadPlaybook } from "@/libs/playbooks";
+import { loadSharedPlan } from "@/libs/sharedPlan";
 import { loadPinnedFiles } from "@/libs/pinnedFiles";
 import { ensureFreshSymbolIndex } from "@/libs/symbolStore";
 import { ensureFreshStyleFingerprint } from "@/libs/styleStore";
@@ -424,6 +425,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const memoryEntries = topMemoryEntries(app?.path ?? null);
   const playbookBody = loadPlaybook(role);
   const verifyHint = app?.verify ?? null;
+  // Shared plan from a prior `planner` run, if any. Injected for every
+  // role — including the planner itself on re-dispatch, so it can refine
+  // instead of starting from scratch. Coordinator decides when to spawn
+  // the planner; the bridge only flows the artifact downstream.
+  const sharedPlan = loadSharedPlan(id);
 
   // P3a — symbol index + style fingerprint + pinned files. All gated
   // on `app !== null` because they need the registered app's path. The
@@ -495,6 +501,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     recentDirection,
     memoryEntries,
     detectedScope,
+    sharedPlan,
   });
 
   // User mediation. We only ask if (a) the caller didn't opt out AND

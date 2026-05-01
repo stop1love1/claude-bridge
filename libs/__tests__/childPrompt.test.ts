@@ -182,6 +182,29 @@ describe("buildChildPrompt", () => {
     expect(out).toContain("Reviewer rubric");
   });
 
+  // Planner — shared plan injection
+  it("omits the Shared plan section when sharedPlan is null/empty", () => {
+    expect(buildChildPrompt(baseOpts)).not.toContain("## Shared plan");
+    expect(buildChildPrompt({ ...baseOpts, sharedPlan: null })).not.toContain("## Shared plan");
+    expect(buildChildPrompt({ ...baseOpts, sharedPlan: "   " })).not.toContain("## Shared plan");
+  });
+
+  it("renders Shared plan between Task and Your role when provided", () => {
+    const plan = "# Plan — Add /users/me\n\n## Goal\nShip the endpoint with matching FE state.";
+    const out = buildChildPrompt({ ...baseOpts, sharedPlan: plan });
+    const task = out.indexOf("## Task");
+    const plan_ = out.indexOf("## Shared plan");
+    const role = out.indexOf("## Your role");
+    expect(task).toBeGreaterThan(-1);
+    expect(plan_).toBeGreaterThan(task);
+    expect(role).toBeGreaterThan(plan_);
+    expect(out).toContain("# Plan — Add /users/me");
+    expect(out).toContain("Ship the endpoint with matching FE state.");
+    // Surfaces the "treat contracts as authoritative" guidance so a
+    // downstream coder doesn't silently deviate.
+    expect(out).toMatch(/contracts as authoritative/i);
+  });
+
   // P1 / D1 — verify hint
   it("omits the Verify commands section when verifyHint is null/empty object", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## Verify commands");

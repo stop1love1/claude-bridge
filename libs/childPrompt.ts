@@ -119,6 +119,20 @@ export interface BuildChildPromptOpts {
    * Null/undefined = no scope cached (legacy task / detect disabled).
    */
   detectedScope?: DetectedScope | null;
+  /**
+   * (Planner) Contents of `sessions/<task-id>/plan.md` if a planner
+   * agent has already drafted one for this task. Rendered as a
+   * `## Shared plan (from planner)` section right before `## Your role`
+   * so every downstream coder/reviewer reads the agreed cross-repo
+   * contracts and breakdown before diving into their own brief.
+   * Null/undefined/empty = no planner has run yet — section omitted.
+   *
+   * The agents route loads this file for every spawn (cheap — one stat
+   * + one read), so any role that runs after the planner sees the same
+   * shared plan automatically. The planner itself sees it too on
+   * re-dispatch, which lets it refine instead of starting over.
+   */
+  sharedPlan?: string | null;
 }
 
 const COORDINATOR_BODY_CAP = 16 * 1024;
@@ -212,18 +226,21 @@ export function sanitizeUserPromptContent(input: string): string {
  *   2. ## Language
  *   3. ## House rules                            (OPT-IN — opts.houseRules)
  *   4. ## House style (auto-detected)            (OPT-IN — opts.styleFingerprint)
- *   5. ## Task
- *   6. ## Your role (playbook prepended if any, then coordinator brief)
- *   7. ## Repo profile
- *   8. ## Available helpers                      (OPT-IN — opts.symbolIndex)
- *   9. ## Repo context (auto-captured by bridge)
- *  10. ## Recent direction                       (OPT-IN — opts.recentDirection)
- *  11. ## Pinned context                         (OPT-IN — opts.pinnedFiles)
- *  12. ## Reference files                        (OPT-IN — opts.attachedReferences)
- *  13. ## Self-register
- *  14. ## Report contract — REQUIRED
- *  15. ## Verify commands                        (OPT-IN — opts.verifyHint)
- *  16. ## Spawn-time signals
+ *   5. ## Memory                                 (OPT-IN — opts.memoryEntries)
+ *   6. ## Task
+ *   7. ## Detected scope                         (OPT-IN — opts.detectedScope)
+ *   8. ## Shared plan (from planner)             (OPT-IN — opts.sharedPlan)
+ *   9. ## Your role (playbook prepended if any, then coordinator brief)
+ *  10. ## Repo profile
+ *  11. ## Available helpers                      (OPT-IN — opts.symbolIndex)
+ *  12. ## Repo context (auto-captured by bridge)
+ *  13. ## Recent direction                       (OPT-IN — opts.recentDirection)
+ *  14. ## Pinned context                         (OPT-IN — opts.pinnedFiles)
+ *  15. ## Reference files                        (OPT-IN — opts.attachedReferences)
+ *  16. ## Self-register
+ *  17. ## Report contract — REQUIRED
+ *  18. ## Verify commands                        (OPT-IN — opts.verifyHint)
+ *  19. ## Spawn-time signals
  */
 export function buildChildPrompt(opts: BuildChildPromptOpts): string {
   const {
@@ -249,6 +266,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     recentDirection,
     memoryEntries,
     detectedScope,
+    sharedPlan,
   } = opts;
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
@@ -318,6 +336,18 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
   if (detectedScope) {
     lines.push(
       renderDetectedScope(detectedScope, { forCoordinator: false }),
+    );
+  }
+
+  const sharedPlanTrimmed = (sharedPlan ?? "").trim();
+  if (sharedPlanTrimmed.length > 0) {
+    lines.push(
+      "## Shared plan (from planner)",
+      "",
+      "A planner agent already drafted the cross-repo breakdown and contracts for this task. **Treat the contracts as authoritative** — if your role would deviate from a documented contract, stop and surface that as a `NEEDS-DECISION` instead of silently going your own way (the other repo's coder is reading the same plan and assuming you'll follow it). The work breakdown and conventions are guidance — match them when reasonable, deviate with a one-line note in your report when you find new info that invalidates an assumption.",
+      "",
+      sharedPlanTrimmed,
+      "",
     );
   }
 

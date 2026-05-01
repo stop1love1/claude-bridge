@@ -55,12 +55,33 @@ No fixed pipeline. Pick from the table; combine when the task genuinely needs it
 | add / build endpoint Y            | `coder` → optional `reviewer`                                      | reviewer only when diff is non-trivial |
 | fix bug Z                         | 1 `fixer`                                                         | auto-retry covers one follow-up |
 | refactor / migrate                | `surveyor` (plan) → `coder` (execute)                             | sequential, never combine in one prompt |
-| feature spanning UI + API         | `api-builder` → `ui-builder` → optional cross-repo `reviewer`     | dispatch backend first |
+| feature spanning UI + API         | `planner` → `api-builder` → `ui-builder` → optional cross-repo `reviewer` | dispatch planner first; the bridge auto-injects its `plan.md` into every later child's prompt |
+| L-size feature in one repo        | `planner` → `coder` (→ optional `reviewer`)                       | planner is cheap insurance against contract drift mid-implementation |
 | research / audit                  | 1 `researcher` (read-only)                                        | |
 | test the UI / verify in browser   | 1 `ui-tester`                                                     | playbook `prompts/playbooks/ui-tester.md` — Playwright MCP, no code edits, `NEEDS-DECISION` on dead dev server. If bugs found, follow with a `fixer` whose brief embeds the tester's findings. Never combine test + fix. |
 | XL                                | none — split the task                                             | stop and tell the user |
 
 The **`devops`** role is reserved — bridge auto-spawns it post-success when the app's `git.integrationMode === "pull-request"`. **Do not include `devops` in your team plan**, do not call `gh` / `glab` yourself.
+
+### When to spawn a `planner` first
+
+The `planner` role is your alignment lever for tasks where multiple agents would otherwise invent inconsistent contracts in parallel. It is **read-only** — it produces `sessions/<task-id>/plan.md` (a shared cross-repo breakdown + contract list) and a standard report; it does NOT write production code. Once the planner finishes, the bridge auto-injects `plan.md` into the prompt of every subsequent child as `## Shared plan (from planner)`, so the next coders all read the same source of truth — no need for you to copy-paste it into briefs.
+
+Use this rubric (in order — first match wins):
+
+| Task shape                                                                                  | Planner first? |
+| ------------------------------------------------------------------------------------------- | -------------- |
+| **XS / S** (single-line fix, single endpoint, isolated bug, single component)               | **No** — planner is overhead for trivial work, just dispatch the `coder`/`fixer`. |
+| **M, single repo, no cross-repo contract**                                                  | **No** by default; the playbook + repo profile are enough. Add a planner only if the task body itself contains design ambiguity ("we should figure out how to…"). |
+| **M, multi-repo OR introduces a new shared contract** (new endpoint UI consumes, new schema field FE reads, new event emitted)  | **Yes** — planner pins the contract once so BE and FE agree before they code. |
+| **L** (multi-file change, design thought required) — single OR multi repo                   | **Yes** — alignment cost is amortized by the multi-file follow-up. |
+| **Refactor / migrate**                                                                       | Use `surveyor` (existing recipe) for in-repo refactors. Use `planner` when the refactor crosses repos OR changes a shared contract. |
+| **`research` / `audit` / `ui-tester`**                                                       | **No** — those roles ARE the analysis; a planner before them is recursion. |
+| **`fix bug Z` triggered by a `ui-tester` finding**                                           | **No** — the tester's report is the plan. Spawn the `fixer` directly with the tester's findings in the brief. |
+
+When you DO dispatch a planner: spawn it alone, wait for it to exit, read its report, then dispatch the rest of the team in dependency order (typically backend / contract producer first). If the planner returns `NEEDS-DECISION`, follow §4 — escalate to the user, do NOT try to answer the questions yourself, do NOT spawn the downstream coders before the user answers.
+
+When you DON'T dispatch a planner, the `## Shared plan` section is simply absent from each child's prompt — the existing flow is unchanged. Backward-compatible by default; opt-in by team-shape.
 
 For `ui-tester`: the agent probes the dev URL first; on dead server it returns `NEEDS-DECISION` asking the user whether the bridge should auto-start the dev server. **Only authorize auto-start in the brief** when the user has explicitly picked that option (e.g. "the user authorized auto-start; spin up `<dev-cmd>`, run the test, then `KillShell` it before exiting").
 
