@@ -58,15 +58,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   try {
     // The user-facing mode picker only ever sends one of
-    // {default, acceptEdits, plan, auto}. We default to `default` (the
-    // permission popup) when the body omitted `mode`, so opening the
-    // composer and hitting Enter behaves the way the dropdown label
-    // ("Ask before edits") promises. Bypass mode is reachable only via
-    // the internal-token-gated agent / continuation routes — never
-    // from this endpoint.
+    // {default, acceptEdits, plan, auto, bypassPermissions}. We default
+    // to `default` (the permission popup) when the body omitted `mode`,
+    // so opening the composer and hitting Enter behaves the way the
+    // dropdown label ("Ask before edits") promises. Bypass mode is
+    // reachable from this endpoint only when the operator explicitly
+    // opted into it via `NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS=1` — in which
+    // case the missing-mode fallback flips to bypass too, matching the
+    // single-user UX promise the env var advertises. The validation
+    // check above already gates the explicit value the same way.
+    const fallbackMode =
+      process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS === "1" ? "bypassPermissions" : "default";
     const effectiveSettings: ChatSettings = {
       ...(settings ?? {}),
-      mode: settings?.mode ?? "default",
+      mode: settings?.mode ?? fallbackMode,
     };
     const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
     // "Create-on-first-send": when the UI generates a UUID locally (no

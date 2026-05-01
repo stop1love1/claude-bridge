@@ -836,7 +836,36 @@ function SessionLogInner({
     requestAnimationFrame(() => {
       if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
     });
-  }, [visibleEntries, autoScroll]);
+    // `partials` is in the dep set so streaming assistant text follows
+    // the bottom edge as tokens arrive — without it, a long reply
+    // streaming in clips its tail behind the composer until the message
+    // finalises.
+  }, [visibleEntries, partials, autoScroll]);
+
+  // Sibling rows below the scroll panel (ActivityRow flipping out of
+  // idle, InlinePermissionRequests appearing, the composer growing
+  // when the user expands the textarea) shrink the scroller's
+  // clientHeight without firing a scroll event. When that happens
+  // mid-conversation, the last line of the latest message ends up
+  // hidden behind those rows even though `autoScroll` is still on.
+  // Re-pin the bottom on every viewport resize so the tail stays in
+  // view. We read `autoScroll` through a ref to avoid tearing the
+  // observer down on every toggle.
+  const autoScrollRef = useRef(autoScroll);
+  useEffect(() => {
+    autoScrollRef.current = autoScroll;
+  }, [autoScroll]);
+  useEffect(() => {
+    const el = logRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (!autoScrollRef.current) return;
+      if (pendingScrollRestoreRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // rAF-throttled re-evaluation of which user uuid currently sits "above
   // the top edge of the viewport" — i.e., the most recent user message

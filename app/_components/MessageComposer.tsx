@@ -15,7 +15,17 @@ import type { ChatSettings } from "@/libs/client/types";
 const MIN_H = 34;
 const MAX_H = 220;
 const STORAGE_KEY = "bridge.chat.settings";
-const EMPTY_SETTINGS: ChatSettings = {};
+// Operator opt-in: when `NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS=1` is set, treat
+// "Skip permissions" as the implicit default for any session that has
+// not yet picked a mode. Otherwise a brand-new task starts in `default`
+// (Ask-before-edits) and the user keeps seeing the popup despite having
+// opted in at the env layer. Explicit picks still win — the loader only
+// fills in the mode when the stored object has none.
+const COMPOSER_DEFAULT_MODE =
+  process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS === "1" ? "bypassPermissions" : undefined;
+const EMPTY_SETTINGS: ChatSettings = COMPOSER_DEFAULT_MODE
+  ? { mode: COMPOSER_DEFAULT_MODE }
+  : {};
 const dumpSettings = (s: ChatSettings) => JSON.stringify(s);
 
 interface Attachment {
@@ -98,13 +108,21 @@ function MessageComposerInner({
   // global key on first render of a brand-new task" behaviour.
   const loadComposerSettings = useCallback(
     (raw: string | null): ChatSettings => {
+      // Apply the env-based default mode if the loaded object doesn't
+      // have one yet. Without this, a stored `{effort: "high"}` from an
+      // older session leaves `mode` undefined and the request falls back
+      // to "default" on the server even though BRIDGE_ALLOW_BYPASS is on.
+      const withDefaultMode = (s: ChatSettings): ChatSettings =>
+        s.mode === undefined && COMPOSER_DEFAULT_MODE
+          ? { ...s, mode: COMPOSER_DEFAULT_MODE }
+          : s;
       if (raw) {
-        try { return JSON.parse(raw) as ChatSettings; } catch { /* fallthrough */ }
+        try { return withDefaultMode(JSON.parse(raw) as ChatSettings); } catch { /* fallthrough */ }
       }
       if (taskId && typeof window !== "undefined") {
         try {
           const fallback = window.localStorage.getItem(STORAGE_KEY);
-          if (fallback) return JSON.parse(fallback) as ChatSettings;
+          if (fallback) return withDefaultMode(JSON.parse(fallback) as ChatSettings);
         } catch { /* fallthrough */ }
       }
       return EMPTY_SETTINGS;
