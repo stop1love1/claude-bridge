@@ -80,6 +80,8 @@ func NewHandler(cfg Config) http.Handler {
 	r.Put("/api/tasks/{id}/summary", api.PutTaskSummary)
 	r.Get("/api/tasks/{id}/usage", api.GetTaskUsage)
 	r.Post("/api/tasks/{id}/link", api.LinkSession)
+	r.Get("/api/tasks/{id}/events", api.TaskEvents)
+	r.Post("/api/tasks/{id}/detect/refresh", api.DetectRefresh)
 	r.Get("/api/sessions/all", api.ListAllSessions)
 	r.Get("/api/usage", api.GetUsage)
 
