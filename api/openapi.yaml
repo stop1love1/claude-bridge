@@ -1,0 +1,854 @@
+openapi: 3.1.0
+info:
+  title: claude-bridge API
+  version: 0.1.0
+  description: |
+    HTTP surface for the claude-bridge orchestration tool. v0.1 inventories every
+    Next.js route under `app/api/**/route.ts` so we can codegen Go server stubs
+    (`oapi-codegen`) and TypeScript clients (`openapi-typescript`).
+
+    Body and response shapes are intentionally placeholders (`OkResponse`,
+    `AnyJson`) at v0.1 — they will be filled in per-domain in subsequent
+    sessions (see MIGRATION_SESSIONS.md). This spec is the source-of-truth
+    for the migration; do not let it drift behind the handler signatures.
+servers:
+  - url: http://localhost:7777
+    description: Bridge dev server (Next now, Go after cutover)
+  - url: http://localhost:8080
+    description: Go backend during strangler-fig phase
+tags:
+  - { name: health, description: Liveness check }
+  - { name: tasks, description: Task lifecycle }
+  - { name: sessions, description: Claude Code session inspection }
+  - { name: apps, description: Registered sibling apps }
+  - { name: repos, description: Repository profiles + file access }
+  - { name: auth, description: Cookie session + setup token }
+  - { name: tunnels, description: ngrok / tunnel providers }
+  - { name: telegram, description: MTProto bridge settings }
+  - { name: detect, description: Auto-detect heuristics }
+  - { name: bridge, description: Bridge global settings }
+  - { name: permission, description: Permission prompt flow }
+  - { name: usage, description: Token + cost stats }
+  - { name: uploads, description: Pasted/uploaded file access }
+
+components:
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      additionalProperties: true
+      properties:
+        error: { type: string }
+        code: { type: string, nullable: true }
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+    OkResponse:
+      description: |
+        v0.1 placeholder for any successful JSON body. Per-domain sessions
+        replace this with a concrete schema in `components/schemas`.
+      type: object
+      additionalProperties: true
+    AnyJson:
+      description: Placeholder schema while v0.1 is being filled in.
+      type: object
+      additionalProperties: true
+  parameters:
+    TaskIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        description: Task ID, format `t_YYYYMMDD_NNN`.
+    SessionIdPath:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        description: Claude Code session UUID.
+    NamePath:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+    ApprovalIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    PendingLoginIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    RequestIdPath:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string }
+    TunnelIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    UploadNamePath:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    Ok:
+      description: Success (v0.1 placeholder body)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OkResponse' }
+    NoContent:
+      description: Success with no body
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Stream:
+      description: Server-Sent Events stream (`text/event-stream`)
+      content:
+        text/event-stream:
+          schema:
+            type: string
+            description: SSE framing — `event:` and `data:` lines per event.
+  requestBodies:
+    Json:
+      description: Generic JSON body (v0.1 placeholder)
+      required: false
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AnyJson' }
+
+paths:
+  # ─── health (new — scaffold endpoint, see S02) ───────────────────────────
+  /api/health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Liveness probe + version banner
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  version: { type: string }
+                  uptime: { type: number, description: Seconds since process start }
+
+  # ─── tasks ───────────────────────────────────────────────────────────────
+  /api/tasks:
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createTask
+      tags: [tasks]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/meta:
+    get:
+      operationId: listTasksMeta
+      tags: [tasks]
+      summary: Bulk meta for all tasks (used by sidebar)
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    patch:
+      operationId: updateTask
+      tags: [tasks]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/agents:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    post:
+      operationId: spawnTaskAgent
+      tags: [tasks]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/clear:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    post:
+      operationId: clearTaskRuns
+      tags: [tasks]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/continue:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    post:
+      operationId: continueTask
+      tags: [tasks]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/detect/refresh:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    post:
+      operationId: refreshTaskDetect
+      tags: [tasks, detect]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    get:
+      operationId: taskEvents
+      tags: [tasks]
+      summary: SSE — `task.event`, `agent.detect.progress`
+      responses:
+        '200': { $ref: '#/components/responses/Stream' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/link:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    post:
+      operationId: linkTaskSession
+      tags: [tasks]
+      summary: Self-register coordinator/sub-agent session (uses x-bridge-internal-token)
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/meta:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    get:
+      operationId: getTaskMeta
+      tags: [tasks]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/runs/{sessionId}/diff:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+      - $ref: '#/components/parameters/SessionIdPath'
+    get:
+      operationId: getRunDiff
+      tags: [tasks]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/runs/{sessionId}/kill:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+      - $ref: '#/components/parameters/SessionIdPath'
+    post:
+      operationId: killRun
+      tags: [tasks]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/runs/{sessionId}/prompt:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+      - $ref: '#/components/parameters/SessionIdPath'
+    get:
+      operationId: getRunPrompt
+      tags: [tasks]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/summary:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    get:
+      operationId: getTaskSummary
+      tags: [tasks]
+      responses:
+        '200':
+          description: Plain markdown summary
+          content:
+            text/markdown:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tasks/{id}/usage:
+    parameters:
+      - $ref: '#/components/parameters/TaskIdPath'
+    get:
+      operationId: getTaskUsage
+      tags: [tasks, usage]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── sessions ────────────────────────────────────────────────────────────
+  /api/sessions:
+    post:
+      operationId: createSession
+      tags: [sessions]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/all:
+    get:
+      operationId: listAllSessions
+      tags: [sessions]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    delete:
+      operationId: deleteSession
+      tags: [sessions]
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/kill:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    post:
+      operationId: killSession
+      tags: [sessions]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/message:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    post:
+      operationId: sendSessionMessage
+      tags: [sessions]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/permission:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    get:
+      operationId: listSessionPermissions
+      tags: [sessions, permission]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createSessionPermission
+      tags: [sessions, permission]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/permission/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+      - $ref: '#/components/parameters/RequestIdPath'
+    get:
+      operationId: getSessionPermission
+      tags: [sessions, permission]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: decideSessionPermission
+      tags: [sessions, permission]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/permission/stream:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    get:
+      operationId: sessionPermissionStream
+      tags: [sessions, permission]
+      summary: SSE — `permission.request`
+      responses:
+        '200': { $ref: '#/components/responses/Stream' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/rewind:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    post:
+      operationId: rewindSession
+      tags: [sessions]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/tail:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    get:
+      operationId: getSessionTail
+      tags: [sessions]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/tail/stream:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    get:
+      operationId: sessionTailStream
+      tags: [sessions]
+      summary: SSE — `session.tail`
+      responses:
+        '200': { $ref: '#/components/responses/Stream' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/sessions/{sessionId}/upload:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+    post:
+      operationId: uploadSessionFile
+      tags: [sessions, uploads]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── apps ────────────────────────────────────────────────────────────────
+  /api/apps:
+    get:
+      operationId: listApps
+      tags: [apps]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createApp
+      tags: [apps]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/apps/auto-detect:
+    post:
+      operationId: autoDetectApps
+      tags: [apps, detect]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/apps/auto-detect/stream:
+    get:
+      operationId: autoDetectAppsStream
+      tags: [apps, detect]
+      summary: SSE — `agent.detect.progress`
+      responses:
+        '200': { $ref: '#/components/responses/Stream' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/apps/bulk:
+    post:
+      operationId: bulkUpsertApps
+      tags: [apps]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/apps/{name}:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    patch:
+      operationId: updateApp
+      tags: [apps]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteApp
+      tags: [apps]
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/apps/{name}/memory:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      operationId: getAppMemory
+      tags: [apps]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: writeAppMemory
+      tags: [apps]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/apps/{name}/scan:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    post:
+      operationId: scanApp
+      tags: [apps, detect]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── repos ───────────────────────────────────────────────────────────────
+  /api/repos:
+    get:
+      operationId: listRepos
+      tags: [repos]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/repos/profiles:
+    get:
+      operationId: listRepoProfiles
+      tags: [repos]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/repos/profiles/refresh:
+    post:
+      operationId: refreshRepoProfiles
+      tags: [repos]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/repos/profiles/{name}:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      operationId: getRepoProfile
+      tags: [repos]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/repos/{name}/files:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      operationId: listRepoFiles
+      tags: [repos]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/repos/{name}/raw:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      operationId: getRepoRaw
+      tags: [repos]
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Raw file content
+          content:
+            text/plain: { schema: { type: string } }
+            application/octet-stream: { schema: { type: string, format: binary } }
+        default: { $ref: '#/components/responses/Error' }
+  /api/repos/{name}/slash-commands:
+    parameters:
+      - $ref: '#/components/parameters/NamePath'
+    get:
+      operationId: listRepoSlashCommands
+      tags: [repos]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── auth ────────────────────────────────────────────────────────────────
+  /api/auth/approvals:
+    get:
+      operationId: listApprovals
+      tags: [auth]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/auth/approvals/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ApprovalIdPath'
+    post:
+      operationId: decideApproval
+      tags: [auth]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/auth/devices:
+    get:
+      operationId: listDevices
+      tags: [auth]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteDevice
+      tags: [auth]
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/auth/login/pending/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PendingLoginIdPath'
+    get:
+      operationId: getPendingLogin
+      tags: [auth]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/auth/setup:
+    post:
+      operationId: setupAuth
+      tags: [auth]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── tunnels ─────────────────────────────────────────────────────────────
+  /api/tunnels:
+    get:
+      operationId: listTunnels
+      tags: [tunnels]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createTunnel
+      tags: [tunnels]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tunnels/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TunnelIdPath'
+    get:
+      operationId: getTunnel
+      tags: [tunnels]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteTunnel
+      tags: [tunnels]
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tunnels/providers:
+    get:
+      operationId: listTunnelProviders
+      tags: [tunnels]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tunnels/providers/ngrok/authtoken:
+    put:
+      operationId: setNgrokAuthtoken
+      tags: [tunnels]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/tunnels/providers/ngrok/install:
+    post:
+      operationId: installNgrok
+      tags: [tunnels]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── telegram ────────────────────────────────────────────────────────────
+  /api/telegram/settings:
+    get:
+      operationId: getTelegramSettings
+      tags: [telegram]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateTelegramSettings
+      tags: [telegram]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/telegram/test:
+    post:
+      operationId: testTelegram
+      tags: [telegram]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/telegram/user/settings:
+    get:
+      operationId: getTelegramUserSettings
+      tags: [telegram]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateTelegramUserSettings
+      tags: [telegram]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: clearTelegramUserSettings
+      tags: [telegram]
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/telegram/user/test:
+    post:
+      operationId: testTelegramUser
+      tags: [telegram]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── detect ──────────────────────────────────────────────────────────────
+  /api/detect/scan-roots:
+    get:
+      operationId: getScanRoots
+      tags: [detect]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateScanRoots
+      tags: [detect]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/detect/settings:
+    get:
+      operationId: getDetectSettings
+      tags: [detect]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateDetectSettings
+      tags: [detect]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── bridge ──────────────────────────────────────────────────────────────
+  /api/bridge/settings:
+    get:
+      operationId: getBridgeSettings
+      tags: [bridge]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateBridgeSettings
+      tags: [bridge]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── permission (global) ─────────────────────────────────────────────────
+  /api/permission:
+    get:
+      operationId: listPermissions
+      tags: [permission]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/permission/stream:
+    get:
+      operationId: permissionStream
+      tags: [permission]
+      summary: SSE — `permission.request`
+      responses:
+        '200': { $ref: '#/components/responses/Stream' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── usage ───────────────────────────────────────────────────────────────
+  /api/usage:
+    get:
+      operationId: getUsage
+      tags: [usage]
+      parameters:
+        - { name: range, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        default: { $ref: '#/components/responses/Error' }
+
+  # ─── uploads ─────────────────────────────────────────────────────────────
+  /api/uploads/{sessionId}/{name}:
+    parameters:
+      - $ref: '#/components/parameters/SessionIdPath'
+      - $ref: '#/components/parameters/UploadNamePath'
+    get:
+      operationId: getUpload
+      tags: [uploads]
+      responses:
+        '200':
+          description: Raw upload content
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Error' }

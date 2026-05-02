@@ -5,6 +5,16 @@
 .uploads/
 .bridge-state/
 
+# Go build artefacts (migration/go branch)
+/bin/
+/dist/
+/web/dist/
+*.exe
+*.exe~
+*.test
+*.out
+go.work.sum
+
 # local-only bridge runtime state — per-task meta.json + spawned sessions
 /sessions/*
 !/sessions/.gitkeep
