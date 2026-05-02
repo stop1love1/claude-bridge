@@ -21,6 +21,8 @@ import (
 
 	"github.com/stop1love1/claude-bridge/internal/api"
 	"github.com/stop1love1/claude-bridge/internal/apps"
+	"github.com/stop1love1/claude-bridge/internal/coordinator"
+	"github.com/stop1love1/claude-bridge/internal/detect"
 	"github.com/stop1love1/claude-bridge/internal/server"
 	"github.com/stop1love1/claude-bridge/internal/sessions"
 	"github.com/stop1love1/claude-bridge/internal/spawn"
@@ -105,6 +107,21 @@ func newServeCmd() *cobra.Command {
 			spawner.BridgeURL = fmt.Sprintf("http://%s:%d", host, port)
 			api.SetSpawnRegistry(spawnRegistry)
 			api.SetSpawner(spawner)
+
+			// Coordinator config — POST /api/tasks now spawns a real
+			// claude coordinator in the bridge root after creating
+			// the task. The coordinator template lives at
+			// <bridgeRoot>/prompts/coordinator.md (falls back to a
+			// bundled minimal template when missing).
+			coordinator.SetDefault(&coordinator.Config{
+				BridgeRoot:     absRoot,
+				BridgeURL:      fmt.Sprintf("http://%s:%d", host, port),
+				SessionsDir:    sessionsDir,
+				BridgeFolder:   filepath.Base(absRoot),
+				BridgeLogicDir: filepath.Join(absRoot, "prompts"),
+				Spawner:        spawner,
+				Detector:       detect.Default(),
+			})
 
 			// Reaper — belt-and-suspenders sweep that drops registry
 			// entries whose process is gone. Runs until shutdown.

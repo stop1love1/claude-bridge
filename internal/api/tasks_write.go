@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/stop1love1/claude-bridge/internal/coordinator"
 	"github.com/stop1love1/claude-bridge/internal/meta"
 )
 
@@ -78,10 +79,6 @@ func CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row := metaToTask(&header)
-	// Coordinator spawn intentionally not invoked here — that wires in
-	// when the apps + detect + coordinator stack lands. Surface the
-	// known-deferral via an error field so the UI can offer a manual
-	// retry once the wiring catches up.
 	resp := map[string]any{
 		"id":      row.ID,
 		"date":    row.Date,
@@ -91,7 +88,28 @@ func CreateTask(w http.ResponseWriter, r *http.Request) {
 		"section": row.Section,
 		"checked": row.Checked,
 		"app":     row.App,
-		"error":   "coordinator spawn deferred to S15+",
+	}
+	// Coordinator spawn — best-effort. A failure (claude binary
+	// missing, fork EAGAIN, no coordinator config wired) does NOT
+	// nuke the task: it's already been created on disk. We surface
+	// the spawn error so the UI can show "task created but
+	// coordinator failed to spawn" and offer manual retry, instead
+	// of clients retrying the POST and creating duplicate tasks.
+	appName := ""
+	if header.TaskApp != nil {
+		appName = *header.TaskApp
+	}
+	if cfg := coordinator.GetDefault(); cfg != nil {
+		if _, err := coordinator.SpawnForTask(r.Context(), cfg, coordinator.TaskInput{
+			ID:    id,
+			Title: title,
+			Body:  rawBody,
+			App:   appName,
+		}); err != nil {
+			resp["error"] = err.Error()
+		}
+	} else {
+		resp["error"] = "coordinator not configured (cmd/bridge serve must call coordinator.SetDefault)"
 	}
 	WriteJSON(w, http.StatusCreated, resp)
 }
