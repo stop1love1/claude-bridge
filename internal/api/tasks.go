@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/stop1love1/claude-bridge/internal/meta"
+	"github.com/stop1love1/claude-bridge/internal/repos"
 	"github.com/stop1love1/claude-bridge/internal/sessions"
 	"github.com/stop1love1/claude-bridge/internal/usage"
 )
@@ -27,6 +28,12 @@ type Config struct {
 	// SessionsDir is the bridge's sessions/<task-id>/ root. Defaults
 	// to "./sessions" relative to cwd when unset.
 	SessionsDir string
+	// ProjectsRoot is ~/.claude/projects/ (or fixture equivalent).
+	// Empty means "use sessions.DefaultClaudeProjectsRoot()". The
+	// contract test fixture sets this to its own dir so a test against
+	// an empty registry doesn't surface the operator's real session
+	// folders in the response.
+	ProjectsRoot string
 }
 
 var (
@@ -229,30 +236,26 @@ type taskUsageResponse struct {
 	Runs   []PerRunUsage      `json:"runs"`
 }
 
-// resolveSessionPath resolves a run's session jsonl path. The full
-// implementation also walks bridge.json + sibling-folder discovery to
-// pick up sessions whose repo isn't the bridge itself; that wiring
-// lands with internal/repos in S17. For S10, we fall back to the
-// claude projects root only when the run carries an absolute repo cwd
-// (rare). Most runs hit the empty-zeros path here, which is exactly
-// what the contract test asserts.
+// resolveSessionPath resolves a run's session jsonl path under
+// ~/.claude/projects/<slug-of-repoCwd>/<sessionId>.jsonl. Returns ""
+// when repoCwd is empty — the caller's row stays zero-valued.
 func resolveSessionPath(reader *sessions.Reader, repoCwd, sessionID string) string {
 	if repoCwd == "" {
 		return ""
 	}
-	// projectDir uses ~/.claude/projects/<slug-of-repoCwd>/. ResolveSessionFile
-	// also checks the project dir exists on disk; a missing dir means
-	// the session was never written and SumUsageFromJsonl returns
-	// zeros via the missing-file path.
 	dir := reader.ProjectDirFor(repoCwd)
 	return filepath.Join(dir, sessionID+".jsonl")
 }
 
-// GetTaskUsage upgrades the S06 stub: reads the task's meta.json and
-// sums per-run usage from each linked .jsonl. Without internal/repos
-// (S17) we can't resolve a run's repo back to an absolute cwd, so the
-// per-run rows return zeros — but the response envelope is correct
-// and the contract test passes against an empty fixture.
+// GetTaskUsage reads the task's meta.json and sums per-run usage from
+// each linked .jsonl. S17 wired the repos resolver so we can now turn
+// each run's repo name back into an absolute cwd and read the actual
+// .jsonl from ~/.claude/projects/<slug>/.
+//
+// Repos that can't be resolved (the operator removed an app from the
+// registry between the spawn and the read) still appear in the
+// response — the per-run row reports zeros instead of failing the
+// whole request.
 func GetTaskUsage(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !meta.IsValidTaskID(id) {
@@ -272,11 +275,13 @@ func GetTaskUsage(w http.ResponseWriter, r *http.Request) {
 	reader := sessions.New()
 	resp := taskUsageResponse{TaskID: id, Runs: make([]PerRunUsage, 0, len(m.Runs))}
 	for _, run := range m.Runs {
-		// Repo→cwd resolution requires internal/repos (S17). For now
-		// every per-run row is zeros; the envelope shape still matches.
-		_ = resolveSessionPath
-		_ = reader
 		row := PerRunUsage{SessionID: run.SessionID, Role: run.Role, Repo: run.Repo}
+		if cwd, ok := repos.ResolveCwd(getBridgeRoot(), run.Repo); ok {
+			path := resolveSessionPath(reader, cwd, run.SessionID)
+			if path != "" {
+				row.SessionUsage = usage.SumUsageFromJsonl(path)
+			}
+		}
 		resp.Runs = append(resp.Runs, row)
 		resp.Total = usage.Add(resp.Total, row.SessionUsage)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/stop1love1/claude-bridge/internal/api"
+	"github.com/stop1love1/claude-bridge/internal/apps"
 	"github.com/stop1love1/claude-bridge/internal/server"
 )
 
@@ -65,7 +66,16 @@ func Verify(name, goldenDir string) (string, error) {
 	// Pin the api package's config to the fixture's paths BEFORE the
 	// per-endpoint Setup runs, so handlers that read SessionsDir see
 	// the isolated dir instead of the operator's real ./sessions/.
-	api.SetConfig(&api.Config{SessionsDir: fix.SessionsDir})
+	// ProjectsRoot also points at the fixture so listAllSessions
+	// doesn't surface the operator's real ~/.claude/projects/ folders.
+	api.SetConfig(&api.Config{
+		SessionsDir:  fix.SessionsDir,
+		ProjectsRoot: fix.ProjectsDir,
+	})
+	// Ditto for bridge.json — point apps registry at an empty dir so
+	// no apps surface in handlers that consult it.
+	api.SetBridgeRoot(fix.Root)
+	apps.SetDefault(apps.New(fix.Root))
 
 	if e.Setup != nil {
 		if err := e.Setup(fix); err != nil {
