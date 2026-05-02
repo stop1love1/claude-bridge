@@ -6,7 +6,7 @@
  * versioned, with a 24h lazy TTL refresh.
  *
  * Pure mirror of `symbolStore` — see that module's comments for the
- * rationale on TTL, fail-soft, and Windows rename fallback.
+ * rationale on TTL and fail-soft behavior.
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
