@@ -82,6 +82,9 @@ func NewHandler(cfg Config) http.Handler {
 	r.Post("/api/tasks/{id}/link", api.LinkSession)
 	r.Get("/api/tasks/{id}/events", api.TaskEvents)
 	r.Post("/api/tasks/{id}/detect/refresh", api.DetectRefresh)
+	r.Post("/api/tasks/{id}/agents", api.SpawnAgent)
+	r.Post("/api/tasks/{id}/continue", api.ContinueTask)
+	r.Post("/api/tasks/{id}/clear", api.ClearTask)
 
 	// S26 — Tunnels
 	r.Get("/api/tunnels", api.ListTunnels)
