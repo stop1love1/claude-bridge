@@ -1,0 +1,62 @@
+name: Go
+
+# CI for the Go migration (migration/go branch). Mirrors the structure
+# of test.yml (Bun/Next pipeline) so both can coexist while the
+# strangler-fig migration is in progress. Drops to a single Linux job
+# for golangci-lint (slowest stage; cross-platform lint findings are
+# rare and caught locally).
+
+on:
+  push:
+    branches: [main, migration/go]
+  pull_request:
+    branches: [main, migration/go]
+
+concurrency:
+  group: go-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        # Git Bash on windows-latest provides POSIX sh; the Makefile
+        # relies on it. macOS/Linux already default to bash.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
