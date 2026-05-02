@@ -47,10 +47,6 @@ func GetUsage(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, snap)
 }
 
-// GetTaskUsage is the Go side of GET /api/tasks/{id}/usage. Stubbed in
-// S06: always returns 404 because task-meta lookup depends on
-// internal/meta (S09) and internal/repos (S17). Wires the route so the
-// chi mux is complete; full implementation lands in S10/S11.
-func GetTaskUsage(w http.ResponseWriter, _ *http.Request) {
-	WriteJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
-}
+// GetTaskUsage moved to tasks.go in S10 — full impl now reads meta.json
+// and sums per-run usage. Per-run rows still return zeros until repos
+// (S17) lets us resolve a run's repo back to its absolute cwd.

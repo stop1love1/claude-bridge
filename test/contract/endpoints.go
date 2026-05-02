@@ -81,7 +81,33 @@ var Endpoints = map[string]Endpoint{
 		Name:   "getTaskUsage",
 		Method: http.MethodGet,
 		Path:   "/api/tasks/t_20260101_001/usage",
-		// S06 stub returns 404 unconditionally — full meta + repos
-		// wiring lands in S10/S11.
+		// S10 upgrade: handler now reads meta.json. With an empty
+		// fixture (no task dirs) the response is still 404 —
+		// `{"error":"task not found"}` — so the golden is unchanged
+		// from S06.
+	},
+	"listTasks": {
+		Name:   "listTasks",
+		Method: http.MethodGet,
+		Path:   "/api/tasks",
+		// Empty fixture → empty array. Lands in S10.
+	},
+	"getTask": {
+		Name:   "getTask",
+		Method: http.MethodGet,
+		Path:   "/api/tasks/t_20260101_001",
+		// Empty fixture → 404 not-found.
+	},
+	"getTaskMeta": {
+		Name:   "getTaskMeta",
+		Method: http.MethodGet,
+		Path:   "/api/tasks/t_20260101_001/meta",
+		// Empty fixture → 404 not-found.
+	},
+	"getTaskSummary": {
+		Name:   "getTaskSummary",
+		Method: http.MethodGet,
+		Path:   "/api/tasks/t_20260101_001/summary",
+		// Empty fixture → 404 not-found.
 	},
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/stop1love1/claude-bridge/internal/api"
 	"github.com/stop1love1/claude-bridge/internal/server"
 )
 
@@ -36,6 +37,7 @@ func TestDumpGoldens(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fixture: %v", err)
 		}
+		api.SetConfig(&api.Config{SessionsDir: fix.SessionsDir})
 		if e.Setup != nil {
 			if err := e.Setup(fix); err != nil {
 				t.Fatalf("setup %s: %v", n, err)

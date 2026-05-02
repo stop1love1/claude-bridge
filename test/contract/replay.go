@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/stop1love1/claude-bridge/internal/api"
 	"github.com/stop1love1/claude-bridge/internal/server"
 )
 
@@ -60,6 +61,11 @@ func Verify(name, goldenDir string) (string, error) {
 		return "", fmt.Errorf("fixture: %w", err)
 	}
 	defer func() { _ = fix.Cleanup() }()
+
+	// Pin the api package's config to the fixture's paths BEFORE the
+	// per-endpoint Setup runs, so handlers that read SessionsDir see
+	// the isolated dir instead of the operator's real ./sessions/.
+	api.SetConfig(&api.Config{SessionsDir: fix.SessionsDir})
 
 	if e.Setup != nil {
 		if err := e.Setup(fix); err != nil {
