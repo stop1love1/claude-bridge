@@ -113,9 +113,11 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
               )}
             </AlertDialogHeader>
             <AlertDialogFooter>
-              {/* For destructive confirms (delete, kill, drop) put
-                  default focus on Cancel — an accidental Enter must
-                  not destroy data. */}
+              {/* Radix already focuses Cancel on open via
+                  onOpenAutoFocus; the explicit autoFocus is
+                  belt-and-suspenders for destructive confirms so an
+                  accidental Enter cannot destroy data even if Radix's
+                  default ever changes. */}
               <AlertDialogCancel
                 autoFocus={active.destructive}
                 disabled={busy}

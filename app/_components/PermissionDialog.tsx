@@ -88,10 +88,12 @@ export function PermissionDialog({ sessionId }: { sessionId: string | null | und
         </label>
 
         <AlertDialogFooter>
-          {/* Deny is the safer default — `autoFocus` shifts focus off
-              Allow so an accidental Enter cannot grant access. The
-              destructive outline keeps the visual hierarchy: Deny reads
-              as the cautious choice, Allow as the deliberate one. */}
+          {/* Deny is the safer default. Radix's AlertDialog already
+              auto-focuses Cancel on open via onOpenAutoFocus; the
+              explicit `autoFocus` is belt-and-suspenders. The visual
+              shift to outline-destructive is what really tells the
+              operator: Deny reads as the cautious choice, Allow as
+              the deliberate one. */}
           <AlertDialogCancel
             autoFocus
             onClick={() => void onAnswer("deny")}
