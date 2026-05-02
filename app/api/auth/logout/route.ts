@@ -7,6 +7,7 @@ import {
   verifySession,
 } from "@/libs/auth";
 import { checkCsrf } from "@/libs/csrf";
+import { DEMO_MODE } from "@/libs/demoMode";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,9 @@ export const dynamic = "force-dynamic";
  * idempotent.
  */
 export function POST(req: NextRequest) {
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   const csrf = checkCsrf(req);
   if (!csrf.ok) {
     return NextResponse.json(

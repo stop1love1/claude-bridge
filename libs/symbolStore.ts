@@ -14,8 +14,9 @@
  * Failure to refresh (any error) is swallowed — the previous cached
  * index is returned, never block a caller on symbol-build.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanSymbols, type SymbolIndex } from "./symbolIndex";
 
@@ -111,20 +112,10 @@ export function loadSymbolStore(): SymbolStore | null {
 
 export function saveSymbolStore(store: SymbolStore): void {
   ensureStateDir();
-  const path = storeFilePath();
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(store, null, 2), "utf8");
-  try {
-    renameSync(tmp, path);
-  } catch (err) {
-    // Windows can't rename over a locked file; fall back to delete+rename.
-    try {
-      if (existsSync(path)) unlinkSync(path);
-      renameSync(tmp, path);
-    } catch {
-      throw err;
-    }
-  }
+  // Shared atomic-write helper. The legacy `${path}.tmp` suffix raced
+  // under concurrent refreshes (multi-app dispatch) — see
+  // libs/atomicWrite.ts for the rationale on the unique-suffix scheme.
+  writeJsonAtomic(storeFilePath(), store);
   // Drop the cache so the next loadSymbolStore in this process reads
   // the freshly-written file rather than the pre-write snapshot.
   invalidateCache();

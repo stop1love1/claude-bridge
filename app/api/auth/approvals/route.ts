@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyRequestAuth } from "@/libs/auth";
+import { DEMO_MODE } from "@/libs/demoMode";
 import { listPendingLogins } from "@/libs/loginApprovals";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,9 @@ export const dynamic = "force-dynamic";
  * can spot fishy requests at a glance.
  */
 export function GET(req: NextRequest) {
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   if (!verifyRequestAuth(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

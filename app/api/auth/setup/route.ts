@@ -13,6 +13,7 @@ import {
 } from "@/libs/auth";
 import { checkCsrf } from "@/libs/csrf";
 import { getClientIp } from "@/libs/clientIp";
+import { DEMO_MODE } from "@/libs/demoMode";
 import { checkRateLimit } from "@/libs/rateLimit";
 import { clearSetupToken, verifySetupToken } from "@/libs/setupToken";
 
@@ -63,6 +64,13 @@ const SETUP_TOKEN_HEADER = "x-bridge-setup-token";
  * i.e., never, after a successful first run).
  */
 export async function POST(req: NextRequest) {
+  // /api/auth/* is excluded from the proxy matcher, so the proxy's
+  // demo-mode 503 never runs. A demo deployment that allowed setup
+  // would let a stranger create credentials on a host that was never
+  // meant to actually run agents.
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   // Rate-limit BEFORE any work — a LAN attacker who can reach the
   // bridge port and spoof `Host: localhost` would otherwise get
   // unconstrained guesses at the 32-byte setup token.

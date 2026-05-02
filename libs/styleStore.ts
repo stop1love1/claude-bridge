@@ -8,8 +8,9 @@
  * Pure mirror of `symbolStore` — see that module's comments for the
  * rationale on TTL, fail-soft, and Windows rename fallback.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanStyle, type StyleFingerprint } from "./styleFingerprint";
 
@@ -91,19 +92,10 @@ export function loadStyleStore(): StyleStore | null {
 
 export function saveStyleStore(store: StyleStore): void {
   ensureStateDir();
-  const path = storeFilePath();
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(store, null, 2), "utf8");
-  try {
-    renameSync(tmp, path);
-  } catch (err) {
-    try {
-      if (existsSync(path)) unlinkSync(path);
-      renameSync(tmp, path);
-    } catch {
-      throw err;
-    }
-  }
+  // Shared atomic-write helper with unique tmp suffix — see
+  // libs/atomicWrite.ts. The legacy `${path}.tmp` shared suffix raced
+  // when two style refreshes ran concurrently for different apps.
+  writeJsonAtomic(storeFilePath(), store);
   invalidateCache();
 }
 

@@ -5,6 +5,7 @@ import {
   loadAuthConfig,
   verifySession,
 } from "@/libs/auth";
+import { DEMO_MODE } from "@/libs/demoMode";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,9 @@ export const dynamic = "force-dynamic";
  * gets a 401 without ever hitting the handler.
  */
 export function GET(req: NextRequest) {
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   const cfg = loadAuthConfig();
   if (!cfg) return NextResponse.json({ configured: false }, { status: 200 });
   const token = req.cookies.get(COOKIE_NAME)?.value;

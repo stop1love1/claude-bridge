@@ -1,37 +1,25 @@
 import {
   mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
   existsSync,
-  unlinkSync,
 } from "node:fs";
 import { basename, join } from "node:path";
 import { EventEmitter } from "node:events";
+import { writeJsonAtomic } from "./atomicWrite";
 import type { TaskStatus, TaskSection } from "./tasks";
 import type { DetectedScopeCacheEntry } from "./detect/types";
 import { SESSIONS_DIR } from "./paths";
 
 /**
- * Write `meta.json` atomically: stage the new contents in a sibling
- * tempfile, then `rename` over the destination. `rename` is atomic on
- * POSIX and atomic-on-success on NTFS, so a crash mid-write leaves
- * either the old file or the new one — never a half-written one. The
- * temp file is also a per-call random suffix so two concurrent writes
- * can't trample each other's staging.
+ * Write `meta.json` atomically. Delegates to the shared
+ * `libs/atomicWrite.ts` helper, which stages to a unique
+ * `<file>.<pid>.<ms>.<rand>.tmp` and renames — so two concurrent
+ * writers can't trample each other's staging file. `rename` is atomic
+ * on POSIX and atomic-on-success on NTFS, so a crash mid-write leaves
+ * either the old file or the new — never a half-written one.
  */
 function atomicWriteJson(filePath: string, value: unknown): void {
-  const dir = filePath.slice(0, Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")));
-  mkdirSync(dir, { recursive: true });
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n");
-  try {
-    renameSync(tmp, filePath);
-  } catch (err) {
-    // Best-effort cleanup of the staged file before re-throwing.
-    try { unlinkSync(tmp); } catch { /* ignore */ }
-    throw err;
-  }
+  writeJsonAtomic(filePath, value);
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stale";

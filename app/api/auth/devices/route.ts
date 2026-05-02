@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   COOKIE_NAME,
   INTERNAL_TOKEN_HEADER,
+  constantTimeStringEqual,
   findTrustedDevice,
   loadAuthConfig,
   pruneExpired,
@@ -9,6 +10,7 @@ import {
   verifySession,
 } from "@/libs/auth";
 import { checkCsrf } from "@/libs/csrf";
+import { DEMO_MODE } from "@/libs/demoMode";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +34,7 @@ function requireAuth(
   const cfg = loadAuthConfig();
   if (!cfg) return { denied: NextResponse.json({ error: "auth not configured" }, { status: 503 }) };
   const internal = req.headers.get(INTERNAL_TOKEN_HEADER);
-  if (internal && cfg.internalToken && internal === cfg.internalToken) {
+  if (constantTimeStringEqual(internal, cfg.internalToken)) {
     return { denied: null, payload: null };
   }
   const token = req.cookies.get(COOKIE_NAME)?.value;
@@ -59,6 +61,9 @@ function requireAuth(
  * so the next page load on that device will redirect to /login.
  */
 export function GET(req: NextRequest) {
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   const auth = requireAuth(req);
   if (auth.denied) return auth.denied;
   const cfg = loadAuthConfig();
@@ -83,6 +88,9 @@ export function GET(req: NextRequest) {
 }
 
 export function DELETE(req: NextRequest) {
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   const csrf = checkCsrf(req);
   if (!csrf.ok) {
     return NextResponse.json(

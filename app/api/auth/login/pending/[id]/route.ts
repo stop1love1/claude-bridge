@@ -13,6 +13,7 @@ import {
   getPendingLogin,
 } from "@/libs/loginApprovals";
 import { getClientIp } from "@/libs/clientIp";
+import { DEMO_MODE } from "@/libs/demoMode";
 import { checkRateLimit } from "@/libs/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -50,6 +51,9 @@ const PENDING_LIMIT_PER_IP = 30;
  * device is expected to stop polling on any non-202 response.
  */
 export async function GET(req: NextRequest, ctx: Ctx) {
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   const { id } = await ctx.params;
   if (!id) {
     return NextResponse.json({ error: "id required" }, { status: 400 });

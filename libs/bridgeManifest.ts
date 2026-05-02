@@ -19,15 +19,11 @@
  * touching this file.
  */
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeStringAtomic } from "./atomicWrite";
 import { USER_CLAUDE_DIR } from "./paths";
 
 export const BRIDGE_JSON = join(USER_CLAUDE_DIR, "bridge.json");
@@ -104,25 +100,13 @@ export function onBridgeManifestWrite(fn: () => void): void {
 }
 
 function atomicWrite(contents: string): void {
-  mkdirSync(dirname(BRIDGE_JSON), { recursive: true });
-  // Pid + ms + random keeps the temp name unique even when two writes
-  // race within the same millisecond on the same Node process.
-  const tmp = `${BRIDGE_JSON}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
   // mode: 0o600 — bridge.json holds password hashes, the HMAC secret,
   // the internal-bypass token, and the ngrok authtoken. POSIX users
   // colocated on a multi-tenant box must not be able to `cat` it.
-  // Windows ignores the mode bit but the call succeeds either way.
-  writeFileSync(tmp, contents, { mode: 0o600 });
-  try {
-    renameSync(tmp, BRIDGE_JSON);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* ignore */ }
-    throw err;
-  }
-  // renameSync preserves the temp's mode on Linux; some macOS filesystems
-  // retain the destination inode's metadata across the rename so we
-  // chmod explicitly. No-op on Windows.
-  try { chmodSync(BRIDGE_JSON, 0o600); } catch { /* ignore (windows) */ }
+  // Windows ignores the mode bit; the helper applies it pre- and
+  // post-rename to defeat macOS variants that preserve the
+  // destination inode's metadata across rename.
+  writeStringAtomic(BRIDGE_JSON, contents, { mode: 0o600 });
 }
 
 /**
