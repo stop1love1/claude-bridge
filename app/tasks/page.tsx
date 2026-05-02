@@ -41,6 +41,11 @@ function Dashboard() {
     [router, searchParams],
   );
   const [tasks, setTasks] = useState<Task[]>([]);
+  // `true` until the first `refreshTasks()` settles. Without this, an
+  // empty initial array flashes the EmptyState ("No tasks yet") for a
+  // few hundred ms before real data arrives — the skeleton smooths
+  // that out and reads as "fetching" rather than "you have nothing".
+  const [tasksLoading, setTasksLoading] = useState(true);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [apps, setApps] = useState<App[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -55,6 +60,7 @@ function Dashboard() {
   const refreshTasks = useCallback(async () => {
     try { setTasks(await api.tasks()); }
     catch (e) { toast("error", (e as Error).message); }
+    finally { setTasksLoading(false); }
   }, [toast]);
 
   const refreshApps = useCallback(async () => {
@@ -168,22 +174,31 @@ function Dashboard() {
     const sessionsLine = runCount > 0
       ? `Also removes ${runCount} linked Claude session${runCount === 1 ? "" : "s"} from ~/.claude/projects/.`
       : "Also removes sessions/" + id + "/ metadata.";
-    const ok = await confirm({
+    // Async-confirm pattern (S4.6): the dialog keeps a spinner up while
+    // the DELETE round-trip and refresh fan-out runs, instead of
+    // closing optimistically and leaving the user staring at a stale
+    // grid for a beat. On error we toast immediately and re-throw so
+    // the dialog stays open and the user can retry.
+    await confirm({
       title: `Delete task ${id}?`,
       description: t ? `"${t.title}"\n\n${sessionsLine}` : sessionsLine,
       confirmLabel: "Delete",
       destructive: true,
+      onConfirm: async () => {
+        try {
+          const r = await api.deleteTask(id);
+          await refreshTasks();
+          await refreshAllMeta();
+          const msg = r.sessionsDeleted > 0
+            ? `Task deleted (${r.sessionsDeleted} session${r.sessionsDeleted === 1 ? "" : "s"} removed${r.sessionsFailed ? `, ${r.sessionsFailed} failed` : ""})`
+            : "Task deleted";
+          toast(r.sessionsFailed > 0 ? "error" : "info", msg);
+        } catch (e) {
+          toast("error", (e as Error).message);
+          throw e;
+        }
+      },
     });
-    if (!ok) return;
-    try {
-      const r = await api.deleteTask(id);
-      await refreshTasks();
-      await refreshAllMeta();
-      const msg = r.sessionsDeleted > 0
-        ? `Task deleted (${r.sessionsDeleted} session${r.sessionsDeleted === 1 ? "" : "s"} removed${r.sessionsFailed ? `, ${r.sessionsFailed} failed` : ""})`
-        : "Task deleted";
-      toast(r.sessionsFailed > 0 ? "error" : "info", msg);
-    } catch (e) { toast("error", (e as Error).message); }
   };
 
   const handleSelectSession = (s: SessionSummary) => {
@@ -367,6 +382,7 @@ function Dashboard() {
           metaByTask={metaByTask}
           activeTaskId={null}
           query={query}
+          loading={tasksLoading}
           onOpenTask={openTask}
           onQuickAdd={handleQuickAdd}
           onDeleteTask={handleDeleteTask}

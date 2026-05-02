@@ -7,6 +7,7 @@ import {
   Terminal, Copy, Check, ArrowDown, OctagonAlert,
   Undo2, Wrench,
   Search, X, ArrowUp, Download, MoreVertical, RotateCw,
+  Loader2,
 } from "lucide-react";
 import { exportSessionMarkdown, downloadFile } from "@/libs/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
@@ -340,12 +341,32 @@ function StreamingPartialRowConnected({
 }
 
 /**
- * "Waiting for session output…" placeholder, but suppressed when a
- * streaming partial is already accumulating. Subscribes to the same key
- * set as `StreamingPartialsList` so the placeholder vanishes the moment
- * the first token arrives — without forcing `SessionLogInner` itself to
- * subscribe (and thereby re-render on every token tick).
+ * Placeholder shown while a session has no entries and no streaming
+ * partial yet. Switches copy at 30s so the operator knows the spawn is
+ * taking longer than usual and where to look for errors. Subscribes to
+ * the same key set as `StreamingPartialsList` so the placeholder
+ * vanishes the moment the first token arrives — without forcing
+ * `SessionLogInner` itself to subscribe (and thereby re-render on every
+ * token tick).
  */
+function SpawnPlaceholder() {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    const h = setTimeout(() => setStalled(true), 30_000);
+    return () => clearTimeout(h);
+  }, []);
+  return (
+    <div className="flex items-start gap-2 text-muted-foreground text-[12px]">
+      <Loader2 size={14} className="animate-spin shrink-0 mt-0.5 text-primary" />
+      <span className="leading-relaxed">
+        {stalled
+          ? "Still spawning. Check the terminal where you started the bridge for errors."
+          : "Spawning coordinator… first response usually arrives in 5-15s."}
+      </span>
+    </div>
+  );
+}
+
 function EmptyOrStreaming({
   sessionId,
   scrollerRef,
@@ -358,7 +379,10 @@ function EmptyOrStreaming({
   const sub = useMemo(() => subscribePartialKeys(sessionId), [sessionId]);
   const keys = useSyncExternalStore(sub.subscribe, sub.getSnapshot, sub.getSnapshot);
   if (keys.length === 0) {
-    return <p className="text-muted-foreground italic">Waiting for session output…</p>;
+    // Remount on session change so the 30s timer restarts each time
+    // the operator opens a different run — otherwise `stalled` from a
+    // previous spawn would carry over and we'd lie to the user.
+    return <SpawnPlaceholder key={sessionId} />;
   }
   return (
     <StreamingPartialsList

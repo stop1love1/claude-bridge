@@ -69,6 +69,7 @@ export function PermissionDialog({ sessionId }: { sessionId: string | null | und
           </AlertDialogTitle>
           <AlertDialogDescription>
             Claude is requesting permission to run this tool in the current session.
+            {"\n"}Esc keeps the popup open. Click Deny to refuse.
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -87,7 +88,15 @@ export function PermissionDialog({ sessionId }: { sessionId: string | null | und
         </label>
 
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => void onAnswer("deny")} className="bg-destructive text-destructive-foreground hover:bg-destructive/90 border-transparent">
+          {/* Deny is the safer default — `autoFocus` shifts focus off
+              Allow so an accidental Enter cannot grant access. The
+              destructive outline keeps the visual hierarchy: Deny reads
+              as the cautious choice, Allow as the deliberate one. */}
+          <AlertDialogCancel
+            autoFocus
+            onClick={() => void onAnswer("deny")}
+            className="border-destructive text-destructive hover:bg-destructive/10"
+          >
             Deny
           </AlertDialogCancel>
           <AlertDialogAction onClick={() => void onAnswer("allow")}>
