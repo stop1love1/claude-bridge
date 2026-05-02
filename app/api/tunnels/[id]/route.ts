@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getTunnel, removeTunnel, stopTunnel } from "@/libs/tunnels";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,7 @@ export async function GET(
   const { id } = await params;
   const t = getTunnel(id);
   if (!t) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({ tunnel: t });
+  return ok({ tunnel: t });
 }
 
 /**
@@ -32,5 +33,5 @@ export async function DELETE(
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
   if (purge) removeTunnel(id);
-  return NextResponse.json({ ok: true });
+  return ok();
 }

@@ -131,6 +131,88 @@ describe("buildCoordinatorArgs", () => {
     );
     expect(b).not.toContain("--disallowed-tools");
   });
+
+  // S3.3 — explicit coverage for every settings key the gate accepts /
+  // rejects. The point isn't novelty; it's ensuring a future drift in
+  // VALID_MODES / VALID_EFFORT / the model regex breaks loudly here
+  // rather than silently letting an arbitrary string reach the CLI.
+  it.each([
+    "default",
+    "acceptEdits",
+    "plan",
+    "auto",
+    "bypassPermissions",
+    "dontAsk",
+  ] as const)("forwards the valid permission mode %s", (mode) => {
+    const args = buildCoordinatorArgs(
+      { role: "coordinator", taskId: "t_x", prompt: "", settings: { mode } },
+      "id",
+    );
+    expect(args).toContain("--permission-mode");
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe(mode);
+  });
+
+  it.each(["low", "medium", "high", "max"] as const)(
+    "forwards the valid effort %s",
+    (effort) => {
+      const args = buildCoordinatorArgs(
+        { role: "coordinator", taskId: "t_x", prompt: "", settings: { effort } },
+        "id",
+      );
+      expect(args).toContain("--effort");
+      expect(args[args.indexOf("--effort") + 1]).toBe(effort);
+    },
+  );
+
+  it("rejects model strings that contain shell or path traversal characters", () => {
+    // Plain alphanumerics + `.` `-` `_` only — anything that could
+    // smuggle a flag, glob, or path separator must not reach the CLI.
+    const reject = ["opus 4", "../etc/passwd", "model;rm -rf /", "model$(whoami)", ""];
+    for (const model of reject) {
+      const args = buildCoordinatorArgs(
+        { role: "coordinator", taskId: "t_x", prompt: "", settings: { model } },
+        "id",
+      );
+      expect(args, `model=${JSON.stringify(model)} should be rejected`).not.toContain("--model");
+    }
+  });
+
+  it("accepts model strings within the allowed charset", () => {
+    for (const model of ["opus", "claude-3.5-sonnet", "gpt-4_turbo", "model-2024.07"]) {
+      const args = buildCoordinatorArgs(
+        { role: "coordinator", taskId: "t_x", prompt: "", settings: { model } },
+        "id",
+      );
+      expect(args).toContain("--model");
+      expect(args[args.indexOf("--model") + 1]).toBe(model);
+    }
+  });
+
+  it("threads a settings file path through --settings before the streaming flags", () => {
+    const args = buildCoordinatorArgs(
+      {
+        role: "coordinator",
+        taskId: "t_x",
+        prompt: "",
+        settingsPath: "/tmp/sess.json",
+      },
+      "id",
+    );
+    const idx = args.indexOf("--settings");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("/tmp/sess.json");
+    // --settings must come BEFORE --output-format so that the streaming
+    // flags don't interleave with the per-spawn settings argument.
+    expect(idx).toBeLessThan(args.indexOf("--output-format"));
+  });
+
+  it("omits --settings when settingsPath is absent", () => {
+    const args = buildCoordinatorArgs(
+      { role: "coordinator", taskId: "t_x", prompt: "" },
+      "id",
+    );
+    expect(args).not.toContain("--settings");
+  });
 });
 
 /**

@@ -3,7 +3,6 @@ import {
   pathToSlug,
   tailJsonl,
   tailJsonlBefore,
-  findSessionByPrefix,
   listSessions,
   __resetScanHeadCacheForTests,
 } from "../sessions";
@@ -322,22 +321,6 @@ describe("scanSessionHead cache (via listSessions)", () => {
     const out = listSessions(dir);
     expect(out.map((s) => s.sessionId)).toEqual(["real"]);
     expect(out[0]?.preview).toBe("now real");
-  });
-});
-
-describe("findSessionByPrefix", () => {
-  it("finds the newest .jsonl whose first user message starts with prefix", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "sessions-"));
-    const old = join(dir, "old.jsonl");
-    const neu = join(dir, "new.jsonl");
-    const other = join(dir, "other.jsonl");
-    writeFileSync(old, `{"type":"user","message":{"role":"user","content":"[ROLE: coder] [TASK: t_20260424_001] hi"}}\n`);
-    writeFileSync(neu, `{"type":"user","message":{"role":"user","content":"[ROLE: coder] [TASK: t_20260424_001] hi"}}\n`);
-    writeFileSync(other, `{"type":"user","message":{"role":"user","content":"[ROLE: reviewer] [TASK: t_20260424_001] hi"}}\n`);
-    utimesSync(old, Date.now() / 1000 - 100, Date.now() / 1000 - 100);
-
-    const match = await findSessionByPrefix(dir, "[ROLE: coder] [TASK: t_20260424_001]");
-    expect(match).toBe(neu);
   });
 });
 

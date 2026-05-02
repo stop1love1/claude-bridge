@@ -8,6 +8,7 @@ import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { bustSessionsListCache } from "@/libs/sessionListCache";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,8 @@ type Ctx = { params: Promise<{ sessionId: string }> };
 /**
  * Delete a Claude Code session: removes the .jsonl from
  * `~/.claude/projects/<slug>/` and unlinks the session from any task's
- * meta.json. The bridge `tasks.md` entry stays — only the session goes.
+ * meta.json. Runtime task state lives in `meta.json`, so the task row
+ * itself is unaffected — only the linked session goes.
  *
  * The repo is required because the same sessionId could theoretically
  * collide across project dirs; we won't guess.
@@ -115,8 +117,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   // deletes never touch meta — without an explicit bust the next poll
   // would still surface the just-deleted row for up to TTL.
   bustSessionsListCache();
-  return NextResponse.json({
-    ok: true,
+  return ok({
     fileRemoved: removedFile,
     unlinkedFromTasks,
   });

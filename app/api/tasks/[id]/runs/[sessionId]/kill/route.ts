@@ -5,6 +5,7 @@ import { SESSIONS_DIR } from "@/libs/paths";
 import { killChild } from "@/libs/spawnRegistry";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest, isValidSessionId } from "@/libs/validate";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -52,5 +53,5 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     (r) => r.status === "running",
   );
 
-  return NextResponse.json({ ok: true, sessionId, action: "killed" });
+  return ok({ sessionId, action: "killed" });
 }

@@ -313,26 +313,6 @@ export async function tailJsonlBefore(
   }
 }
 
-export async function findSessionByPrefix(projectDir: string, prefix: string): Promise<string | null> {
-  let files: string[];
-  try { files = readdirSync(projectDir).filter((f) => f.endsWith(".jsonl")); }
-  catch { return null; }
-
-  const candidates = files
-    .map((f) => ({ path: join(projectDir, f), mtime: statSync(join(projectDir, f)).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime);
-
-  for (const c of candidates) {
-    try {
-      const first = readFileSync(c.path, "utf8").split("\n", 1)[0];
-      const obj = JSON.parse(first) as { type?: string; message?: { role?: string; content?: string } };
-      const content = obj?.message?.content ?? "";
-      if (obj.type === "user" && content.startsWith(prefix)) return c.path;
-    } catch { /* skip malformed */ }
-  }
-  return null;
-}
-
 export interface SessionEntry {
   sessionId: string;     // filename without .jsonl
   filePath: string;

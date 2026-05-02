@@ -67,17 +67,17 @@ export const api = {
     sessionId: string,
     body: { message: string; repo: string; settings?: ChatSettings },
   ) =>
-    req<{ ok: true }>(`/sessions/${sessionId}/message`, {
+    req<{ sessionId: string }>(`/sessions/${sessionId}/message`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
   killSession: (sessionId: string) =>
-    req<{ ok: true; sessionId: string; action: "killed" }>(
+    req<{ sessionId: string; action: "killed" }>(
       `/sessions/${sessionId}/kill`,
       { method: "POST" },
     ),
   killRun: (taskId: string, sessionId: string) =>
-    req<{ ok: true }>(
+    req<{ sessionId: string; action: "killed" }>(
       `/tasks/${taskId}/runs/${sessionId}/kill`,
       { method: "POST" },
     ),

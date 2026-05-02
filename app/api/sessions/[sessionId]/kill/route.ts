@@ -5,6 +5,7 @@ import { readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { killChild } from "@/libs/spawnRegistry";
 import { badRequest, isValidSessionId } from "@/libs/validate";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -54,5 +55,5 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     }
   }
 
-  return NextResponse.json({ ok: true, sessionId, action: "killed" });
+  return ok({ sessionId, action: "killed" });
 }

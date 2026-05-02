@@ -1,6 +1,12 @@
 /**
  * Safe error-to-response conversion for API routes.
  *
+ * Counterpart to `libs/apiResponse.ts` (success path). Together the two
+ * modules form the bridge's API response contract:
+ *
+ *   - Success → `ok()` / `ok(payload)` from `apiResponse.ts`
+ *   - Failure → `serverError(e, "context")` / `safeErrorMessage(e)` here
+ *
  * Why this exists: pre-existing routes returned `String(e)` or
  * `e.message` directly in JSON. Both leak information the operator's
  * filesystem shouldn't put on the wire:

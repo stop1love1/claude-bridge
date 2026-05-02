@@ -7,6 +7,7 @@ import { resolveRepoCwd } from "@/libs/repos";
 import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { getChild } from "@/libs/spawnRegistry";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -70,5 +71,5 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(tmp, payload);
   renameSync(tmp, file);
-  return NextResponse.json({ ok: true, kept: cutoff + 1, dropped: lines.length - cutoff - 1 });
+  return ok({ kept: cutoff + 1, dropped: lines.length - cutoff - 1 });
 }
