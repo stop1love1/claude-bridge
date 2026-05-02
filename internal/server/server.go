@@ -115,6 +115,18 @@ func NewHandler(cfg Config) http.Handler {
 	r.Get("/api/sessions/all", api.ListAllSessions)
 	r.Get("/api/usage", api.GetUsage)
 
+	// S16 — Apps registry
+	r.Get("/api/apps", api.ListApps)
+	r.Post("/api/apps", api.AddApp)
+	r.Get("/api/apps/{name}", api.GetApp)
+	r.Delete("/api/apps/{name}", api.DeleteApp)
+	r.Post("/api/apps/auto-detect", api.AutoDetectApps)
+
+	// S17 — Repos resolver + slash discovery
+	r.Get("/api/repos", api.ListRepos)
+	r.Get("/api/repos/{name}", api.GetRepo)
+	r.Get("/api/repos/{name}/slash-commands", api.ListRepoSlashCommands)
+
 	return r
 }
 
