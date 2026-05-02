@@ -1,0 +1,27 @@
+version: "2"
+
+# Limit linters to first-party Go code. node_modules ships some
+# vendored Go (e.g. node_modules/flatted/golang) that we don't own;
+# web/ is the Vite frontend; .next/ is Next.js build output; bin/
+# and dist/ are build artefacts.
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  exclusions:
+    paths:
+      - node_modules
+      - web
+      - "\\.next"
+      - bin
+      - dist
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-same-issues: 0
+  max-issues-per-linter: 0
