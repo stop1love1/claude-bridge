@@ -10,6 +10,7 @@ import { relativeTime } from "@/libs/client/time";
 import { STATUS_PILL, type DerivedStatus } from "@/libs/client/runStatus";
 import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { EmptyState } from "./ui/empty-state";
+import { Skeleton } from "./ui/skeleton";
 import { Button } from "./ui/button";
 import {
   Select,
@@ -202,6 +203,7 @@ export function TaskGrid({
   metaByTask,
   activeTaskId,
   query,
+  loading = false,
   onOpenTask,
   onQuickAdd,
   onDeleteTask,
@@ -213,6 +215,10 @@ export function TaskGrid({
   metaByTask: Map<string, Meta>;
   activeTaskId: string | null;
   query: string;
+  /** `true` while the parent's first task fetch is in flight. We swap
+   *  the EmptyState ("No tasks yet") for skeleton rows so the page
+   *  doesn't briefly read as empty before data lands. */
+  loading?: boolean;
   onOpenTask: (id: string) => void;
   onQuickAdd: (body: string) => void;
   onDeleteTask: (id: string) => void;
@@ -412,14 +418,38 @@ export function TaskGrid({
 
       <div className="flex-1 overflow-y-auto pb-16">
         {sorted.length === 0 ? (
-          <div className="h-full flex items-center justify-center p-6">
-            <EmptyState
-              icon={Inbox}
-              title={q ? "No matches" : "No tasks yet"}
-              hint={q ? "Try a different search term." : "Press ⌘N or click New task to get started."}
-              className="max-w-sm"
-            />
-          </div>
+          loading ? (
+            // First-mount: render skeleton rows in the same grid the
+            // real cards will use. Without this the EmptyState flashes
+            // for ~hundreds of ms before the initial fetch settles.
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-4">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="rounded-lg border border-border p-3 bg-card">
+                  <div className="flex items-start gap-2">
+                    <Skeleton className="h-4 w-4 rounded-sm shrink-0 mt-0.5" />
+                    <Skeleton className="h-3.5 flex-1" />
+                    <Skeleton className="h-3 w-12 rounded-full shrink-0" />
+                  </div>
+                  <div className="mt-3 ml-6 flex items-center gap-2">
+                    <Skeleton className="h-2.5 w-16" />
+                    <Skeleton className="h-2.5 w-12" />
+                  </div>
+                  <div className="mt-2 ml-6">
+                    <Skeleton className="h-2 w-20" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="h-full flex items-center justify-center p-6">
+              <EmptyState
+                icon={Inbox}
+                title={q ? "No matches" : "No tasks yet"}
+                hint={q ? "Try a different search term." : "Press ⌘N or click New task to get started."}
+                className="max-w-sm"
+              />
+            </div>
+          )
         ) : layout === "grid" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-4">
             {sorted.map((t) => renderCard(t))}

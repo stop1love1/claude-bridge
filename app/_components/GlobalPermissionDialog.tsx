@@ -66,6 +66,7 @@ export function GlobalPermissionDialog() {
             <span className="font-mono text-[11px] text-muted-foreground">
               session {current.sessionId.slice(0, 8)}…
             </span>
+            {"\n"}Esc keeps the popup open. Click Deny to refuse.
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -84,9 +85,12 @@ export function GlobalPermissionDialog() {
         </label>
 
         <AlertDialogFooter>
+          {/* Deny is the safer default — see PermissionDialog.tsx for
+              the focus-hierarchy rationale. */}
           <AlertDialogCancel
+            autoFocus
             onClick={() => void onAnswer("deny")}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90 border-transparent"
+            className="border-destructive text-destructive hover:bg-destructive/10"
           >
             Deny
           </AlertDialogCancel>

@@ -397,8 +397,10 @@ function TaskPageInner() {
       </div>
 
       {/* Mobile-only tab bar — picks which panel takes the full height
-          below. Hidden on lg+ where both panels render side-by-side. */}
-      <div className="lg:hidden shrink-0 flex border-b border-border bg-card">
+          below. Hidden on md+ where both panels render side-by-side
+          (detail pane gets a constrained max-width so the chat keeps
+          breathing room on iPad-portrait widths). */}
+      <div className="md:hidden shrink-0 flex border-b border-border bg-card">
         <button
           type="button"
           onClick={() => setMobileTabWithUrl("detail")}
@@ -425,11 +427,11 @@ function TaskPageInner() {
         </button>
       </div>
 
-      <main className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
+      <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
         {/* Both panels stay mounted (display:none vs flex) so editor
             state and scroll position survive a tab switch. */}
         <div
-          className={`flex-1 min-h-0 lg:flex lg:flex-1 lg:min-w-0 lg:max-w-2xl xl:max-w-3xl lg:border-r border-border ${
+          className={`flex-1 min-h-0 md:flex md:flex-1 md:min-w-0 md:max-w-md lg:max-w-2xl xl:max-w-3xl md:border-r border-border ${
             mobileTab === "detail" ? "flex" : "hidden"
           }`}
         >
@@ -445,7 +447,7 @@ function TaskPageInner() {
           />
         </div>
         <div
-          className={`flex-1 min-w-0 min-h-0 lg:flex ${
+          className={`flex-1 min-w-0 min-h-0 md:flex ${
             mobileTab === "chat" ? "flex" : "hidden"
           }`}
         >
