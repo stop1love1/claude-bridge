@@ -82,6 +82,36 @@ func NewHandler(cfg Config) http.Handler {
 	r.Post("/api/tasks/{id}/link", api.LinkSession)
 	r.Get("/api/tasks/{id}/events", api.TaskEvents)
 	r.Post("/api/tasks/{id}/detect/refresh", api.DetectRefresh)
+
+	// S26 — Tunnels
+	r.Get("/api/tunnels", api.ListTunnels)
+	r.Post("/api/tunnels", api.CreateTunnel)
+	r.Delete("/api/tunnels/{id}", api.StopTunnel)
+	r.Get("/api/tunnels/providers", api.ListTunnelProviders)
+	r.Post("/api/tunnels/providers/ngrok/install", api.InstallNgrok)
+	r.Get("/api/tunnels/providers/ngrok/authtoken", api.GetNgrokAuthtoken)
+	r.Post("/api/tunnels/providers/ngrok/authtoken", api.SetNgrokAuthtoken)
+
+	// S27 — Upload
+	r.Post("/api/sessions/{sessionId}/upload", api.SessionUpload)
+	r.Get("/api/uploads/{sid}/{name}", api.GetUpload)
+
+	// S28 — Permission
+	r.Get("/api/permission", api.ListAllPermissions)
+	r.Post("/api/permission", api.AnnouncePermission)
+	r.Post("/api/permission/{requestId}", api.AnswerPermission)
+	r.Get("/api/permission/stream", api.PermissionStream)
+	r.Get("/api/sessions/{sessionId}/permission", api.SessionPermissions)
+	r.Get("/api/sessions/{sessionId}/permission/{requestId}", api.GetSessionPermission)
+	r.Post("/api/sessions/{sessionId}/permission/{requestId}", api.DecideSessionPermission)
+
+	// S29 — Misc routes
+	r.Get("/api/sessions/{sessionId}/tail", api.SessionTail)
+	r.Post("/api/sessions/{sessionId}/kill", api.SessionKill)
+	r.Post("/api/sessions/{sessionId}/message", api.SessionMessage)
+	r.Post("/api/sessions/{sessionId}/rewind", api.SessionRewind)
+	r.Get("/api/bridge/settings", api.GetBridgeSettings)
+	r.Put("/api/bridge/settings", api.PutBridgeSettings)
 	r.Get("/api/sessions/all", api.ListAllSessions)
 	r.Get("/api/usage", api.GetUsage)
 
