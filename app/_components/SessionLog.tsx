@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Repo } from "@/libs/client/types";
 import { api } from "@/libs/client/api";
 import {
@@ -41,6 +41,13 @@ import {
   ToolResultView,
   ToolUseView,
 } from "./SessionLog/views";
+import {
+  appendPartial,
+  clearPartials,
+  dropOnArrival,
+  subscribePartialKeys,
+  subscribePartialText,
+} from "./SessionLog/partialsStore";
 
 
 /**
@@ -246,6 +253,122 @@ const LogRow = memo(function LogRow({
   return true;
 });
 
+/**
+ * Subscribes to the streaming-partial key set for `sessionId` and
+ * renders one `StreamingPartialRowConnected` per active key. The key
+ * set changes only when a streaming message starts or finishes; pure
+ * text growth on an existing key does NOT change the key set, so this
+ * list itself doesn't re-render on token deltas — only the individual
+ * row whose text grew does.
+ *
+ * `scrollerRef` + `autoScroll` are forwarded so the streaming row can
+ * pin the parent's bottom edge as text grows. We do that here (rather
+ * than a generic `useEffect([partials])` in `SessionLogInner`) precisely
+ * because the latter would defeat the whole point of lifting partials
+ * out — it would re-run on every token tick.
+ */
+const StreamingPartialsList = memo(function StreamingPartialsList({
+  sessionId,
+  scrollerRef,
+  autoScroll,
+}: {
+  sessionId: string;
+  scrollerRef: React.RefObject<HTMLDivElement | null>;
+  autoScroll: boolean;
+}) {
+  const sub = useMemo(() => subscribePartialKeys(sessionId), [sessionId]);
+  const keys = useSyncExternalStore(sub.subscribe, sub.getSnapshot, sub.getSnapshot);
+  if (keys.length === 0) return null;
+  return (
+    <>
+      {keys.map((id) => (
+        <StreamingPartialRowConnected
+          key={`live-${id}`}
+          sessionId={sessionId}
+          messageId={id}
+          scrollerRef={scrollerRef}
+          autoScroll={autoScroll}
+        />
+      ))}
+    </>
+  );
+});
+
+/**
+ * One streaming "ghost" assistant row, wired to its own slot in the
+ * partials store. Renders `StreamingAssistantRow` with the live text
+ * and pins the parent scroller's bottom edge as the text grows so the
+ * tail doesn't slide behind the composer. Only this component re-renders
+ * on token deltas — siblings (the canonical chat rows) are unaffected.
+ */
+function StreamingPartialRowConnected({
+  sessionId,
+  messageId,
+  scrollerRef,
+  autoScroll,
+}: {
+  sessionId: string;
+  messageId: string;
+  scrollerRef: React.RefObject<HTMLDivElement | null>;
+  autoScroll: boolean;
+}) {
+  const sub = useMemo(
+    () => subscribePartialText(sessionId, messageId),
+    [sessionId, messageId],
+  );
+  const text = useSyncExternalStore(sub.subscribe, sub.getSnapshot, sub.getSnapshot);
+  // Pin the bottom edge each time our text grows. Reading the latest
+  // `autoScroll` through a ref so the effect doesn't tear down on every
+  // toggle — keeps scroll behavior in step with the user's preference.
+  const autoScrollRef = useRef(autoScroll);
+  useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
+  useEffect(() => {
+    if (!autoScrollRef.current) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    // RAF so the layout pass that placed our updated text is settled
+    // before we measure scrollHeight.
+    const r = requestAnimationFrame(() => {
+      if (autoScrollRef.current && scrollerRef.current) {
+        scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+      }
+    });
+    return () => cancelAnimationFrame(r);
+  }, [text, scrollerRef]);
+  if (!text.trim()) return null;
+  return <StreamingAssistantRow text={text} />;
+}
+
+/**
+ * "Waiting for session output…" placeholder, but suppressed when a
+ * streaming partial is already accumulating. Subscribes to the same key
+ * set as `StreamingPartialsList` so the placeholder vanishes the moment
+ * the first token arrives — without forcing `SessionLogInner` itself to
+ * subscribe (and thereby re-render on every token tick).
+ */
+function EmptyOrStreaming({
+  sessionId,
+  scrollerRef,
+  autoScroll,
+}: {
+  sessionId: string;
+  scrollerRef: React.RefObject<HTMLDivElement | null>;
+  autoScroll: boolean;
+}) {
+  const sub = useMemo(() => subscribePartialKeys(sessionId), [sessionId]);
+  const keys = useSyncExternalStore(sub.subscribe, sub.getSnapshot, sub.getSnapshot);
+  if (keys.length === 0) {
+    return <p className="text-muted-foreground italic">Waiting for session output…</p>;
+  }
+  return (
+    <StreamingPartialsList
+      sessionId={sessionId}
+      scrollerRef={scrollerRef}
+      autoScroll={autoScroll}
+    />
+  );
+}
+
 function SessionLogInner({
   run,
   repos,
@@ -265,11 +388,14 @@ function SessionLogInner({
   const [lastTs, setLastTs] = useState<number>(0);
   const [pinnedUserUuid, setPinnedUserUuid] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  // Live token-streaming buffers, keyed by assistant message id (msg_…)
-  // emitted by claude's stream_event/message_start. We append on every
-  // content_block_delta/text_delta and drop the entry once the canonical
-  // assistant line lands in `entries` with the matching message.id.
-  const [partials, setPartials] = useState<Record<string, string>>({});
+  // Live token-streaming buffers live in `partialsStore` (a module-level
+  // `useSyncExternalStore` source) keyed by sessionId+messageId. Lifting
+  // them out of SessionLogInner's `useState` keeps token deltas (~50/s
+  // on a long reply) from re-reconciling the entire 300-row chat tree —
+  // only the streaming "ghost" row subscribes to its own buffer, and a
+  // small list-of-keys subscriber drives the row map. The remount-on-
+  // session-change wrapper ensures store entries from a previous session
+  // are dropped via the GC inside `subscribePartialKeys.subscribe`.
   // Server-reported child-process state. null until the first `alive`
   // SSE event arrives — until then we fall back to the lastTs heuristic
   // so the UI doesn't lose its responding indicator on a stream blip.
@@ -355,19 +481,12 @@ function SessionLogInner({
       // message_start yet.
       const arrivedAssistant = lines.some((l) => l?.type === "assistant");
       if (arrivedAssistant) {
-        setPartials((prev) => {
-          const next = { ...prev };
-          for (const l of lines) {
-            const id = l?.message?.id;
-            if (typeof id === "string" && next[id] !== undefined) {
-              delete next[id];
-            }
-          }
-          for (const k of Object.keys(next)) {
-            if (k.startsWith("live:")) delete next[k];
-          }
-          return next;
-        });
+        const arrivedIds: string[] = [];
+        for (const l of lines) {
+          const id = l?.message?.id;
+          if (typeof id === "string") arrivedIds.push(id);
+        }
+        dropOnArrival(run.sessionId, arrivedIds);
       }
       startTransition(() => {
         setEntries((prev) => {
@@ -440,19 +559,11 @@ function SessionLogInner({
             text: string;
           };
           if (!p?.text) return;
-          setPartials((prev) => {
-            // Cap per-message buffer to ~256 KB. A pathologically long
-            // model response (10k+ tokens) would otherwise hold the
-            // entire stream in React state until the canonical .jsonl
-            // line lands and replaces the partial — burning memory
-            // and re-rendering every keystroke. The canonical line
-            // is the source of truth anyway; once we hit the cap,
-            // stop appending and keep what we have.
-            const PARTIAL_CAP_BYTES = 256 * 1024;
-            const cur = prev[p.messageId] ?? "";
-            if (cur.length >= PARTIAL_CAP_BYTES) return prev;
-            return { ...prev, [p.messageId]: cur + p.text };
-          });
+          // Per-message cap (~256 KB) is enforced inside the store so a
+          // pathologically long reply can't pin React state. The store
+          // notifies only the streaming row's subscriber — the rest of
+          // the tree never re-renders on token deltas.
+          appendPartial(run.sessionId, p.messageId, p.text);
           // Treat partial deltas as activity for the responding-indicator
           // fallback so the indicator stays warm on long replies.
           setLastTs(Date.now());
@@ -477,7 +588,7 @@ function SessionLogInner({
             aliveSweepTimer = setTimeout(() => {
               aliveSweepTimer = null;
               if (stopped) return;
-              setPartials((prev) => (Object.keys(prev).length ? {} : prev));
+              clearPartials(run.sessionId);
             }, 2000);
           }
         } catch { /* malformed — ignore */ }
@@ -836,11 +947,11 @@ function SessionLogInner({
     requestAnimationFrame(() => {
       if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
     });
-    // `partials` is in the dep set so streaming assistant text follows
-    // the bottom edge as tokens arrive — without it, a long reply
-    // streaming in clips its tail behind the composer until the message
-    // finalises.
-  }, [visibleEntries, partials, autoScroll]);
+    // Streaming-token-driven autoscroll is handled in
+    // `<StreamingPartialsList>` below — the streaming row observes its
+    // own resize and pins the parent's bottom edge as text grows. That
+    // keeps SessionLogInner itself out of the per-token re-render loop.
+  }, [visibleEntries, autoScroll]);
 
   // Sibling rows below the scroll panel (ActivityRow flipping out of
   // idle, InlinePermissionRequests appearing, the composer growing
@@ -1230,8 +1341,8 @@ function SessionLogInner({
               … {trimmed} earlier entries trimmed
             </p>
           )}
-          {visibleEntries.length === 0 && Object.keys(partials).length === 0 ? (
-            <p className="text-muted-foreground italic">Waiting for session output…</p>
+          {visibleEntries.length === 0 ? (
+            <EmptyOrStreaming sessionId={run.sessionId} scrollerRef={logRef} autoScroll={autoScroll} />
           ) : (
             <>
               {visibleEntries.map((e, i) => {
@@ -1264,11 +1375,7 @@ function SessionLogInner({
                   </div>
                 );
               })}
-              {Object.entries(partials).map(([id, text]) =>
-                text.trim() ? (
-                  <StreamingAssistantRow key={`live-${id}`} text={text} />
-                ) : null,
-              )}
+              <StreamingPartialsList sessionId={run.sessionId} scrollerRef={logRef} autoScroll={autoScroll} />
             </>
           )}
         </div>

@@ -101,6 +101,14 @@ export interface TailResult {
   lineOffsets: number[];
 }
 
+/**
+ * Chunk size for `tailJsonl`'s streaming read. Picked at 256 KB as a
+ * balance: large enough that typical session-log appends (a few KB per
+ * tail tick) finish in one syscall, small enough that a multi-MB tail
+ * after a long offline gap doesn't hold the entire window in RAM.
+ */
+const TAIL_CHUNK_BYTES = 256 * 1024;
+
 export async function tailJsonl(filePath: string, fromOffset: number): Promise<TailResult> {
   // The file may be deleted between this call and the next (task
   // delete races a live SSE tail). Wrap stat + open in a try so a
@@ -120,37 +128,83 @@ export async function tailJsonl(filePath: string, fromOffset: number): Promise<T
     return { lines: [], offset: fromOffset, lineOffsets: [] };
   }
   try {
-    // The file size we just read could shrink between stat and read (log
-    // rotation, task delete, truncation). `readSync` reports the actual
-    // bytes pulled — slice to that, never trust the original size.
-    const buf = Buffer.alloc(size - fromOffset);
-    const bytesRead = readSync(fd, buf, 0, buf.length, fromOffset);
-    if (bytesRead === 0) return { lines: [], offset: fromOffset, lineOffsets: [] };
-    const data = buf.subarray(0, bytesRead);
-    // Work on raw bytes for offset bookkeeping. `\n` (0x0A) is a single
-    // byte in UTF-8 and never appears inside a multi-byte sequence, so
-    // splitting on byte boundaries is correct even if the read sliced a
-    // multi-byte char at the tail (we exclude that partial trailing line
-    // by stopping at the last `\n` byte).
-    const lastNewlineByte = data.lastIndexOf(0x0A);
-    if (lastNewlineByte === -1) return { lines: [], offset: fromOffset, lineOffsets: [] };
+    // Stream the tail in fixed-size chunks rather than allocating a
+    // single `Buffer.alloc(size - fromOffset)`. A long-offline reconnect
+    // can push that allocation into the tens-of-MB range, which is
+    // wasteful when the caller almost always wants to incrementally
+    // forward the offset cursor.
+    //
+    // We assemble whole lines on raw bytes (not decoded strings): `\n`
+    // (0x0A) is a single byte in UTF-8 and never appears inside a
+    // multi-byte sequence, so byte-level newline splitting is safe even
+    // when a chunk boundary falls inside a multi-byte char. The full
+    // line is `toString("utf8")`-decoded only after the newline closes
+    // it, by which point every multi-byte sequence in the line is
+    // complete.
+    const buf = Buffer.alloc(TAIL_CHUNK_BYTES);
     const lines: unknown[] = [];
     const lineOffsets: number[] = [];
-    let lineStart = 0;
-    for (let i = 0; i <= lastNewlineByte; i++) {
-      if (data[i] !== 0x0A) continue;
-      const lineBytes = data.subarray(lineStart, i);
-      if (lineBytes.length > 0) {
-        const text = lineBytes.toString("utf8");
-        try { lines.push(JSON.parse(text)); }
-        catch { lines.push({ __raw: text, __parseError: true }); }
-        lineOffsets.push(fromOffset + lineStart);
+    // Bytes pending for the in-progress line. Replaced on each newline.
+    let pending: Buffer = Buffer.alloc(0);
+    // Absolute file offset where `pending` begins.
+    let pendingStart = fromOffset;
+    // Total bytes read so far (relative to fromOffset). Used to advance
+    // the cursor and to compute the absolute byte position of the next
+    // newline we encounter.
+    let consumed = 0;
+    // Highest absolute offset we've fully closed off with a newline.
+    // Becomes the result `offset` cursor.
+    let lastNewlineAbsEnd = fromOffset;
+
+    while (true) {
+      // The file size we just read could shrink between stat and read
+      // (log rotation, task delete, truncation). `readSync` returns 0
+      // at EOF — trust that, never the original `size`.
+      const n = readSync(fd, buf, 0, TAIL_CHUNK_BYTES, fromOffset + consumed);
+      if (n === 0) break;
+      const chunk = buf.subarray(0, n);
+      // Walk the chunk byte-by-byte looking for newlines. Splitting a
+      // multi-byte UTF-8 sequence across the chunk boundary is fine —
+      // we accumulate raw bytes into `pending` and only decode at line
+      // boundaries, by which point the sequence is complete.
+      let lineStartInChunk = 0;
+      for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] !== 0x0A) continue;
+        // Absolute end-byte (just past the newline) of this completed line.
+        const absLineEnd = fromOffset + consumed + i + 1;
+        // Bytes belonging to the current line: pending leftovers plus
+        // whatever fell in this chunk before the newline.
+        const tailBytes = chunk.subarray(lineStartInChunk, i);
+        const lineBytes = pending.length === 0
+          ? tailBytes
+          : Buffer.concat([pending, tailBytes]);
+        if (lineBytes.length > 0) {
+          const text = lineBytes.toString("utf8");
+          try { lines.push(JSON.parse(text)); }
+          catch { lines.push({ __raw: text, __parseError: true }); }
+          lineOffsets.push(pendingStart);
+        }
+        lastNewlineAbsEnd = absLineEnd;
+        // Reset for the next line.
+        pending = Buffer.alloc(0);
+        pendingStart = absLineEnd;
+        lineStartInChunk = i + 1;
       }
-      lineStart = i + 1;
+      // Carry over the unfinished tail of this chunk.
+      if (lineStartInChunk < chunk.length) {
+        const tailBytes = chunk.subarray(lineStartInChunk);
+        pending = pending.length === 0
+          ? Buffer.from(tailBytes)
+          : Buffer.concat([pending, tailBytes]);
+      }
+      consumed += n;
+      if (n < TAIL_CHUNK_BYTES) break;
     }
+    // Drop the trailing partial line — the cursor must always land on a
+    // line boundary so the next call doesn't double-emit it.
     return {
       lines,
-      offset: fromOffset + lastNewlineByte + 1,
+      offset: lastNewlineAbsEnd,
       lineOffsets,
     };
   } finally {
@@ -329,6 +383,72 @@ function extractText(content: unknown): string {
 }
 
 /**
+ * Cache for `scanSessionHead`: keyed by `${path}:${mtimeMs}:${size}` so a
+ * file rewrite (which always changes either mtime or size) misses the
+ * cache, while a steady-state file (most older sessions never change
+ * after the run ends) is read at most once. Capped at 256 entries with
+ * insertion-order eviction — Map preserves insertion order, so the
+ * oldest insertion is the first iterator key, deleted when we exceed
+ * the cap.
+ *
+ * Cache only successful parses. We never cache stat / read failures so
+ * a transient ENOENT / EMFILE doesn't poison the entry until the next
+ * file mutation.
+ */
+const SCAN_HEAD_CACHE_MAX = 256;
+const scanHeadCache = new Map<string, { hasRealEntry: boolean; preview: string }>();
+
+function scanHeadCacheKey(path: string, mtimeMs: number, size: number): string {
+  return `${path}:${mtimeMs}:${size}`;
+}
+
+function scanSessionHead(filePath: string): { hasRealEntry: boolean; preview: string } {
+  // Stat upfront so the cache key reflects the on-disk file we're about
+  // to read. A failure here is non-cacheable; fall through to the
+  // uncached read which returns `{false,""}` for a missing file.
+  // mtime is sampled via `st.mtime.getTime()` (integer ms) rather than
+  // `st.mtimeMs` (sub-ms precision on POSIX): integer ms is stable
+  // across utimesSync round-trips and matches Windows' native granularity.
+  let mtimeMs = 0;
+  let size = 0;
+  let cacheable = false;
+  try {
+    const st = statSync(filePath);
+    mtimeMs = st.mtime.getTime();
+    size = st.size;
+    cacheable = true;
+  } catch { /* fall through to uncached */ }
+  if (cacheable) {
+    const key = scanHeadCacheKey(filePath, mtimeMs, size);
+    const hit = scanHeadCache.get(key);
+    if (hit) {
+      // Insertion-order LRU bump: re-insert so a hot key moves to the
+      // tail and isn't the next eviction candidate.
+      scanHeadCache.delete(key);
+      scanHeadCache.set(key, hit);
+      return hit;
+    }
+    const value = scanSessionHeadUncached(filePath);
+    scanHeadCache.set(key, value);
+    if (scanHeadCache.size > SCAN_HEAD_CACHE_MAX) {
+      const oldest = scanHeadCache.keys().next().value;
+      if (oldest !== undefined) scanHeadCache.delete(oldest);
+    }
+    return value;
+  }
+  return scanSessionHeadUncached(filePath);
+}
+
+/**
+ * Test helper: drop everything in the scanSessionHead cache. Exported
+ * so unit tests can verify miss-on-mtime-change without colliding with
+ * other tests' cached entries.
+ */
+export function __resetScanHeadCacheForTests(): void {
+  scanHeadCache.clear();
+}
+
+/**
  * Stream a .jsonl session file in 16 KB chunks, returning whether it
  * contains at least one real conversation turn (`user` / `assistant` /
  * `summary`) and the first user-line preview if present. Bounded at
@@ -342,7 +462,7 @@ function extractText(content: unknown): string {
  * lives well past byte 8192. A small head window silently hides every such
  * session as a "stub".
  */
-function scanSessionHead(filePath: string): { hasRealEntry: boolean; preview: string } {
+function scanSessionHeadUncached(filePath: string): { hasRealEntry: boolean; preview: string } {
   let fd: number;
   try { fd = openSync(filePath, "r"); }
   catch { return { hasRealEntry: false, preview: "" }; }
