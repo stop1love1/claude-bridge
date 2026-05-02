@@ -9,7 +9,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -19,6 +18,8 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
+
+	"github.com/stop1love1/claude-bridge/internal/api"
 )
 
 // Config controls how a server instance is constructed. Zero values are
@@ -36,6 +37,17 @@ type Config struct {
 // New returns an *http.Server with all middleware and routes wired up.
 // The caller owns ListenAndServe / Shutdown.
 func New(cfg Config) *http.Server {
+	return &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           NewHandler(cfg),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+}
+
+// NewHandler returns just the chi router with all middleware mounted.
+// Exposed for in-process tests (httptest, contract framework) which
+// don't want to bind a real port.
+func NewHandler(cfg Config) http.Handler {
 	if len(cfg.AllowedOrigins) == 0 {
 		cfg.AllowedOrigins = []string{"http://localhost:7777"}
 	}
@@ -57,12 +69,9 @@ func New(cfg Config) *http.Server {
 
 	startedAt := time.Now()
 	r.Get("/api/health", healthHandler(cfg.Version, startedAt))
+	r.Get("/api/tasks/meta", api.ListTasksMeta)
 
-	return &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           r,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	return r
 }
 
 type healthResponse struct {
@@ -72,20 +81,12 @@ type healthResponse struct {
 }
 
 func healthHandler(version string, startedAt time.Time) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, r, http.StatusOK, healthResponse{
+	return func(w http.ResponseWriter, _ *http.Request) {
+		api.WriteJSON(w, http.StatusOK, healthResponse{
 			Status:  "ok",
 			Version: version,
 			Uptime:  time.Since(startedAt).Seconds(),
 		})
-	}
-}
-
-func writeJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		hlog.FromRequest(r).Err(err).Msg("encode response")
 	}
 }
 

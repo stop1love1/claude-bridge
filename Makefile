@@ -56,14 +56,12 @@ build-go:
 test:
 	go test ./...
 
-# Contract framework lands in S04. Until then the target prints a stub
-# and exits 0 so CI's `make contract` stage is green during phase 0.
+# OpenAPI contract verifier — bytewise diff between Go handlers and
+# golden files captured from Next. See test/contract/README.md for the
+# per-endpoint workflow. Same Verify code path runs under `make test`
+# via test/contract/contract_test.go.
 contract:
-	@if [ -d cmd/contract ]; then \
-		go run ./cmd/contract verify-all; \
-	else \
-		echo ">> contract framework lands in S04"; \
-	fi
+	go run ./cmd/contract verify-all
 
 lint:
 	golangci-lint run ./...
