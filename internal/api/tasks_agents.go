@@ -178,6 +178,28 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Branch-Warning", branchErr.Error())
 	}
 
+	// Worktree isolation — when the app opted in (worktreeMode is
+	// sourced from extras since git.Settings doesn't carry it
+	// today), allocate a private `<appRoot>/.worktrees/<sid>/` git
+	// worktree. The child spawns there and the post-exit cascade
+	// merges the worktree branch back via git.MergeWorktreeBack.
+	// Failure → fall back to the live tree (non-fatal); the warning
+	// surfaces via the X-Worktree-Warning response header.
+	spawnCwd := cwd
+	worktreeMode := decodeStringField(app, "git", "worktreeMode")
+	var wt git.Worktree
+	useWorktree := false
+	if worktreeMode == "enabled" {
+		newWT, werr := git.CreateWorktreeForRun(cwd, fmt.Sprintf("agent-%s", id), branch)
+		if werr != nil {
+			w.Header().Add("X-Worktree-Warning", werr.Error())
+		} else {
+			wt = newWT
+			useWorktree = true
+			spawnCwd = wt.Path
+		}
+	}
+
 	// Build the child prompt. Optional context (pinned files, symbol
 	// index, style fingerprint, memory, house rules, playbook) is
 	// loaded best-effort — missing pieces just skip their section.
@@ -285,13 +307,16 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := spawnerInstance.SpawnFreeSession(cwd, prompt, nil, "", childSessionID)
+	sess, err := spawnerInstance.SpawnFreeSession(spawnCwd, prompt, nil, "", childSessionID)
 	if err != nil {
 		_, _ = meta.UpdateRun(dir, childSessionID, func(r *meta.Run) {
 			r.Status = meta.RunStatusFailed
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			r.EndedAt = &now
 		}, nil)
+		if useWorktree {
+			_ = git.RemoveWorktree(cwd, fmt.Sprintf("agent-%s", id))
+		}
 		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
@@ -300,23 +325,112 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 	_, _ = meta.UpdateRun(dir, childSessionID, func(r *meta.Run) {
 		r.Status = meta.RunStatusRunning
 		r.StartedAt = &startedAt
+		if useWorktree {
+			path := wt.Path
+			b := wt.Branch
+			base := wt.BaseBranch
+			r.WorktreePath = &path
+			r.WorktreeBranch = &b
+			r.WorktreeBaseBranch = &base
+		}
 	}, nil)
 
-	runlifecycle.Wire(dir, childSessionID, sess.Done, func() int {
+	// Verify chain hook — if the app declared a verify map in its
+	// extras, run those commands after a clean exit and persist the
+	// outcome to meta.runs[].verify. Failure of the chain doesn't
+	// retry yet (LLM-driven retry cascade is out of scope); it just
+	// logs the verdict to the run row.
+	verifyHook := buildVerifyHook(app, spawnCwd)
+	exitCodeFn := func() int {
 		if sess.Cmd == nil || sess.Cmd.ProcessState == nil {
 			return -1
 		}
 		return sess.Cmd.ProcessState.ExitCode()
-	}, fmt.Sprintf("agent %s/%s/%s", id, body.Role, body.Repo))
+	}
+	if verifyHook != nil {
+		runlifecycle.WireWithVerify(dir, childSessionID, sess.Done, exitCodeFn,
+			fmt.Sprintf("agent %s/%s/%s", id, body.Role, body.Repo), verifyHook)
+	} else {
+		runlifecycle.Wire(dir, childSessionID, sess.Done, exitCodeFn,
+			fmt.Sprintf("agent %s/%s/%s", id, body.Role, body.Repo))
+	}
 
-	WriteJSON(w, http.StatusCreated, map[string]any{
+	resp := map[string]any{
 		"sessionId": childSessionID,
 		"role":      body.Role,
 		"repo":      body.Repo,
 		"branch":    branch,
 		"pid":       sess.Cmd.Process.Pid,
-	})
+	}
+	if useWorktree {
+		resp["worktreePath"] = wt.Path
+		resp["worktreeBranch"] = wt.Branch
+	}
+	WriteJSON(w, http.StatusCreated, resp)
 }
+
+// buildVerifyHook returns a runlifecycle.VerifyHook that runs the
+// app's configured verify commands (format/lint/typecheck/test/build)
+// after a clean exit. Returns nil when the app declared no commands —
+// callers fall back to plain Wire.
+func buildVerifyHook(app *apps.App, cwd string) runlifecycle.VerifyHook {
+	if app == nil || cwd == "" {
+		return nil
+	}
+	steps := decodeVerifySteps(app.Extras["verify"])
+	if len(steps) == 0 {
+		return nil
+	}
+	return func(_, _ string) (meta.RunVerify, bool, error) {
+		out, err := runlifecycle.Run(steps, cwd, runlifecycle.VerifyOptions{})
+		if err != nil {
+			return meta.RunVerify{}, false, err
+		}
+		return out, true, nil
+	}
+}
+
+// decodeVerifySteps converts the per-app verify map (raw JSON
+// {format, lint, typecheck, test, build} → command string) into the
+// canonical-ordered runlifecycle.VerifyStep slice.
+func decodeVerifySteps(raw []byte) []runlifecycle.VerifyStep {
+	if len(raw) == 0 {
+		return nil
+	}
+	var v map[string]string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil
+	}
+	out := make([]runlifecycle.VerifyStep, 0, 5)
+	for _, name := range []string{"format", "lint", "typecheck", "test", "build"} {
+		if cmd, ok := v[name]; ok && cmd != "" {
+			out = append(out, runlifecycle.VerifyStep{Name: name, Cmd: cmd})
+		}
+	}
+	return out
+}
+
+// decodeStringField pulls one nested string field out of an App's
+// Extras map (e.g. extras["git"]["worktreeMode"]). Returns "" on any
+// shape mismatch — callers treat as "feature off".
+func decodeStringField(app *apps.App, parent, key string) string {
+	if app == nil {
+		return ""
+	}
+	raw, ok := app.Extras[parent]
+	if !ok {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
 
 // spawnAgentResume handles the mode=resume branch — looks up the
 // prior run, calls ResumeClaude with the new brief as a follow-up
