@@ -54,11 +54,14 @@ async function computeMeta(): Promise<MetaPayload> {
  * shows a permanently-running task whose process has long since died.
  *
  * Two layers in front of the reap pass:
- *   1. `withInFlight("tasks-meta", "all", …)` so concurrent callers
- *      share a single in-flight computation rather than each spawning
- *      its own reap pass.
- *   2. A 1.5 s response cache busted by `subscribeMetaAll` events so
- *      steady-state polling doesn't churn the disk.
+ *   1. A 1.5 s response cache busted by `subscribeMetaAll` events.
+ *      Steady-state polling reads this and doesn't touch disk.
+ *   2. `withInFlight("tasks-meta", "all", …)` skips the reap pass when
+ *      another request is already computing it — `withInFlight` returns
+ *      `null` to the second caller rather than awaiting the first, so
+ *      the actual dedupe property comes from the response cache once
+ *      the first caller settles. The in-flight gate just shields us
+ *      from kicking off a second reap pass before the first finishes.
  */
 export async function GET() {
   const now = Date.now();
