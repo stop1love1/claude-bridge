@@ -1,9 +1,15 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -166,19 +172,124 @@ func SessionMessage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SessionRewind — POST /api/sessions/{sessionId}/rewind. Stub for
-// S29: rewind mutates the session .jsonl to undo the last N turns,
-// which requires careful byte-level surgery against claude's transcript
-// format + checkpointing. Lands when the chat-composer rewind UX is
-// actively wired in the Vite frontend port (S33+).
+// SessionRewindBody is the POST /api/sessions/{sessionId}/rewind
+// payload. `repo` resolves the .jsonl path under
+// ~/.claude/projects/<slug>/. `uuid` names the line that becomes the
+// new tail — every entry whose uuid follows it in file order is
+// dropped. Mirrors the TS shape exactly so the existing UI keeps
+// working.
+type SessionRewindBody struct {
+	Repo string `json:"repo"`
+	UUID string `json:"uuid"`
+}
+
+// SessionRewind — POST /api/sessions/{sessionId}/rewind. Truncates
+// the session .jsonl after the entry whose `uuid` field matches
+// body.UUID. The named entry itself is kept ("rewind to here, this is
+// now my latest turn") — claude on the next resume sees the
+// conversation as if every later turn never happened.
+//
+// Refuses to rewind a session with a live child registered: the child
+// holds the file open and appends; truncating mid-write would either
+// drop an in-progress turn or leave the child writing at a now-invalid
+// offset and corrupt the file.
+//
+// Atomic write: stage to a sibling .tmp then rename. A crash mid-write
+// leaves the original intact rather than truncated.
 func SessionRewind(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "sessionId")
 	if !sessions.IsValidSessionID(sid) {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sessionId"})
 		return
 	}
-	WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
-		"error":     "rewind algorithm deferred (S33+)",
-		"sessionId": sid,
+	defer func() { _ = r.Body.Close() }()
+	var body SessionRewindBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if body.Repo == "" || body.UUID == "" {
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "repo and uuid required"})
+		return
+	}
+
+	if spawnRegistry != nil {
+		if _, alive := spawnRegistry.Get(sid); alive {
+			WriteJSON(w, http.StatusConflict, map[string]string{
+				"error": "session is still running — stop the run before rewinding",
+			})
+			return
+		}
+	}
+
+	cwd, ok := repos.ResolveCwd(getBridgeRoot(), body.Repo)
+	if !ok {
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown repo"})
+		return
+	}
+	reader := sessions.New()
+	file, ok := reader.ResolveSessionFile(cwd, sid)
+	if !ok {
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session repo"})
+		return
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			WriteJSON(w, http.StatusNotFound, map[string]string{"error": "session file not found"})
+			return
+		}
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	lines := strings.Split(string(raw), "\n")
+	cutoff := -1
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		var probe struct {
+			UUID string `json:"uuid"`
+		}
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			continue
+		}
+		if probe.UUID == body.UUID {
+			cutoff = i
+			break
+		}
+	}
+	if cutoff == -1 {
+		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "uuid not found in session"})
+		return
+	}
+
+	kept := strings.Join(lines[:cutoff+1], "\n")
+	if !strings.HasSuffix(kept, "\n") {
+		kept += "\n"
+	}
+	// Stage to <file>.<pid>.<rand>.tmp so a crash leaves the original
+	// intact. Rename is atomic on POSIX and on Windows when both paths
+	// are on the same volume (always the case here — tmp is a sibling).
+	suffix := make([]byte, 6)
+	if _, rerr := rand.Read(suffix); rerr != nil {
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": rerr.Error()})
+		return
+	}
+	tmp := file + "." + strconv.Itoa(os.Getpid()) + "." + hex.EncodeToString(suffix) + ".tmp"
+	if werr := os.WriteFile(tmp, []byte(kept), 0o644); werr != nil {
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": werr.Error()})
+		return
+	}
+	if rerr := os.Rename(tmp, file); rerr != nil {
+		_ = os.Remove(tmp)
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": rerr.Error()})
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"kept":    cutoff + 1,
+		"dropped": len(lines) - cutoff - 1,
 	})
 }

@@ -113,6 +113,15 @@ func NewHandler(cfg Config) http.Handler {
 	r.Post("/api/sessions/{sessionId}/kill", api.SessionKill)
 	r.Post("/api/sessions/{sessionId}/message", api.SessionMessage)
 	r.Post("/api/sessions/{sessionId}/rewind", api.SessionRewind)
+
+	// Per-run subroutes — kill / prompt / diff scoped to the (taskId,
+	// sessionId) pair so the UI can target an individual run without
+	// depending on which task happens to own it. More specific than
+	// the global /api/sessions/{sid}/kill above.
+	r.Post("/api/tasks/{id}/runs/{sessionId}/kill", api.KillRun)
+	r.Get("/api/tasks/{id}/runs/{sessionId}/prompt", api.GetRunPrompt)
+	r.Get("/api/tasks/{id}/runs/{sessionId}/diff", api.GetRunDiff)
+
 	r.Get("/api/bridge/settings", api.GetBridgeSettings)
 	r.Put("/api/bridge/settings", api.PutBridgeSettings)
 	r.Get("/api/sessions/all", api.ListAllSessions)
@@ -121,13 +130,26 @@ func NewHandler(cfg Config) http.Handler {
 	// S16 — Apps registry
 	r.Get("/api/apps", api.ListApps)
 	r.Post("/api/apps", api.AddApp)
+	r.Post("/api/apps/bulk", api.BulkReplaceApps)
 	r.Get("/api/apps/{name}", api.GetApp)
 	r.Delete("/api/apps/{name}", api.DeleteApp)
 	r.Post("/api/apps/auto-detect", api.AutoDetectApps)
+	r.Get("/api/apps/{name}/memory", api.GetAppMemory)
+	r.Post("/api/apps/{name}/memory", api.AppendAppMemory)
+	r.Post("/api/apps/{name}/scan", api.ScanApp)
 
 	// S17 — Repos resolver + slash discovery
 	r.Get("/api/repos", api.ListRepos)
+	// Profiles routes mount BEFORE /api/repos/{name} so chi doesn't
+	// route "profiles" as the {name} parameter — chi matches by
+	// declaration order on overlapping patterns.
+	r.Get("/api/repos/profiles", api.ListRepoProfiles)
+	r.Post("/api/repos/profiles/refresh", api.RefreshRepoProfiles)
+	r.Get("/api/repos/profiles/{name}", api.GetRepoProfile)
+	r.Delete("/api/repos/profiles/{name}", api.DeleteRepoProfile)
 	r.Get("/api/repos/{name}", api.GetRepo)
+	r.Get("/api/repos/{name}/files", api.ListRepoFiles)
+	r.Get("/api/repos/{name}/raw", api.GetRepoRawFile)
 	r.Get("/api/repos/{name}/slash-commands", api.ListRepoSlashCommands)
 
 	return r
