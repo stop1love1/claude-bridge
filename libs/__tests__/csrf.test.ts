@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkCsrf } from "../csrf";
+import * as auth from "../auth";
 
 function makeReq(opts: {
   method?: string;
@@ -33,10 +34,57 @@ describe("checkCsrf — safe methods", () => {
 });
 
 describe("checkCsrf — internal-token bypass", () => {
-  it("accepts a POST that carries the internal-token header", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts a POST whose internal-token header matches the configured secret", () => {
+    vi.spyOn(auth, "loadAuthConfig").mockReturnValue({
+      email: "op@example.com",
+      passwordHash: "scrypt$1$1$1$AAA$BBB",
+      secret: "test-secret",
+      internalToken: "real-token",
+      trustedDevices: [],
+    });
     expect(
-      checkCsrf(makeReq({ method: "POST", internal: "any-token-value" })).ok,
+      checkCsrf(makeReq({ method: "POST", internal: "real-token" })).ok,
     ).toBe(true);
+  });
+
+  it("falls through to origin checks when the internal-token does NOT match", () => {
+    vi.spyOn(auth, "loadAuthConfig").mockReturnValue({
+      email: "op@example.com",
+      passwordHash: "scrypt$1$1$1$AAA$BBB",
+      secret: "test-secret",
+      internalToken: "real-token",
+      trustedDevices: [],
+    });
+    // Wrong token + same-origin Sec-Fetch-Site → still passes via fetch-site.
+    expect(
+      checkCsrf(makeReq({
+        method: "POST",
+        internal: "wrong-token",
+        fetchSite: "same-origin",
+      })).ok,
+    ).toBe(true);
+    // Wrong token + cross-site → rejected; header presence alone is not a bypass.
+    const r = checkCsrf(makeReq({
+      method: "POST",
+      internal: "wrong-token",
+      fetchSite: "cross-site",
+    }));
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects when auth isn't configured even if header is present", () => {
+    vi.spyOn(auth, "loadAuthConfig").mockReturnValue(null);
+    const r = checkCsrf(makeReq({
+      method: "POST",
+      host: "bridge.local",
+      internal: "any-token",
+    }));
+    // No origin/referer + no valid token → rejected.
+    expect(r.ok).toBe(false);
   });
 });
 

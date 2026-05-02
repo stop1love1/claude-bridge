@@ -17,6 +17,7 @@ import {
 } from "@/libs/loginApprovals";
 import { getClientIp } from "@/libs/clientIp";
 import { checkCsrf } from "@/libs/csrf";
+import { DEMO_MODE } from "@/libs/demoMode";
 import { rateLimit, rateLimitClear } from "@/libs/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -67,6 +68,13 @@ interface LoginBody {
  * found" leak).
  */
 export async function POST(req: NextRequest) {
+  // /api/auth/* is excluded from the proxy matcher (so the login form
+  // can hit this endpoint without already being authed), which also
+  // means the proxy's demo-mode 503 doesn't reach us. Short-circuit
+  // here so a deployed demo instance can't accept login attempts.
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   // /api/auth/* is excluded from the proxy's CSRF check, so we
   // perform it inline. Doing this before the rate-limit bucket
   // increment avoids letting a CSRF attempt burn the operator's

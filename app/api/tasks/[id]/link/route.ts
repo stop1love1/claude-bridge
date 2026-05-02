@@ -10,6 +10,7 @@ import {
   isValidRunStatus,
   isValidSessionId,
 } from "@/libs/validate";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -112,5 +113,5 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     });
   }
 
-  return NextResponse.json({ ok: true, taskId: id, sessionId: body.sessionId });
+  return ok({ taskId: id, sessionId: body.sessionId });
 }

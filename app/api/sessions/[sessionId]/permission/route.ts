@@ -6,6 +6,7 @@ import {
   isValidSessionId,
   isValidToolName,
 } from "@/libs/validate";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     input: body.input ?? {},
     createdAt: body.timestamp ?? new Date().toISOString(),
   });
-  return NextResponse.json({ ok: true });
+  return ok();
 }
 
 /**

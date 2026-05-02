@@ -52,7 +52,6 @@ export const SESSIONS_DIR = join(BRIDGE_ROOT, "sessions");
  *   - `report-template.md`       — the child agent report contract
  *   - `bugs.md`, `decisions.md`, `questions.md` —
  *                                  cross-repo registers the coordinator reads / writes
- *   - `tasks.md`                 — legacy notebook (no longer runtime data)
  */
 export const BRIDGE_LOGIC_DIR = join(BRIDGE_ROOT, "prompts");
 

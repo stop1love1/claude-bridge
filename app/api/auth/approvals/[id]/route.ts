@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyRequestAuthOrInternal } from "@/libs/auth";
 import { checkCsrf } from "@/libs/csrf";
+import { DEMO_MODE } from "@/libs/demoMode";
 import { answerPendingLogin } from "@/libs/loginApprovals";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,9 @@ type Ctx = { params: Promise<{ id: string }> };
  * `GET /api/auth/login/pending/[id]` and then signs in if approved.
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
+  if (DEMO_MODE) {
+    return NextResponse.json({ error: "demo mode" }, { status: 503 });
+  }
   // /api/auth/* is excluded from the proxy matcher, so the CSRF check
   // doesn't run automatically. checkCsrf still allows internal-token
   // callers (the CLI approve script), so the bypass path is intact.

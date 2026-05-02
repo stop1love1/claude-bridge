@@ -6,6 +6,7 @@ import {
   isValidRequestId,
   isValidSessionId,
 } from "@/libs/validate";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -70,5 +71,5 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!updated) {
     return NextResponse.json({ error: "no such request" }, { status: 404 });
   }
-  return NextResponse.json({ ok: true });
+  return ok();
 }

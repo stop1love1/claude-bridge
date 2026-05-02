@@ -10,8 +10,9 @@
  * No background timer; staleness is bounded by usage.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanRepoIfExists, type RepoProfile } from "./repoProfile";
 
@@ -65,22 +66,11 @@ export function loadProfiles(): ProfileStore | null {
 
 export function saveProfiles(store: ProfileStore): void {
   ensureStateDir();
-  const path = profileFilePath();
-  const tmp = `${path}.tmp`;
-  const body = JSON.stringify(store, null, 2);
-  writeFileSync(tmp, body, "utf8");
-  try {
-    renameSync(tmp, path);
-  } catch (err) {
-    // On Windows, rename onto an existing file can fail if it's locked.
-    // Fall back to delete-then-rename.
-    try {
-      if (existsSync(path)) unlinkSync(path);
-      renameSync(tmp, path);
-    } catch {
-      throw err;
-    }
-  }
+  // writeJsonAtomic handles mkdir + unique tmp suffix (so concurrent
+  // writers can't trample the same `.tmp` staging) + cleanup on
+  // rename failure. The legacy ad-hoc helper here used a shared
+  // `${path}.tmp` suffix which raced under load.
+  writeJsonAtomic(profileFilePath(), store);
 }
 
 /**

@@ -10,6 +10,7 @@ import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/libs/
 import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
 import { isValidAppName } from "@/libs/apps";
 import { serverError } from "@/libs/errorResponse";
+import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -107,7 +108,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     } catch (err) {
       console.warn("re-open task on chat failed", err);
     }
-    return NextResponse.json({ ok: true, sessionId });
+    return ok({ sessionId });
   } catch (e) {
     return NextResponse.json(serverError(e, "sessions:message"), { status: 500 });
   }

@@ -18,12 +18,15 @@
  *   3. As last resort fall back to `Referer` (same shape).
  *
  * `GET` / `HEAD` / `OPTIONS` are cacheable / idempotent and skipped.
- * Callers that send the per-install internal token are also skipped —
- * the CLI helpers (`approve-login.ts`, child agents) hit POST endpoints
- * with that header instead of a cookie, so they're not part of the
- * browser-CSRF threat model.
+ * Callers that present a VERIFIED per-install internal token are also
+ * skipped — the CLI helpers (`approve-login.ts`, child agents) hit
+ * POST endpoints with that header instead of a cookie, so they're not
+ * part of the browser-CSRF threat model. We compare in constant time
+ * against `loadAuthConfig().internalToken`; header presence alone is
+ * NOT enough (a hostile page can attach arbitrary header values via
+ * fetch()).
  */
-import { INTERNAL_TOKEN_HEADER } from "./auth";
+import { INTERNAL_TOKEN_HEADER, constantTimeStringEqual, loadAuthConfig } from "./auth";
 
 interface CsrfRequestLike {
   method: string;
@@ -54,9 +57,19 @@ export function checkCsrf(req: CsrfRequestLike): CsrfResult {
 
   // Internal-token callers (CLI scripts, agent hooks) bypass CSRF —
   // they don't carry a browser cookie, so a CSRF attack against them
-  // has nothing to leverage.
-  if (req.headers.get(INTERNAL_TOKEN_HEADER)) {
-    return { ok: true };
+  // has nothing to leverage. Verify the token actually matches the
+  // per-install secret rather than trusting header presence — a
+  // malicious page can set arbitrary header values via fetch(), so
+  // header-presence alone is no signal at all.
+  const headerToken = req.headers.get(INTERNAL_TOKEN_HEADER);
+  if (headerToken) {
+    const cfg = loadAuthConfig();
+    if (cfg && constantTimeStringEqual(headerToken, cfg.internalToken)) {
+      return { ok: true };
+    }
+    // Header was supplied but didn't verify — fall through to the
+    // Sec-Fetch-Site / Origin / Referer logic. Same-origin browser
+    // requests still pass; cross-origin ones get rejected as before.
   }
 
   const fetchSite = req.headers.get("sec-fetch-site");
