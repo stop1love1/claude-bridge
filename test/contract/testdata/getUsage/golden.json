@@ -1,0 +1,10 @@
+{
+  "status": 200,
+  "headers": {
+    "Content-Type": [
+      "application/json; charset=utf-8"
+    ]
+  },
+  "body_base64": "eyJzb3VyY2UiOiJtaXNzaW5nIiwiY2FjaGVVcGRhdGVkQXQiOm51bGwsImxhc3RDb21wdXRlZERhdGUiOm51bGwsInRvdGFsU2Vzc2lvbnMiOjAsInRvdGFsTWVzc2FnZXMiOjAsImZpcnN0U2Vzc2lvbkRhdGUiOm51bGwsIm1vZGVsVXNhZ2UiOnt9LCJkYWlseUFjdGl2aXR5IjpbXSwiZGFpbHlNb2RlbFRva2VucyI6W10sImxvbmdlc3RTZXNzaW9uIjpudWxsLCJob3VyQ291bnRzIjp7fSwicGxhbiI6bnVsbCwicXVvdGEiOnsiZml2ZUhvdXIiOm51bGwsIndlZWtseUFsbE1vZGVscyI6bnVsbCwid2Vla2x5U29ubmV0IjpudWxsLCJ3ZWVrbHlPcHVzIjpudWxsLCJ3ZWVrbHlDbGF1ZGVEZXNpZ24iOm51bGwsIndlZWtseU9hdXRoQXBwcyI6bnVsbCwid2Vla2x5Q293b3JrIjpudWxsLCJleHRyYVVzYWdlIjpudWxsLCJlcnJvciI6Im5vdCBpbXBsZW1lbnRlZCAoUzEzL1MxNCkiLCJmZXRjaGVkQXQiOiIyMDI2LTAxLTAxVDAwOjAwOjAwWiJ9fQ==",
+  "body_text": "{\"source\":\"missing\",\"cacheUpdatedAt\":null,\"lastComputedDate\":null,\"totalSessions\":0,\"totalMessages\":0,\"firstSessionDate\":null,\"modelUsage\":{},\"dailyActivity\":[],\"dailyModelTokens\":[],\"longestSession\":null,\"hourCounts\":{},\"plan\":null,\"quota\":{\"fiveHour\":null,\"weeklyAllModels\":null,\"weeklySonnet\":null,\"weeklyOpus\":null,\"weeklyClaudeDesign\":null,\"weeklyOauthApps\":null,\"weeklyCowork\":null,\"extraUsage\":null,\"error\":\"not implemented (S13/S14)\",\"fetchedAt\":\"2026-01-01T00:00:00Z\"}}"
+}

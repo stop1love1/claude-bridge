@@ -1,6 +1,12 @@
 package contract
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+
+	"github.com/stop1love1/claude-bridge/internal/api"
+	"github.com/stop1love1/claude-bridge/internal/usage"
+)
 
 // Endpoint is a single contract-checked HTTP route. Name is the OpenAPI
 // operationId (matches api/openapi.yaml) and doubles as the testdata
@@ -51,5 +57,31 @@ var Endpoints = map[string]Endpoint{
 		// When the full handler ports, re-record from a fresh Next
 		// instance and update the Setup hook to seed deterministic
 		// fixture state.
+	},
+	"getUsage": {
+		Name:   "getUsage",
+		Method: http.MethodGet,
+		Path:   "/api/usage",
+		Setup: func(f *Fixture) error {
+			// Point the snapshot reader at an empty fixture root with
+			// no stats-cache.json / .credentials.json — the handler
+			// must produce the canonical "missing source" snapshot.
+			// The frozen Now() makes Quota.FetchedAt deterministic so
+			// the golden stays bytewise-stable across runs.
+			r := &usage.Reader{
+				Root:         f.UsageRoot,
+				Now:          func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
+				QuotaFetcher: usage.NotImplementedQuota{},
+			}
+			api.SetUsageReader(r)
+			return nil
+		},
+	},
+	"getTaskUsage": {
+		Name:   "getTaskUsage",
+		Method: http.MethodGet,
+		Path:   "/api/tasks/t_20260101_001/usage",
+		// S06 stub returns 404 unconditionally — full meta + repos
+		// wiring lands in S10/S11.
 	},
 }

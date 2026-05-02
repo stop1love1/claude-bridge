@@ -20,6 +20,11 @@ type Fixture struct {
 	SessionsDir string
 	BridgeJSON  string
 	ProjectsDir string
+	// UsageRoot is the fixture's stand-in for ~/.claude (where
+	// stats-cache.json + .credentials.json live). Empty by default —
+	// usage tests assert on the "missing source" snapshot until they
+	// seed files explicitly.
+	UsageRoot string
 }
 
 // NewFixture creates a tempdir-backed Fixture. The caller must invoke
@@ -34,6 +39,7 @@ func NewFixture() (*Fixture, error) {
 		SessionsDir: filepath.Join(root, "sessions"),
 		BridgeJSON:  filepath.Join(root, "bridge.json"),
 		ProjectsDir: filepath.Join(root, ".claude", "projects"),
+		UsageRoot:   filepath.Join(root, ".claude"),
 	}
 	if err := os.MkdirAll(f.SessionsDir, 0o755); err != nil {
 		_ = os.RemoveAll(root)
