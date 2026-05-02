@@ -36,4 +36,20 @@ var Endpoints = map[string]Endpoint{
 		// state (see app/api/tasks/meta/route.ts: readdirSync over an
 		// empty SESSIONS_DIR yields no entries). Go pilot mirrors that.
 	},
+	"listAllSessions": {
+		Name:   "listAllSessions",
+		Method: http.MethodGet,
+		Path:   "/api/sessions/all",
+		// Setup: nil. The S05 stub in internal/api/sessions.go returns
+		// [] unconditionally — the full implementation depends on
+		// internal/meta + internal/git + internal/repos which land in
+		// later sessions (S09/S15/S17). The golden was hand-authored
+		// (not recorded against Next, since live Next state always
+		// includes the bridge's own session dir under
+		// ~/.claude/projects/) to capture the empty-state shape Next
+		// would produce in a clean fixture: a JSON empty array.
+		// When the full handler ports, re-record from a fresh Next
+		// instance and update the Setup hook to seed deterministic
+		// fixture state.
+	},
 }

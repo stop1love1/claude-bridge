@@ -70,6 +70,7 @@ func NewHandler(cfg Config) http.Handler {
 	startedAt := time.Now()
 	r.Get("/api/health", healthHandler(cfg.Version, startedAt))
 	r.Get("/api/tasks/meta", api.ListTasksMeta)
+	r.Get("/api/sessions/all", api.ListAllSessions)
 
 	return r
 }
