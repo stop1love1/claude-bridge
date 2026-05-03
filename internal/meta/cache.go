@@ -52,9 +52,15 @@ func (c *metaCacheT) get(dir string) (*Meta, bool) {
 		return nil, false
 	}
 	if time.Now().After(v.expires) {
-		// TTL expired; treat as miss but leave the entry — the next
-		// put will overwrite it. Avoids a delete + reinsert dance for
-		// the common case of "stale read followed by fresh read".
+		// TTL expired — evict from both the lookup map AND the LRU
+		// list. The earlier "leave it for the next put to overwrite"
+		// shortcut was buggy: an expired entry that's never re-put
+		// (e.g. the dir got deleted) keeps occupying an LRU slot at
+		// whatever insertion-order position it had, so eviction can
+		// drop a hot live entry instead. Removing on read keeps
+		// `order` cleanly bounded by live entries.
+		c.order.Remove(v.node)
+		delete(c.items, dir)
 		return nil, false
 	}
 	c.order.MoveToBack(v.node)
@@ -104,4 +110,17 @@ func ResetCacheForTests() {
 	defer metaCache.mu.Unlock()
 	metaCache.items = make(map[string]*cacheValue, metaCacheMaxEntries)
 	metaCache.order = list.New()
+}
+
+// InvalidateCacheFor drops a single cached meta for the given task
+// dir without disturbing siblings. Hot path: DeleteTask removes the
+// task dir and must invalidate the cache so a follow-up GET sees the
+// absence rather than serving the pre-delete snapshot. Using
+// ResetCacheForTests for that would stomp every other live entry
+// across the bridge.
+//
+// The argument is the absolute task dir (the same key ReadMeta /
+// WriteMeta use), not a bare task id.
+func InvalidateCacheFor(dir string) {
+	metaCache.drop(dir)
 }

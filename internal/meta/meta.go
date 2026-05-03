@@ -1,3 +1,12 @@
+// Package meta is the source of truth for per-task runtime state on
+// disk: sessions/<task-id>/meta.json. Provides atomic write
+// (tempfile + rename) with a per-directory mutex so concurrent
+// AppendRun / UpdateRun callers serialize cleanly.
+//
+// Ported from libs/atomicWrite.ts + libs/tasks.ts + libs/meta.ts in S09.
+// Event subscription (SubscribeMeta / SubscribeMetaAll) lives here too
+// so the SSE route in S12 can subscribe without depending on the
+// per-route singleton stash the TS module used.
 package meta
 
 import (
@@ -92,12 +101,25 @@ var ErrMissingMeta = errors.New("meta: meta.json missing")
 // doesn't exist in meta.runs.
 var ErrRunNotFound = errors.New("meta: run not found")
 
-// ReadMeta loads meta.json from the task's sessions dir, returning
-// (nil, nil) when the file doesn't exist OR fails to parse — a
-// truncated file (mid-rename power-cut, hand-edit, sync race) would
-// otherwise propagate a SyntaxError through every listTasks() / boot
-// sweep / SSE caller and freeze the dashboard until the file is
-// deleted manually.
+// ErrMetaExists is returned by CreateMeta when meta.json already
+// exists in the target dir. Distinct from a generic write error so
+// the API layer can return 409 Conflict instead of 500. Mirrors the
+// "create-or-fail" semantics of POST /api/tasks where a duplicate
+// task id must NOT clobber the existing meta.
+var ErrMetaExists = errors.New("meta: meta.json already exists")
+
+// ReadMeta loads meta.json from the task's sessions dir.
+//
+// Return values:
+//   - (nil, nil) — meta.json doesn't exist (task missing / not yet
+//     created). Callers map this to a 404.
+//   - (nil, err) — read failure OR JSON parse failure. Parse errors
+//     are surfaced rather than swallowed: a truncated file (operator
+//     hand-edit, disk corruption, partial restore) signals fixable
+//     damage and silently returning (nil, nil) made the dashboard
+//     show "task missing" instead of telling the operator their
+//     meta.json is broken. The parse failure is not cached.
+//   - (m, nil) — happy path.
 //
 // Cached in-process via the package-global metaCache (TTL 500ms +
 // 1024-entry LRU); cache invalidation happens on every emit() — so
@@ -117,43 +139,75 @@ func ReadMeta(dir string) (*Meta, error) {
 	}
 	var m Meta
 	if err := json.Unmarshal(b, &m); err != nil {
-		// Distinguish ENOENT from parse error — rename race is benign,
-		// no warning needed; corrupt-JSON signals operator-fixable damage.
 		// Don't poison the cache with the parse failure: next read after
-		// a writeMeta will pick up the fresh bytes.
-		return nil, nil
+		// a writeMeta will pick up the fresh bytes. Surface the error so
+		// the operator/UI sees "meta.json corrupt" rather than the
+		// misleading "task not found".
+		return nil, fmt.Errorf("meta.json parse %s: %w", p, err)
 	}
 	metaCache.put(dir, &m)
 	return &m, nil
 }
 
 // CreateMeta initializes a fresh meta.json. Caller passes the header
-// fields; runs is initialized empty. Mirrors libs/meta.ts createMeta.
+// fields; if Runs is nil it's initialized to an empty slice (the wire
+// shape is `[]`, never `null`). A caller-provided non-nil Runs slice
+// is preserved verbatim — useful for tests / restores that want to
+// seed historical run rows in the same write.
+//
+// CreateMeta is "create-or-fail": if meta.json already exists in dir,
+// returns ErrMetaExists rather than overwriting. Both the existence
+// check and the write happen under the per-task lock, so two
+// concurrent CreateMeta calls produce one success + one ErrMetaExists.
 //
 // Emits writeMeta on the package-global event bus so subscribers
 // (S12 SSE route) see the create.
+//
+// Mirrors libs/meta.ts createMeta.
 func CreateMeta(dir string, header Meta) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	header.Runs = nil // Wire shape uses [], not null — fixed below.
 	if header.Runs == nil {
 		header.Runs = []Run{}
 	}
-	if err := WriteJSONAtomic(filepath.Join(dir, MetaFile), header, nil); err != nil {
-		return err
-	}
-	emit(dir, MetaChangeEvent{
-		TaskID: taskIDFromDir(dir),
-		Kind:   MetaChangeWriteMeta,
+	return WithTaskLock(dir, func() error {
+		p := filepath.Join(dir, MetaFile)
+		if _, err := os.Stat(p); err == nil {
+			return ErrMetaExists
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("stat %s: %w", p, err)
+		}
+		return WriteMetaUnlocked(dir, &header)
 	})
-	return nil
 }
 
 // WriteMeta replaces meta.json on disk and notifies subscribers.
+// Acquires the per-task lock, so callers MUST NOT already hold it
+// (call WriteMetaUnlocked from inside WithTaskLock instead — or use
+// MutateMeta for the read-modify-write pattern).
+//
 // Mirrors libs/meta.ts writeMeta — emits a writeMeta event (no per-run
 // signal — task header changed).
 func WriteMeta(dir string, m *Meta) error {
+	return WithTaskLock(dir, func() error {
+		return WriteMetaUnlocked(dir, m)
+	})
+}
+
+// WriteMetaUnlocked is the lock-less worker for callers that already
+// hold the per-task lock (AppendRun, UpdateRun,
+// RemoveSessionFromTask, MutateMeta, the existence-checked tail of
+// CreateMeta, and external API handlers that need to perform other
+// operations under the same lock alongside the write). Writes the
+// JSON, then emits the generic writeMeta event. Helpers that need a
+// more specific event kind (spawned/transition/updated) should call
+// WriteJSONAtomic + emit directly.
+//
+// Prefer MutateMeta for the read-modify-write pattern. WriteMeta auto-
+// locks for the common case. Use WriteMetaUnlocked only when the
+// caller already holds the lock via WithTaskLock.
+func WriteMetaUnlocked(dir string, m *Meta) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -165,6 +219,36 @@ func WriteMeta(dir string, m *Meta) error {
 		Kind:   MetaChangeWriteMeta,
 	})
 	return nil
+}
+
+// MutateMeta runs fn(meta) under the per-task lock and writes the
+// result back. fn receives the live *Meta loaded from disk; it may
+// mutate fields in place. Returning a non-nil error from fn aborts
+// the write and propagates up; returning nil triggers a write +
+// writeMeta event.
+//
+// Sentinel returns:
+//   - ErrMissingMeta — meta.json doesn't exist (mirrors AppendRun /
+//     UpdateRun semantics so callers can branch on the same value).
+//
+// Group F's API handlers should prefer MutateMeta over the manual
+// "WithTaskLock(dir, ReadMeta + WriteMeta)" sequence — it cuts the
+// lock-acquisition boilerplate and centralises the missing-meta
+// check.
+func MutateMeta(dir string, fn func(*Meta) error) error {
+	return WithTaskLock(dir, func() error {
+		m, err := ReadMeta(dir)
+		if err != nil {
+			return err
+		}
+		if m == nil {
+			return ErrMissingMeta
+		}
+		if err := fn(m); err != nil {
+			return err
+		}
+		return WriteMetaUnlocked(dir, m)
+	})
 }
 
 // AppendRun adds a Run to the task under the per-dir lock and emits a
@@ -265,6 +349,12 @@ func RemoveSessionFromTask(dir, sessionID string) (removed bool, err error) {
 			return nil
 		}
 		before := len(m.Runs)
+		// Filter-in-place: out aliases the same backing array as
+		// m.Runs, but the value-copy `for _, r := range m.Runs`
+		// snapshots each Run before the conditional append, so
+		// overwriting earlier slots while iterating later ones is
+		// safe. The post-loop `m.Runs = out` shortens the slice
+		// header to the kept count.
 		out := m.Runs[:0]
 		for _, r := range m.Runs {
 			if r.SessionID == sessionID {

@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -317,26 +318,67 @@ func splitShell(s string) (string, []string) {
 type VerifyHook func(sessionID, repo string) (meta.RunVerify, bool, error)
 
 // WireWithVerify is the Wire variant that runs a verify hook after the
-// status flip lands. Backward-compat wrapper: when hook is nil this
-// behaves identically to Wire (existing callers don't have to
-// migrate). When hook is non-nil and the status flip succeeded as
-// "done", the hook is invoked; if it returns persist=true and no
-// error, the resulting RunVerify is patched onto the run.
+// status flip lands. Backward-compat wrapper around WireWithVerifyOpts:
+// existing callers (no ctx, no autoCommit/autoPush) keep this shape;
+// new callers pass WireWithVerifyOpts directly with WireOpts populated.
+//
+// When hook is nil this behaves identically to Wire (existing callers
+// don't have to migrate). When hook is non-nil and the status flip
+// succeeded as "done", the hook is invoked; if it returns persist=true
+// and no error, the resulting RunVerify is patched onto the run.
+func WireWithVerify(sessionsDir, sessionID string, done <-chan struct{}, exitCode func() int, label string, hook VerifyHook) {
+	WireWithVerifyOpts(sessionsDir, sessionID, done, exitCode, label, hook, WireOpts{})
+}
+
+// WireWithVerifyOpts is the full-control verify-path variant. Accepts
+// the same WireOpts as WireWithOpts so the verify path also honors
+// the post-exit git step + ctx-cancel.
 //
 // Hook failures are logged via the standard `log` package and never
 // promote a successful run to failed — verify is advisory metadata,
 // not a status gate at this layer (the LLM-driven retry cascade that
 // would gate on it is out of scope for this port).
-func WireWithVerify(sessionsDir, sessionID string, done <-chan struct{}, exitCode func() int, label string, hook VerifyHook) {
+//
+// Post-exit git step (autoCommit/autoPush per opts.GitSettings) runs
+// AFTER the verify hook completes — verify is advisory, not a gate, so
+// a verify failure must NOT block the commit. CLAUDE.md owns this
+// contract: "Failures are logged but never flip a successful run to
+// failed." Same goes for the git step on a verify-fail-but-exit-clean
+// run; the operator can revert manually.
+//
+// opts.Ctx propagates server-shutdown so the goroutine drains cleanly.
+// The done channel still wins when both fire — we don't want a
+// transient shutdown signal to short-circuit a child that has already
+// exited.
+func WireWithVerifyOpts(sessionsDir, sessionID string, done <-chan struct{}, exitCode func() int, label string, hook VerifyHook, opts WireOpts) {
 	if hook == nil {
-		Wire(sessionsDir, sessionID, done, exitCode, label)
+		WireWithOpts(sessionsDir, sessionID, done, exitCode, label, opts)
 		return
 	}
 	if label == "" {
 		label = sessionID
 	}
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	go func() {
-		<-done
+		// Outer guard: any panic in patchExit / runVerifyHook /
+		// runAfterSpawn must NOT take the bridge process down. The
+		// inner recover around exitCode keeps the status-flip path
+		// (so a panicking exitCode still ends in "failed"); this
+		// catch-all is a last-resort safety net for the rest of the
+		// goroutine body.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("runlifecycle: %s: goroutine panic: %v", label, r)
+			}
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return
+		}
 		var code int
 		func() {
 			defer func() {
@@ -348,16 +390,33 @@ func WireWithVerify(sessionsDir, sessionID string, done <-chan struct{}, exitCod
 		}()
 		patchExit(sessionsDir, sessionID, code, label)
 		if code != 0 {
-			return // verify only runs on clean exit
+			return // verify + git only run on clean exit
 		}
 		runVerifyHook(sessionsDir, sessionID, label, hook)
+		// Post-exit git step is wired here too (not just in Wire) —
+		// the verify chain has finished and the run is staying in
+		// "done", regardless of verify's verdict. Run the auto-commit/
+		// push so the working tree doesn't drift just because the
+		// caller opted into verify.
+		runAfterSpawn(label, opts)
 	}()
 }
 
 // runVerifyHook invokes the hook, persists the result, and logs any
 // errors. Split out from WireWithVerify so the goroutine body stays
 // short and the persistence path is callable from tests directly.
+//
+// Panic recovery: a buggy hook (or a panic inside Run that wasn't
+// caught earlier) must NOT kill the goroutine — the run already
+// completed, the status was already flipped to "done", and verify is
+// advisory metadata. A panic here means we lose the verify row but
+// keep the run; better than a crash that takes down the bridge process.
 func runVerifyHook(sessionsDir, sessionID, label string, hook VerifyHook) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("runlifecycle: %s: verify hook panic: %v (run stays done)", label, r)
+		}
+	}()
 	// Read the run's repo so the hook can resolve the verify config.
 	// If meta.json is gone (task archived during the run), bail
 	// quietly — Wire already logged the missing-meta case.

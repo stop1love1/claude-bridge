@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,7 +18,7 @@ import (
 // Cmd/bridge serve points BridgeRoot at the operator's bridge dir on
 // startup; tests inject a fixture path.
 var (
-	bridgeSettingsMu  sync.RWMutex
+	bridgeSettingsMu   sync.RWMutex
 	bridgeSettingsRoot string
 )
 
@@ -69,7 +71,7 @@ func GetBridgeSettings(w http.ResponseWriter, _ *http.Request) {
 // through internal/meta.WriteStringAtomic.
 func PutBridgeSettings(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
-	body, err := readAllBody(r)
+	body, err := readAllBody(w, r)
 	if err != nil {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -91,10 +93,13 @@ func PutBridgeSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // readAllBody buffers the request body into a []byte. Capped at 1 MB
-// to defend against an oversize PUT trying to OOM the bridge.
-func readAllBody(r *http.Request) ([]byte, error) {
+// to defend against an oversize PUT trying to OOM the bridge. Passing
+// the ResponseWriter to MaxBytesReader lets net/http set the
+// Connection: close header on the response when the limit is hit, so
+// the client sees a clean 413 instead of a half-finished frame.
+func readAllBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	const maxBody = 1 << 20
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBody)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	buf := make([]byte, 0, 4096)
 	tmp := make([]byte, 4096)
 	for {
@@ -103,7 +108,10 @@ func readAllBody(r *http.Request) ([]byte, error) {
 			buf = append(buf, tmp[:n]...)
 		}
 		if err != nil {
-			if err.Error() == "EOF" {
+			// Use errors.Is + io.EOF rather than string-comparing the
+			// error message: wrapped EOFs (some readers wrap with extra
+			// context) would otherwise be misclassified as fatal.
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, err

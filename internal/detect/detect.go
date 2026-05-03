@@ -1,8 +1,24 @@
+// Package detect computes a per-task DetectedScope: which sibling
+// repo(s) the task touches, what high-level features / domain entities
+// it references, and any explicit file-path mentions in the body.
+//
+// The scope is rendered into both the coordinator prompt and every
+// child prompt via Render so the two layers can never drift, and is
+// persisted in sessions/<task-id>/meta.json under `detectedScope` so
+// repeat dispatches don't re-run detection.
+//
+// Migration note: the TypeScript module shipped a heuristic +
+// LLM-backed detector pair plus an `auto` mode that tried the LLM
+// first and fell back to heuristic. The Go port is heuristic-only
+// for now — the LLM client + bridge.json `detect.source` plumbing
+// land in a follow-up. Mode and Source are preserved as types so the
+// LLM upgrade can drop in without breaking on-disk meta.json or
+// caller signatures.
 package detect
 
 // Top-level orchestration for the detect layer. Go port of
 // libs/detect/index.ts, with the LLM upgrade path collapsed to
-// heuristic-only — see the package doc.go for why.
+// heuristic-only — see the package comment above for why.
 //
 // Caller-facing surface mirrors the TS module:
 //   - LoadInput(opts)               — build a DetectInput from caller-

@@ -94,7 +94,7 @@ func WriteScopeCache(sessionsDir string, scope DetectedScope) error {
 			return fmt.Errorf("detect: marshal cache entry: %w", err)
 		}
 		m.DetectedScope = raw
-		return meta.WriteMeta(sessionsDir, m)
+		return meta.WriteMetaUnlocked(sessionsDir, m)
 	})
 }
 
@@ -111,6 +111,6 @@ func ClearScopeCache(sessionsDir string) error {
 			return nil
 		}
 		m.DetectedScope = nil
-		return meta.WriteMeta(sessionsDir, m)
+		return meta.WriteMetaUnlocked(sessionsDir, m)
 	})
 }

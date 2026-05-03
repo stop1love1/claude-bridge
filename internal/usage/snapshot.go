@@ -1,3 +1,12 @@
+// Package usage aggregates token + cost usage stats from session
+// JSONL events, both per-task and across the whole bridge, for the
+// /api/usage and /api/tasks/<id>/usage endpoints.
+//
+// Ported from libs/sessionUsage.ts + libs/usageStats.ts in S06. The
+// quota panel from Anthropic's `/api/oauth/usage` endpoint is stubbed
+// in this iteration (returns Quota.Error="not implemented") — full
+// OAuth fetch + retry-after handling lands when the auth/credentials
+// wiring is plumbed (S13/S14).
 package usage
 
 import (
@@ -65,7 +74,7 @@ func New() *Reader {
 // ttl values mirror libs/usageStats.ts:
 //   - success     → 60 s so polling doesn't burn rate-limit budget
 //   - other error → 8  s so a transient blip doesn't pin the UI to
-//                   "unavailable" for a full minute
+//     "unavailable" for a full minute
 const (
 	ttlOK  = 60 * time.Second
 	ttlErr = 8 * time.Second
@@ -148,19 +157,19 @@ type Plan struct {
 // Snapshot is the complete /api/usage response shape. Mirrors the
 // Next UsageSnapshot interface bytewise.
 type Snapshot struct {
-	Source           string                      `json:"source"`
-	CacheUpdatedAt   *string                     `json:"cacheUpdatedAt"`
-	LastComputedDate *string                     `json:"lastComputedDate"`
-	TotalSessions    int64                       `json:"totalSessions"`
-	TotalMessages    int64                       `json:"totalMessages"`
-	FirstSessionDate *string                     `json:"firstSessionDate"`
-	ModelUsage       map[string]ModelUsage       `json:"modelUsage"`
-	DailyActivity    []DailyActivity             `json:"dailyActivity"`
-	DailyModelTokens []DailyModelTokens          `json:"dailyModelTokens"`
-	LongestSession   *LongestSession             `json:"longestSession"`
-	HourCounts       map[string]int64            `json:"hourCounts"`
-	Plan             *Plan                       `json:"plan"`
-	Quota            *Quota                      `json:"quota"`
+	Source           string                `json:"source"`
+	CacheUpdatedAt   *string               `json:"cacheUpdatedAt"`
+	LastComputedDate *string               `json:"lastComputedDate"`
+	TotalSessions    int64                 `json:"totalSessions"`
+	TotalMessages    int64                 `json:"totalMessages"`
+	FirstSessionDate *string               `json:"firstSessionDate"`
+	ModelUsage       map[string]ModelUsage `json:"modelUsage"`
+	DailyActivity    []DailyActivity       `json:"dailyActivity"`
+	DailyModelTokens []DailyModelTokens    `json:"dailyModelTokens"`
+	LongestSession   *LongestSession       `json:"longestSession"`
+	HourCounts       map[string]int64      `json:"hourCounts"`
+	Plan             *Plan                 `json:"plan"`
+	Quota            *Quota                `json:"quota"`
 }
 
 // RawCredentials is the subset of ~/.claude/.credentials.json the
@@ -231,15 +240,15 @@ func (r *Reader) quotaFetcher() QuotaFetcher {
 // rawStatsCache is the on-disk shape of stats-cache.json. Every field
 // is optional — claude may write a partial file when the run is short.
 type rawStatsCache struct {
-	LastComputedDate *string                `json:"lastComputedDate"`
-	DailyActivity    []DailyActivity        `json:"dailyActivity"`
-	DailyModelTokens []DailyModelTokens     `json:"dailyModelTokens"`
-	ModelUsage       map[string]ModelUsage  `json:"modelUsage"`
-	TotalSessions    *int64                 `json:"totalSessions"`
-	TotalMessages    *int64                 `json:"totalMessages"`
-	LongestSession   *LongestSession        `json:"longestSession"`
-	FirstSessionDate *string                `json:"firstSessionDate"`
-	HourCounts       map[string]int64       `json:"hourCounts"`
+	LastComputedDate *string               `json:"lastComputedDate"`
+	DailyActivity    []DailyActivity       `json:"dailyActivity"`
+	DailyModelTokens []DailyModelTokens    `json:"dailyModelTokens"`
+	ModelUsage       map[string]ModelUsage `json:"modelUsage"`
+	TotalSessions    *int64                `json:"totalSessions"`
+	TotalMessages    *int64                `json:"totalMessages"`
+	LongestSession   *LongestSession       `json:"longestSession"`
+	FirstSessionDate *string               `json:"firstSessionDate"`
+	HourCounts       map[string]int64      `json:"hourCounts"`
 }
 
 func readJSONFile(path string) (*rawStatsCache, error) {

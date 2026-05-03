@@ -69,7 +69,7 @@ type Spawner interface {
 
 // Deps is the bag of cross-package collaborators SpawnRetry calls into.
 // Wrapping these as function-typed fields (instead of hard-importing
-// internal/repos and internal/quality) keeps the dependency tree
+// internal/apps and internal/quality) keeps the dependency tree
 // shallow and lets tests stub each port independently.
 type Deps struct {
 	// BridgeRoot is the bridge install directory; carried for parity
@@ -254,26 +254,15 @@ func SpawnRetry(args SpawnRetryArgs, deps Deps) (*SpawnRetryResult, error) {
 
 	sessionID := newSessionUUID()
 
-	// settingsPath="" — the per-session permission settings file the
-	// TS port writes (libs/permissionSettings.ts) is out of scope for
-	// this Go port. Callers needing it can layer it on top of Deps in
-	// a follow-up; the spawn itself works fine without it (the child
-	// inherits the bridge's default settings).
-	childHandle, err := deps.Spawner.SpawnFreeSession(
-		spawnCwd,
-		retryPrompt,
-		&spawn.ChatSettings{Mode: "bypassPermissions"},
-		"",
-		sessionID,
-	)
-	if err != nil {
-		// Spawn failures are not fatal — log + skip so the caller's
-		// gate-cascade can keep running. Mirrors the TS try/catch shape.
-		log.Printf("%s spawn failed for %s/%s: %v", logLabelOr(args.LogLabel), args.TaskID, args.FinishedRun.SessionID, err)
-		_ = childHandle // silence unused on error path
-		return nil, nil
-	}
-
+	// Append the Run record to meta.json BEFORE the spawn so we can
+	// never end up with a live child that has no row in the dashboard.
+	// The previous ordering (spawn first, then AppendRun) had a
+	// poison-pill: an AppendRun I/O failure left the just-spawned child
+	// running and registered, with no lifecycle wire and no row to
+	// flip — an orphan with no recovery path. Mirroring the coordinator
+	// pattern (meta first, then spawn) means a failed AppendRun simply
+	// returns the error without ever calling SpawnFreeSession, and a
+	// failed SpawnFreeSession patches the row to "failed" via UpdateRun.
 	startedAt := nowISO()
 	wtPath, wtBranch, wtBase := git.InheritWorktreeFields(args.FinishedRun)
 	attempt := nextAttempt
@@ -296,11 +285,46 @@ func SpawnRetry(args SpawnRetryArgs, deps Deps) (*SpawnRetryResult, error) {
 	}
 	if err := meta.AppendRun(sessionsDir, retryRun); err != nil {
 		// AppendRun failures ARE surfaced — meta.json is the source of
-		// truth for the dashboard, and an orphan child without a Run
-		// record is exactly the inconsistency this layer must avoid.
-		// The caller can decide whether to kill the just-spawned child
-		// or leave it limping along.
+		// truth for the dashboard, and we'd rather fail loudly here
+		// (no child spawned, caller decides) than spawn a child that
+		// can't be tracked.
 		return nil, fmt.Errorf("retry: append run: %w", err)
+	}
+
+	// settingsPath="" — the per-session permission settings file the
+	// TS port writes (libs/permissionSettings.ts) is out of scope for
+	// this Go port. Callers needing it can layer it on top of Deps in
+	// a follow-up; the spawn itself works fine without it (the child
+	// inherits the bridge's default settings).
+	childHandle, spawnErr := deps.Spawner.SpawnFreeSession(
+		spawnCwd,
+		retryPrompt,
+		&spawn.ChatSettings{Mode: "bypassPermissions"},
+		"",
+		sessionID,
+	)
+	if spawnErr != nil {
+		// Spawn failures are not fatal — log + skip so the caller's
+		// gate-cascade can keep running. Mirrors the TS try/catch shape.
+		// Patch the just-appended row to `failed` so the dashboard
+		// doesn't show a forever-running ghost; an UpdateRun error
+		// here is itself non-fatal (we'd be returning (nil, nil)
+		// anyway and the stale-run reaper would catch the row).
+		log.Printf("%s spawn failed for %s/%s: %v", logLabelOr(args.LogLabel), args.TaskID, args.FinishedRun.SessionID, spawnErr)
+		endedAt := nowISO()
+		if _, uerr := meta.UpdateRun(
+			sessionsDir,
+			sessionID,
+			func(r *meta.Run) {
+				r.Status = meta.RunStatusFailed
+				r.EndedAt = &endedAt
+			},
+			func(r meta.Run) bool { return r.Status == meta.RunStatusRunning },
+		); uerr != nil {
+			log.Printf("%s spawn-failure patch for %s/%s: %v", logLabelOr(args.LogLabel), args.TaskID, sessionID, uerr)
+		}
+		_ = childHandle // silence unused on error path
+		return nil, nil
 	}
 
 	return &SpawnRetryResult{SessionID: sessionID, Run: retryRun}, nil

@@ -47,6 +47,13 @@ func (rp *Reaper) Run(ctx context.Context) {
 
 // SweepOnce runs one pass of the reaper synchronously. Drops any
 // registry entry whose process is no longer alive. Idempotent.
+//
+// Race safety: every drop goes through UnregisterIf, which deletes the
+// map entry only when the registered cmd pointer matches the one we
+// inspected. That cmd-identity check is what protects against a
+// re-registered child (same session id, different *exec.Cmd) being
+// clobbered by a late reaper sweep — there's no other lock or
+// generation counter; the cmd pointer IS the generation token.
 func (rp *Reaper) SweepOnce() {
 	if rp.Registry == nil {
 		return

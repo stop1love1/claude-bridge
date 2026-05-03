@@ -20,15 +20,15 @@ import (
 
 func TestStripDiacritics_Vietnamese(t *testing.T) {
 	cases := map[string]string{
-		"khóa học":         "khoa hoc",
-		"đăng nhập":        "dang nhap",
-		"ĐĂNG KÝ":          "DANG KY",
-		"Học viên":         "Hoc vien",
-		"Bài kiểm tra":     "Bai kiem tra",
-		"không có gì":      "khong co gi",
+		"khóa học":          "khoa hoc",
+		"đăng nhập":         "dang nhap",
+		"ĐĂNG KÝ":           "DANG KY",
+		"Học viên":          "Hoc vien",
+		"Bài kiểm tra":      "Bai kiem tra",
+		"không có gì":       "khong co gi",
 		"naïve façade café": "naive facade cafe",
-		"":                 "",
-		"ascii only":       "ascii only", // fast path
+		"":                  "",
+		"ascii only":        "ascii only", // fast path
 	}
 	for in, want := range cases {
 		if got := detect.StripDiacritics(in); got != want {
@@ -153,9 +153,9 @@ func TestDetect_FrontendWinsOnUITask(t *testing.T) {
 func TestDetect_BackendWinsOnAPITask(t *testing.T) {
 	_, profiles, caps := fakeApps()
 	scope := detect.Detect(detect.DetectInput{
-		TaskBody: "Add a new /api/courses endpoint — Prisma migration + NestJS controller, JWT auth required.",
-		Repos:    []string{"edusoft-fe", "edusoft-api"},
-		Profiles: profiles,
+		TaskBody:     "Add a new /api/courses endpoint — Prisma migration + NestJS controller, JWT auth required.",
+		Repos:        []string{"edusoft-fe", "edusoft-api"},
+		Profiles:     profiles,
 		Capabilities: caps,
 	})
 
@@ -170,9 +170,9 @@ func TestDetect_BackendWinsOnAPITask(t *testing.T) {
 func TestDetect_BilingualVietnameseTask(t *testing.T) {
 	_, profiles, caps := fakeApps()
 	scope := detect.Detect(detect.DetectInput{
-		TaskBody: "Thêm trang đăng nhập cho khóa học",
-		Repos:    []string{"edusoft-fe", "edusoft-api"},
-		Profiles: profiles,
+		TaskBody:     "Thêm trang đăng nhập cho khóa học",
+		Repos:        []string{"edusoft-fe", "edusoft-api"},
+		Profiles:     profiles,
 		Capabilities: caps,
 	})
 	if !containsString(scope.Features, "auth.login") {

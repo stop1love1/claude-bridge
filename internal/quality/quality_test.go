@@ -81,11 +81,11 @@ func TestListPlaybooksSkipsNonMarkdown(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	files := map[string]string{
-		"reviewer.md":  "# reviewer\n",
-		"coder.md":     "  coder body  ",
-		"notes.txt":    "ignored",
-		"empty.md":     "   \n  ",       // trimmed-empty → skipped
-		"README.MD":    "wrong case",    // case-sensitive .md
+		"reviewer.md": "# reviewer\n",
+		"coder.md":    "  coder body  ",
+		"notes.txt":   "ignored",
+		"empty.md":    "   \n  ",    // trimmed-empty → skipped
+		"README.MD":   "wrong case", // case-sensitive .md
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(pb, name), []byte(body), 0o644); err != nil {

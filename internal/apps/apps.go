@@ -49,10 +49,10 @@ func IsValidAppName(s string) bool {
 // fields the TS module owns are passed through verbatim via Extras so
 // a bridge.json round-trip via this package preserves them.
 type App struct {
-	Name        string         `json:"name"`
-	Path        string         `json:"path"`        // raw — exactly what the user wrote
-	Description string         `json:"description,omitempty"`
-	Git         git.Settings   `json:"git,omitempty"`
+	Name        string       `json:"name"`
+	Path        string       `json:"path"` // raw — exactly what the user wrote
+	Description string       `json:"description,omitempty"`
+	Git         git.Settings `json:"git,omitempty"`
 
 	// Extras holds every other key the TS module knows about (verify,
 	// quality, retry, memory, dispatch, capabilities, pinnedFiles,
@@ -147,8 +147,8 @@ func isZeroGitSettings(s git.Settings) bool {
 // telegram settings, …) verbatim so a write-back from this module
 // doesn't blow away keys the TS sister-modules wrote.
 type Manifest struct {
-	Version int                       `json:"version"`
-	Apps    []App                     `json:"apps"`
+	Version int                        `json:"version"`
+	Apps    []App                      `json:"apps"`
 	Extras  map[string]json.RawMessage `json:"-"`
 }
 
@@ -206,8 +206,8 @@ func jsonPut(out map[string]json.RawMessage, key string, val any) error {
 type Registry struct {
 	BridgeRoot string
 
-	mu      sync.RWMutex
-	cache   *Manifest
+	mu    sync.RWMutex
+	cache *Manifest
 }
 
 // New returns a registry that reads bridge.json from the given root.

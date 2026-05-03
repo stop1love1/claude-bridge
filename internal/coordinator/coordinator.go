@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,13 @@ import (
 	"github.com/stop1love1/claude-bridge/internal/runlifecycle"
 	"github.com/stop1love1/claude-bridge/internal/spawn"
 )
+
+// yourJobRE matches `## Your job` (and case-insensitive variants with
+// 1-6 leading hashes) so sanitizeUserContent can degrade them via a
+// ZWSP after the hashes. Without this, a user-supplied body
+// containing `## Your job` would relocate the splice point that
+// spliceScopeBlock looks for.
+var yourJobRE = regexp.MustCompile(`(?im)^(#{1,6})(\s+Your job\b)`)
 
 // Spawner is the spawn.Spawner the coordinator uses to launch claude.
 // Wired by cmd/bridge serve so the coordinator's children share the
@@ -43,12 +51,12 @@ type Spawner interface {
 // Config holds the bridge paths + the spawner the coordinator needs.
 // Wired once at startup by cmd/bridge serve via SetDefault.
 type Config struct {
-	BridgeRoot    string
-	BridgeURL     string
-	SessionsDir   string
-	BridgeFolder  string
+	BridgeRoot     string
+	BridgeURL      string
+	SessionsDir    string
+	BridgeFolder   string
 	BridgeLogicDir string
-	Spawner       Spawner
+	Spawner        Spawner
 	// Detector runs the heuristic to populate the `## Detected scope`
 	// block. Optional — when nil, the scope block is omitted with a
 	// fallback message and the spawn proceeds.
@@ -70,21 +78,21 @@ func GetDefault() *Config { return defaults }
 // task. Returns the new session ID on success, "" + error on failure.
 //
 // Mirrors libs/coordinator.ts spawnCoordinatorForTask exactly:
-//   1. meta.json must exist (CreateTask should have done that).
-//   2. Pre-allocate session UUID so the prompt can render it.
-//   3. Read the coordinator template + substitute structural placeholders.
-//   4. Build + splice the `## Detected scope` block.
-//   5. Substitute USER content (defanged via SanitizeUserPromptContent)
-//      LAST so a hostile body can't relocate the splice marker or
-//      leak {{SESSION_ID}} into the rendered template.
-//   6. AppendRun as queued BEFORE the spawn (so a spawn failure leaves
-//      a tracked failed row, not a silent gap).
-//   7. SpawnClaude in BridgeRoot with mode=bypassPermissions +
-//      disallowedTools=["Task"] (Claude Code's in-process subagent
-//      tool — blocking it at the CLI level is the cwd-isolation
-//      contract).
-//   8. Promote queued → running. Wire the lifecycle hook so the run
-//      flips to done/failed on exit.
+//  1. meta.json must exist (CreateTask should have done that).
+//  2. Pre-allocate session UUID so the prompt can render it.
+//  3. Read the coordinator template + substitute structural placeholders.
+//  4. Build + splice the `## Detected scope` block.
+//  5. Substitute USER content (defanged via SanitizeUserPromptContent)
+//     LAST so a hostile body can't relocate the splice marker or
+//     leak {{SESSION_ID}} into the rendered template.
+//  6. AppendRun as queued BEFORE the spawn (so a spawn failure leaves
+//     a tracked failed row, not a silent gap).
+//  7. SpawnClaude in BridgeRoot with mode=bypassPermissions +
+//     disallowedTools=["Task"] (Claude Code's in-process subagent
+//     tool — blocking it at the CLI level is the cwd-isolation
+//     contract).
+//  8. Promote queued → running. Wire the lifecycle hook so the run
+//     flips to done/failed on exit.
 func SpawnForTask(ctx context.Context, cfg *Config, task TaskInput) (string, error) {
 	if cfg == nil {
 		return "", errors.New("coordinator: no config installed (cmd/bridge serve must call SetDefault)")
@@ -201,14 +209,23 @@ func SpawnForTask(ctx context.Context, cfg *Config, task TaskInput) (string, err
 	}, nil)
 
 	// Wire the lifecycle hook — exit triggers the meta status flip.
-	runlifecycle.Wire(sessionsDir, sessionID, sess.Done, func() int {
+	// ctx propagates server-shutdown cancellation so the goroutine
+	// drains on stop instead of leaking when the caller (test / SDK
+	// embedder) cancels mid-run. The coordinator runs in the bridge's
+	// own root (filepath.Base(BridgeRoot)) — we don't wire post-exit
+	// git for it here because the bridge itself isn't generally a
+	// registered app. If an operator does register the bridge folder
+	// as an app, the call below can populate WireOpts.GitSettings
+	// from that entry exactly like /api/tasks/<id>/agents does.
+	runlifecycle.WireWithOpts(sessionsDir, sessionID, sess.Done, func() int {
 		if sess.Cmd == nil || sess.Cmd.ProcessState == nil {
 			return -1
 		}
 		return sess.Cmd.ProcessState.ExitCode()
-	}, fmt.Sprintf("coordinator %s", task.ID))
+	}, fmt.Sprintf("coordinator %s", task.ID), runlifecycle.WireOpts{
+		Ctx: ctx,
+	})
 
-	_ = ctx // reserved for future cancellation plumbing
 	return sessionID, nil
 }
 

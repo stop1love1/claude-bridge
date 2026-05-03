@@ -179,6 +179,72 @@ func TestScanSessionHeadCache(t *testing.T) {
 	})
 }
 
+// TestReadSessionCwdHandlesLongLine covers the bufio.Scanner-ceiling
+// regression: prior versions used a Scanner with a 1 MB max-line buffer
+// over a 16 KB head slice, which tore in two ways — (a) any session
+// whose first line exceeded the scanner cap aborted with
+// bufio.ErrTooLong; (b) the 16 KB head was too small for modern
+// transcripts whose first line embeds a multi-KB attachment. Both
+// silently broke orphan-project recovery: ReadSessionCwd returned
+// ("", false) and the discovered project showed up under its slug
+// instead of a real path.
+//
+// The fix is twofold: bufio.Reader (no per-line cap) and a 256 KB head
+// window. This test exercises a 200 KB line 1 that still carries the
+// cwd field — neither change alone is enough; both must hold.
+func TestReadSessionCwdHandlesLongFirstLine(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "huge-line1.jsonl")
+
+	// Build a single ~200 KB JSON line with a real cwd field. We pad the
+	// `pad` field with 'x' so the line is well past any 16 KB cap but
+	// below the 256 KB head window.
+	pad := strings.Repeat("x", 200*1024)
+	line1 := `{"cwd":"/home/u/recovered-proj","pad":"` + pad + `"}`
+	body := line1 + "\n"
+	writeFile(t, file, body)
+
+	cwd, ok := ReadSessionCwd(file)
+	if !ok {
+		t.Fatalf("ReadSessionCwd ok = false for 200 KB line-1, want true")
+	}
+	if cwd != "/home/u/recovered-proj" {
+		t.Errorf("cwd = %q, want /home/u/recovered-proj", cwd)
+	}
+}
+
+// TestReadSessionCwdSkipsBigLinesAndFindsCwdLater verifies that when
+// the head holds several large but cwd-less lines, the scan keeps going
+// and recovers the cwd from a later line (here, line 5). With the old
+// Scanner, the first oversize line would have aborted the scan with
+// ErrTooLong and the cwd would never have been found.
+func TestReadSessionCwdSkipsBigLinesAndFindsCwdLater(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "cwd-on-line5.jsonl")
+
+	// Four ~30 KB lines without a cwd, then a normal line that has it.
+	// Total well under 256 KB so it stays in the head window.
+	bigBlob := strings.Repeat("y", 30*1024)
+	bigLine := `{"type":"queue-operation","payload":"` + bigBlob + `"}`
+	cwdLine := `{"type":"user","cwd":"/home/u/late-cwd","message":{"role":"user","content":"hi"}}`
+	body := strings.Join([]string{
+		bigLine,
+		bigLine,
+		bigLine,
+		bigLine,
+		cwdLine,
+	}, "\n") + "\n"
+	writeFile(t, file, body)
+
+	cwd, ok := ReadSessionCwd(file)
+	if !ok {
+		t.Fatalf("ReadSessionCwd ok = false when cwd is on line 5 after big lines, want true")
+	}
+	if cwd != "/home/u/late-cwd" {
+		t.Errorf("cwd = %q, want /home/u/late-cwd", cwd)
+	}
+}
+
 func TestResolveSessionFile(t *testing.T) {
 	const validSID = "0123abcd-4567-89ef-cdef-0123456789ab"
 

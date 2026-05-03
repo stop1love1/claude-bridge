@@ -4,7 +4,11 @@
       "Bash(*)",
       "PowerShell(*)",
       "Node(*)",
-      "Bun(*)"
+      "Bun(*)",
+      "mcp__plugin_playwright_playwright__*",
+      "Skill(code-review:code-review)",
+      "Skill(code-review:code-review:*)",
+      "Read(//tmp/**)"
     ],
     "additionalDirectories": [
       "D:\\Edusoft\\claude-bridge\\.git"

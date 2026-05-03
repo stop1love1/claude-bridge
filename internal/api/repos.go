@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/stop1love1/claude-bridge/internal/apps"
-	"github.com/stop1love1/claude-bridge/internal/repos"
+	"github.com/stop1love1/claude-bridge/internal/pathsafe"
 	"github.com/stop1love1/claude-bridge/internal/slash"
 )
 
@@ -20,7 +20,7 @@ import (
 // app entry mapped to its absolute path). Mirrors libs/repos.ts
 // resolveRepos.
 func ListRepos(w http.ResponseWriter, _ *http.Request) {
-	WriteJSON(w, http.StatusOK, map[string]any{"repos": repos.ResolveRepos()})
+	WriteJSON(w, http.StatusOK, map[string]any{"repos": apps.ResolveRepos()})
 }
 
 // GetRepo — GET /api/repos/{name}. Returns the resolved entry by name.
@@ -32,12 +32,12 @@ func GetRepo(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"})
 		return
 	}
-	cwd, ok := repos.ResolveCwd(getBridgeRoot(), name)
+	cwd, ok := apps.ResolveCwd(getBridgeRoot(), name)
 	if !ok {
 		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	WriteJSON(w, http.StatusOK, repos.Resolved{Name: name, Path: cwd})
+	WriteJSON(w, http.StatusOK, apps.Resolved{Name: name, Path: cwd})
 }
 
 // slashItemDTO mirrors the Next handler's SlashCommandsItemDto shape.
@@ -62,7 +62,7 @@ func ListRepoSlashCommands(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid app name"})
 		return
 	}
-	cwd, ok := repos.ResolveCwd(getBridgeRoot(), name)
+	cwd, ok := apps.ResolveCwd(getBridgeRoot(), name)
 	if !ok {
 		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "unknown repo"})
 		return
@@ -130,34 +130,25 @@ type repoFileEntry struct {
 
 // resolveRepoSubpath validates that `rel` resolves to a path strictly
 // inside `root`. Returns the absolute target path and true on success;
-// "" + false (with a 400 written via reject) when the path escapes.
+// "" + false when the path escapes.
 //
 // Both the empty string and "." map to the repo root itself. Any
-// embedded NUL byte rejects immediately.
+// embedded NUL byte rejects immediately. Absolute rels are accepted
+// when (and only when) they already resolve strictly inside the abs
+// root — the file picker historically passes back the same abs path
+// it received, so AllowAbsolute preserves that contract.
+//
+// Thin wrapper around pathsafe.Resolve — the heavy lifting (lexical +
+// EvalSymlinks + parent walk + symlink-ancestor reject) lives in the
+// shared package so every caller in the bridge enforces identical
+// semantics. Don't inline a hand-rolled containment check here; the
+// shared one is the only audited copy.
 func resolveRepoSubpath(root, rel string) (string, bool) {
-	if strings.ContainsRune(rel, 0) {
-		return "", false
-	}
-	rootAbs, err := filepath.Abs(root)
+	got, err := pathsafe.Resolve(root, rel, pathsafe.AllowAbsolute())
 	if err != nil {
 		return "", false
 	}
-	var target string
-	if rel == "" || rel == "." {
-		target = rootAbs
-	} else if filepath.IsAbs(rel) {
-		target = filepath.Clean(rel)
-	} else {
-		target = filepath.Clean(filepath.Join(rootAbs, rel))
-	}
-	// Containment check: target must equal root or be a descendant.
-	// Compare with a trailing separator on the root so "/repo" doesn't
-	// accept "/repository".
-	rootWithSep := rootAbs + string(filepath.Separator)
-	if target != rootAbs && !strings.HasPrefix(target, rootWithSep) {
-		return "", false
-	}
-	return target, true
+	return got, true
 }
 
 // ListRepoFiles — GET /api/repos/{name}/files?path=<rel>. Returns a
@@ -171,7 +162,7 @@ func ListRepoFiles(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid app name"})
 		return
 	}
-	cwd, ok := repos.ResolveCwd(getBridgeRoot(), name)
+	cwd, ok := apps.ResolveCwd(getBridgeRoot(), name)
 	if !ok {
 		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "unknown repo"})
 		return
@@ -243,7 +234,7 @@ func GetRepoRawFile(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid app name"})
 		return
 	}
-	cwd, ok := repos.ResolveCwd(getBridgeRoot(), name)
+	cwd, ok := apps.ResolveCwd(getBridgeRoot(), name)
 	if !ok {
 		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "unknown repo"})
 		return

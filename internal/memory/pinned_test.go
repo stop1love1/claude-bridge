@@ -67,10 +67,10 @@ func TestLoadPinnedFilesSkipsAbsoluteAndTraversal(t *testing.T) {
 	mustWrite(t, outside, "secret")
 
 	pins := []string{
-		outside,                               // absolute → reject
-		"../" + filepath.Base(outside),        // traversal → reject
-		"..",                                  // bare parent → reject
-		"../../etc/passwd",                    // deep traversal → reject
+		outside,                        // absolute → reject
+		"../" + filepath.Base(outside), // traversal → reject
+		"..",                           // bare parent → reject
+		"../../etc/passwd",             // deep traversal → reject
 	}
 	got := memory.LoadPinnedFiles(app, pins)
 	if len(got) != 0 {

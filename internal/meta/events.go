@@ -20,16 +20,16 @@ const (
 // task's meta.json mutates. Mirrors the TS shape exactly so the SSE
 // stream can JSON-encode it without translation.
 type MetaChangeEvent struct {
-	TaskID       string         `json:"taskId"`
-	Kind         MetaChangeKind `json:"kind"`
-	SessionID    string         `json:"sessionId,omitempty"`
-	Run          *Run           `json:"run,omitempty"`
-	PrevStatus   RunStatus      `json:"prevStatus,omitempty"`
-	RetryOf      string         `json:"retryOf,omitempty"`
-	PrevSection  TaskSection    `json:"prevSection,omitempty"`
-	NextSection  TaskSection    `json:"nextSection,omitempty"`
-	TaskTitle    string         `json:"taskTitle,omitempty"`
-	TaskChecked  bool           `json:"taskChecked,omitempty"`
+	TaskID      string         `json:"taskId"`
+	Kind        MetaChangeKind `json:"kind"`
+	SessionID   string         `json:"sessionId,omitempty"`
+	Run         *Run           `json:"run,omitempty"`
+	PrevStatus  RunStatus      `json:"prevStatus,omitempty"`
+	RetryOf     string         `json:"retryOf,omitempty"`
+	PrevSection TaskSection    `json:"prevSection,omitempty"`
+	NextSection TaskSection    `json:"nextSection,omitempty"`
+	TaskTitle   string         `json:"taskTitle,omitempty"`
+	TaskChecked bool           `json:"taskChecked,omitempty"`
 }
 
 type metaSubscriber struct {

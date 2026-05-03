@@ -8,9 +8,23 @@ import (
 
 // childEntry pairs a running cmd with its stderr-tail handle so the
 // kill path can return the captured failure context to the caller.
+//
+// `exited` is closed by the wait goroutine (via MarkExited) when
+// cmd.Wait returns. The kill-escalation goroutine selects on this so a
+// child that has already been reaped by Wait can NOT have its (now
+// recycled) PID killed by a stray SIGKILL after EscalateAfter — on
+// POSIX, sending signal 9 to `-pid` after the kernel reaped that pid
+// would target whatever process group inherited the recycled gid.
+//
+// `waitErr` is the cmd.Wait() error stashed by the wait goroutine so
+// downstream consumers (lifecycle hook, /api/runs/:id) can distinguish
+// "exited cleanly with non-zero code" from "killed by signal" — the
+// former leaves waitErr nil + ExitCode set, the latter leaves both.
 type childEntry struct {
-	cmd  *exec.Cmd
-	tail *StderrTail
+	cmd     *exec.Cmd
+	tail    *StderrTail
+	exited  chan struct{}
+	waitErr error
 }
 
 // Registry is the in-process map of live claude children, keyed by
@@ -45,7 +59,57 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(sessionID string, cmd *exec.Cmd, tail *StderrTail) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.children[sessionID] = &childEntry{cmd: cmd, tail: tail}
+	r.children[sessionID] = &childEntry{
+		cmd:    cmd,
+		tail:   tail,
+		exited: make(chan struct{}),
+	}
+}
+
+// MarkExited records cmd.Wait()'s error and closes the per-entry
+// `exited` channel. The wait goroutine calls this BEFORE Unregister so
+// the kill-escalation goroutine, which selects on `exited`, learns the
+// child has been reaped while the entry is still indexed under
+// sessionID. waitErr is stored even when nil — callers reading via
+// WaitErr() rely on the closed-channel signal to know it's safe to
+// read, not on the error itself.
+//
+// Idempotent: a second MarkExited call (e.g. if Reaper sweeps and the
+// wait goroutine both fire) leaves the existing waitErr untouched and
+// the close-of-already-closed-channel is guarded by a select. Identity
+// check via cmd pointer protects against a re-registered child whose
+// predecessor's wait goroutine fires late.
+func (r *Registry) MarkExited(sessionID string, cmd *exec.Cmd, waitErr error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.children[sessionID]
+	if !ok || e.cmd != cmd {
+		return
+	}
+	if e.waitErr == nil {
+		e.waitErr = waitErr
+	}
+	select {
+	case <-e.exited:
+		// already closed — safe no-op.
+	default:
+		close(e.exited)
+	}
+}
+
+// WaitErr returns the cmd.Wait() error captured by MarkExited, or
+// (nil, false) when the session is unknown / hasn't exited yet. The
+// boolean reports whether the entry exists; a nil error with ok=true
+// means "exited cleanly per Wait" (the process may still have a
+// non-zero exit code — read via cmd.ProcessState.ExitCode()).
+func (r *Registry) WaitErr(sessionID string) (error, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.children[sessionID]
+	if !ok {
+		return nil, false
+	}
+	return e.waitErr, true
 }
 
 // Get returns the live cmd for a session id, or nil + false when
@@ -87,6 +151,16 @@ func (r *Registry) UnregisterIf(sessionID string, cmd *exec.Cmd) {
 // was sent, false when the session id has no live process.
 //
 // Idempotent for the false case — a stale UI click doesn't blow up.
+//
+// The escalation goroutine SELECTS on the per-entry `exited` channel so
+// a child that Wait()-reaped before EscalateAfter elapses does NOT get
+// its (now potentially recycled) PID hit with SIGKILL. Without this
+// guard, on POSIX the kernel could have rebound the PID — and therefore
+// the PGID — to an unrelated process by the time the escalation timer
+// fired, and `syscall.Kill(-pid, SIGKILL)` would bomb a different
+// process group. The map identity check (current.cmd == entry.cmd)
+// remains as a second line of defense for the rare case where Unregister
+// happens after MarkExited but before the lookup.
 func (r *Registry) Kill(sessionID string) bool {
 	r.mu.Lock()
 	entry, ok := r.children[sessionID]
@@ -95,11 +169,20 @@ func (r *Registry) Kill(sessionID string) bool {
 		return false
 	}
 	_ = killProcessTree(entry.cmd, false)
-	// Escalate unless the wait goroutine drops the entry first. We
-	// re-check the registry rather than the ProcessState to avoid a
-	// race between Wait()'s state mutation and the timer fire.
+	// Capture the per-entry exited channel under no lock — `exited` is
+	// allocated by Register and only ever closed (never reassigned), so
+	// reading it after the initial Lock is race-free even if the map
+	// entry is later replaced.
+	exited := entry.exited
 	go func() {
-		time.Sleep(r.EscalateAfter)
+		select {
+		case <-time.After(r.EscalateAfter):
+		case <-exited:
+			// Wait reaped the child; don't risk PID-recycle on the
+			// follow-up SIGKILL. Returning here is the whole point of
+			// this fix.
+			return
+		}
 		r.mu.Lock()
 		current, ok := r.children[sessionID]
 		r.mu.Unlock()

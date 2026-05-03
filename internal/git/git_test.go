@@ -151,6 +151,97 @@ func TestAfterSpawnNoOpWhenBothFlagsOff(t *testing.T) {
 	}
 }
 
+// TestPrepareForSpawnFixedRejectsOptionLikeBranch — a fixedBranch
+// value that begins with `-` would be parsed by git as a CLI option.
+// PrepareForSpawn must reject before any exec ever happens, regardless
+// of whether the upstream apps validator was bypassed (a hand-edited
+// bridge.json, a corrupted profile, etc.).
+func TestPrepareForSpawnFixedRejectsOptionLikeBranch(t *testing.T) {
+	dir := initRepo(t)
+	cases := []string{
+		"--upload-pack=evil",
+		"-c core.editor=evil",
+		"-Hsomething",
+	}
+	for _, name := range cases {
+		_, err := git.PrepareForSpawn(dir, "t_20260101_001", git.Settings{
+			BranchMode:  git.BranchModeFixed,
+			FixedBranch: name,
+		})
+		if err == nil {
+			t.Errorf("FixedBranch %q: expected validation error, got nil", name)
+			continue
+		}
+		// The error message must NOT echo the rejected input back —
+		// these strings end up in HTTP responses, and operator-controlled
+		// JSON shouldn't be reflected in error messages verbatim.
+		if contains(err.Error(), name) {
+			t.Errorf("FixedBranch %q: error %q leaks input back to caller", name, err.Error())
+		}
+	}
+}
+
+// TestPrepareForSpawnFixedRejectsTraversal — `..` segments would let
+// the operator address parent refs (`refs/heads/../../etc`). The
+// validator's regex denies the dot-dot pair regardless of where it
+// appears in the string.
+func TestPrepareForSpawnFixedRejectsTraversal(t *testing.T) {
+	dir := initRepo(t)
+	_, err := git.PrepareForSpawn(dir, "t_20260101_001", git.Settings{
+		BranchMode:  git.BranchModeFixed,
+		FixedBranch: "feature/..",
+	})
+	if err == nil {
+		t.Error("expected error for branch with `..` segment, got nil")
+	}
+}
+
+// TestPrepareForSpawnFixedRejectsControlChars — whitespace and NUL
+// bytes have no place in a branch ref; git would either reject them
+// or, worse, accept them in some refs/heads/ subpath. Validate up front.
+func TestPrepareForSpawnFixedRejectsControlChars(t *testing.T) {
+	dir := initRepo(t)
+	cases := []string{
+		"feature\nbranch",
+		"feature\x00branch",
+		"feature branch",
+	}
+	for _, name := range cases {
+		_, err := git.PrepareForSpawn(dir, "t_20260101_001", git.Settings{
+			BranchMode:  git.BranchModeFixed,
+			FixedBranch: name,
+		})
+		if err == nil {
+			t.Errorf("FixedBranch with control chars %q: expected error", name)
+		}
+	}
+}
+
+// TestPrepareForSpawnFixedAcceptsValidBranches — the validator must
+// not regress on legitimate branch names that exist in the wild.
+func TestPrepareForSpawnFixedAcceptsValidBranches(t *testing.T) {
+	for _, name := range []string{
+		"main",
+		"feature/foo-bar",
+		"release/v1.2.3",
+		"user/jane.doe/wip",
+		"hotfix-2024-01",
+	} {
+		dir := initRepo(t)
+		got, err := git.PrepareForSpawn(dir, "t_20260101_001", git.Settings{
+			BranchMode:  git.BranchModeFixed,
+			FixedBranch: name,
+		})
+		if err != nil {
+			t.Errorf("FixedBranch %q: unexpected validation error: %v", name, err)
+			continue
+		}
+		if got != name {
+			t.Errorf("FixedBranch %q: got %q", name, got)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || (len(s) > len(sub) && (s[:len(sub)] == sub || contains(s[1:], sub))))
 }

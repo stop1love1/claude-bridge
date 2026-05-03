@@ -143,11 +143,11 @@ var versionLikeRE = regexp.MustCompile(`^v?\d+(\.\d+)+$`)
 // Scoring weights — declared capabilities outweigh inferred features
 // because the operator typed them by hand and meant them.
 const (
-	profileKeywordWeight   = 1
-	profileStackWeight     = 2
-	profileFeatureWeight   = 3
+	profileKeywordWeight    = 1
+	profileStackWeight      = 2
+	profileFeatureWeight    = 3
 	profileCapabilityWeight = 4
-	roleBucketWeight       = 1
+	roleBucketWeight        = 1
 )
 
 // classifyRepoRoles derives the role(s) a repo plays from its

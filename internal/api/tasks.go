@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/stop1love1/claude-bridge/internal/apps"
 	"github.com/stop1love1/claude-bridge/internal/meta"
-	"github.com/stop1love1/claude-bridge/internal/repos"
 	"github.com/stop1love1/claude-bridge/internal/sessions"
 	"github.com/stop1love1/claude-bridge/internal/usage"
 )
@@ -276,7 +276,7 @@ func GetTaskUsage(w http.ResponseWriter, r *http.Request) {
 	resp := taskUsageResponse{TaskID: id, Runs: make([]PerRunUsage, 0, len(m.Runs))}
 	for _, run := range m.Runs {
 		row := PerRunUsage{SessionID: run.SessionID, Role: run.Role, Repo: run.Repo}
-		if cwd, ok := repos.ResolveCwd(getBridgeRoot(), run.Repo); ok {
+		if cwd, ok := apps.ResolveCwd(getBridgeRoot(), run.Repo); ok {
 			path := resolveSessionPath(reader, cwd, run.SessionID)
 			if path != "" {
 				row.SessionUsage = usage.SumUsageFromJsonl(path)

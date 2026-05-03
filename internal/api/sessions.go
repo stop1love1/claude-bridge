@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 
+	"github.com/stop1love1/claude-bridge/internal/apps"
 	"github.com/stop1love1/claude-bridge/internal/git"
 	"github.com/stop1love1/claude-bridge/internal/meta"
-	"github.com/stop1love1/claude-bridge/internal/repos"
 	"github.com/stop1love1/claude-bridge/internal/sessions"
 )
 
@@ -70,7 +71,7 @@ func ListAllSessions(w http.ResponseWriter, _ *http.Request) {
 		candidates = append(candidates, repoCandidate{Name: name, Path: path, IsBridge: isBridge})
 	}
 	add(filepath.Base(bridgeRoot), bridgeRoot, true)
-	for _, r := range repos.ResolveRepos() {
+	for _, r := range apps.ResolveRepos() {
 		add(r.Name, r.Path, false)
 	}
 
@@ -85,18 +86,27 @@ func ListAllSessions(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	// Cache git branch reads — multiple sessions in the same repo only
-	// need one .git/HEAD parse.
+	// need one .git/HEAD parse. The map is wrapped in an RWMutex
+	// because the handler is single-goroutine today but a future
+	// concurrency refactor (e.g. parallel orphan-project scans) would
+	// otherwise race on a plain map without warning.
+	var branchCacheMu sync.RWMutex
 	branchCache := make(map[string]*string)
 	branchOf := func(path string) *string {
-		if b, ok := branchCache[path]; ok {
+		branchCacheMu.RLock()
+		b, ok := branchCache[path]
+		branchCacheMu.RUnlock()
+		if ok {
 			return b
 		}
 		var out *string
 		if br, ok := git.ReadBranch(path); ok {
-			b := br
-			out = &b
+			s := br
+			out = &s
 		}
+		branchCacheMu.Lock()
 		branchCache[path] = out
+		branchCacheMu.Unlock()
 		return out
 	}
 

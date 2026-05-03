@@ -1,3 +1,6 @@
+// Package tunnels manages public-tunnel providers (currently ngrok):
+// install, authtoken setup, start/stop of the tunnel process, and the
+// /api/tunnels* endpoints.
 package tunnels
 
 import (
@@ -32,17 +35,17 @@ const (
 // Entry is one tunnel row the bridge tracks. Mirrors libs/tunnels.ts
 // TunnelEntry exactly so the existing UI fetcher unpacks the same shape.
 type Entry struct {
-	ID         string   `json:"id"`
-	Port       int      `json:"port"`
-	Provider   Provider `json:"provider"`
-	Label      string   `json:"label,omitempty"`
-	Subdomain  string   `json:"subdomain,omitempty"`
-	URL        string   `json:"url,omitempty"`
-	Status     Status   `json:"status"`
-	StartedAt  string   `json:"startedAt"`
-	UpdatedAt  string   `json:"updatedAt"`
-	Error      string   `json:"error,omitempty"`
-	PID        int      `json:"pid,omitempty"`
+	ID        string   `json:"id"`
+	Port      int      `json:"port"`
+	Provider  Provider `json:"provider"`
+	Label     string   `json:"label,omitempty"`
+	Subdomain string   `json:"subdomain,omitempty"`
+	URL       string   `json:"url,omitempty"`
+	Status    Status   `json:"status"`
+	StartedAt string   `json:"startedAt"`
+	UpdatedAt string   `json:"updatedAt"`
+	Error     string   `json:"error,omitempty"`
+	PID       int      `json:"pid,omitempty"`
 
 	cmd *exec.Cmd
 }

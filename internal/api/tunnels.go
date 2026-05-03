@@ -18,10 +18,10 @@ func ListTunnels(w http.ResponseWriter, _ *http.Request) {
 
 // CreateTunnelBody is the POST /api/tunnels request shape.
 type CreateTunnelBody struct {
-	Port      int               `json:"port"`
-	Provider  tunnels.Provider  `json:"provider"`
-	Label     string            `json:"label,omitempty"`
-	Subdomain string            `json:"subdomain,omitempty"`
+	Port      int              `json:"port"`
+	Provider  tunnels.Provider `json:"provider"`
+	Label     string           `json:"label,omitempty"`
+	Subdomain string           `json:"subdomain,omitempty"`
 }
 
 // CreateTunnel — POST /api/tunnels. Spawns the provider CLI; entry

@@ -293,6 +293,42 @@ func TestInheritWorktreeFieldsNilWhenAbsent(t *testing.T) {
 	}
 }
 
+// TestCreateWorktreeForRunRejectsOptionLikeBaseBranch — baseBranch
+// rides into `git worktree add` as the trailing positional arg. A
+// `-c core.editor=...` value would be parsed as an option, allowing
+// arbitrary git config injection. Validate before exec.
+func TestCreateWorktreeForRunRejectsOptionLikeBaseBranch(t *testing.T) {
+	repo := initRepo(t)
+	for _, name := range []string{
+		"--upload-pack=evil",
+		"-c core.editor=evil",
+		"--exec=evil",
+	} {
+		_, err := git.CreateWorktreeForRun(repo, "sid-evil", name)
+		if err == nil {
+			t.Errorf("baseBranch %q: expected validation error, got nil", name)
+		}
+	}
+}
+
+// TestMergeWorktreeBackRejectsOptionLikeBranches — both BaseBranch
+// and Branch would otherwise be passed verbatim to `git checkout` /
+// `git merge`. Validation must short-circuit before any exec.
+func TestMergeWorktreeBackRejectsOptionLikeBranches(t *testing.T) {
+	requireGit(t)
+	cases := []git.Worktree{
+		{Branch: "feature", BaseBranch: "--upload-pack=evil"},
+		{Branch: "-c core.editor=evil", BaseBranch: "main"},
+		{Branch: "feature", BaseBranch: "feature/.."},
+	}
+	for _, w := range cases {
+		_, err := git.MergeWorktreeBack("/nonexistent", w)
+		if err == nil {
+			t.Errorf("MergeWorktreeBack(%+v): expected validation error", w)
+		}
+	}
+}
+
 // readBranchAt re-reads HEAD inside a worktree the same way the
 // production ReadBranch does — but tests live in the _test package
 // and we only need the branch name, so a small inline impl is

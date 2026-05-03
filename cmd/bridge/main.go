@@ -21,6 +21,7 @@ import (
 
 	"github.com/stop1love1/claude-bridge/internal/api"
 	"github.com/stop1love1/claude-bridge/internal/apps"
+	"github.com/stop1love1/claude-bridge/internal/auth"
 	"github.com/stop1love1/claude-bridge/internal/coordinator"
 	"github.com/stop1love1/claude-bridge/internal/detect"
 	"github.com/stop1love1/claude-bridge/internal/server"
@@ -52,9 +53,11 @@ func newRootCmd() *cobra.Command {
 
 func newServeCmd() *cobra.Command {
 	var (
-		port       int
-		host       string
-		bridgeRoot string
+		port           int
+		host           string
+		bridgeRoot     string
+		allowedOrigins []string
+		localhostOnly  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -79,6 +82,29 @@ func newServeCmd() *cobra.Command {
 			absRoot, err := filepath.Abs(root)
 			if err != nil {
 				return fmt.Errorf("abs root: %w", err)
+			}
+
+			// Validate operator-supplied CORS origins BEFORE building
+			// the server — pairing AllowCredentials=true with "*" or
+			// "null" would let any third-party site issue authenticated
+			// requests against the bridge. Default (nil) is fine; the
+			// server fills in http://localhost:7777.
+			if err := server.ValidateAllowedOrigins(allowedOrigins); err != nil {
+				return fmt.Errorf("invalid --allowed-origin: %w", err)
+			}
+
+			// Resolve / generate the internal-bypass token. Spawned
+			// children inherit BRIDGE_INTERNAL_TOKEN via os.Setenv inside
+			// LoadOrGenerateInternalToken, so internal/spawn keeps
+			// working without changes.
+			internalToken, generated, err := auth.LoadOrGenerateInternalToken()
+			if err != nil {
+				return fmt.Errorf("internal token: %w", err)
+			}
+			if generated {
+				logger.Info().
+					Str("token", internalToken).
+					Msg("generated BRIDGE_INTERNAL_TOKEN — set this in your shell to keep it stable across restarts")
 			}
 
 			// Wire every package's process-global handle to the
@@ -132,9 +158,12 @@ func newServeCmd() *cobra.Command {
 
 			addr := host + ":" + strconv.Itoa(port)
 			srv := server.New(server.Config{
-				Addr:    addr,
-				Version: Version,
-				Logger:  logger,
+				Addr:           addr,
+				Version:        Version,
+				Logger:         logger,
+				AllowedOrigins: allowedOrigins,
+				InternalToken:  internalToken,
+				LocalhostOnly:  localhostOnly,
 			})
 
 			errCh := make(chan error, 1)
@@ -186,5 +215,9 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "Host/interface to bind")
 	cmd.Flags().StringVar(&bridgeRoot, "root", "",
 		"Bridge root directory (defaults to current working directory)")
+	cmd.Flags().StringSliceVar(&allowedOrigins, "allowed-origin", nil,
+		"CORS origin permitted to call the API (repeatable). Default http://localhost:7777. Wildcards rejected.")
+	cmd.Flags().BoolVar(&localhostOnly, "localhost-only", false,
+		"Bypass auth for loopback (127.0.0.1 / ::1) callers. Off by default — only enable on a trusted single-machine setup.")
 	return cmd
 }

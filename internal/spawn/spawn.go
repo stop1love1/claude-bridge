@@ -1,3 +1,16 @@
+// Package spawn orchestrates child Claude Code processes: spawn,
+// stdout/stderr capture into per-session log files, registry tracking,
+// graceful shutdown.
+//
+// Cross-platform process group handling lives in
+// process_kill_windows.go (taskkill /F /T) and process_kill_unix.go
+// (setpgid at spawn + killpg at terminate) so killing a parent
+// reliably reaps grandchildren.
+//
+// Ported from libs/spawn.ts + libs/spawnRegistry.ts + libs/processKill.ts
+// in S07. The stream-json stdout parser (partial / status events) ports
+// later — it's only needed once the SSE tail/stream route lands (S12).
+// Retry ladder + stale-run reaper + shutdown handler are S08.
 package spawn
 
 import (
@@ -6,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -303,14 +317,40 @@ func (s *Spawner) runWithStdin(cwd string, args []string, stdin, sessionID strin
 
 	done := make(chan struct{})
 	go func() {
+		// `done` is the public "child has exited" signal that
+		// SpawnedSession.Done returns to callers. It MUST close even if
+		// EmitAlive / EmitStatus / log close panic, otherwise Shutdown
+		// polls forever and runlifecycle.Wire never patches the run row.
+		// The unregister + log close are also deferred so a mid-cleanup
+		// panic still releases the registry slot and the file handle —
+		// without that, a recycled session id couldn't re-register, and
+		// the OS file table would leak one descriptor per panicked run.
+		//
+		// MarkExited is called BEFORE UnregisterIf so the per-entry done
+		// channel (the kill-escalation goroutine selects on it to avoid
+		// a PID-recycle race) closes while the entry is still indexed.
+		// Closing after Unregister would let an escalation already past
+		// the lookup miss the cancellation.
+		var waitErr error
 		defer close(done)
-		_ = cmd.Wait()
-		if logFile != nil {
-			_ = logFile.Close()
-		}
-		if s.Registry != nil {
-			s.Registry.UnregisterIf(sessionID, cmd)
-		}
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("spawn: wait goroutine panic for %s: %v", sessionID, r)
+			}
+		}()
+		defer func() {
+			if logFile != nil {
+				_ = logFile.Close()
+			}
+		}()
+		defer func() {
+			if s.Registry != nil {
+				s.Registry.MarkExited(sessionID, cmd, waitErr)
+				s.Registry.UnregisterIf(sessionID, cmd)
+			}
+		}()
+
+		waitErr = cmd.Wait()
 		if s.Events != nil {
 			s.Events.EmitAlive(sessionID, false)
 			s.Events.EmitStatus(sessionID, sessions.StatusEvent{Kind: "idle"})

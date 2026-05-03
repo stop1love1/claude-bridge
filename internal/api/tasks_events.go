@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -105,22 +106,38 @@ func TaskEvents(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	// Initial snapshot — UI doesn't need a separate /meta fetch.
-	if snap, err := meta.ReadMeta(dir); err == nil && snap != nil {
-		send("snapshot", snap)
+	// Subscribe-before-snapshot fix: previously we read the snapshot
+	// then subscribed, leaving a window in which lifecycle events
+	// fired between snapshot read and subscribe registration would
+	// vanish. We now register a buffered queue FIRST, read the
+	// snapshot, then drain the queue — so any event that fires during
+	// the snapshot read is captured and replayed.
+	//
+	// If the buffer overflows during the snapshot phase we drop the
+	// queue and log: clients reconnect on stream end and will get a
+	// fresh snapshot, so the worst case is a brief reconnect rather
+	// than silent data loss.
+	type queuedEvent struct {
+		ev meta.MetaChangeEvent
 	}
+	const queueBuf = 64
+	var (
+		queueMu       sync.Mutex
+		queue         = make([]queuedEvent, 0, queueBuf)
+		queueDrained  bool
+		queueOverflow bool
+	)
 
-	// sendWithMeta piggybacks the full Meta on every lifecycle event so
-	// the client never needs a follow-up GET round-trip just to see
-	// the new state of runs[]. Mirrors the TS handler.
-	sendWithMeta := func(event string, payload map[string]any) {
-		if m, err := meta.ReadMeta(dir); err == nil && m != nil {
-			payload["meta"] = m
+	processEvent := func(ev meta.MetaChangeEvent) {
+		// sendWithMeta piggybacks the full Meta on every lifecycle event so
+		// the client never needs a follow-up GET round-trip just to see
+		// the new state of runs[]. Mirrors the TS handler.
+		sendWithMeta := func(event string, payload map[string]any) {
+			if m, err := meta.ReadMeta(dir); err == nil && m != nil {
+				payload["meta"] = m
+			}
+			send(event, payload)
 		}
-		send(event, payload)
-	}
-
-	cancel := meta.SubscribeMeta(id, func(ev meta.MetaChangeEvent) {
 		switch ev.Kind {
 		case meta.MetaChangeSpawned:
 			sendWithMeta("spawned", map[string]any{
@@ -160,10 +177,49 @@ func TaskEvents(w http.ResponseWriter, r *http.Request) {
 				send("meta", m)
 			}
 		}
+	}
+
+	cancel := meta.SubscribeMeta(id, func(ev meta.MetaChangeEvent) {
+		queueMu.Lock()
+		if queueDrained {
+			queueMu.Unlock()
+			processEvent(ev)
+			return
+		}
+		if len(queue) >= queueBuf {
+			queueOverflow = true
+			queueMu.Unlock()
+			return
+		}
+		queue = append(queue, queuedEvent{ev: ev})
+		queueMu.Unlock()
 	})
 
+	// Initial snapshot — UI doesn't need a separate /meta fetch.
+	if snap, err := meta.ReadMeta(dir); err == nil && snap != nil {
+		send("snapshot", snap)
+	}
+
+	// Drain any events that arrived during the snapshot read window,
+	// then flip the flag so future events bypass the queue.
+	queueMu.Lock()
+	pending := queue
+	queue = nil
+	overflow := queueOverflow
+	queueDrained = true
+	queueMu.Unlock()
+	if overflow {
+		log.Printf("tasks_events: subscribe-window queue overflow for task %s; client will reconnect", id)
+	} else {
+		for _, q := range pending {
+			processEvent(q.ev)
+		}
+	}
+
 	// Keepalive ticker. Tied to the request context so it stops when
-	// the client disconnects.
+	// the client disconnects. Defers run LIFO; we want the closed-flag
+	// flip first (so any in-flight emit drops cleanly), then cancel
+	// (detach subscription), then ticker.Stop (release timer goroutine).
 	ctx := r.Context()
 	ticker := time.NewTicker(keepaliveInterval)
 	defer ticker.Stop()
@@ -210,7 +266,7 @@ func DetectRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
+		"ok":       true,
 		"deferred": "detect package lands in S16",
 	})
 }

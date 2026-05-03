@@ -11,12 +11,13 @@ package sessions
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
-	"io/fs"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/stop1love1/claude-bridge/internal/pathsafe"
 )
 
 // PathToSlug converts an absolute path to claude-code's project-slug
@@ -140,17 +141,16 @@ func (r *Reader) ResolveSessionFile(repoPath, sessionID string) (string, bool) {
 	}
 
 	dir := r.ProjectDirFor(repoPath)
-	rootClean, err := filepath.Abs(r.Root)
-	if err != nil {
+	// Containment: filepath.Clean (via pathsafe.Contains -> Abs)
+	// normalizes any `..` that survived slug substitution; the result
+	// must still be under root. pathsafe also re-checks via EvalSymlinks
+	// so a future slug substitution that didn't strip a symlink
+	// component still couldn't escape r.Root.
+	if !pathsafe.Contains(r.Root, dir) {
 		return "", false
 	}
 	dirClean, err := filepath.Abs(dir)
 	if err != nil {
-		return "", false
-	}
-	// Containment: filepath.Clean (via Abs) normalizes any `..` that
-	// survived slug substitution; the result must still be under root.
-	if dirClean != rootClean && !strings.HasPrefix(dirClean, rootClean+string(filepath.Separator)) {
 		return "", false
 	}
 	// The slugged dir must already exist. This is what restricts callers
@@ -299,7 +299,11 @@ func ListSessions(projectDir string) []Entry {
 // folder isn't a bridge sibling (worktrees, unrelated repos, etc).
 //
 // Returns ("", false) when the file can't be read or no cwd field is
-// present in the first ~16 KB.
+// present in the head window. The window is intentionally generous
+// (256 KB) because real transcripts now begin with a queue-operation +
+// a multi-KB attachment payload, and a single line carrying a base64
+// image attachment can itself span >100 KB. A 16 KB cap was empirically
+// too tight on those sessions.
 func ReadSessionCwd(filePath string) (string, bool) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -307,30 +311,43 @@ func ReadSessionCwd(filePath string) (string, bool) {
 	}
 	defer func() { _ = f.Close() }()
 
-	const headBytes = 16 * 1024
-	buf := make([]byte, headBytes)
-	n, err := f.Read(buf)
-	if err != nil && !errors.Is(err, fs.ErrClosed) && n == 0 {
-		return "", false
+	// headBytes caps how much of the file we'll inspect before giving up.
+	// We use a bufio.Reader (no per-line ceiling) rather than a Scanner
+	// so an oversize attachment line doesn't fail the whole scan with
+	// bufio.ErrTooLong — that would silently break orphan-project
+	// recovery for any session whose head contains a big attachment.
+	const headBytes = 256 * 1024
+	r := bufio.NewReader(io.LimitReader(f, headBytes))
+	for {
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			trimmed := line
+			if trimmed[len(trimmed)-1] == '\n' {
+				trimmed = trimmed[:len(trimmed)-1]
+			}
+			if len(trimmed) > 0 && trimmed[len(trimmed)-1] == '\r' {
+				trimmed = trimmed[:len(trimmed)-1]
+			}
+			if len(strings.TrimSpace(string(trimmed))) > 0 {
+				var obj struct {
+					Cwd string `json:"cwd"`
+				}
+				// Per-line errors (bad JSON, partially-flushed line) are
+				// swallowed — the next line might still carry the cwd.
+				if jerr := json.Unmarshal(trimmed, &obj); jerr == nil && obj.Cwd != "" {
+					return obj.Cwd, true
+				}
+			}
+		}
+		if err != nil {
+			// io.EOF (full file consumed) or io.ErrUnexpectedEOF / the
+			// LimitReader-induced EOF when we hit headBytes — both mean
+			// "no cwd in the inspected window". A read error mid-stream
+			// is treated identically to keep this best-effort: a single
+			// flaky read shouldn't break orphan recovery.
+			return "", false
+		}
 	}
-	scanner := bufio.NewScanner(strings.NewReader(string(buf[:n])))
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var obj struct {
-			Cwd string `json:"cwd"`
-		}
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
-			continue
-		}
-		if obj.Cwd != "" {
-			return obj.Cwd, true
-		}
-	}
-	return "", false
 }
 
 // DiscoverOrphanProjects scans the projects root for folders we haven't

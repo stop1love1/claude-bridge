@@ -10,7 +10,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +22,7 @@ import (
 	"github.com/rs/zerolog/hlog"
 
 	"github.com/stop1love1/claude-bridge/internal/api"
+	bmw "github.com/stop1love1/claude-bridge/internal/middleware"
 )
 
 // Config controls how a server instance is constructed. Zero values are
@@ -30,8 +33,43 @@ type Config struct {
 	// AllowedOrigins is the list of CORS origins permitted to call the
 	// API. Defaults to the bridge UI dev origin (http://localhost:7777)
 	// when nil so a fresh `bridge serve` works without extra flags.
+	//
+	// Wildcards ("*", "null", empty entries) are rejected at startup
+	// because we set AllowCredentials=true — a wildcard origin paired
+	// with credentialed CORS is a textbook CSRF foothold. Validate via
+	// ValidateAllowedOrigins before constructing the server.
 	AllowedOrigins []string
 	Logger         zerolog.Logger
+
+	// InternalToken gates every non-public route. cmd/bridge populates
+	// this from BRIDGE_INTERNAL_TOKEN (auto-generated if missing). An
+	// empty token causes every authenticated request to 401 — matches
+	// the fail-closed posture we want.
+	InternalToken string
+
+	// LocalhostOnly bypasses auth for loopback callers. Off by default;
+	// the operator opts in via cmd/bridge --localhost-only.
+	LocalhostOnly bool
+}
+
+// ValidateAllowedOrigins refuses wildcards / null / empty entries. We
+// pair AllowCredentials=true with the configured origins so a wildcard
+// would let any third-party site read authenticated responses — call
+// this before New / NewHandler.
+func ValidateAllowedOrigins(origins []string) error {
+	for i, o := range origins {
+		trimmed := strings.TrimSpace(o)
+		if trimmed == "" {
+			return fmt.Errorf("AllowedOrigins[%d] is empty", i)
+		}
+		if trimmed == "*" {
+			return fmt.Errorf("AllowedOrigins[%d] = %q: wildcard origins are incompatible with AllowCredentials=true", i, o)
+		}
+		if strings.EqualFold(trimmed, "null") {
+			return fmt.Errorf("AllowedOrigins[%d] = %q: 'null' origin is not permitted", i, o)
+		}
+	}
+	return nil
 }
 
 // New returns an *http.Server with all middleware and routes wired up.
@@ -65,6 +103,16 @@ func NewHandler(cfg Config) http.Handler {
 		ExposedHeaders:   []string{"X-Request-Id"},
 		AllowCredentials: true,
 		MaxAge:           300,
+	}))
+
+	// Auth gate — runs AFTER CORS so OPTIONS preflight gets the right
+	// headers, but BEFORE every route below. Health is intentionally
+	// public so liveness probes from a load balancer don't need the
+	// shared secret.
+	r.Use(bmw.NewAuth(bmw.AuthConfig{
+		InternalToken: cfg.InternalToken,
+		LocalhostOnly: cfg.LocalhostOnly,
+		PublicPaths:   []string{"/api/health"},
 	}))
 
 	startedAt := time.Now()

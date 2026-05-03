@@ -156,6 +156,44 @@ func TestSumUsageDoesNotCacheMissingFile(t *testing.T) {
 	}
 }
 
+// TestSumUsageSurvivesAbsurdlyLongLine covers the
+// bufio.Scanner-ceiling regression: prior versions used a 4 MB scanner
+// buffer that hit ErrTooLong on transcripts containing >4 MB attachment
+// lines, which then triggered the cache-no-poison guard and zeroed the
+// dashboard for the entire session. The fix is to use bufio.Reader +
+// ReadBytes, which has no fixed per-line ceiling and can therefore
+// stream past arbitrarily long lines.
+//
+// The fixture is three lines:
+//   - line 1: a normal assistant usage row (input=10, output=5, turns=1)
+//   - line 2: ~10 MB of garbage (still terminated by \n)
+//   - line 3: another normal usage row (input=20, output=7, turns=1)
+//
+// Expected post-fix totals: input=30, output=12, turns=2. Line 2 is
+// non-JSON and is silently skipped, exactly the same as a malformed
+// short line would be — the *length* of the bad line is no longer
+// fatal.
+func TestSumUsageSurvivesAbsurdlyLongLine(t *testing.T) {
+	usage.ResetUsageCacheForTests()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "huge-line.jsonl")
+
+	line1 := `{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":5}}}`
+	garbage := strings.Repeat("X", 10*1024*1024) // 10 MB, no newlines, not JSON
+	line3 := `{"type":"assistant","message":{"usage":{"input_tokens":20,"output_tokens":7}}}`
+
+	body := line1 + "\n" + garbage + "\n" + line3 + "\n"
+	if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got := usage.SumUsageFromJsonl(file)
+	want := usage.SessionUsage{InputTokens: 30, OutputTokens: 12, Turns: 2}
+	if got != want {
+		t.Errorf("with 10 MB garbage line in middle: got %+v, want %+v", got, want)
+	}
+}
+
 func TestSumUsageEvictsOldestWhenCapExceeded(t *testing.T) {
 	usage.ResetUsageCacheForTests()
 	dir := t.TempDir()

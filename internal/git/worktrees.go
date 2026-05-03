@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/stop1love1/claude-bridge/internal/meta"
+	"github.com/stop1love1/claude-bridge/internal/pathsafe"
 )
 
 // worktreesDirName is the per-app folder that holds every spawn's
@@ -71,6 +72,14 @@ func CreateWorktreeForRun(appRoot, sessionID, baseBranch string) (Worktree, erro
 	if _, err := os.Stat(filepath.Join(appRoot, ".git")); err != nil {
 		return Worktree{}, fmt.Errorf("worktree: %s is not a git repo: %w", appRoot, err)
 	}
+	// baseBranch (when supplied) ends up as a positional arg to
+	// `git worktree add`. Reject anything that could be interpreted as
+	// a CLI option before the validator inside `git` ever sees it.
+	if baseBranch != "" {
+		if err := validateBranchName(baseBranch); err != nil {
+			return Worktree{}, fmt.Errorf("worktree: invalid base branch: %w", err)
+		}
+	}
 
 	wtPath := worktreePathFor(appRoot, sessionID)
 	if !isUnderAppRoot(appRoot, wtPath) {
@@ -103,6 +112,13 @@ func CreateWorktreeForRun(appRoot, sessionID, baseBranch string) (Worktree, erro
 	}
 
 	branch := mintWorktreeBranch(sessionID)
+	// mintWorktreeBranch sanitizes through sanitizeBranchSegment, but we
+	// re-validate anyway: a future change to that helper that accidentally
+	// allows a leading dash would otherwise produce a branch name that
+	// `git` parses as an option.
+	if err := validateBranchName(branch); err != nil {
+		return Worktree{}, fmt.Errorf("worktree: minted branch invalid: %w", err)
+	}
 	args := []string{"worktree", "add", "-b", branch, wtPath}
 	if resolvedBase != "" {
 		args = append(args, resolvedBase)
@@ -173,6 +189,15 @@ func MergeWorktreeBack(appRoot string, w Worktree) (MergeOutcome, error) {
 	if w.BaseBranch == w.Branch {
 		return MergeOutcome{Message: "base branch equals worktree branch; nothing to merge"}, nil
 	}
+	// Both branch names ride into git argv; validate before exec so a
+	// crafted Worktree literal (or stale meta.json hand-edit) can't turn
+	// `BaseBranch="--upload-pack=evil"` into a git option.
+	if err := validateBranchName(w.BaseBranch); err != nil {
+		return MergeOutcome{}, fmt.Errorf("worktree: invalid base branch: %w", err)
+	}
+	if err := validateBranchName(w.Branch); err != nil {
+		return MergeOutcome{}, fmt.Errorf("worktree: invalid branch: %w", err)
+	}
 
 	// Switch the live tree to the merge target. We don't restore the
 	// previous branch on exit — the bridge's per-app branchMode hook
@@ -180,13 +205,16 @@ func MergeWorktreeBack(appRoot string, w Worktree) (MergeOutcome, error) {
 	// merge step.
 	if cur, ok := currentBranchOf(appRoot); !ok || cur != w.BaseBranch {
 		if err := run(appRoot, "git", "checkout", w.BaseBranch); err != nil {
-			return MergeOutcome{}, fmt.Errorf("worktree: checkout base %q: %w", w.BaseBranch, err)
+			return MergeOutcome{}, fmt.Errorf("worktree: checkout base failed: %w", err)
 		}
 	}
 
 	// --no-ff preserves the merge commit even when fast-forwarding
 	// would suffice; the audit trail of "this work came from a bridge
-	// worktree" is the whole reason this branch exists.
+	// worktree" is the whole reason this branch exists. The trailing
+	// `--` lets git distinguish the branch token from any pathspec git
+	// might otherwise look for, even if validateBranchName were ever
+	// loosened.
 	mergeErr := run(appRoot, "git", "merge", "--no-ff", "--no-edit", w.Branch)
 	if mergeErr == nil {
 		return MergeOutcome{
@@ -287,30 +315,24 @@ func worktreePathFor(appRoot, sessionID string) string {
 // crafted sessionID with `..` segments, RemoveWorktree must never
 // `RemoveAll` something outside the app tree. The sessionID is
 // validated upstream as a UUID, so this is layered paranoia.
+//
+// Strict descendant only — equal-to-root counts as "not under" so
+// RemoveAll can never target the entire app tree. pathsafe.ContainsStrict
+// encodes that policy.
 func isUnderAppRoot(appRoot, candidate string) bool {
-	a, err := filepath.Abs(appRoot)
-	if err != nil {
-		return false
-	}
-	c, err := filepath.Abs(candidate)
-	if err != nil {
-		return false
-	}
-	if a == c {
-		return false
-	}
-	rel, err := filepath.Rel(a, c)
-	if err != nil {
-		return false
-	}
-	// Rel returning a path that starts with ".." means c escaped a.
-	return rel != "." && !strings.HasPrefix(rel, "..")
+	return pathsafe.ContainsStrict(appRoot, candidate)
 }
 
 // currentBranchOf resolves the working tree's current branch via
 // `git rev-parse --abbrev-ref HEAD`. Returns ok=false on detached
 // HEAD or any rev-parse error so callers can fall through (worktree
 // forks from HEAD without a named base, merge-back is skipped).
+//
+// The output is treated as untrusted: git's stdout for a corrupted
+// HEAD ref could in principle contain anything, and the value flows
+// back into git argv via Worktree.BaseBranch. We run it through
+// validateBranchName before declaring it usable; failures fall back to
+// ok=false (same as detached-HEAD handling).
 func currentBranchOf(repoPath string) (string, bool) {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = repoPath
@@ -320,6 +342,9 @@ func currentBranchOf(repoPath string) (string, bool) {
 	}
 	name := strings.TrimSpace(string(out))
 	if name == "" || name == "HEAD" {
+		return "", false
+	}
+	if err := validateBranchName(name); err != nil {
 		return "", false
 	}
 	return name, true

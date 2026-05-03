@@ -61,47 +61,47 @@ func TestParseDescription(t *testing.T) {
 	}{
 		{
 			name: "front-matter description wins over body heading",
-			in: "---\ndescription: From front matter\n---\n\n# Body Heading\n\nstuff",
+			in:   "---\ndescription: From front matter\n---\n\n# Body Heading\n\nstuff",
 			want: "From front matter",
 		},
 		{
 			name: "front-matter without description falls through to first heading in body",
-			in: "---\nname: foo\nother: bar\n---\n\n# Body Heading Wins\n",
+			in:   "---\nname: foo\nother: bar\n---\n\n# Body Heading Wins\n",
 			want: "Body Heading Wins",
 		},
 		{
 			name: "first heading is used when no front-matter is present",
-			in: "# Heading One\n\nintro paragraph\n\n# Heading Two\n",
+			in:   "# Heading One\n\nintro paragraph\n\n# Heading Two\n",
 			want: "Heading One",
 		},
 		{
 			name: "supports CRLF line endings",
-			in: "---\r\ndescription: crlf desc\r\n---\r\n\r\n# Body\r\n",
+			in:   "---\r\ndescription: crlf desc\r\n---\r\n\r\n# Body\r\n",
 			want: "crlf desc",
 		},
 		{
 			name: "strips matching surrounding double quotes from front-matter value",
-			in: "---\ndescription: \"quoted desc\"\n---\n",
+			in:   "---\ndescription: \"quoted desc\"\n---\n",
 			want: "quoted desc",
 		},
 		{
 			name: "strips matching surrounding single quotes from front-matter value",
-			in: "---\ndescription: 'quoted desc'\n---\n",
+			in:   "---\ndescription: 'quoted desc'\n---\n",
 			want: "quoted desc",
 		},
 		{
 			name: "leaves mismatched quotes in place rather than mangling input",
-			in: "---\ndescription: \"weird'\n---\n",
+			in:   "---\ndescription: \"weird'\n---\n",
 			want: "\"weird'",
 		},
 		{
 			name: "tolerates leading whitespace before the heading hashes (CommonMark up to 3 spaces)",
-			in: "   ## Indented heading\n",
+			in:   "   ## Indented heading\n",
 			want: "Indented heading",
 		},
 		{
 			name: "skips body paragraphs that are not headings",
-			in: "Just a paragraph, no heading.\n\nAnother paragraph.\n",
+			in:   "Just a paragraph, no heading.\n\nAnother paragraph.\n",
 			want: "",
 		},
 		{
@@ -111,12 +111,12 @@ func TestParseDescription(t *testing.T) {
 		},
 		{
 			name: "returns empty when front-matter has neither description nor a body heading",
-			in: "---\nname: foo\n---\n\nplain body\n",
+			in:   "---\nname: foo\n---\n\nplain body\n",
 			want: "",
 		},
 		{
 			name: "trims trailing closing hashes (ATX-style)",
-			in: "# Title ##\n",
+			in:   "# Title ##\n",
 			want: "Title",
 		},
 	}

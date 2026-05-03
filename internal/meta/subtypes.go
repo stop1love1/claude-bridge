@@ -42,20 +42,20 @@ type RunVerifier struct {
 
 // RunStyleCritic is the agent-driven style critic outcome (P2b-2).
 type RunStyleCritic struct {
-	Verdict           string   `json:"verdict"`
-	Reason            string   `json:"reason"`
-	Issues            []string `json:"issues"`
-	CriticSessionID   *string  `json:"criticSessionId,omitempty"`
-	DurationMs        int64    `json:"durationMs"`
-	RetryScheduled    *bool    `json:"retryScheduled,omitempty"`
+	Verdict         string   `json:"verdict"`
+	Reason          string   `json:"reason"`
+	Issues          []string `json:"issues"`
+	CriticSessionID *string  `json:"criticSessionId,omitempty"`
+	DurationMs      int64    `json:"durationMs"`
+	RetryScheduled  *bool    `json:"retryScheduled,omitempty"`
 }
 
 // RunSemanticVerifier is the agent-driven semantic-verifier outcome.
 type RunSemanticVerifier struct {
-	Verdict             string   `json:"verdict"`
-	Reason              string   `json:"reason"`
-	Concerns            []string `json:"concerns"`
-	VerifierSessionID   *string  `json:"verifierSessionId,omitempty"`
-	DurationMs          int64    `json:"durationMs"`
-	RetryScheduled      *bool    `json:"retryScheduled,omitempty"`
+	Verdict           string   `json:"verdict"`
+	Reason            string   `json:"reason"`
+	Concerns          []string `json:"concerns"`
+	VerifierSessionID *string  `json:"verifierSessionId,omitempty"`
+	DurationMs        int64    `json:"durationMs"`
+	RetryScheduled    *bool    `json:"retryScheduled,omitempty"`
 }

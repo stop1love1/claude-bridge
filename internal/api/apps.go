@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -291,7 +292,15 @@ func AppendAppMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cwd := app.ResolvedPath()
-	_, appended := memory.AppendMemory(cwd, body.Entry)
+	bullet, appended := memory.AppendMemory(cwd, body.Entry)
+	if !appended {
+		// AppendMemory swallows the underlying failure (bad cwd, write
+		// error, idempotent no-op). Surface it via a log line so the
+		// operator can correlate "memory chip didn't appear" with a
+		// concrete cause; we still 200 with appended=false so the UI
+		// has a single, well-typed signal to render.
+		log.Printf("apps: AppendMemory returned !appended for %s (entry=%q bullet=%q)", name, body.Entry, bullet)
+	}
 	raw, _ := memory.LoadMemory(cwd)
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"memory":   raw,

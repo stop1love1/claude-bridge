@@ -289,11 +289,71 @@ func TestSpawnRetrySpawnerErrorReturnsNil(t *testing.T) {
 	if res != nil || err != nil {
 		t.Errorf("spawner error should produce (nil, nil), got res=%v err=%v", res, err)
 	}
-	// AppendRun must NOT have run — orphan record is exactly what we're
-	// guarding against.
+	// New ordering writes the run row BEFORE the spawn so an AppendRun
+	// I/O failure can't leave a live child with no row. Spawn failures
+	// patch the row to `failed` so the dashboard doesn't show a ghost
+	// "running" entry. Verify the row exists and is marked failed.
 	m, _ := meta.ReadMeta(filepath.Join(root, taskID))
-	if m != nil && len(m.Runs) != 0 {
-		t.Errorf("runs after failed spawn = %d, want 0 (no orphan)", len(m.Runs))
+	if m == nil || len(m.Runs) != 1 {
+		t.Fatalf("runs after failed spawn = %d, want 1 (failed row)", len(m.Runs))
+	}
+	r := m.Runs[0]
+	if r.Status != meta.RunStatusFailed {
+		t.Errorf("run.Status = %q, want failed", r.Status)
+	}
+	if r.EndedAt == nil || *r.EndedAt == "" {
+		t.Error("run.EndedAt should be stamped on spawn failure")
+	}
+}
+
+// TestSpawnRetryAppendRunFailureKeepsNoChild covers the race the
+// pre-fix code lost: SpawnFreeSession succeeded, then AppendRun failed
+// → child running, registered, no row, no lifecycle wire → orphan.
+//
+// The reordered flow here writes the row BEFORE spawning, so an
+// AppendRun failure (simulated via a sessionsDir whose meta.json is
+// missing) returns the error WITHOUT calling SpawnFreeSession at all.
+// Asserts via the fakeSpawner's call counter (must remain 0).
+func TestSpawnRetryAppendRunFailureKeepsNoChild(t *testing.T) {
+	parent := "p"
+	taskID := "t_20260101_005b"
+	root := t.TempDir()
+	// PrecomputedAttempt skips the eligibility-readMeta path, so we
+	// land on AppendRun first. AppendRun on a dir without meta.json
+	// returns ErrMissingMeta — exactly the I/O-failure shape we're
+	// guarding against (any error from AppendRun follows the same
+	// branch).
+	fs := &fakeSpawner{}
+	deps := retry.Deps{
+		BridgeRoot:  t.TempDir(),
+		SessionsDir: root,
+		Spawner:     fs,
+		LookupApp:   func(name string) (*apps.App, bool) { return nil, false },
+		ResolveCwd:  func(name string) (string, bool) { return filepath.Join(root, "live", name), true },
+		ReadOriginalPrompt: func(taskID string, finishedRun meta.Run) string {
+			return "ORIGINAL"
+		},
+	}
+
+	res, err := retry.SpawnRetry(retry.SpawnRetryArgs{
+		TaskID:             taskID,
+		FinishedRun:        meta.Run{SessionID: "x", Role: "coder", Repo: "myapp", ParentSessionID: &parent},
+		Gate:               retry.GateVerify,
+		LogLabel:           "verify-retry",
+		PrecomputedAttempt: &retry.PrecomputedAttempt{NextAttempt: 1},
+	}, deps)
+	if err == nil {
+		t.Fatal("expected non-nil error from AppendRun failure (missing meta.json)")
+	}
+	if res != nil {
+		t.Errorf("expected nil result on AppendRun failure, got %+v", res)
+	}
+	// CRITICAL: the spawner must NOT have been called. The pre-fix
+	// code spawned first then appended; an AppendRun failure there
+	// would leak a child. With the reorder, AppendRun runs first and
+	// SpawnFreeSession is never reached.
+	if fs.calls != 0 {
+		t.Errorf("spawner calls = %d, want 0 (AppendRun must run before spawn)", fs.calls)
 	}
 }
 

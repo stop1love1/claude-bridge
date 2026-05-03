@@ -45,3 +45,19 @@ func WithTaskLock(dir string, fn func() error) error {
 	defer mu.Unlock()
 	return fn()
 }
+
+// RemoveLockFor drops the per-dir mutex from the registry. Intended
+// for the DeleteTask path: once the task dir is gone, no further
+// callers will need the lock and leaving it in the sync.Map leaks
+// memory across the bridge's lifetime.
+//
+// Caller MUST guarantee no in-flight WithTaskLock holders for this
+// dir — calling RemoveLockFor while another goroutine holds the
+// mutex orphans that goroutine's lock instance: a fresh caller would
+// create a NEW mutex and proceed concurrently with the in-flight
+// holder. The DeleteTask flow already serializes via WithTaskLock
+// before nuking the dir, so any holders are gone by the time delete
+// returns.
+func RemoveLockFor(dir string) {
+	taskLocks.locks.Delete(dir)
+}

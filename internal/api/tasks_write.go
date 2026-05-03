@@ -12,6 +12,7 @@ import (
 
 	"github.com/stop1love1/claude-bridge/internal/coordinator"
 	"github.com/stop1love1/claude-bridge/internal/meta"
+	"github.com/stop1love1/claude-bridge/internal/sessions"
 )
 
 // CreateTaskBody is the POST /api/tasks request shape — same fields
@@ -131,11 +132,11 @@ func deriveTitle(body string) string {
 // UpdateTaskBody is the PATCH /api/tasks/{id} request shape. Every
 // field is optional — the handler patches in place.
 type UpdateTaskBody struct {
-	Title   *string             `json:"title,omitempty"`
-	Body    *string             `json:"body,omitempty"`
-	Section *meta.TaskSection   `json:"section,omitempty"`
-	Status  *meta.TaskStatus    `json:"status,omitempty"`
-	Checked *bool               `json:"checked,omitempty"`
+	Title   *string           `json:"title,omitempty"`
+	Body    *string           `json:"body,omitempty"`
+	Section *meta.TaskSection `json:"section,omitempty"`
+	Status  *meta.TaskStatus  `json:"status,omitempty"`
+	Checked *bool             `json:"checked,omitempty"`
 }
 
 // UpdateTask is the Go side of PATCH /api/tasks/{id}. Mirrors
@@ -200,7 +201,7 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 		} else if patch.Status != nil {
 			m.TaskStatus = *patch.Status
 		}
-		if werr := meta.WriteMeta(dir, m); werr != nil {
+		if werr := meta.WriteMetaUnlocked(dir, m); werr != nil {
 			return werr
 		}
 		updated = m
@@ -250,12 +251,43 @@ func DeleteTask(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+
+	// Race-safe delete sequence:
+	//  1. Take the per-task lock so a concurrent /link or /agents
+	//     POST cannot append a run row mid-delete.
+	//  2. Read the meta to find any still-running children, kill
+	//     them via the spawn registry. Without this, RemoveAll
+	//     leaves orphaned children writing to a now-deleted task
+	//     dir.
+	//  3. RemoveAll the dir.
+	//  4. Drop ONLY this task's cache entry (not the whole LRU as
+	//     ResetCacheForTests would).
+	//  5. Drop the per-task lock from the registry so it doesn't
+	//     leak across the bridge's lifetime.
+	lockErr := meta.WithTaskLock(dir, func() error {
+		// Best-effort: read meta and kill any still-running children
+		// before nuking the dir.
+		if m, err := meta.ReadMeta(dir); err == nil && m != nil && spawnRegistry != nil {
+			for _, run := range m.Runs {
+				if run.Status == meta.RunStatusQueued || run.Status == meta.RunStatusRunning {
+					_ = spawnRegistry.Kill(run.SessionID)
+				}
+			}
+		}
+		return os.RemoveAll(dir)
+	})
+	if lockErr != nil {
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": lockErr.Error()})
 		return
 	}
-	// Drop the cache entry so a follow-up GET sees the absence.
-	meta.ResetCacheForTests() // safe to call here — re-initializes the LRU
+	// Drop just this task's cache entry. The earlier code stomped
+	// the entire LRU via ResetCacheForTests, which evicted hot
+	// entries for unrelated live tasks across the bridge.
+	meta.InvalidateCacheFor(dir)
+	// Now that the dir is gone and no holders are queued behind the
+	// lock, drop the registry entry to avoid leaking sync.Map keys
+	// over the bridge's lifetime.
+	meta.RemoveLockFor(dir)
 	WriteJSON(w, http.StatusOK, DeleteTaskResponse{OK: true})
 }
 
@@ -326,6 +358,15 @@ func LinkSession(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "sessionId required"})
 		return
 	}
+	// Reject malformed sessionIds before they hit meta.json. Without this
+	// check an authenticated caller could persist a path-traversal or
+	// otherwise pathological string as Run.SessionID — and downstream
+	// endpoints like KillRun / GetRunDiff use sessions.IsValidSessionID
+	// to gate, which would render the bad row unkillable / unviewable.
+	if !sessions.IsValidSessionID(body.SessionID) {
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sessionId"})
+		return
+	}
 	c := currentConfig()
 	dir := filepath.Join(c.SessionsDir, id)
 
@@ -360,7 +401,7 @@ func LinkSession(w http.ResponseWriter, r *http.Request) {
 					n := now
 					m.Runs[i].StartedAt = &n
 				}
-				return meta.WriteMeta(dir, m)
+				return meta.WriteMetaUnlocked(dir, m)
 			}
 		}
 		startedAt := now
@@ -372,7 +413,7 @@ func LinkSession(w http.ResponseWriter, r *http.Request) {
 			StartedAt: &startedAt,
 		})
 		inserted = true
-		return meta.WriteMeta(dir, m)
+		return meta.WriteMetaUnlocked(dir, m)
 	})
 	if err != nil {
 		if err == meta.ErrMissingMeta {

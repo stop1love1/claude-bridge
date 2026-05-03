@@ -1,8 +1,14 @@
+// Package git wraps the per-app git lifecycle hook: honor branchMode
+// (current / fixed / auto-create) before a child runs, then optionally
+// run git add/commit/push afterwards per the app's autoCommit /
+// autoPush flags. Failures are logged but never flip a successful run
+// to failed.
 package git
 
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,7 +70,42 @@ var (
 	drivePrefixRE = regexp.MustCompile(`^[A-Za-z]:`)
 	headRefRE     = regexp.MustCompile(`^ref:\s*refs/heads/(.+)$`)
 	shaRE         = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+
+	// branchNameRE is the closed-charset gate every operator-supplied
+	// branch name must pass before the bridge hands it to `git`. It
+	// mirrors the TS port's BRANCH_RE in app/api/apps/[name]/route.ts
+	// (`^[A-Za-z0-9._/-]{1,200}$`) so a value that survived the API
+	// layer's validator can also survive this one. The leading `-`
+	// rejection happens via validateBranchName, not the regex itself,
+	// because `-` is a permitted *interior* character (e.g.
+	// `feature/foo-bar`).
+	branchNameRE = regexp.MustCompile(`^[A-Za-z0-9._/@-]{1,200}$`)
 )
+
+// validateBranchName rejects branch names that could be coaxed into
+// becoming a git CLI option (anything starting with `-`), would
+// traverse refs (`..` segments), or contain characters outside the
+// bridge's branch charset. Errors are operator-safe — they do not
+// echo the rejected input back into the message because the input
+// often ends up in HTTP responses verbatim.
+func validateBranchName(branch string) error {
+	if branch == "" {
+		return errors.New("git: branch name is empty")
+	}
+	if strings.HasPrefix(branch, "-") {
+		return errors.New("git: branch name must not start with '-'")
+	}
+	if strings.Contains(branch, "..") {
+		return errors.New("git: branch name must not contain '..'")
+	}
+	if strings.ContainsAny(branch, " \t\r\n\x00") {
+		return errors.New("git: branch name must not contain whitespace or NUL")
+	}
+	if !branchNameRE.MatchString(branch) {
+		return errors.New("git: branch name contains invalid characters")
+	}
+	return nil
+}
 
 func parseHead(raw string) string {
 	text := strings.TrimSpace(raw)
@@ -80,11 +121,11 @@ func parseHead(raw string) string {
 // BranchMode controls how the bridge picks a branch for a child spawn.
 //
 //   - Current     → no checkout (the child runs on whatever branch the
-//                   working tree currently has).
+//     working tree currently has).
 //   - Fixed       → `git checkout <FixedBranch>`, creating it from HEAD
-//                   if missing.
+//     if missing.
 //   - AutoCreate  → `git checkout -b claude/<task-id>`, with a fallback
-//                   to plain checkout if the branch already exists.
+//     to plain checkout if the branch already exists.
 type BranchMode string
 
 const (
@@ -120,12 +161,22 @@ func PrepareForSpawn(repoPath, taskID string, s Settings) (branch string, err er
 		if s.FixedBranch == "" {
 			return "", errors.New("git: branchMode=fixed requires FixedBranch")
 		}
+		if err := validateBranchName(s.FixedBranch); err != nil {
+			return "", err
+		}
 		if err := checkoutOrCreate(repoPath, s.FixedBranch); err != nil {
 			return "", err
 		}
 		return s.FixedBranch, nil
 	case BranchModeAutoCreate:
 		branch := "claude/" + taskID
+		// taskID is meta-validated upstream (IsValidTaskID is a closed
+		// charset) but we revalidate the assembled branch string so the
+		// invariant is local to this function rather than a contract a
+		// future caller might violate.
+		if err := validateBranchName(branch); err != nil {
+			return "", err
+		}
 		if err := checkoutOrCreate(repoPath, branch); err != nil {
 			return "", err
 		}
@@ -139,6 +190,11 @@ func PrepareForSpawn(repoPath, taskID string, s Settings) (branch string, err er
 // are returned but the caller (lifecycle hook) treats them as
 // best-effort: a failed commit/push must NOT flip a successful run to
 // failed — the operator can retry manually.
+//
+// `message` is operator-supplied so we pass it via the `-m` flag and
+// rely on argv separation (no shell), rather than embedding it in a
+// command string. The git CLI never re-parses `-m`'s argument as
+// options.
 func AfterSpawn(repoPath, message string, s Settings) error {
 	if !s.AutoCommit && !s.AutoPush {
 		return nil
@@ -164,21 +220,48 @@ func AfterSpawn(repoPath, message string, s Settings) error {
 // checkoutOrCreate runs `git checkout <branch>` and falls back to
 // `git checkout -b <branch>` on failure (the branch doesn't exist yet).
 // Mirrors the BranchMode=fixed / auto-create semantics.
+//
+// validateBranchName already rejects names that start with `-`, but we
+// also defensively pin the option-terminator semantics by passing
+// branches that pass validation. We can't use `--` for the no-arg
+// `checkout <branch>` form because `git checkout -- <branch>` treats
+// the arg as a path (revert-file mode), not a branch switch — the
+// validator is the only line of defense for that arg, which is why
+// the regex is closed-charset.
 func checkoutOrCreate(repoPath, branch string) error {
+	if err := validateBranchName(branch); err != nil {
+		return err
+	}
 	if err := run(repoPath, "git", "checkout", branch); err == nil {
 		return nil
 	}
+	// `-b` accepts a branch name; the validator already prevented a
+	// dash-led arg from reaching here, so no `--` games are needed.
 	return run(repoPath, "git", "checkout", "-b", branch)
 }
 
-// run shells out to a command in repoPath. stdout/stderr are captured
-// and surfaced via the returned error so failures are diagnosable.
+// run shells out to a command in repoPath and returns an
+// operator-safe error. The full git stderr (which may contain branch
+// names, file paths, or other repo internals) is logged at warn level
+// rather than embedded in the returned error, so HTTP handlers that
+// surface this error to clients don't accidentally leak repo state.
 func run(dir, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		// Log the rich detail for the operator (stdout+stderr+args).
+		// `args` is bridge-controlled at every callsite (no operator
+		// JSON values pass through here unsanitized) so logging it is
+		// safe; the user-supplied strings are already validated.
+		log.Printf("git: %s %s in %s failed: %v: %s",
+			name, strings.Join(args, " "), dir, err, strings.TrimSpace(string(out)))
+		// Returned error stays intentionally terse so downstream HTTP
+		// responses don't echo repo paths or git's stderr verbatim.
+		if len(args) > 0 {
+			return fmt.Errorf("%s %s failed", name, args[0])
+		}
+		return fmt.Errorf("%s failed", name)
 	}
 	return nil
 }

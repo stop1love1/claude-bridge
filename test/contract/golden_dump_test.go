@@ -22,7 +22,8 @@ import (
 // against Next (state-non-deterministic, fixture-only behavior, etc.).
 //
 // Run with:
-//   DUMP_GOLDENS=1 go test -run TestDumpGoldens -v ./test/contract/...
+//
+//	DUMP_GOLDENS=1 go test -run TestDumpGoldens -v ./test/contract/...
 func TestDumpGoldens(t *testing.T) {
 	if os.Getenv("DUMP_GOLDENS") != "1" {
 		t.Skip("set DUMP_GOLDENS=1 to dump")

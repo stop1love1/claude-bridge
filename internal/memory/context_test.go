@@ -186,7 +186,7 @@ func TestBuildResumePromptDirectSpawnAndEmptyBody(t *testing.T) {
 	out := memory.BuildResumePrompt(m, memory.ResumeOptions{
 		Role:            "reviewer",
 		Repo:            "repoX",
-		ParentSessionID: "",     // direct spawn branch
+		ParentSessionID: "",    // direct spawn branch
 		CoordinatorBody: "   ", // whitespace-only body branch
 	})
 	if !strings.Contains(out, "Coordinator session: (none — direct spawn).") {

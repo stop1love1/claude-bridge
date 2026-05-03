@@ -41,9 +41,9 @@ type pendingHandler func(Request)
 type answeredHandler func(Request)
 
 type sessionSubs struct {
-	mu        sync.Mutex
-	pending   []pendingHandler
-	answered  []answeredHandler
+	mu       sync.Mutex
+	pending  []pendingHandler
+	answered []answeredHandler
 }
 
 // Store holds every in-flight permission request keyed by

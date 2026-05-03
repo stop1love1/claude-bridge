@@ -3,10 +3,21 @@
 package spawn
 
 import (
+	"context"
 	"os/exec"
 	"strconv"
 	"syscall"
+	"time"
 )
+
+// taskkillTimeout caps how long the spawn package waits for a single
+// `taskkill` invocation. Five seconds is generous — taskkill is local,
+// non-network, and finishes near-instantly when the target PID exists.
+// The bound exists purely to keep a wedged taskkill (e.g. a Windows
+// security agent introspecting the call) from blocking the kill path
+// forever; on hit, we move on and rely on the registry's identity-
+// checked SIGKILL escalation as the safety net.
+const taskkillTimeout = 5 * time.Second
 
 // configureProcAttr is a no-op on Windows. Process groups are managed
 // via Job objects (a future enhancement); for now the kill path uses
@@ -38,10 +49,13 @@ func killProcessTree(cmd *exec.Cmd, force bool) error {
 	if force {
 		args = append([]string{"/F"}, args...)
 	}
-	tk := exec.Command("taskkill", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), taskkillTimeout)
+	defer cancel()
+	tk := exec.CommandContext(ctx, "taskkill", args...)
 	// Don't surface taskkill's "process not found" exit code as an
 	// error — kill is best-effort and the caller re-checks via the
-	// registry anyway.
+	// registry anyway. A ctx-deadline-exceeded is also folded silently
+	// on the same theory (registry escalation is the safety net).
 	_ = tk.Run()
 	return nil
 }

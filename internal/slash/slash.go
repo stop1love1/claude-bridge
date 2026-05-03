@@ -17,6 +17,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/stop1love1/claude-bridge/internal/pathsafe"
 )
 
 // Command describes one slash command surfaced to the UI / completion.
@@ -153,20 +155,16 @@ func Discover(roots []string) []Command {
 // cannot be resolved or paths can't be made absolute — this is the
 // safer default; mislabeling a personal commands dir as "app" only
 // affects the UI badge, never security/permissions.
+//
+// pathsafe.ContainsCaseInsensitive does the case-folded prefix check:
+// Windows tempdirs and home paths often differ in casing across
+// invocations (8.3 short-names, etc.) and the lower-case comparison is
+// correct on every platform we run on.
 func sourceFor(root, homeAbs string) string {
 	if homeAbs == "" {
 		return "app"
 	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return "app"
-	}
-	// Case-insensitive on Windows. Comparing both lower-cased is good
-	// enough — a legitimate POSIX path wouldn't have casing collisions
-	// with a different real dir.
-	a := strings.ToLower(abs)
-	h := strings.ToLower(homeAbs)
-	if a == h || strings.HasPrefix(a, h+string(filepath.Separator)) {
+	if pathsafe.ContainsCaseInsensitive(homeAbs, root) {
 		return "user"
 	}
 	return "app"

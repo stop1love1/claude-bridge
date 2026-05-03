@@ -36,7 +36,7 @@ type TailBeforeResult struct {
 	FromOffset int64 `json:"fromOffset"`
 	// BeforeOffset echoes the input ceiling so the client can detect
 	// stale responses.
-	BeforeOffset int64 `json:"beforeOffset"`
+	BeforeOffset int64   `json:"beforeOffset"`
 	LineOffsets  []int64 `json:"lineOffsets"`
 }
 

@@ -16,7 +16,7 @@ import (
 	"github.com/stop1love1/claude-bridge/internal/apps"
 	"github.com/stop1love1/claude-bridge/internal/git"
 	"github.com/stop1love1/claude-bridge/internal/meta"
-	"github.com/stop1love1/claude-bridge/internal/repos"
+	"github.com/stop1love1/claude-bridge/internal/pathsafe"
 	"github.com/stop1love1/claude-bridge/internal/sessions"
 )
 
@@ -144,15 +144,14 @@ func GetRunPrompt(w http.ResponseWriter, r *http.Request) {
 
 	// Best-effort: if a future spawner version drops the file, try
 	// reading it before falling back to the stub. Path is contained
-	// to the task dir via filepath.Base + a final prefix check.
+	// to the task dir via filepath.Base + a final symlink-aware check.
 	if isValidRunRoleRepo(run.Role, run.Repo) {
 		fileName := run.Role + "-" + run.Repo + ".prompt.txt"
 		if filepath.Base(fileName) == fileName {
 			full := filepath.Join(dir, fileName)
 			absDir, derr := filepath.Abs(dir)
 			absFile, ferr := filepath.Abs(full)
-			if derr == nil && ferr == nil &&
-				(absFile == absDir || strings.HasPrefix(absFile, absDir+string(filepath.Separator))) {
+			if derr == nil && ferr == nil && isUnderRoot(absDir, absFile) {
 				if body, err := os.ReadFile(full); err == nil {
 					WriteJSON(w, http.StatusOK, map[string]string{"prompt": string(body)})
 					return
@@ -254,10 +253,10 @@ func GetRunDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveRunCwd picks the working tree to diff against. Order:
-//   1. The run's worktree (if recorded, contained under the registered
-//      app root, and still on disk).
-//   2. The registered app's live path.
-//   3. The repos resolver (handles the bridge folder + sibling repos).
+//  1. The run's worktree (if recorded, contained under the registered
+//     app root, and still on disk).
+//  2. The registered app's live path.
+//  3. The repos resolver (handles the bridge folder + sibling repos).
 //
 // kind is "worktree" or "live" — surfaced to the UI so the diff panel
 // can label the source.
@@ -278,7 +277,7 @@ func resolveRunCwd(run *meta.Run) (cwd, kind string) {
 			return p, "live"
 		}
 	}
-	if p, ok := repos.ResolveCwd(getBridgeRoot(), run.Repo); ok {
+	if p, ok := apps.ResolveCwd(getBridgeRoot(), run.Repo); ok {
 		if st, err := os.Stat(p); err == nil && st.IsDir() {
 			return p, "live"
 		}
@@ -287,14 +286,11 @@ func resolveRunCwd(run *meta.Run) (cwd, kind string) {
 }
 
 // isUnderRoot reports whether candidate is the same path as root or
-// a descendant of it. Both inputs are expected to be absolute and
-// already cleaned by filepath.Abs.
+// a descendant of it, including a symlink-aware re-check. Thin wrapper
+// around pathsafe.Contains — kept as a 2-line helper so the call sites
+// elsewhere in the file stay readable.
 func isUnderRoot(root, candidate string) bool {
-	if root == candidate {
-		return true
-	}
-	sep := string(filepath.Separator)
-	return strings.HasPrefix(candidate, root+sep) || strings.HasPrefix(candidate, root+"/")
+	return pathsafe.Contains(root, candidate)
 }
 
 // runGitDiff shells out to `git -C cwd diff HEAD --no-color`, falling

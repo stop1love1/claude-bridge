@@ -48,7 +48,7 @@ var Endpoints = map[string]Endpoint{
 		Path:   "/api/sessions/all",
 		// Setup: nil. The S05 stub in internal/api/sessions.go returns
 		// [] unconditionally — the full implementation depends on
-		// internal/meta + internal/git + internal/repos which land in
+		// internal/meta + internal/git + internal/apps which land in
 		// later sessions (S09/S15/S17). The golden was hand-authored
 		// (not recorded against Next, since live Next state always
 		// includes the bridge's own session dir under

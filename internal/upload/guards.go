@@ -7,9 +7,10 @@
 package upload
 
 import (
-	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/stop1love1/claude-bridge/internal/pathsafe"
 )
 
 // MaxBytes caps any one upload at 25 MB. Big enough for screenshots
@@ -34,7 +35,7 @@ var blockedExtensions = map[string]struct{}{
 	".vbs": {}, ".vbe": {}, ".wsf": {}, ".wsh": {}, ".hta": {}, ".chm": {},
 	".js": {}, ".jse": {},
 	".jar": {}, ".class": {},
-	".sh": {},
+	".sh":  {},
 	".iso": {}, ".img": {}, ".vhd": {}, ".vhdx": {},
 	".html": {}, ".htm": {}, ".xhtml": {}, ".shtml": {},
 	".svg": {}, ".svgz": {}, ".mhtml": {},
@@ -112,10 +113,10 @@ func IsReservedDeviceName(name string) bool {
 type GuardReason string
 
 const (
-	ReasonEmptyName       GuardReason = "empty-name"
-	ReasonBlockedExt      GuardReason = "blocked-extension"
-	ReasonReservedName    GuardReason = "reserved-name"
-	ReasonOutsideDir      GuardReason = "outside-upload-dir"
+	ReasonEmptyName    GuardReason = "empty-name"
+	ReasonBlockedExt   GuardReason = "blocked-extension"
+	ReasonReservedName GuardReason = "reserved-name"
+	ReasonOutsideDir   GuardReason = "outside-upload-dir"
 )
 
 // GuardResult is the outcome of ValidateName.
@@ -149,17 +150,10 @@ func ValidateName(raw string) GuardResult {
 // resolved write path. Even with a sanitized name, paranoia says: the
 // resolved path must stay inside uploadDir (with the separator
 // appended so `/uploads/abc` doesn't accept `/uploads/abc-evil`).
+//
+// Thin wrapper around pathsafe.Contains — keeps the existing call
+// surface (bool return, no error categories) so the API handlers don't
+// have to grow a switch over pathsafe sentinels.
 func AssertInsideUploadDir(uploadDir, candidatePath string) bool {
-	resolvedDir, err := filepath.Abs(uploadDir)
-	if err != nil {
-		return false
-	}
-	resolvedCandidate, err := filepath.Abs(candidatePath)
-	if err != nil {
-		return false
-	}
-	if resolvedCandidate == resolvedDir {
-		return true
-	}
-	return strings.HasPrefix(resolvedCandidate, resolvedDir+string(filepath.Separator))
+	return pathsafe.Contains(uploadDir, candidatePath)
 }

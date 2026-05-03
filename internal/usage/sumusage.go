@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -179,50 +178,70 @@ func sumUsageFromJsonlUncached(filePath string) (SessionUsage, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	// claude session lines can be very long (multi-KB attachments,
-	// embedded base64 images). Default 64 KB token size is too small —
-	// bump to 4 MB to cover even the worst-case lines we've observed.
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-
+	// bufio.Scanner imposes a fixed line ceiling (default 64 KB, even
+	// after Buffer()) — when a single line exceeds it, Scanner.Err returns
+	// bufio.ErrTooLong and the surrounding cache-no-poison guard would
+	// silently zero out the entire session. Claude transcripts routinely
+	// embed multi-MB base64 image attachments, so any fixed cap is wrong.
+	// Use a Reader with ReadBytes('\n') so individual lines have no length
+	// limit, and treat per-line errors as recoverable: a single garbled or
+	// over-long line should not void the whole file's worth of usage.
+	r := bufio.NewReader(f)
 	var out SessionUsage
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	for {
+		line, err := r.ReadBytes('\n')
+		// ReadBytes may return data along with a non-nil err (typically
+		// io.EOF on the trailing partial line). Process whatever bytes
+		// came back before deciding whether to stop.
+		if len(line) > 0 {
+			// Strip the trailing newline (and stray \r on Windows-edited
+			// files) for cleaner empty-line detection / json parsing.
+			trimmed := line
+			if trimmed[len(trimmed)-1] == '\n' {
+				trimmed = trimmed[:len(trimmed)-1]
+			}
+			if len(trimmed) > 0 && trimmed[len(trimmed)-1] == '\r' {
+				trimmed = trimmed[:len(trimmed)-1]
+			}
+			if len(trimmed) > 0 {
+				var entry struct {
+					Type    string `json:"type"`
+					Message struct {
+						Usage *struct {
+							InputTokens              int64 `json:"input_tokens"`
+							OutputTokens             int64 `json:"output_tokens"`
+							CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+							CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+						} `json:"usage"`
+					} `json:"message"`
+				}
+				if jerr := json.Unmarshal(trimmed, &entry); jerr == nil {
+					if entry.Type == "assistant" && entry.Message.Usage != nil {
+						u := entry.Message.Usage
+						out.InputTokens += u.InputTokens
+						out.OutputTokens += u.OutputTokens
+						out.CacheCreationTokens += u.CacheCreationInputTokens
+						out.CacheReadTokens += u.CacheReadInputTokens
+						out.Turns++
+					}
+				}
+				// Malformed JSON on a single line is intentionally
+				// swallowed — claude occasionally writes partially-flushed
+				// rows when a session crashes; one bad row shouldn't
+				// invalidate the rest of the file.
+			}
 		}
-		var entry struct {
-			Type    string `json:"type"`
-			Message struct {
-				Usage *struct {
-					InputTokens              int64 `json:"input_tokens"`
-					OutputTokens             int64 `json:"output_tokens"`
-					CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-					CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				// Clean end-of-file. Final partial line (no trailing \n)
+				// was already processed above.
+				return out, nil
+			}
+			// Best-effort: a transient mid-stream read error shouldn't
+			// flip a parse-so-far into a zero. Stop here and return the
+			// partial sum as success — the (path, mtime, size) cache key
+			// will invalidate on the next file mutation anyway.
+			return out, nil
 		}
-		if err := json.Unmarshal(line, &entry); err != nil {
-			// Stream-parse: a malformed line in the middle of a long
-			// log doesn't void the whole file.
-			continue
-		}
-		if entry.Type != "assistant" || entry.Message.Usage == nil {
-			continue
-		}
-		u := entry.Message.Usage
-		out.InputTokens += u.InputTokens
-		out.OutputTokens += u.OutputTokens
-		out.CacheCreationTokens += u.CacheCreationInputTokens
-		out.CacheReadTokens += u.CacheReadInputTokens
-		out.Turns++
 	}
-	if err := scanner.Err(); err != nil {
-		// Treat scanner failure as a read error so the caller's
-		// don't-cache-failures contract holds.
-		if !errors.Is(err, io.EOF) && !errors.Is(err, fs.ErrClosed) {
-			return SessionUsage{}, err
-		}
-	}
-	return out, nil
 }

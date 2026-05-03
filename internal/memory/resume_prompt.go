@@ -17,10 +17,10 @@ import (
 // "(none — direct spawn)" branch already collapses the empty case;
 // pointer chasing for a single string field would be busy work.
 type ResumeOptions struct {
-	Role             string
-	Repo             string
-	ParentSessionID  string
-	CoordinatorBody  string
+	Role            string
+	Repo            string
+	ParentSessionID string
+	CoordinatorBody string
 }
 
 // BuildResumePrompt formats the message body the bridge hands to

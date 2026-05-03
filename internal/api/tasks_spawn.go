@@ -1,10 +1,13 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,22 +21,19 @@ import (
 	"github.com/stop1love1/claude-bridge/internal/memory"
 	"github.com/stop1love1/claude-bridge/internal/meta"
 	"github.com/stop1love1/claude-bridge/internal/quality"
-	"github.com/stop1love1/claude-bridge/internal/repos"
 	"github.com/stop1love1/claude-bridge/internal/runlifecycle"
-	"github.com/stop1love1/claude-bridge/internal/sessions"
-	"github.com/stop1love1/claude-bridge/internal/spawn"
 	"github.com/stop1love1/claude-bridge/internal/symbol"
 )
 
 // AgentBody is the POST /api/tasks/{id}/agents payload — the
 // coordinator's spawn-child request.
 type AgentBody struct {
-	Role             string  `json:"role"`
-	Repo             string  `json:"repo"`
-	Prompt           string  `json:"prompt"`
-	ParentSessionID  string  `json:"parentSessionId,omitempty"`
-	AllowDuplicate   bool    `json:"allowDuplicate,omitempty"`
-	Mode             string  `json:"mode,omitempty"` // "spawn" (default) | "resume"
+	Role            string `json:"role"`
+	Repo            string `json:"repo"`
+	Prompt          string `json:"prompt"`
+	ParentSessionID string `json:"parentSessionId,omitempty"`
+	AllowDuplicate  bool   `json:"allowDuplicate,omitempty"`
+	Mode            string `json:"mode,omitempty"` // "spawn" (default) | "resume"
 }
 
 var agentRoleRE = mustCompileRoleRE()
@@ -125,7 +125,7 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cwd, ok := repos.ResolveCwd(getBridgeRoot(), body.Repo)
+	cwd, ok := apps.ResolveCwd(getBridgeRoot(), body.Repo)
 	if !ok {
 		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown repo"})
 		return
@@ -135,7 +135,7 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 	// (parentSessionId, role, repo) and call ResumeClaude with the
 	// operator's brief as the new user message.
 	if body.Mode == "resume" {
-		spawnAgentResume(w, dir, m, body, cwd, id)
+		spawnAgentResume(w, r, dir, m, body, cwd, id)
 		return
 	}
 
@@ -155,7 +155,7 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			if run.Status == meta.RunStatusQueued || run.Status == meta.RunStatusRunning {
 				WriteJSON(w, http.StatusConflict, map[string]any{
-					"error":            "duplicate active child for (parentSessionId, role, repo)",
+					"error":             "duplicate active child for (parentSessionId, role, repo)",
 					"existingSessionId": run.SessionID,
 				})
 				return
@@ -175,7 +175,10 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 	if branchErr != nil {
 		// Log but don't bail — operator can fix the branch issue.
 		// The child runs on whatever branch HEAD already had.
-		w.Header().Set("X-Branch-Warning", branchErr.Error())
+		// Sanitize the error before stamping it as an HTTP header
+		// value: git output may carry newlines or other control bytes
+		// which would corrupt the response framing.
+		w.Header().Set("X-Branch-Warning", sanitizeHeaderValue(branchErr.Error()))
 	}
 
 	// Worktree isolation — when the app opted in (worktreeMode is
@@ -192,7 +195,7 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 	if worktreeMode == "enabled" {
 		newWT, werr := git.CreateWorktreeForRun(cwd, fmt.Sprintf("agent-%s", id), branch)
 		if werr != nil {
-			w.Header().Add("X-Worktree-Warning", werr.Error())
+			w.Header().Add("X-Worktree-Warning", sanitizeHeaderValue(werr.Error()))
 		} else {
 			wt = newWT
 			useWorktree = true
@@ -269,26 +272,26 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prompt := childprompt.Build(childprompt.Options{
-		TaskID:           id,
-		TaskTitle:        m.TaskTitle,
-		TaskBody:         m.TaskBody,
-		ParentSessionID:  parentSession,
-		ChildSessionID:   childSessionID,
-		Role:             body.Role,
-		Repo:             body.Repo,
-		RepoCwd:          cwd,
-		BridgeURL:        coordinator.GetDefault().BridgeURL,
-		BridgeFolder:     coordinator.GetDefault().BridgeFolder,
-		CoordinatorBody:  body.Prompt,
-		Profile:          profile,
-		HouseRules:       houseRules,
-		PlaybookBody:     playbookBody,
-		PinnedFiles:      pinnedFiles,
-		SymbolIndex:      symIndex,
-		StyleFingerprint: styleFp,
+		TaskID:             id,
+		TaskTitle:          m.TaskTitle,
+		TaskBody:           m.TaskBody,
+		ParentSessionID:    parentSession,
+		ChildSessionID:     childSessionID,
+		Role:               body.Role,
+		Repo:               body.Repo,
+		RepoCwd:            cwd,
+		BridgeURL:          coordinator.GetDefault().BridgeURL,
+		BridgeFolder:       coordinator.GetDefault().BridgeFolder,
+		CoordinatorBody:    body.Prompt,
+		Profile:            profile,
+		HouseRules:         houseRules,
+		PlaybookBody:       playbookBody,
+		PinnedFiles:        pinnedFiles,
+		SymbolIndex:        symIndex,
+		StyleFingerprint:   styleFp,
 		AttachedReferences: refs,
-		RecentDirection:  &recent,
-		MemoryEntries:    memEntries,
+		RecentDirection:    &recent,
+		MemoryEntries:      memEntries,
 	})
 
 	// Append run as queued BEFORE spawn (orphan-window fix).
@@ -322,7 +325,7 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	_, _ = meta.UpdateRun(dir, childSessionID, func(r *meta.Run) {
+	if _, uerr := meta.UpdateRun(dir, childSessionID, func(r *meta.Run) {
 		r.Status = meta.RunStatusRunning
 		r.StartedAt = &startedAt
 		if useWorktree {
@@ -333,7 +336,22 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 			r.WorktreeBranch = &b
 			r.WorktreeBaseBranch = &base
 		}
-	}, nil)
+	}, nil); uerr != nil {
+		// Meta write failed AFTER spawn succeeded — without this
+		// surfacing, the child runs but the UI sees the row stuck in
+		// queued forever. Kill the orphan and 500 with a clear error.
+		if spawnRegistry != nil {
+			spawnRegistry.Kill(childSessionID)
+		}
+		if useWorktree {
+			_ = git.RemoveWorktree(cwd, fmt.Sprintf("agent-%s", id))
+		}
+		log.Printf("tasks_agents: post-spawn UpdateRun failed for %s; killed orphan child: %v", childSessionID, uerr)
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "spawned child but failed to record running state: " + uerr.Error(),
+		})
+		return
+	}
 
 	// Verify chain hook — if the app declared a verify map in its
 	// extras, run those commands after a clean exit and persist the
@@ -341,18 +359,28 @@ func SpawnAgent(w http.ResponseWriter, r *http.Request) {
 	// retry yet (LLM-driven retry cascade is out of scope); it just
 	// logs the verdict to the run row.
 	verifyHook := buildVerifyHook(app, spawnCwd)
+	// exitCodeFn reads ProcessState. ProcessState is only safe to read
+	// AFTER cmd.Wait() has returned, which is signaled here by sess.Done
+	// closing. runlifecycle.Wire / WireWithVerify guarantee they call
+	// exitCodeFn only after <-done has fired, so this access is race-free
+	// at the call site. Don't move this read forward of sess.Done close.
 	exitCodeFn := func() int {
 		if sess.Cmd == nil || sess.Cmd.ProcessState == nil {
 			return -1
 		}
 		return sess.Cmd.ProcessState.ExitCode()
 	}
+	wireOpts := runlifecycle.WireOpts{
+		Ctx:           r.Context(),
+		GitSettings:   &branchSettings,
+		RepoPath:      spawnCwd,
+		CommitMessage: fmt.Sprintf("bridge: %s/%s for %s", body.Role, body.Repo, id),
+	}
+	label := fmt.Sprintf("agent %s/%s/%s", id, body.Role, body.Repo)
 	if verifyHook != nil {
-		runlifecycle.WireWithVerify(dir, childSessionID, sess.Done, exitCodeFn,
-			fmt.Sprintf("agent %s/%s/%s", id, body.Role, body.Repo), verifyHook)
+		runlifecycle.WireWithVerifyOpts(dir, childSessionID, sess.Done, exitCodeFn, label, verifyHook, wireOpts)
 	} else {
-		runlifecycle.Wire(dir, childSessionID, sess.Done, exitCodeFn,
-			fmt.Sprintf("agent %s/%s/%s", id, body.Role, body.Repo))
+		runlifecycle.WireWithOpts(dir, childSessionID, sess.Done, exitCodeFn, label, wireOpts)
 	}
 
 	resp := map[string]any{
@@ -431,11 +459,10 @@ func decodeStringField(app *apps.App, parent, key string) string {
 	return ""
 }
 
-
 // spawnAgentResume handles the mode=resume branch — looks up the
 // prior run, calls ResumeClaude with the new brief as a follow-up
 // turn, wires lifecycle, returns 200.
-func spawnAgentResume(w http.ResponseWriter, dir string, m *meta.Meta, body AgentBody, cwd, taskID string) {
+func spawnAgentResume(w http.ResponseWriter, r *http.Request, dir string, m *meta.Meta, body AgentBody, cwd, taskID string) {
 	// Find the prior child run with matching (parent, role, repo).
 	var match *meta.Run
 	for i := range m.Runs {
@@ -453,7 +480,7 @@ func spawnAgentResume(w http.ResponseWriter, dir string, m *meta.Meta, body Agen
 		// finished session to extend.
 		if run.Status == meta.RunStatusRunning || run.Status == meta.RunStatusQueued {
 			WriteJSON(w, http.StatusConflict, map[string]any{
-				"error":            "prior run still active — cannot resume; kill it first",
+				"error":             "prior run still active — cannot resume; kill it first",
 				"existingSessionId": run.SessionID,
 			})
 			return
@@ -480,136 +507,28 @@ func spawnAgentResume(w http.ResponseWriter, dir string, m *meta.Meta, body Agen
 		r.StartedAt = &startedAt
 		r.EndedAt = nil
 	}, nil)
-	runlifecycle.Wire(dir, match.SessionID, sess.Done, func() int {
+	app, _ := apps.GetDefault().FindByName(body.Repo)
+	resumeGit := git.Settings{}
+	if app != nil {
+		resumeGit = app.Git
+	}
+	runlifecycle.WireWithOpts(dir, match.SessionID, sess.Done, func() int {
 		if sess.Cmd == nil || sess.Cmd.ProcessState == nil {
 			return -1
 		}
 		return sess.Cmd.ProcessState.ExitCode()
-	}, fmt.Sprintf("resume %s/%s/%s", taskID, body.Role, body.Repo))
+	}, fmt.Sprintf("resume %s/%s/%s", taskID, body.Role, body.Repo), runlifecycle.WireOpts{
+		Ctx:           r.Context(),
+		GitSettings:   &resumeGit,
+		RepoPath:      cwd,
+		CommitMessage: fmt.Sprintf("bridge: %s/%s for %s", body.Role, body.Repo, taskID),
+	})
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"sessionId": match.SessionID,
 		"role":      body.Role,
 		"repo":      body.Repo,
 		"resumed":   true,
 		"pid":       sess.Cmd.Process.Pid,
-	})
-}
-
-// ContinueTask — POST /api/tasks/{id}/continue. Re-spawns the
-// coordinator with a resume prompt summarizing prior runs / open
-// decisions. Mirrors libs/coordinator's continue path.
-func ContinueTask(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if !meta.IsValidTaskID(id) {
-		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid task id"})
-		return
-	}
-	c := currentConfig()
-	dir := filepath.Join(c.SessionsDir, id)
-	m, err := meta.ReadMeta(dir)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if m == nil {
-		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	// Find the latest finished coordinator run.
-	var latestCoord *meta.Run
-	for i := len(m.Runs) - 1; i >= 0; i-- {
-		if m.Runs[i].Role == "coordinator" {
-			cp := m.Runs[i]
-			latestCoord = &cp
-			break
-		}
-	}
-	if latestCoord == nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "no coordinator run to continue — POST /api/tasks first",
-		})
-		return
-	}
-	if latestCoord.Status == meta.RunStatusRunning || latestCoord.Status == meta.RunStatusQueued {
-		WriteJSON(w, http.StatusConflict, map[string]string{
-			"error": "coordinator still active — kill it first",
-		})
-		return
-	}
-	if spawnerInstance == nil {
-		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "spawner not configured"})
-		return
-	}
-	resumeMsg := memory.BuildResumePrompt(*m, memory.ResumeOptions{
-		ParentSessionID: latestCoord.SessionID,
-	})
-	bridgeRoot := getBridgeRoot()
-	sess, err := spawnerInstance.ResumeClaude(bridgeRoot, latestCoord.SessionID, resumeMsg,
-		&spawn.ChatSettings{Mode: "bypassPermissions", DisallowedTools: []string{"Task"}},
-		"")
-	if err != nil {
-		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	_, _ = meta.UpdateRun(dir, latestCoord.SessionID, func(r *meta.Run) {
-		r.Status = meta.RunStatusRunning
-		r.StartedAt = &startedAt
-		r.EndedAt = nil
-	}, nil)
-	runlifecycle.Wire(dir, latestCoord.SessionID, sess.Done, func() int {
-		if sess.Cmd == nil || sess.Cmd.ProcessState == nil {
-			return -1
-		}
-		return sess.Cmd.ProcessState.ExitCode()
-	}, fmt.Sprintf("continue %s", id))
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"sessionId": latestCoord.SessionID,
-		"continued": true,
-	})
-}
-
-// ClearTask — POST /api/tasks/{id}/clear. SIGTERMs every active child
-// + flips queued/running rows to failed. Mirrors libs/coordinator's
-// clear path. Idempotent — clearing an already-cleared task is a
-// no-op success.
-func ClearTask(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if !meta.IsValidTaskID(id) {
-		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid task id"})
-		return
-	}
-	c := currentConfig()
-	dir := filepath.Join(c.SessionsDir, id)
-	m, err := meta.ReadMeta(dir)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if m == nil {
-		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-		return
-	}
-	killed := 0
-	for _, run := range m.Runs {
-		if run.Status != meta.RunStatusQueued && run.Status != meta.RunStatusRunning {
-			continue
-		}
-		if spawnRegistry != nil && spawnRegistry.Kill(run.SessionID) {
-			killed++
-		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		_, _ = meta.UpdateRun(dir, run.SessionID, func(r *meta.Run) {
-			r.Status = meta.RunStatusFailed
-			r.EndedAt = &now
-		}, func(cur meta.Run) bool {
-			// Only flip if still active — don't demote done/failed.
-			return cur.Status == meta.RunStatusQueued || cur.Status == meta.RunStatusRunning
-		})
-	}
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"ok":     true,
-		"killed": killed,
 	})
 }
 
@@ -633,48 +552,61 @@ func decodeStringList(raw []byte) []string {
 	return out
 }
 
-// newAgentUUID is a local UUID generator (avoid importing spawn for
-// just the helper). Same shape as spawn.newUUID.
+// newAgentUUID returns a fresh v4 UUID using crypto/rand. The earlier
+// implementation derived bytes from time.UnixNano() with bit shifts —
+// two parallel SpawnAgent calls in the same nanosecond would collide,
+// silently overwriting one child's session row. crypto/rand makes the
+// odds vanishingly small (≈ birthday-bound at 2^61 generations).
+//
+// Format mirrors spawn.newUUID so the on-disk session id shape is
+// indistinguishable from spawner-minted ids.
 func newAgentUUID() string {
-	// Use os-supplied source for randomness via the meta package's
-	// helper indirectly — but meta doesn't export one. Quick local
-	// implementation.
-	now := time.Now().UnixNano()
 	var b [16]byte
-	for i := range b {
-		b[i] = byte(now >> (i * 4))
+	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+		// crypto/rand should never fail on supported platforms. Falling
+		// back to a deterministic time-prefixed id rather than panicking
+		// keeps the request loop alive; the operator can retry.
+		return fmt.Sprintf("00000000-0000-4000-8000-%012x", time.Now().UnixNano())
 	}
-	if f, err := os.Open(os.DevNull); err == nil {
-		_ = f.Close()
-	}
-	// Add some entropy from a /dev/urandom-equivalent read via
-	// crypto/rand — but to avoid the import we re-use the per-spawn
-	// helper through SpawnFreeSession (which mints its own when sid
-	// is empty). For this call we DO need to allocate up-front so
-	// the prompt can render the id. Use a v4-ish hex string seeded
-	// from time + a tiny mix.
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	const hex = "0123456789abcdef"
+	b[6] = (b[6] & 0x0f) | 0x40 // v4
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
 	dst := make([]byte, 36)
-	hexEnc := func(out []byte, src []byte) {
-		for i, v := range src {
-			out[i*2] = hex[v>>4]
-			out[i*2+1] = hex[v&0x0f]
-		}
-	}
-	hexEnc(dst[0:8], b[0:4])
+	hex.Encode(dst[0:8], b[0:4])
 	dst[8] = '-'
-	hexEnc(dst[9:13], b[4:6])
+	hex.Encode(dst[9:13], b[4:6])
 	dst[13] = '-'
-	hexEnc(dst[14:18], b[6:8])
+	hex.Encode(dst[14:18], b[6:8])
 	dst[18] = '-'
-	hexEnc(dst[19:23], b[8:10])
+	hex.Encode(dst[19:23], b[8:10])
 	dst[23] = '-'
-	hexEnc(dst[24:36], b[10:16])
+	hex.Encode(dst[24:36], b[10:16])
 	return string(dst)
 }
 
-// Compile-time guard so the imports are exercised even when the
-// optional context loaders are nil for this app.
-var _ = sessions.IsValidSessionID
+// sanitizeHeaderValue strips control characters (\r, \n, NUL, tab) from
+// a string before stamping it as an HTTP header value. Net/http does
+// not validate these in older Go releases, and a stray newline in a
+// header corrupts the response framing by injecting a fake header /
+// body separator. We replace runs of control bytes with a single
+// space and trim.
+func sanitizeHeaderValue(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	return strings.TrimSpace(b.String())
+}
+

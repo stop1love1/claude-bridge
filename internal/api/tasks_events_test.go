@@ -17,8 +17,12 @@ import (
 // `spawned`, transition to `done`, observe `done`.
 func TestTaskEventsEmitsSnapshotAndLifecycle(t *testing.T) {
 	h, sessionsDir := newTestServer(t)
-	_, created := doJSON(t, h, "POST", "/api/tasks", map[string]any{"body": "sse target"})
-	id := created["id"].(string)
+	rec, created := doJSON(t, h, "POST", "/api/tasks", map[string]any{"body": "sse target"})
+	idVal, ok := created["id"].(string)
+	if !ok {
+		t.Fatalf("CreateTask response missing id: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	id := idVal
 	_ = sessionsDir
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,8 +118,12 @@ func newTaskDirHelperReuse(sessionsDir, taskID string) string {
 // 200 contract callers depend on.
 func TestDetectRefreshStubReturnsOK(t *testing.T) {
 	h, _ := newTestServer(t)
-	_, created := doJSON(t, h, "POST", "/api/tasks", map[string]any{"body": "detect target"})
-	id := created["id"].(string)
+	createRec, created := doJSON(t, h, "POST", "/api/tasks", map[string]any{"body": "detect target"})
+	idVal, ok := created["id"].(string)
+	if !ok {
+		t.Fatalf("CreateTask response missing id: status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	id := idVal
 
 	rec, got := doJSON(t, h, "POST", "/api/tasks/"+id+"/detect/refresh", nil)
 	if rec.Code != 200 {
@@ -124,4 +132,106 @@ func TestDetectRefreshStubReturnsOK(t *testing.T) {
 	if got["ok"] != true {
 		t.Errorf("ok: %+v", got)
 	}
+}
+
+// TestTaskEventsSubscribeBeforeSnapshotRace exercises the race-safety
+// fix for tasks_events.go: events fired between the client's connect
+// and the snapshot-send must not be silently dropped. We pre-register
+// a run row before the SSE handler runs (so it's already in the
+// snapshot), then fire AppendRun frames in a tight loop while the
+// handler is reading the snapshot, and assert every emitted event
+// shows up as a frame on the wire.
+//
+// Before the fix, events between the snapshot ReadMeta and the
+// SubscribeMeta call would land on no listener and vanish; with the
+// pre-subscribe queue, every event gets either delivered or queued
+// and replayed.
+func TestTaskEventsSubscribeBeforeSnapshotRace(t *testing.T) {
+	h, sessionsDir := newTestServer(t)
+	rec, created := doJSON(t, h, "POST", "/api/tasks", map[string]any{"body": "race target"})
+	idVal, ok := created["id"].(string)
+	if !ok {
+		t.Fatalf("CreateTask response missing id: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	id := idVal
+	dir := newTaskDirHelperReuse(sessionsDir, id)
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// Connect SSE.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/tasks/"+id+"/events", nil)
+	if err != nil {
+		t.Fatalf("req: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Frame collector.
+	frames := make(chan string, 64)
+	go func() {
+		defer close(frames)
+		sc := bufio.NewScanner(resp.Body)
+		var current strings.Builder
+		for sc.Scan() {
+			line := sc.Text()
+			if line == "" {
+				if current.Len() > 0 {
+					frames <- current.String()
+					current.Reset()
+				}
+				continue
+			}
+			current.WriteString(line)
+			current.WriteString("\n")
+		}
+	}()
+
+	// Wait for snapshot frame, then immediately fire several AppendRun
+	// events that the subscribe-window queue must capture.
+	select {
+	case f := <-frames:
+		if !strings.HasPrefix(f, "event: snapshot\n") {
+			t.Fatalf("first frame: %q", f)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for snapshot")
+	}
+
+	const want = 5
+	sids := []string{
+		"55555555-5555-4555-8555-555555555551",
+		"55555555-5555-4555-8555-555555555552",
+		"55555555-5555-4555-8555-555555555553",
+		"55555555-5555-4555-8555-555555555554",
+		"55555555-5555-4555-8555-555555555555",
+	}
+	for _, sid := range sids {
+		if err := meta.AppendRun(dir, meta.Run{SessionID: sid, Status: meta.RunStatusRunning, Role: "coder", Repo: "bridge"}); err != nil {
+			t.Fatalf("AppendRun %s: %v", sid, err)
+		}
+	}
+
+	// Collect frames; we expect at least `want` spawned events.
+	gotSpawned := 0
+	deadline := time.After(3 * time.Second)
+	for gotSpawned < want {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				t.Fatalf("frame channel closed; saw %d/%d spawned", gotSpawned, want)
+			}
+			if strings.HasPrefix(f, "event: spawned\n") {
+				gotSpawned++
+			}
+		case <-deadline:
+			t.Fatalf("timeout: got %d/%d spawned events", gotSpawned, want)
+		}
+	}
+	cancel()
 }

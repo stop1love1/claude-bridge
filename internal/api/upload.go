@@ -73,6 +73,14 @@ func SessionUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Hard-cap the request body BEFORE the multipart parser touches it.
+	// A client that lies in Content-Length (or omits it under
+	// Transfer-Encoding: chunked) would otherwise stream past our cap
+	// and only get caught by the per-file size check. MaxBytesReader
+	// short-circuits the read at the byte cap and tells net/http to
+	// close the connection so the client sees a clean 413.
+	r.Body = http.MaxBytesReader(w, r.Body, upload.MaxBytes+64*1024)
+
 	// Cap the parser too — ParseMultipartForm uses memBytes for in-
 	// memory parts, spills to temp files for the rest. We pass MaxBytes
 	// + slack so the temp-file spill kicks in at our hard cap.
@@ -127,8 +135,21 @@ func SessionUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dst, err := os.Create(filePath)
+	// Open with O_CREATE|O_EXCL|O_WRONLY rather than os.Create —
+	// os.Create follows pre-existing symlinks (an attacker who could
+	// pre-plant a symlink at filePath would redirect the write
+	// outside the upload dir). O_EXCL refuses to open if the file
+	// already exists, side-stepping the symlink-follow class entirely.
+	// On Windows O_NOFOLLOW isn't reliable; O_EXCL is the correct
+	// defense on every platform we run on.
+	dst, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
+		// If the path already exists (likely a duplicate upload of the
+		// same name) surface a 409 so the operator can rename.
+		if errors.Is(err, os.ErrExist) {
+			WriteJSON(w, http.StatusConflict, map[string]string{"error": "file already exists; rename to overwrite"})
+			return
+		}
 		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -198,12 +219,16 @@ func GetUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	st, _ := f.Stat()
-	if st != nil {
-		w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+	st, statErr := f.Stat()
+	if statErr != nil {
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": statErr.Error()})
+		return
 	}
-	// Let the browser sniff content-type — we don't store the original
-	// MIME with the file. That's the same behavior Next has via
-	// next/server's static serving fallback.
+	w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+	// Set a generic binary type so browsers don't guess (and don't
+	// auto-render uploaded HTML as same-origin pages — strips an XSS
+	// surface). The ValidateName guard already blocks active extensions
+	// like .html/.svg/.js, but this header is belt-and-braces.
+	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = io.Copy(w, f)
 }

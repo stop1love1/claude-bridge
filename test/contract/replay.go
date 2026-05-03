@@ -84,7 +84,8 @@ func Verify(name, goldenDir string) (string, error) {
 	}
 
 	handler := server.NewHandler(server.Config{
-		Logger: zerolog.New(io.Discard),
+		Logger:        zerolog.New(io.Discard),
+		LocalhostOnly: true,
 	})
 
 	rec := httptest.NewRecorder()
@@ -97,6 +98,7 @@ func Verify(name, goldenDir string) (string, error) {
 		target = target + "?" + e.RawQuery
 	}
 	req := httptest.NewRequest(e.Method, target, body)
+	req.RemoteAddr = "127.0.0.1:1234"
 	for k, vv := range e.Headers {
 		for _, v := range vv {
 			req.Header.Add(k, v)

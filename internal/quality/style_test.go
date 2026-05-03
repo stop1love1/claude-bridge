@@ -208,11 +208,11 @@ func TestFingerprintUnknownWhenEmpty(t *testing.T) {
 		t.Errorf("indent: got %+v, want {unknown 0}", fp.Indent)
 	}
 	for name, got := range map[string]string{
-		"quotes":        fp.Quotes,
-		"semicolons":    fp.Semicolons,
-		"trailingComma": fp.TrailingComma,
-		"exports":       fp.Exports,
-		"fileNaming.ts": fp.FileNaming.Ts,
+		"quotes":         fp.Quotes,
+		"semicolons":     fp.Semicolons,
+		"trailingComma":  fp.TrailingComma,
+		"exports":        fp.Exports,
+		"fileNaming.ts":  fp.FileNaming.Ts,
 		"fileNaming.tsx": fp.FileNaming.Tsx,
 	} {
 		if got != "unknown" {
