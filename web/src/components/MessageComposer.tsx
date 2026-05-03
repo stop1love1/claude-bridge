@@ -33,26 +33,92 @@ const STORAGE_KEY = "bridge.chat.settings";
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 
+// Operator opt-in: when `VITE_BRIDGE_ALLOW_BYPASS=1` is set, treat
+// "Skip permissions" as the implicit default for any session that has
+// not yet picked a mode. Otherwise a brand-new task starts in `default`
+// (Ask-before-edits). Explicit picks still win — the loader only fills
+// in the mode when the stored object has none.
+const COMPOSER_DEFAULT_MODE: "bypassPermissions" | undefined =
+  import.meta.env.VITE_BRIDGE_ALLOW_BYPASS === "1" ? "bypassPermissions" : undefined;
+const EMPTY_SETTINGS: ChatSettings = COMPOSER_DEFAULT_MODE
+  ? { mode: COMPOSER_DEFAULT_MODE }
+  : {};
+
 interface Attachment {
   name: string;
   path: string;
   size: number;
   isImage: boolean;
+  /** Pixel dimensions for images, populated client-side after upload. */
+  width?: number;
+  height?: number;
 }
 
-function readSettings(): ChatSettings {
+/**
+ * Read pixel dimensions from a File without uploading. Returns null
+ * for non-images or unreadable files.
+ */
+function readImageDimensions(
+  file: File,
+): Promise<{ w: number; h: number } | null> {
+  if (!file.type.startsWith("image/") && !IMG_EXT.test(file.name)) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new window.Image();
+    img.onload = () => {
+      resolve({ w: img.naturalWidth, h: img.naturalHeight });
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => {
+      resolve(null);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  });
+}
+
+function settingsKey(taskId?: string): string {
+  // Per-task settings live under their own key so a task-specific
+  // override (e.g. `effort: max` for a heavy refactor) doesn't leak
+  // into a sibling task. Free-form sessions keep the legacy key so
+  // existing prefs survive the upgrade.
+  return taskId ? `${STORAGE_KEY}.task.${taskId}` : STORAGE_KEY;
+}
+
+function readSettings(key: string): ChatSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as ChatSettings;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw) as ChatSettings;
+      // Apply env-based default mode if the loaded object has none yet.
+      if (parsed.mode === undefined && COMPOSER_DEFAULT_MODE) {
+        return { ...parsed, mode: COMPOSER_DEFAULT_MODE };
+      }
+      return parsed;
+    }
+    // No per-task settings yet — fall back to the global key so existing
+    // prefs carry over to a brand-new task on first render.
+    if (key !== STORAGE_KEY) {
+      const fallback = localStorage.getItem(STORAGE_KEY);
+      if (fallback) {
+        const parsed = JSON.parse(fallback) as ChatSettings;
+        if (parsed.mode === undefined && COMPOSER_DEFAULT_MODE) {
+          return { ...parsed, mode: COMPOSER_DEFAULT_MODE };
+        }
+        return parsed;
+      }
+    }
+    return EMPTY_SETTINGS;
   } catch {
-    return {};
+    return EMPTY_SETTINGS;
   }
 }
 
-function writeSettings(s: ChatSettings) {
+function writeSettings(key: string, s: ChatSettings) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    localStorage.setItem(key, JSON.stringify(s));
   } catch {
     /* private mode etc. — no-op */
   }
@@ -63,6 +129,13 @@ export interface MessageComposerProps {
   repo: string;
   /** Display label in the placeholder ("Message {role} @ {repo}…"). */
   role?: string;
+  /**
+   * When set, chat settings persist under a per-task localStorage key
+   * (`bridge.chat.settings.task.<taskId>`) so a heavy `effort: max`
+   * override doesn't bleed into sibling tasks. Free-form Sessions page
+   * omits this prop and reads/writes the global key.
+   */
+  taskId?: string;
   /** Streaming flag — when true the Send button morphs into Stop. */
   isResponding?: boolean;
   /**
@@ -86,15 +159,19 @@ function MessageComposerInner({
   sessionId,
   repo,
   role = "claude",
+  taskId,
   isResponding = false,
   onSend,
   onStop,
   onSent,
 }: MessageComposerProps) {
+  const storageKey = useMemo(() => settingsKey(taskId), [taskId]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [settings, setSettings] = useState<ChatSettings>(() => readSettings());
+  const [settings, setSettings] = useState<ChatSettings>(() =>
+    readSettings(storageKey),
+  );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState<{
@@ -115,8 +192,8 @@ function MessageComposerInner({
 
   // Persist settings on every change.
   useEffect(() => {
-    writeSettings(settings);
-  }, [settings]);
+    writeSettings(storageKey, settings);
+  }, [storageKey, settings]);
 
   // ── Auto-resize ────────────────────────────────────────────────────
   const resize = useCallback(() => {
@@ -277,16 +354,21 @@ function MessageComposerInner({
       setUploading(true);
       setUploadPct({ name: f.name, pct: 0 });
       try {
-        const r = await api.uploads.withProgress(sessionId, f, (p) =>
-          setUploadPct({ name: f.name, pct: Math.round(p * 100) }),
-        );
+        const [r, dims] = await Promise.all([
+          api.uploads.withProgress(sessionId, f, (p) =>
+            setUploadPct({ name: f.name, pct: Math.round(p * 100) }),
+          ),
+          readImageDimensions(f),
+        ]);
         setAttachments((prev) => [
           ...prev,
           {
             name: r.name,
             path: r.path,
             size: r.size,
-            isImage: IMG_EXT.test(r.name),
+            isImage: !!dims || IMG_EXT.test(r.name),
+            width: dims?.w,
+            height: dims?.h,
           },
         ]);
         toast.success(`Attached ${r.name}`);

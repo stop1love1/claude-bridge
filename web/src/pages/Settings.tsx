@@ -1,23 +1,20 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   FolderTree,
-  Globe,
   KeyRound,
+  Send,
   Settings as SettingsIcon,
-  Sparkles,
+  User,
 } from "lucide-react";
 import { api, getToken, setToken } from "@/api/client";
-import {
-  useBridgeSettings,
-  useHealth,
-  useUpdateBridgeSettings,
-} from "@/api/queries";
+import { useHealth } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
-import { useToast } from "@/components/Toasts";
+import { PublicUrlSection } from "@/components/settings/PublicUrlSection";
+import { DetectSettingsSection } from "@/components/settings/DetectSettingsSection";
+import { TrustedDevicesSection } from "@/components/settings/TrustedDevicesSection";
 import { cn } from "@/lib/cn";
 
 type TestState =
@@ -27,28 +24,42 @@ type TestState =
   | { kind: "auth" }
   | { kind: "err"; message: string };
 
+/**
+ * Bridge-wide settings. Sections mirror main's layout (auth, public URL,
+ * detect, apps registry root, trusted devices, telegram bot, telegram
+ * user) so the operator's muscle memory carries over. A few sections
+ * are stubs because the Go bridge hasn't ported their endpoints yet —
+ * each one names the missing endpoint inline so the gap is visible.
+ */
 export default function Settings() {
   const [params] = useSearchParams();
   const reason = params.get("reason");
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10 space-y-6">
-      <div className="flex items-center gap-2">
-        <SettingsIcon size={18} className="text-primary" />
-        <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
-          settings
-        </h1>
+      <div className="sticky top-0 -mx-6 -mt-10 mb-2 border-b border-border bg-background/95 px-6 pb-3 pt-10 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="flex items-center gap-2">
+          <SettingsIcon size={18} className="text-primary" />
+          <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
+            settings
+          </h1>
+        </div>
+        <p className="mt-1 max-w-xl text-small text-muted-foreground">
+          per-machine configuration stored in{" "}
+          <span className="font-mono text-foreground">~/.claude/bridge.json</span>
+          . outside the project tree so version updates can&apos;t overwrite
+          your bot tokens / detection mode. token lives in this browser&apos;s
+          localStorage only.
+        </p>
       </div>
-      <p className="-mt-2 max-w-xl text-small text-muted-foreground">
-        per-machine configuration stored in{" "}
-        <span className="font-mono text-foreground">~/.claude/bridge.json</span> and the
-        bridge process. token lives in this browser&apos;s localStorage only.
-      </p>
 
       <AuthSection reason={reason} />
-      <BridgeSection />
-      <DetectSection />
+      <PublicUrlSection />
+      <DetectSettingsSection />
       <ScanRootsSection />
+      <TrustedDevicesSection />
+      <TelegramBotStub />
+      <TelegramUserStub />
     </div>
   );
 }
@@ -159,123 +170,61 @@ function AuthSection({ reason }: { reason: string | null }) {
   );
 }
 
-/* ─────────────────────── bridge ─────────────────────── */
-
-function BridgeSection() {
-  const { data, isLoading } = useBridgeSettings();
-  const update = useUpdateBridgeSettings();
-  const toast = useToast();
-  const [draft, setDraft] = useState("");
-  const [hydrated, setHydrated] = useState(false);
-
-  useEffect(() => {
-    if (!hydrated && data) {
-      setDraft(typeof data.publicUrl === "string" ? data.publicUrl : "");
-      setHydrated(true);
-    }
-  }, [data, hydrated]);
-
-  const current =
-    typeof data?.publicUrl === "string" ? (data.publicUrl as string) : "";
-  const dirty = draft.trim() !== current;
-
-  const submit = async () => {
-    try {
-      await update.mutateAsync({ ...data, publicUrl: draft.trim() });
-      toast.success(draft.trim() ? "public URL saved" : "public URL cleared");
-    } catch (e) {
-      toast.error("save failed", (e as Error).message);
-    }
-  };
-
-  return (
-    <section className="rounded-sm border border-border bg-card p-5">
-      <div className="mb-1 flex items-center gap-2">
-        <Globe size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          bridge
-        </h2>
-      </div>
-      <p className="mb-4 text-small text-muted-foreground">
-        the origin the bridge is reachable at after deploy. used to render
-        clickable links in webhook payloads.
-      </p>
-
-      {isLoading ? (
-        <Skeleton className="h-8 w-full rounded-sm" />
-      ) : (
-        <div className="grid gap-2">
-          <Label htmlFor="public-url">public origin</Label>
-          <Input
-            id="public-url"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="https://bridge.example.com"
-            spellCheck={false}
-            inputMode="url"
-          />
-          <p className="text-[11px] text-muted-foreground">
-            origin only — http:// or https://. path / query / hash get stripped.
-          </p>
-          <div className="flex items-center gap-2 pt-1">
-            <Button
-              onClick={() => void submit()}
-              disabled={update.isPending || !dirty}
-            >
-              {update.isPending ? "saving…" : "save"}
-            </Button>
-            {current && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setDraft("");
-                }}
-                className="text-muted-foreground hover:text-status-blocked"
-              >
-                clear
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/* ─────────────────────── detect ─────────────────────── */
-
-function DetectSection() {
-  return (
-    <section className="rounded-sm border border-dashed border-border bg-card/50 p-5">
-      <div className="mb-1 flex items-center gap-2">
-        <Sparkles size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          scope detection
-        </h2>
-      </div>
-      <p className="text-small text-muted-foreground">
-        detect source: auto (LLM + heuristic) — controls landing soon. backend{" "}
-        <span className="font-mono text-foreground">/api/detect/settings</span>{" "}
-        endpoint isn&apos;t ported yet.
-      </p>
-    </section>
-  );
-}
-
 /* ─────────────────────── apps registry root ─────────────────────── */
 
 function ScanRootsSection() {
   return (
-    <section className="rounded-sm border border-dashed border-border bg-card/50 p-5">
+    <section className="rounded-sm border border-border bg-card p-5">
       <div className="mb-1 flex items-center gap-2">
         <FolderTree size={14} className="text-primary" />
         <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
           apps registry root
         </h2>
       </div>
+      <p className="mb-3 text-small text-muted-foreground">
+        the directory tree the auto-detect dialog walks when it scans for
+        sibling app folders. defaults to the bridge&apos;s parent dir; the
+        editor for explicit roots isn&apos;t ported yet — use auto-detect from
+        the apps page in the meantime.
+      </p>
+      <div className="rounded-sm border border-dashed border-border bg-background/50 px-3 py-2 font-mono text-micro text-muted-foreground">
+        scan-roots editor pending — using bridge default root.
+      </div>
+    </section>
+  );
+}
+
+/* ─────────────────────── telegram stubs ─────────────────────── */
+
+function TelegramBotStub() {
+  return (
+    <section className="rounded-sm border border-border bg-card p-5 opacity-90">
+      <div className="mb-1 flex items-center gap-2">
+        <Send size={14} className="text-primary" />
+        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
+          telegram bot
+        </h2>
+      </div>
       <p className="text-small text-muted-foreground">
-        scan-roots editor not yet ported. the auto-detect dialog uses the
-        bridge default root for now.
+        telegram integration not yet ported — coming soon. (will surface bot
+        token + chat id, forward-chat mode, notification level.)
+      </p>
+    </section>
+  );
+}
+
+function TelegramUserStub() {
+  return (
+    <section className="rounded-sm border border-border bg-card p-5 opacity-90">
+      <div className="mb-1 flex items-center gap-2">
+        <User size={14} className="text-primary" />
+        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
+          telegram user (MTProto)
+        </h2>
+      </div>
+      <p className="text-small text-muted-foreground">
+        MTProto user-mode session not yet ported — coming soon. (will surface
+        api id/hash, session string, target chat id.)
       </p>
     </section>
   );

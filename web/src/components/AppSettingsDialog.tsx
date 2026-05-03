@@ -26,9 +26,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   App,
   AppGitSettings,
+  AppQuality,
   AppRetry,
   AppVerify,
   GitBranchMode,
+  GitIntegrationMode,
   GitWorktreeMode,
   AppExtras,
 } from "@/api/types";
@@ -37,6 +39,10 @@ interface Props {
   app: App | null;
   onClose: () => void;
 }
+
+// Mirrors the bridge.json APP_NAME_RE so the UI rejects bad names
+// before the round-trip. Same regex Go uses server-side.
+const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const BRANCH_MODES: { value: GitBranchMode; label: string }[] = [
   { value: "current", label: "current — use whatever HEAD is on" },
@@ -47,6 +53,28 @@ const BRANCH_MODES: { value: GitBranchMode; label: string }[] = [
 const WORKTREE_MODES: { value: GitWorktreeMode; label: string }[] = [
   { value: "disabled", label: "disabled — operate in the main tree" },
   { value: "enabled", label: "enabled — isolated worktree per run" },
+];
+
+const INTEGRATION_MODES: {
+  value: GitIntegrationMode;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    value: "none",
+    label: "none — leave the work branch alone",
+    hint: "default. operator merges or opens a PR by hand.",
+  },
+  {
+    value: "auto-merge",
+    label: "auto-merge — git merge into target",
+    hint: "bridge runs git merge --no-ff after a successful task. conflict aborts cleanly.",
+  },
+  {
+    value: "pull-request",
+    label: "pull-request — open a PR/MR",
+    hint: "bridge spawns a devops agent that uses gh / glab. requires remote + matching CLI.",
+  },
 ];
 
 const RETRY_GATES: Array<{ key: keyof AppRetry; label: string; hint: string }> = [
@@ -61,40 +89,72 @@ const RETRY_GATES: Array<{ key: keyof AppRetry; label: string; hint: string }> =
 const MAX_RETRY_PER_GATE = 5;
 
 /**
- * Tabbed editor — Git / Retry / Verify / Extras. Pass `app=null` to
- * close. Use `key={app?.name ?? "closed"}` on the parent so the local
- * draft resets when the target app changes.
+ * Strategy ladder for attempt N (purely informational — the prompt
+ * shape is decided server-side by `retryLadder.strategyForAttempt`).
+ */
+const STRATEGY_AT_ATTEMPT: Record<number, string> = {
+  1: "same-context (full prompt + failure)",
+  2: "fresh-focus (drop chatter, narrow scope)",
+  3: "fixer-only (one-line directive)",
+  4: "fixer-only",
+  5: "fixer-only",
+};
+
+/**
+ * Tabbed editor — Identity / Git / Retry / Verify / Quality / Extras.
+ * Pass `app=null` to close. Use `key={app?.name ?? "closed"}` on the
+ * parent so the local draft resets when the target app changes.
  */
 export function AppSettingsDialog({ app, onClose }: Props) {
   const toast = useToast();
   const qc = useQueryClient();
+
+  // ---- draft state ------------------------------------------------------
+  const [name, setName] = useState<string>(app?.name ?? "");
+  const [description, setDescription] = useState<string>(app?.description ?? "");
   const [git, setGit] = useState<AppGitSettings>(() =>
     app?.git
-      ? { ...app.git }
+      ? {
+          branchMode: app.git.branchMode ?? "current",
+          fixedBranch: app.git.fixedBranch ?? "",
+          autoCommit: app.git.autoCommit ?? false,
+          autoPush: app.git.autoPush ?? false,
+          worktreeMode: app.git.worktreeMode ?? "disabled",
+          mergeTargetBranch: app.git.mergeTargetBranch ?? "",
+          integrationMode: app.git.integrationMode ?? "none",
+        }
       : {
           branchMode: "current",
           fixedBranch: "",
           autoCommit: false,
           autoPush: false,
           worktreeMode: "disabled",
+          mergeTargetBranch: "",
+          integrationMode: "none",
         },
   );
   const [retry, setRetry] = useState<AppRetry>(() => app?.retry ?? {});
   const [verify, setVerify] = useState<AppVerify>(() => app?.verify ?? {});
+  const [quality, setQuality] = useState<AppQuality>(() => app?.quality ?? {});
+  const [pinnedFilesText, setPinnedFilesText] = useState<string>(() =>
+    (app?.pinnedFiles ?? []).join("\n"),
+  );
+  const [symbolDirsText, setSymbolDirsText] = useState<string>(() =>
+    (app?.symbolDirs ?? []).join("\n"),
+  );
   const [extrasText, setExtrasText] = useState<string>(() =>
     app?.extras ? JSON.stringify(app.extras, null, 2) : "{}",
   );
   const [extrasError, setExtrasError] = useState<string | null>(null);
 
+  // The Go bridge doesn't expose PATCH /api/apps/{name}; the only
+  // documented mutations are POST /api/apps (add) and DELETE. We
+  // round-trip the full record via remove + add to simulate an update.
   const update = useMutation({
     mutationFn: async (patch: Partial<App>): Promise<App> => {
-      // The Go bridge doesn't expose PATCH /api/apps/{name}; the only
-      // documented mutations on the registry are POST /api/apps (add)
-      // and DELETE. We round-trip the full record via remove + add to
-      // simulate an update for the existing endpoints.
       if (!app) throw new Error("no app loaded");
-      await api.apps.remove(app.name);
       const merged: App = { ...app, ...patch };
+      await api.apps.remove(app.name);
       await api.apps.add({
         name: merged.name,
         path: merged.path,
@@ -119,11 +179,57 @@ export function AppSettingsDialog({ app, onClose }: Props) {
     }
   }, [extrasText]);
 
+  const trimmedName = name.trim();
+  const nameValid = APP_NAME_RE.test(trimmedName);
+
   if (!app) return null;
 
+  const splitLines = (txt: string): string[] =>
+    txt
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+  // Switching integration mode promotes the matching git settings so
+  // the mode is internally consistent the moment it lands.
+  const onIntegrationModeChange = (mode: GitIntegrationMode) => {
+    setGit((g) => {
+      if (mode === "none") {
+        return { ...g, integrationMode: "none", mergeTargetBranch: "" };
+      }
+      if (mode === "pull-request") {
+        return {
+          ...g,
+          integrationMode: "pull-request",
+          autoCommit: true,
+          autoPush: true,
+        };
+      }
+      return { ...g, integrationMode: "auto-merge", autoCommit: true };
+    });
+  };
+
   const submit = async () => {
+    if (!nameValid) {
+      toast.error(
+        "invalid name",
+        "letters, digits, dot, dash, underscore; must start alphanumeric",
+      );
+      return;
+    }
     if (git.branchMode === "fixed" && !git.fixedBranch.trim()) {
       toast.error("validation", "fixed-branch mode needs a branch name");
+      return;
+    }
+    const targetBranch = (git.mergeTargetBranch ?? "").trim();
+    if (
+      (git.integrationMode ?? "none") !== "none" &&
+      !targetBranch
+    ) {
+      toast.error(
+        "validation",
+        "integration needs a target branch (or set mode to none)",
+      );
       return;
     }
     if (extrasText.trim().length > 0) {
@@ -141,12 +247,17 @@ export function AppSettingsDialog({ app, onClose }: Props) {
     setExtrasError(null);
     try {
       await update.mutateAsync({
+        name: trimmedName,
+        description: description.trim(),
         git,
         retry,
         verify,
+        quality,
+        pinnedFiles: splitLines(pinnedFilesText),
+        symbolDirs: splitLines(symbolDirsText),
         extras: extrasParsed ?? {},
       });
-      toast.success(`saved ${app.name}`);
+      toast.success(`saved ${trimmedName}`);
       onClose();
     } catch (e) {
       toast.error("save failed", (e as Error).message);
@@ -161,18 +272,52 @@ export function AppSettingsDialog({ app, onClose }: Props) {
             edit <span className="font-mono text-foreground">{app.name}</span>
           </DialogTitle>
           <DialogDescription>
-            git workflow, retry budgets, verify commands, and extras for the
-            bridge to honor when running tasks here.
+            git workflow, retry budgets, verify commands, quality gates, and
+            extras for the bridge to honor when running tasks here.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="git" className="w-full">
+        <Tabs defaultValue="id" className="w-full">
           <TabsList>
+            <TabsTrigger value="id">identity</TabsTrigger>
             <TabsTrigger value="git">git</TabsTrigger>
+            <TabsTrigger value="integration">integration</TabsTrigger>
             <TabsTrigger value="retry">retry</TabsTrigger>
             <TabsTrigger value="verify">verify</TabsTrigger>
+            <TabsTrigger value="quality">quality</TabsTrigger>
             <TabsTrigger value="extras">extras</TabsTrigger>
           </TabsList>
+
+          {/* ─── Identity ─── */}
+          <TabsContent value="id" className="grid gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="app-name">name</Label>
+              <Input
+                id="app-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={app.name}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              {!nameValid && (
+                <p className="font-mono text-micro text-status-blocked">
+                  invalid characters — use letters, digits, dot, dash,
+                  underscore; must start alphanumeric
+                </p>
+              )}
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="app-desc">description</Label>
+              <Textarea
+                id="app-desc"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={3}
+                placeholder="one or two lines about what this app does — fed to dispatch heuristic"
+              />
+            </div>
+          </TabsContent>
 
           {/* ─── Git ─── */}
           <TabsContent value="git" className="grid gap-3">
@@ -253,9 +398,62 @@ export function AppSettingsDialog({ app, onClose }: Props) {
             />
           </TabsContent>
 
+          {/* ─── Integration ─── */}
+          <TabsContent value="integration" className="grid gap-3">
+            <p className="-mt-1 text-[11px] text-muted-foreground">
+              what the bridge does after a task lands a successful commit on
+              the work branch.
+            </p>
+            <div className="grid gap-1.5">
+              <Label htmlFor="integration-mode">mode</Label>
+              <Select
+                value={git.integrationMode ?? "none"}
+                onValueChange={(v) =>
+                  onIntegrationModeChange(v as GitIntegrationMode)
+                }
+              >
+                <SelectTrigger id="integration-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {INTEGRATION_MODES.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {INTEGRATION_MODES.find(
+                  (m) => m.value === (git.integrationMode ?? "none"),
+                )?.hint ?? ""}
+              </p>
+            </div>
+
+            {(git.integrationMode === "auto-merge" ||
+              git.integrationMode === "pull-request") && (
+              <div className="grid gap-1.5">
+                <Label htmlFor="merge-target">merge target branch</Label>
+                <Input
+                  id="merge-target"
+                  value={git.mergeTargetBranch ?? ""}
+                  onChange={(e) =>
+                    setGit({ ...git, mergeTargetBranch: e.target.value })
+                  }
+                  placeholder="main"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {git.integrationMode === "auto-merge"
+                    ? "bridge runs git checkout <target> + git merge --no-ff. conflict aborts cleanly."
+                    : "bridge spawns the devops agent which uses gh / glab to open a PR/MR."}
+                </p>
+              </div>
+            )}
+          </TabsContent>
+
           {/* ─── Retry ─── */}
           <TabsContent value="retry" className="grid gap-2">
-            <p className="text-[11px] text-muted-foreground -mt-1">
+            <p className="-mt-1 text-[11px] text-muted-foreground">
               per-gate attempt cap. unset = bridge default (1). higher budgets
               unlock the strategy ladder.
             </p>
@@ -270,30 +468,54 @@ export function AppSettingsDialog({ app, onClose }: Props) {
                     <div className="font-mono text-micro uppercase tracking-wideish text-foreground">
                       {gate.label}
                     </div>
-                    <div className="text-[11px] text-muted-foreground">{gate.hint}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {gate.hint}
+                    </div>
                   </div>
-                  <select
-                    value={String(value)}
+                  <Input
+                    type="number"
+                    min={0}
+                    max={MAX_RETRY_PER_GATE}
+                    value={value}
                     onChange={(e) => {
-                      const n = parseInt(e.target.value, 10);
+                      let n = parseInt(e.target.value, 10);
+                      if (Number.isNaN(n)) n = 0;
+                      if (n < 0) n = 0;
+                      if (n > MAX_RETRY_PER_GATE) n = MAX_RETRY_PER_GATE;
                       setRetry({ ...retry, [gate.key]: n });
                     }}
-                    className="h-7 rounded-sm border border-border bg-background px-2 font-mono text-xs"
-                  >
-                    {Array.from({ length: MAX_RETRY_PER_GATE + 1 }, (_, i) => (
-                      <option key={i} value={i}>
-                        {i === 0 ? "0 (off)" : `${i}`}
-                      </option>
-                    ))}
-                  </select>
+                    className="h-7 w-20 text-center font-mono text-xs"
+                  />
                 </div>
               );
             })}
+
+            <div className="mt-2 rounded-sm border border-border p-2">
+              <div className="mb-1 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
+                strategy ladder
+              </div>
+              <table className="w-full font-mono text-[11px]">
+                <thead>
+                  <tr className="text-left text-muted-foreground">
+                    <th className="w-16 font-normal">attempt</th>
+                    <th className="font-normal">strategy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(STRATEGY_AT_ATTEMPT).map(([n, s]) => (
+                    <tr key={n} className="text-foreground">
+                      <td className="tabular-nums">{n}</td>
+                      <td className="text-muted-foreground">{s}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </TabsContent>
 
           {/* ─── Verify ─── */}
           <TabsContent value="verify" className="grid gap-3">
-            <p className="text-[11px] text-muted-foreground -mt-1">
+            <p className="-mt-1 text-[11px] text-muted-foreground">
               shell commands the verify-chain runs after each successful
               child. leave blank to skip a step.
             </p>
@@ -313,6 +535,51 @@ export function AppSettingsDialog({ app, onClose }: Props) {
                 </div>
               ),
             )}
+          </TabsContent>
+
+          {/* ─── Quality ─── */}
+          <TabsContent value="quality" className="grid gap-3">
+            <p className="-mt-1 text-[11px] text-muted-foreground">
+              optional LLM-driven gates that run on a successful diff. each
+              one can re-prompt via its own retry budget.
+            </p>
+            <SwitchRow
+              label="style critic"
+              hint="LLM critic flags diffs that look alien to the codebase"
+              checked={!!quality.critic}
+              onChange={(v) => setQuality({ ...quality, critic: v })}
+            />
+            <SwitchRow
+              label="semantic verifier"
+              hint="LLM verifier judges whether the diff accomplishes the task"
+              checked={!!quality.verifier}
+              onChange={(v) => setQuality({ ...quality, verifier: v })}
+            />
+
+            <div className="grid gap-1.5">
+              <Label htmlFor="pinned-files">pinned files</Label>
+              <Textarea
+                id="pinned-files"
+                value={pinnedFilesText}
+                onChange={(e) => setPinnedFilesText(e.target.value)}
+                rows={4}
+                spellCheck={false}
+                placeholder="one path per line — always injected into the agent context"
+                className="font-mono"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="symbol-dirs">symbol dirs</Label>
+              <Textarea
+                id="symbol-dirs"
+                value={symbolDirsText}
+                onChange={(e) => setSymbolDirsText(e.target.value)}
+                rows={3}
+                spellCheck={false}
+                placeholder="one directory per line — symbol indexer scopes here"
+                className="font-mono"
+              />
+            </div>
           </TabsContent>
 
           {/* ─── Extras ─── */}
@@ -345,7 +612,7 @@ export function AppSettingsDialog({ app, onClose }: Props) {
           </Button>
           <Button
             onClick={() => void submit()}
-            disabled={update.isPending}
+            disabled={update.isPending || !nameValid}
           >
             {update.isPending ? "saving…" : "save"}
           </Button>

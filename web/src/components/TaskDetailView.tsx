@@ -4,9 +4,17 @@
 // reserved composer slot.
 //
 // The page wrapper (pages/TaskDetail.tsx) handles routing, breadcrumb,
-// loading state, and event subscription. This file is the "inside"
-// of that wrapper so it can be lifted into other surfaces (e.g. a
-// modal preview) later.
+// loading state, the Esc-to-back hotkey, and `?sid=` / `?activeTab=`
+// URL-state. This file is the "inside" of that wrapper so it can be
+// lifted into other surfaces (modal preview) later.
+//
+// URL-driven contract:
+//   * `activeSessionId` flows in from `?sid=<sessionId>`. When it's
+//     null we auto-pick the most recent run and write it back via
+//     `onActiveSessionIdChange` so a deep-link survives a reload.
+//   * `mobileTab` flows in from `?activeTab=detail|chat`. Both panels
+//     stay mounted via `display:none` on the inactive one so editor
+//     state and scroll position survive a tab switch.
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -41,7 +49,6 @@ import StatusDot from "@/components/StatusDot";
 import AgentTree from "@/components/AgentTree";
 import { SessionLog } from "@/components/SessionLog";
 import { MessageComposer } from "@/components/MessageComposer";
-import { InlinePermissionRequests } from "@/components/InlinePermissionRequests";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,11 +63,25 @@ import { useToast } from "@/components/Toasts";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { cn } from "@/lib/cn";
 
+type MobileTab = "detail" | "chat";
+
 interface Props {
   taskId: string;
+  /** URL-driven active session id (`?sid=`). `null` = auto-pick. */
+  activeSessionId?: string | null;
+  onActiveSessionIdChange?: (sid: string | null) => void;
+  /** URL-driven mobile tab (`?activeTab=`). Defaults to "detail". */
+  mobileTab?: MobileTab;
+  onMobileTabChange?: (tab: MobileTab) => void;
 }
 
-export default function TaskDetailView({ taskId }: Props) {
+export default function TaskDetailView({
+  taskId,
+  activeSessionId,
+  onActiveSessionIdChange,
+  mobileTab = "detail",
+  onMobileTabChange,
+}: Props) {
   const { data: task, isLoading, error } = useTaskMeta(taskId);
   const { data: summary } = useTaskSummary(taskId);
   useTaskEvents(taskId);
@@ -78,7 +99,12 @@ export default function TaskDetailView({ taskId }: Props) {
 
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  // Local fallback for the active session — used when the page wrapper
+  // doesn't pass URL-driven props (kept so the component still works
+  // standalone in tests / story).
+  const [localActiveSessionId, setLocalActiveSessionId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     if (task) {
@@ -98,11 +124,41 @@ export default function TaskDetailView({ taskId }: Props) {
     return task.runs[task.runs.length - 1].sessionId;
   }, [task]);
 
-  const effectiveSession = activeSessionId ?? defaultSession;
+  // Prefer the URL-driven id; fall back to local state, then to the
+  // computed default. The URL-driven path is what the wrapper threads
+  // in from `?sid=`.
+  const effectiveSession =
+    (activeSessionId ?? undefined) !== undefined
+      ? activeSessionId
+      : (localActiveSessionId ?? defaultSession);
+  const setActiveSession = (sid: string | null) => {
+    if (onActiveSessionIdChange) onActiveSessionIdChange(sid);
+    else setLocalActiveSessionId(sid);
+  };
+
   const activeRun = useMemo<Run | null>(() => {
     if (!task || !effectiveSession) return null;
     return task.runs.find((r) => r.sessionId === effectiveSession) ?? null;
   }, [task, effectiveSession]);
+
+  // If the URL has no `?sid=` yet but a run roster has landed, write
+  // the default session back to the URL so refresh / share preserves
+  // the selection. Guarded — we only write once per task load.
+  const [autoSelected, setAutoSelected] = useState(false);
+  useEffect(() => {
+    if (autoSelected) return;
+    if (!onActiveSessionIdChange) return;
+    if (activeSessionId) {
+      setAutoSelected(true);
+      return;
+    }
+    if (!task?.runs?.length) return;
+    const coord =
+      task.runs.find((r) => r.role === "coordinator") ??
+      task.runs[task.runs.length - 1];
+    setAutoSelected(true);
+    onActiveSessionIdChange(coord.sessionId);
+  }, [autoSelected, activeSessionId, task, onActiveSessionIdChange]);
 
   if (isLoading)
     return (
@@ -153,8 +209,10 @@ export default function TaskDetailView({ taskId }: Props) {
 
   const onContinue = async () => {
     try {
-      await continueTask.mutateAsync(undefined);
-      toast.success("resumed", "coordinator continuing");
+      const r = await continueTask.mutateAsync(undefined);
+      toast.success(
+        r.action === "resumed" ? "resumed coordinator" : "spawned new coordinator",
+      );
     } catch (e) {
       toast.error("continue failed", (e as Error).message);
     }
@@ -171,22 +229,35 @@ export default function TaskDetailView({ taskId }: Props) {
     try {
       await clearTask.mutateAsync();
       toast.success("cleared");
+      // Drop the active selection — the new coordinator's session id
+      // arrives via the SSE refetch a beat later.
+      setActiveSession(null);
     } catch (e) {
       toast.error("clear failed", (e as Error).message);
     }
   };
 
   const onDelete = async () => {
+    const runCount = task.runs.length;
+    const sessionsLine =
+      runCount > 0
+        ? `also removes ${runCount} linked claude session${runCount === 1 ? "" : "s"} from ~/.claude/projects/.`
+        : `also removes sessions/${taskId}/ metadata.`;
     const ok = await confirm({
-      title: "delete task?",
-      description: "meta.json and every linked .jsonl session is removed.",
+      title: `delete task ${taskId}?`,
+      description: `"${task.taskTitle}"\n\n${sessionsLine}`,
       confirmLabel: "delete",
       variant: "destructive",
     });
     if (!ok) return;
     try {
-      await del.mutateAsync(taskId);
-      toast.success("deleted");
+      const r = await del.mutateAsync(taskId);
+      const msg =
+        r.sessionsDeleted > 0
+          ? `task deleted (${r.sessionsDeleted} session${r.sessionsDeleted === 1 ? "" : "s"} removed${r.sessionsFailed ? `, ${r.sessionsFailed} failed` : ""})`
+          : "task deleted";
+      if (r.sessionsFailed > 0) toast.error(msg);
+      else toast.success(msg);
       navigate("/tasks");
     } catch (e) {
       toast.error("delete failed", (e as Error).message);
@@ -217,6 +288,24 @@ export default function TaskDetailView({ taskId }: Props) {
       toast.error("copy failed");
     }
   };
+
+  const onSelectRun = (r: Run) => {
+    setActiveSession(r.sessionId);
+    // Selecting a run on mobile flips the tab to chat so the user
+    // doesn't have to make a second tap.
+    if (onMobileTabChange) onMobileTabChange("chat");
+  };
+
+  // Most recent coordinator run drives the prominent Continue CTA.
+  // Mirrors main's TaskDetail lines 270-278, 380-396: only show when
+  // the operator stopped the coordinator mid-way (failed) or the
+  // process died unexpectedly (reaper marked it stale). Hide when the
+  // coordinator is queued / running / cleanly done.
+  const lastCoordinator =
+    [...task.runs].reverse().find((r) => r.role === "coordinator") ?? null;
+  const canContinue =
+    !!lastCoordinator &&
+    (lastCoordinator.status === "failed" || lastCoordinator.status === "stale");
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -331,13 +420,74 @@ export default function TaskDetailView({ taskId }: Props) {
             runs: <span className="text-muted-foreground">{task.runs.length}</span>
           </span>
         </div>
+
+        {/* Continue CTA — surfaced when the last coordinator died or
+            was killed. Mirrors main lines 380-396. */}
+        {canContinue && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-sm border border-status-doing/40 bg-status-doing/10 px-3 py-2">
+            <Button
+              size="sm"
+              onClick={() => void onContinue()}
+              disabled={continueTask.isPending}
+              className="gap-1.5"
+              title="resume the coordinator (last run was killed or died unexpectedly)"
+            >
+              <RotateCw
+                size={13}
+                className={continueTask.isPending ? "animate-spin" : ""}
+              />
+              {continueTask.isPending ? "continuing…" : "continue"}
+            </Button>
+            <span className="font-mono text-[11px] text-fg-dim">
+              last coordinator run ended in{" "}
+              <span className="text-foreground">{lastCoordinator?.status}</span>{" "}
+              — pick up where it stopped.
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Mobile tab bar — picks which panel takes the full height
+          below. Hidden on lg+ where both panels render side-by-side. */}
+      <div className="lg:hidden shrink-0 flex border-b border-border bg-card">
+        <button
+          type="button"
+          onClick={() => onMobileTabChange?.("detail")}
+          aria-pressed={mobileTab === "detail"}
+          className={cn(
+            "flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors",
+            mobileTab === "detail"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          detail
+        </button>
+        <button
+          type="button"
+          onClick={() => onMobileTabChange?.("chat")}
+          aria-pressed={mobileTab === "chat"}
+          className={cn(
+            "flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors truncate px-2",
+            mobileTab === "chat"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          chat{activeRun ? ` · ${activeRun.role}` : ""}
+        </button>
       </div>
 
       {/* Body grid: left column = body / agent tree / summary; right
-          column (lg+) = SessionLog. On smaller screens the SessionLog
-          stacks below. */}
+          column (lg+) = SessionLog. Both stay mounted via display:none
+          on the inactive mobile pane so editor state survives. */}
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
-        <aside className="min-h-0 overflow-y-auto border-border lg:border-r">
+        <aside
+          className={cn(
+            "min-h-0 overflow-y-auto border-border lg:flex lg:border-r",
+            mobileTab === "detail" ? "flex flex-col" : "hidden",
+          )}
+        >
           <div className="space-y-6 p-6">
             <section>
               <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
@@ -364,8 +514,8 @@ export default function TaskDetailView({ taskId }: Props) {
               </header>
               <AgentTree
                 meta={task}
-                activeSessionId={effectiveSession}
-                onSelectRun={(r) => setActiveSessionId(r.sessionId)}
+                activeSessionId={effectiveSession ?? null}
+                onSelectRun={onSelectRun}
                 onKill={(r) => void onKillRun(r)}
               />
             </section>
@@ -394,7 +544,12 @@ export default function TaskDetailView({ taskId }: Props) {
           </div>
         </aside>
 
-        <section className="flex min-h-0 min-w-0 flex-col">
+        <section
+          className={cn(
+            "min-h-0 min-w-0 lg:flex lg:flex-col",
+            mobileTab === "chat" ? "flex flex-col" : "hidden",
+          )}
+        >
           {activeRun ? (
             <SessionLog
               sessionId={activeRun.sessionId}
@@ -410,11 +565,11 @@ export default function TaskDetailView({ taskId }: Props) {
           )}
           {activeRun ? (
             <div className="shrink-0 border-t border-border bg-card">
-              <InlinePermissionRequests sessionId={activeRun.sessionId} />
               <MessageComposer
                 sessionId={activeRun.sessionId}
                 repo={activeRun.repo}
                 role={activeRun.role}
+                taskId={taskId}
               />
             </div>
           ) : null}

@@ -15,7 +15,9 @@ export const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/60 backdrop-blur-sm",
+      "fixed inset-0 z-50 bg-black/55 backdrop-blur-sm",
+      "data-[state=open]:animate-in data-[state=closed]:animate-out",
+      "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
       className,
     )}
     {...props}
@@ -35,14 +37,17 @@ export const DialogContent = React.forwardRef<
         // 12px gutter on phones, capped at lg on wider screens; 90vh
         // height + scroll keeps long forms usable on short displays.
         "fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-1.5rem)] max-w-lg max-h-[90vh] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto",
-        "rounded-sm border border-border bg-card text-foreground shadow-2xl",
-        "p-4 sm:p-5 outline-none animate-fade-up",
+        "rounded-lg border border-border bg-card text-card-foreground shadow-2xl",
+        "p-4 sm:p-5 outline-none",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out",
+        "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
+        "data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95",
         className,
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-3 top-3 rounded-sm text-muted-foreground opacity-70 transition-opacity hover:opacity-100 hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:pointer-events-none">
+      <DialogPrimitive.Close className="absolute right-3 top-3 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-1 focus:ring-ring disabled:pointer-events-none">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
@@ -71,10 +76,7 @@ export const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn(
-      "font-mono text-micro uppercase tracking-wideish text-muted-foreground",
-      className,
-    )}
+    className={cn("text-base font-semibold", className)}
     {...props}
   />
 ));
@@ -86,7 +88,7 @@ export const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-small text-muted-foreground", className)}
+    className={cn("text-xs text-muted-foreground", className)}
     {...props}
   />
 ));

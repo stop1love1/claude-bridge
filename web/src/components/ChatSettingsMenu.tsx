@@ -56,12 +56,19 @@ const MODE_OPTIONS: Array<{
     hint: "Explore + plan before editing",
     icon: ListTree,
   },
-  {
-    value: "bypassPermissions",
-    label: "Skip permissions",
-    hint: "No popups — every tool runs. Trusted workstations only.",
-    icon: ShieldOff,
-  },
+  // Operator opt-in via `VITE_BRIDGE_ALLOW_BYPASS=1`. The server mirrors
+  // the same gate in `isValidUserPermissionMode`, so toggling this off
+  // drops the option from the UI AND rejects spoofed requests.
+  ...(import.meta.env.VITE_BRIDGE_ALLOW_BYPASS === "1"
+    ? [
+        {
+          value: "bypassPermissions" as const,
+          label: "Skip permissions",
+          hint: "No popups — every tool runs. Trusted workstations only.",
+          icon: ShieldOff,
+        },
+      ]
+    : []),
 ];
 
 const MODEL_OPTIONS: Array<{ value: string; label: string }> = [

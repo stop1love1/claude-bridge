@@ -4,7 +4,8 @@ import { cn } from "@/lib/cn";
 
 // AlertDialog reuses the Dialog visual treatment but is non-dismissible
 // without an explicit choice — used by ConfirmProvider for destructive
-// actions (delete task, reset, etc.).
+// actions (delete task, reset, etc.). Animation is driven by Radix
+// `data-state` attributes via the `tailwindcss-animate` plugin.
 
 export const AlertDialog = AlertDialogPrimitive.Root;
 export const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
@@ -17,7 +18,9 @@ export const AlertDialogOverlay = React.forwardRef<
   <AlertDialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/60 backdrop-blur-sm",
+      "fixed inset-0 z-50 bg-black/55 backdrop-blur-sm",
+      "data-[state=open]:animate-in data-[state=closed]:animate-out",
+      "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
       className,
     )}
     {...props}
@@ -35,8 +38,11 @@ export const AlertDialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         "fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2",
-        "rounded-sm border border-border bg-card text-foreground shadow-2xl",
-        "p-5 outline-none animate-fade-up",
+        "rounded-xl border border-border bg-card text-foreground shadow-2xl",
+        "p-5 outline-none",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out",
+        "data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0",
+        "data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95",
         className,
       )}
       {...props}
@@ -65,10 +71,7 @@ export const AlertDialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Title
     ref={ref}
-    className={cn(
-      "font-mono text-micro uppercase tracking-wideish text-muted-foreground",
-      className,
-    )}
+    className={cn("text-base font-semibold text-foreground", className)}
     {...props}
   />
 ));
@@ -81,7 +84,7 @@ export const AlertDialogDescription = React.forwardRef<
   <AlertDialogPrimitive.Description
     ref={ref}
     className={cn(
-      "text-small text-foreground leading-relaxed whitespace-pre-wrap",
+      "text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap",
       className,
     )}
     {...props}
@@ -119,7 +122,7 @@ export const AlertDialogCancel = React.forwardRef<
     ref={ref}
     className={cn(
       "inline-flex items-center justify-center h-8 px-3 rounded-md text-xs font-medium transition-colors",
-      "border border-border bg-background hover:bg-card hover:text-foreground",
+      "border border-border bg-background hover:bg-accent hover:text-accent-foreground",
       "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       className,
     )}

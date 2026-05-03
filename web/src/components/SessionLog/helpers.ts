@@ -57,6 +57,10 @@ export interface ParsedAttachment {
 export type Kind = "user" | "assistant" | "tool_result" | "hidden";
 
 // .jsonl is a stream of every event; most are noise to a chat reader.
+// `ai-title` carries the auto-generated session title (surfaced in the
+// header instead of as a chat row); `last-prompt` is the leaf-pointer
+// stub Claude writes to track resume targets; `file-history-snapshot`
+// is the Edit-tool's per-file diff cache. None belong in the transcript.
 export const HIDDEN_TYPES = new Set([
   "queue-operation",
   "attachment",
@@ -161,6 +165,22 @@ export function prettyToolName(raw: string): string {
   const label = dedup.join(" ");
   const toolPretty = tail.replace(/__/g, " · ").replace(/_/g, " ");
   return label ? `${label} · ${toolPretty}` : toolPretty;
+}
+
+// Pull image references out of a tool_result text body. Matches:
+//   [<alt>](relative/path.png)   ← markdown image / link
+//   relative/path.png            ← bare path on its own line
+const IMG_MD_RE = /\[[^\]]*\]\(([^)]+\.(?:png|jpe?g|gif|webp|svg|bmp|avif))\)/gi;
+const IMG_LINE_RE = /^([^\s<>][^\n]*\.(?:png|jpe?g|gif|webp|svg|bmp|avif))\s*$/gim;
+
+export function extractImagePaths(text: string): string[] {
+  const out = new Set<string>();
+  let m: RegExpExecArray | null;
+  IMG_MD_RE.lastIndex = 0;
+  while ((m = IMG_MD_RE.exec(text)) !== null) out.add(m[1].trim());
+  IMG_LINE_RE.lastIndex = 0;
+  while ((m = IMG_LINE_RE.exec(text)) !== null) out.add(m[1].trim());
+  return [...out].filter((p) => !/^https?:\/\//i.test(p));
 }
 
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;

@@ -14,7 +14,7 @@ export const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-8 w-full items-center justify-between rounded-md border border-border bg-background px-3 py-1 font-mono text-xs shadow-sm",
+      "flex h-8 w-full items-center justify-between rounded-md border border-border bg-background px-3 py-1 text-[11px] sm:text-xs shadow-sm",
       "[&>span]:line-clamp-1",
       "placeholder:text-muted-foreground",
       "transition-colors hover:border-input",
@@ -70,8 +70,9 @@ export const SelectContent = React.forwardRef<
       position={position}
       className={cn(
         "relative z-50 max-h-[var(--radix-select-content-available-height)] min-w-32 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
         position === "popper" &&
-          "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
+          "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
         className,
       )}
       {...props}
@@ -99,7 +100,7 @@ export const SelectLabel = React.forwardRef<
   <SelectPrimitive.Label
     ref={ref}
     className={cn(
-      "px-2 py-1 text-[10px] uppercase tracking-wideish font-medium text-muted-foreground",
+      "px-2 py-1 text-[10px] uppercase tracking-wider font-medium text-muted-foreground",
       className,
     )}
     {...props}
@@ -114,8 +115,8 @@ export const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 font-mono text-xs outline-none",
-      "focus:bg-card focus:text-foreground",
+      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-7 pr-2 text-[11px] sm:text-xs outline-none",
+      "focus:bg-accent focus:text-accent-foreground",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}

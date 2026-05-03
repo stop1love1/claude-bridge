@@ -8,7 +8,9 @@
       "mcp__plugin_playwright_playwright__*",
       "Skill(code-review:code-review)",
       "Skill(code-review:code-review:*)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Read(//c/temp/audit/**)",
+      "Read(//d/temp_main/**)"
     ],
     "additionalDirectories": [
       "D:\\Edusoft\\claude-bridge\\.git"

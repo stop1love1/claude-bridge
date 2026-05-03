@@ -153,3 +153,24 @@ button:disabled,
 [role="button"][aria-disabled="true"] {
   cursor: not-allowed;
 }
+
+/*
+ * Landing-page runtime tabs — CSS-only state machine.
+ *
+ * The `<RuntimeTabs>` component (web/src/components/landing/sections.tsx)
+ * uses three sibling radio inputs whose `:checked` state we forward to
+ * the matching tab label and panel via the general-sibling combinator.
+ * Tailwind v3 lacks named-peer variants so we hand-roll the rules here.
+ */
+#bridge-rt-npm:checked ~ [role="tablist"] [data-tab="npm"],
+#bridge-rt-pnpm:checked ~ [role="tablist"] [data-tab="pnpm"],
+#bridge-rt-bun:checked ~ [role="tablist"] [data-tab="bun"] {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+#bridge-rt-npm:checked ~ [data-runtime-panel="npm"],
+#bridge-rt-pnpm:checked ~ [data-runtime-panel="pnpm"],
+#bridge-rt-bun:checked ~ [data-runtime-panel="bun"] {
+  display: block;
+}
