@@ -1,5 +1,10 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  // Class strategy lets the ThemeProvider swap dark/light by toggling
+  // the `dark` class on <html>. Default = dark (matches the editorial
+  // off-black aesthetic); a future light variant can ride on top
+  // without us rewriting components.
+  darkMode: "class",
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
@@ -13,10 +18,49 @@ export default {
         border: "#262628",
         "border-strong": "#3A3A3C",
         fg: "#E8E6DF",
+        "fg-dim": "#8A8784",
         muted: "#8A8784",
         "muted-2": "#6B6864",
         accent: "#E8743D",
         "accent-soft": "#A85528",
+        // ---- shadcn-shaped aliases ----
+        // Many ported components from main reference shadcn token names
+        // (`primary`, `secondary`, `card`, `popover`, `ring`, `muted-foreground`,
+        // etc.). Rather than rewrite every import, we alias those names
+        // onto our existing palette so the editorial aesthetic is the
+        // single source of truth — no extra hex values, just naming
+        // bridges. Tailwind treats nested objects as `text-muted-foreground`
+        // / `bg-muted` / etc., which is what shadcn classes expect.
+        primary: {
+          DEFAULT: "#E8743D",
+          foreground: "#0E0E0F",
+        },
+        secondary: {
+          DEFAULT: "#1C1C1E",
+          foreground: "#E8E6DF",
+        },
+        destructive: {
+          DEFAULT: "#D9694A",
+          foreground: "#0E0E0F",
+        },
+        success: "#7BA05B",
+        warning: "#E8C547",
+        info: "#6B8AB5",
+        background: "#0E0E0F",
+        foreground: "#E8E6DF",
+        card: {
+          DEFAULT: "#161617",
+          foreground: "#E8E6DF",
+        },
+        popover: {
+          DEFAULT: "#161617",
+          foreground: "#E8E6DF",
+        },
+        // `accent` already exists as a flat hex above (the coral). We
+        // additionally expose `accent-foreground` for shadcn callers.
+        "accent-foreground": "#0E0E0F",
+        "muted-foreground": "#8A8784",
+        ring: "#E8743D",
         status: {
           todo: "#5B5953",
           doing: "#E8C547",

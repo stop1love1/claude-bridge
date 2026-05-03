@@ -11,6 +11,28 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // No-flash theme bootstrap. Runs before React mounts so the very
+      // first paint matches the user's saved preference (or system
+      // default), avoiding a dark-to-light flash on navigation.
+      // Self-contained IIFE — kept in sync with src/lib/theme.ts.
+      (function () {
+        try {
+          var k = "bridge.theme";
+          var s = localStorage.getItem(k);
+          var t = s === "light" || s === "dark"
+            ? s
+            : (window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark");
+          var d = document.documentElement;
+          if (t === "dark") d.classList.add("dark");
+          else d.classList.remove("dark");
+          d.style.colorScheme = t;
+          d.setAttribute("data-theme", t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
