@@ -100,7 +100,7 @@ export function AddAppDialog({ open, onOpenChange }: Props) {
               autoComplete="off"
               spellCheck={false}
             />
-            <p className="text-[11px] text-muted">
+            <p className="text-[11px] text-muted-foreground">
               letters, digits, dots, dashes, underscores. must start alphanumeric.
             </p>
           </div>
@@ -114,7 +114,7 @@ export function AddAppDialog({ open, onOpenChange }: Props) {
               autoComplete="off"
               spellCheck={false}
             />
-            <p className="text-[11px] text-muted">
+            <p className="text-[11px] text-muted-foreground">
               type the path manually — the SPA can&apos;t open a native picker.
             </p>
           </div>

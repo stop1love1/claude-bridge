@@ -85,7 +85,7 @@ export function PermissionDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>
             allow{" "}
-            <span className="font-mono text-accent normal-case">
+            <span className="font-mono text-primary normal-case">
               {current.tool}
             </span>
             ?
@@ -96,11 +96,11 @@ export function PermissionDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
 
-        <pre className="text-[11px] font-mono bg-bg border border-border rounded-sm p-2 max-h-56 overflow-auto whitespace-pre-wrap break-words">
+        <pre className="text-[11px] font-mono bg-background border border-border rounded-sm p-2 max-h-56 overflow-auto whitespace-pre-wrap break-words">
           {summarize(current.input) || "(no input)"}
         </pre>
 
-        <label className="mt-3 flex items-center gap-2 text-[11px] text-muted select-none">
+        <label className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground select-none">
           <input
             type="checkbox"
             checked={remember}
@@ -124,7 +124,7 @@ export function PermissionDialog({
         </AlertDialogFooter>
 
         {queue.length > 1 && (
-          <p className="mt-2 text-[10px] text-muted text-right">
+          <p className="mt-2 text-[10px] text-muted-foreground text-right">
             +{queue.length - 1} more pending…
           </p>
         )}

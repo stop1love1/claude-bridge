@@ -41,7 +41,7 @@ export function MainNav({
 }) {
   return (
     <nav
-      className="flex items-center gap-0.5 rounded-md border border-border bg-surface p-0.5 min-w-0 overflow-x-auto"
+      className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5 min-w-0 overflow-x-auto"
       aria-label="Primary navigation"
       style={{ scrollbarWidth: "none" }}
     >
@@ -56,8 +56,8 @@ export function MainNav({
             cn(
               "inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 sm:px-2.5 font-mono text-micro uppercase tracking-wideish whitespace-nowrap transition-colors",
               isActive
-                ? "bg-bg text-fg"
-                : "text-muted hover:text-fg",
+                ? "bg-background text-foreground"
+                : "text-muted-foreground hover:text-foreground",
             )
           }
         >

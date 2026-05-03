@@ -1,21 +1,17 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
     <title>claude-bridge</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
     <script>
       // No-flash theme bootstrap. Runs before React mounts so the very
       // first paint matches the user's saved preference (or system
-      // default), avoiding a dark-to-light flash on navigation.
-      // Self-contained IIFE — kept in sync with src/lib/theme.ts.
+      // default). Self-contained IIFE — kept in sync with
+      // src/lib/theme.ts. Sets `data-theme` on <html> (the canonical
+      // selector); never touches class names so we don't fight the
+      // ThemeProvider's reconciler.
       (function () {
         try {
           var k = "bridge.theme";
@@ -26,8 +22,6 @@
                 ? "light"
                 : "dark");
           var d = document.documentElement;
-          if (t === "dark") d.classList.add("dark");
-          else d.classList.remove("dark");
           d.style.colorScheme = t;
           d.setAttribute("data-theme", t);
         } catch (e) {}

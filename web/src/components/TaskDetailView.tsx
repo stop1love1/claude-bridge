@@ -106,7 +106,7 @@ export default function TaskDetailView({ taskId }: Props) {
 
   if (isLoading)
     return (
-      <p className="px-6 py-10 font-mono text-micro tracking-wideish text-muted">
+      <p className="px-6 py-10 font-mono text-micro tracking-wideish text-muted-foreground">
         loading task…
       </p>
     );
@@ -221,9 +221,9 @@ export default function TaskDetailView({ taskId }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Header */}
-      <div className="shrink-0 border-b border-border bg-surface px-6 py-4">
+      <div className="shrink-0 border-b border-border bg-card px-6 py-4">
         <div className="flex items-start gap-3">
-          <span className="mt-1 font-mono text-micro tracking-wideish text-muted-2">
+          <span className="mt-1 font-mono text-micro tracking-wideish text-fg-dim">
             {task.taskId}
           </span>
 
@@ -233,7 +233,7 @@ export default function TaskDetailView({ taskId }: Props) {
               onChange={(e) => setTitle(e.target.value)}
               onBlur={() => commit("title", title)}
               placeholder="untitled task"
-              className="h-auto border-0 bg-transparent px-0 font-sans text-xl font-semibold tracking-tight text-fg shadow-none focus-visible:ring-0"
+              className="h-auto border-0 bg-transparent px-0 font-sans text-xl font-semibold tracking-tight text-foreground shadow-none focus-visible:ring-0"
             />
           </div>
 
@@ -251,7 +251,7 @@ export default function TaskDetailView({ taskId }: Props) {
                     key={s}
                     onClick={() => moveSection(s)}
                     className={cn(
-                      task.taskSection === s && "bg-accent/10 text-accent",
+                      task.taskSection === s && "bg-primary/10 text-primary",
                     )}
                   >
                     {SECTION_LABEL[s]}
@@ -267,7 +267,7 @@ export default function TaskDetailView({ taskId }: Props) {
                 "inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 font-mono text-micro uppercase tracking-wideish transition-colors",
                 task.taskChecked
                   ? "border-status-done/40 bg-status-done/10 text-status-done"
-                  : "border-border text-muted hover:border-border-strong hover:text-fg",
+                  : "border-border text-muted-foreground hover:border-input hover:text-foreground",
               )}
             >
               <CheckCircle2 size={12} />
@@ -306,7 +306,7 @@ export default function TaskDetailView({ taskId }: Props) {
           </div>
         </div>
 
-        <div className="mt-2 flex items-center gap-3 font-mono text-micro tracking-wideish text-muted-2">
+        <div className="mt-2 flex items-center gap-3 font-mono text-micro tracking-wideish text-fg-dim">
           <StatusDot
             status={
               task.taskStatus === "done"
@@ -321,14 +321,14 @@ export default function TaskDetailView({ taskId }: Props) {
           />
           {task.taskApp && (
             <span>
-              app: <span className="text-muted">{task.taskApp}</span>
+              app: <span className="text-muted-foreground">{task.taskApp}</span>
             </span>
           )}
           <span>
-            created: <span className="text-muted">{task.createdAt}</span>
+            created: <span className="text-muted-foreground">{task.createdAt}</span>
           </span>
           <span>
-            runs: <span className="text-muted">{task.runs.length}</span>
+            runs: <span className="text-muted-foreground">{task.runs.length}</span>
           </span>
         </div>
       </div>
@@ -340,7 +340,7 @@ export default function TaskDetailView({ taskId }: Props) {
         <aside className="min-h-0 overflow-y-auto border-border lg:border-r">
           <div className="space-y-6 p-6">
             <section>
-              <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted">
+              <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
                 body
               </h3>
               <Textarea
@@ -355,10 +355,10 @@ export default function TaskDetailView({ taskId }: Props) {
 
             <section>
               <header className="mb-2 flex items-baseline justify-between">
-                <h3 className="font-mono text-micro uppercase tracking-wideish text-muted">
+                <h3 className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
                   agents
                 </h3>
-                <span className="font-mono text-micro tabular-nums text-muted-2">
+                <span className="font-mono text-micro tabular-nums text-fg-dim">
                   {String(task.runs.length).padStart(2, "0")}
                 </span>
               </header>
@@ -372,20 +372,20 @@ export default function TaskDetailView({ taskId }: Props) {
 
             {summary && typeof summary === "string" && summary.trim() && (
               <section>
-                <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted">
+                <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
                   summary
                 </h3>
                 <details
                   open
-                  className="rounded-sm border border-border bg-surface p-3"
+                  className="rounded-sm border border-border bg-card p-3"
                 >
-                  <summary className="cursor-pointer font-mono text-micro uppercase tracking-wideish text-muted-2">
+                  <summary className="cursor-pointer font-mono text-micro uppercase tracking-wideish text-fg-dim">
                     {summary
                       .split("\n")
                       .find((l) => l.trim().length > 0)
                       ?.slice(0, 60) ?? "summary"}
                   </summary>
-                  <pre className="mt-2 whitespace-pre-wrap font-mono text-small text-fg">
+                  <pre className="mt-2 whitespace-pre-wrap font-mono text-small text-foreground">
                     {summary}
                   </pre>
                 </details>
@@ -402,14 +402,14 @@ export default function TaskDetailView({ taskId }: Props) {
               role={activeRun.role}
             />
           ) : (
-            <div className="flex flex-1 items-center justify-center px-6 py-12 text-center font-mono text-micro uppercase tracking-wideish text-muted-2">
+            <div className="flex flex-1 items-center justify-center px-6 py-12 text-center font-mono text-micro uppercase tracking-wideish text-fg-dim">
               {task.runs.length === 0
                 ? "no sessions yet — continue or clear to spawn the coordinator."
                 : "select a run from the agent tree to view its transcript."}
             </div>
           )}
           {activeRun ? (
-            <div className="shrink-0 border-t border-border bg-surface">
+            <div className="shrink-0 border-t border-border bg-card">
               <InlinePermissionRequests sessionId={activeRun.sessionId} />
               <MessageComposer
                 sessionId={activeRun.sessionId}

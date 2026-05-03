@@ -93,20 +93,20 @@ export function SlashActionsPalette({
   return (
     <div
       ref={containerRef}
-      className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-surface border border-border rounded-md shadow-2xl z-40 overflow-hidden animate-fade-up"
+      className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-card border border-border rounded-md shadow-2xl z-40 overflow-hidden animate-fade-up"
       role="listbox"
       aria-label="Slash commands"
     >
-      <div className="px-3 py-1.5 border-b border-border flex items-center gap-2 text-micro uppercase tracking-wideish text-muted">
+      <div className="px-3 py-1.5 border-b border-border flex items-center gap-2 text-micro uppercase tracking-wideish text-muted-foreground">
         <Terminal size={11} />
         Slash commands
-        <span className="ml-auto font-mono normal-case text-muted">/{query}</span>
+        <span className="ml-auto font-mono normal-case text-muted-foreground">/{query}</span>
       </div>
       <ul className="max-h-72 overflow-y-auto py-1">
         {isLoading ? (
-          <li className="px-3 py-2 text-xs text-muted italic">Loading…</li>
+          <li className="px-3 py-2 text-xs text-muted-foreground italic">Loading…</li>
         ) : items.length === 0 ? (
-          <li className="px-3 py-2 text-xs text-muted italic">
+          <li className="px-3 py-2 text-xs text-muted-foreground italic">
             No commands match
           </li>
         ) : (
@@ -124,14 +124,14 @@ export function SlashActionsPalette({
                 }}
                 className={cn(
                   "w-full flex items-center gap-3 px-3 py-1.5 text-left transition-colors",
-                  i === cursor ? "bg-surface-2" : "hover:bg-surface-2/60",
+                  i === cursor ? "bg-secondary" : "hover:bg-secondary/60",
                 )}
               >
-                <span className="font-mono text-xs text-fg">/{it.slug}</span>
-                <span className="text-[11px] text-muted truncate flex-1">
+                <span className="font-mono text-xs text-foreground">/{it.slug}</span>
+                <span className="text-[11px] text-muted-foreground truncate flex-1">
                   {it.description ?? ""}
                 </span>
-                <span className="text-[10px] text-muted/70 uppercase tracking-wideish">
+                <span className="text-[10px] text-muted-foreground/70 uppercase tracking-wideish">
                   {it.source}
                 </span>
               </button>
@@ -139,7 +139,7 @@ export function SlashActionsPalette({
           ))
         )}
       </ul>
-      <div className="px-3 py-1 border-t border-border bg-surface-2 text-[10px] text-muted">
+      <div className="px-3 py-1 border-t border-border bg-secondary text-[10px] text-muted-foreground">
         ↑↓ move · ↵/Tab insert · Esc cancel
       </div>
     </div>

@@ -41,7 +41,7 @@ const Ctx = createContext<ToastApi | null>(null);
 let counter = 0;
 
 const VARIANT_META: Record<ToastVariant, { icon: typeof Info; tone: string }> = {
-  info:    { icon: Info,           tone: "border-border       text-fg" },
+  info:    { icon: Info,           tone: "border-border       text-foreground" },
   success: { icon: CheckCircle2,   tone: "border-status-done/40    text-status-done" },
   warning: { icon: AlertTriangle,  tone: "border-status-doing/40   text-status-doing" },
   error:   { icon: AlertCircle,    tone: "border-status-blocked/40 text-status-blocked" },
@@ -107,7 +107,7 @@ export function Toaster({ children }: { children: React.ReactNode }) {
               key={t.id}
               role={t.variant === "error" ? "alert" : "status"}
               className={cn(
-                "pointer-events-auto flex items-start gap-3 rounded-sm border bg-surface p-3 shadow-2xl animate-fade-up",
+                "pointer-events-auto flex items-start gap-3 rounded-sm border bg-card p-3 shadow-2xl animate-fade-up",
                 tone,
               )}
             >
@@ -119,13 +119,13 @@ export function Toaster({ children }: { children: React.ReactNode }) {
                   </p>
                 )}
                 {t.description && (
-                  <p className="mt-0.5 text-small text-fg">{t.description}</p>
+                  <p className="mt-0.5 text-small text-foreground">{t.description}</p>
                 )}
               </div>
               <button
                 type="button"
                 onClick={() => dismiss(t.id)}
-                className="text-muted hover:text-fg shrink-0"
+                className="text-muted-foreground hover:text-foreground shrink-0"
                 aria-label="dismiss"
               >
                 <X size={12} />

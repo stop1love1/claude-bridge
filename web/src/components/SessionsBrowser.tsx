@@ -86,11 +86,11 @@ export default function SessionsBrowser({
 
   return (
     <aside className="flex h-full w-full flex-col overflow-hidden border-border md:w-80 md:shrink-0 md:border-r">
-      <div className="sticky top-0 z-10 shrink-0 space-y-2 border-b border-border bg-surface p-2">
+      <div className="sticky top-0 z-10 shrink-0 space-y-2 border-b border-border bg-card p-2">
         <div className="relative">
           <Search
             size={12}
-            className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-2"
+            className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-dim"
           />
           <Input
             value={query}
@@ -102,7 +102,7 @@ export default function SessionsBrowser({
             <button
               type="button"
               onClick={() => setQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-2 hover:text-fg"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground"
               aria-label="clear search"
             >
               <X size={11} />
@@ -146,23 +146,23 @@ export default function SessionsBrowser({
                 <button
                   type="button"
                   onClick={() => toggleGroup(path)}
-                  className="flex w-full items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-surface-2"
+                  className="flex w-full items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-secondary"
                   title={branch ? `${path}\n\non branch ${branch}` : path}
                 >
-                  <Chevron size={11} className="shrink-0 text-muted-2" />
-                  <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted">
+                  <Chevron size={11} className="shrink-0 text-fg-dim" />
+                  <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground">
                     {displayPath(path)}
                   </span>
                   {branch && (
                     <span
-                      className="inline-flex shrink-0 items-center gap-0.5 truncate font-mono text-[9.5px] text-accent"
+                      className="inline-flex shrink-0 items-center gap-0.5 truncate font-mono text-[9.5px] text-primary"
                       title={`branch: ${branch}`}
                     >
                       <GitBranch size={9} />
                       {branch}
                     </span>
                   )}
-                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-2">
+                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-fg-dim">
                     {list.length}
                   </span>
                 </button>
@@ -176,13 +176,13 @@ export default function SessionsBrowser({
                           className={cn(
                             "group flex w-full items-center gap-1.5 rounded-sm border px-2 py-1 text-left transition-colors",
                             activeSessionId === s.sessionId
-                              ? "border-accent/40 bg-accent/10"
-                              : "border-transparent hover:bg-surface-2",
+                              ? "border-primary/40 bg-primary/10"
+                              : "border-transparent hover:bg-secondary",
                           )}
                         >
-                          <span className="min-w-0 flex-1 truncate text-xs text-fg">
+                          <span className="min-w-0 flex-1 truncate text-xs text-foreground">
                             {s.preview || (
-                              <span className="font-mono text-muted">
+                              <span className="font-mono text-muted-foreground">
                                 {s.sessionId.slice(0, 8)}…
                               </span>
                             )}
@@ -193,11 +193,11 @@ export default function SessionsBrowser({
                             </span>
                           )}
                           {s.link && (
-                            <code className="max-w-[110px] shrink-0 truncate font-mono text-[10px] text-muted-2">
+                            <code className="max-w-[110px] shrink-0 truncate font-mono text-[10px] text-fg-dim">
                               {s.link.taskId}
                             </code>
                           )}
-                          <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-2">
+                          <span className="shrink-0 font-mono text-[10px] tabular-nums text-fg-dim">
                             {relTime(new Date(s.mtime).toISOString())}
                           </span>
                         </button>

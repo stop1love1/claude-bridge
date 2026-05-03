@@ -103,22 +103,22 @@ export function MentionPicker({
   }, [matches, cursor, onPick, onClose]);
 
   return (
-    <div className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-surface border border-border rounded-md shadow-2xl z-40 overflow-hidden animate-fade-up">
-      <div className="px-3 py-1.5 border-b border-border flex items-center gap-2 text-micro uppercase tracking-wideish text-muted">
+    <div className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-card border border-border rounded-md shadow-2xl z-40 overflow-hidden animate-fade-up">
+      <div className="px-3 py-1.5 border-b border-border flex items-center gap-2 text-micro uppercase tracking-wideish text-muted-foreground">
         <FileSearch size={11} />
         Mention file in{" "}
-        <span className="font-mono normal-case text-fg">{repo}</span>
+        <span className="font-mono normal-case text-foreground">{repo}</span>
         {query && (
-          <span className="ml-auto font-mono normal-case text-muted">
+          <span className="ml-auto font-mono normal-case text-muted-foreground">
             @{query}
           </span>
         )}
       </div>
       <ul className="max-h-60 overflow-y-auto py-1">
         {loading && matches.length === 0 ? (
-          <li className="px-3 py-2 text-xs text-muted italic">Scanning…</li>
+          <li className="px-3 py-2 text-xs text-muted-foreground italic">Scanning…</li>
         ) : matches.length === 0 ? (
-          <li className="px-3 py-2 text-xs text-muted italic">
+          <li className="px-3 py-2 text-xs text-muted-foreground italic">
             No matching files
           </li>
         ) : (
@@ -133,17 +133,17 @@ export function MentionPicker({
                 }}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-1.5 text-left",
-                  i === cursor ? "bg-surface-2" : "",
+                  i === cursor ? "bg-secondary" : "",
                 )}
               >
-                <FileText size={11} className="text-muted shrink-0" />
+                <FileText size={11} className="text-muted-foreground shrink-0" />
                 <span className="text-xs font-mono truncate">{m.rel}</span>
               </button>
             </li>
           ))
         )}
       </ul>
-      <div className="px-3 py-1 border-t border-border bg-surface-2 text-[10px] text-muted">
+      <div className="px-3 py-1 border-t border-border bg-secondary text-[10px] text-muted-foreground">
         ↑↓ move · ↵/Tab select · Esc cancel
       </div>
     </div>

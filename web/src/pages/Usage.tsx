@@ -122,8 +122,8 @@ export default function UsagePage() {
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10">
       <header className="mb-6 flex flex-wrap items-center gap-2">
-        <Gauge size={18} className="text-accent" />
-        <h1 className="font-mono text-display font-semibold tracking-tightish text-fg">
+        <Gauge size={18} className="text-primary" />
+        <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
           usage
         </h1>
         {snap?.plan && (
@@ -134,7 +134,7 @@ export default function UsagePage() {
             )}
           </span>
         )}
-        <span className="ml-auto inline-flex items-center gap-2 font-mono text-micro tracking-wideish text-muted">
+        <span className="ml-auto inline-flex items-center gap-2 font-mono text-micro tracking-wideish text-muted-foreground">
           <span title={snap?.cacheUpdatedAt ?? "no cache file"}>
             cache: {timeAgo(snap?.cacheUpdatedAt ?? null)}
           </span>
@@ -198,29 +198,29 @@ export default function UsagePage() {
           </section>
 
           {/* Daily activity SVG bar chart */}
-          <section className="mt-4 rounded-sm border border-border bg-surface p-3">
+          <section className="mt-4 rounded-sm border border-border bg-card p-3">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="font-mono text-micro uppercase tracking-wideish text-fg">
+              <h3 className="font-mono text-micro uppercase tracking-wideish text-foreground">
                 daily activity
               </h3>
-              <span className="font-mono text-[10px] tracking-wideish text-muted">
+              <span className="font-mono text-[10px] tracking-wideish text-muted-foreground">
                 last 30 days · max {fmt(dailyMax)} msg/day
               </span>
             </div>
             <DailyBars bars={dailyBars} max={dailyMax} />
-            <div className="mt-1 flex justify-between font-mono text-[10px] text-muted-2">
+            <div className="mt-1 flex justify-between font-mono text-[10px] text-fg-dim">
               <span>{dailyBars[0]?.date}</span>
               <span>{dailyBars[dailyBars.length - 1]?.date}</span>
             </div>
           </section>
 
           {/* Per-model table */}
-          <section className="mt-4 rounded-sm border border-border bg-surface p-3">
-            <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-fg">
+          <section className="mt-4 rounded-sm border border-border bg-card p-3">
+            <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-foreground">
               by model
             </h3>
             {Object.keys(snap.modelUsage).length === 0 ? (
-              <p className="text-small italic text-muted">
+              <p className="text-small italic text-muted-foreground">
                 no per-model data yet.
               </p>
             ) : (
@@ -279,17 +279,17 @@ export default function UsagePage() {
 
           {/* Top sessions / longest session */}
           {snap.longestSession && (
-            <section className="mt-4 flex items-start gap-3 rounded-sm border border-border bg-surface p-3">
+            <section className="mt-4 flex items-start gap-3 rounded-sm border border-border bg-card p-3">
               <Trophy
                 size={14}
                 className="mt-0.5 shrink-0 text-status-doing"
               />
               <div className="min-w-0 flex-1">
-                <h3 className="font-mono text-micro uppercase tracking-wideish text-fg">
+                <h3 className="font-mono text-micro uppercase tracking-wideish text-foreground">
                   longest session
                 </h3>
-                <p className="mt-0.5 text-small text-muted">
-                  <span className="font-mono text-fg">
+                <p className="mt-0.5 text-small text-muted-foreground">
+                  <span className="font-mono text-foreground">
                     {formatDuration(snap.longestSession.duration)}
                   </span>{" "}
                   · {fmt(snap.longestSession.messageCount)} messages ·{" "}
@@ -297,14 +297,14 @@ export default function UsagePage() {
                     {timeAgo(snap.longestSession.timestamp)}
                   </span>
                 </p>
-                <code className="mt-1 block truncate font-mono text-[10px] text-muted-2">
+                <code className="mt-1 block truncate font-mono text-[10px] text-fg-dim">
                   {snap.longestSession.sessionId}
                 </code>
               </div>
             </section>
           )}
 
-          <p className="mt-6 text-center font-mono text-[10px] tracking-wideish text-muted-2">
+          <p className="mt-6 text-center font-mono text-[10px] tracking-wideish text-fg-dim">
             first session{" "}
             {snap.firstSessionDate ? timeAgo(snap.firstSessionDate) : "—"}
             {snap.lastComputedDate && (
@@ -329,16 +329,16 @@ function Tile({
   hint?: string;
 }) {
   return (
-    <div className="rounded-sm border border-border bg-surface p-3">
-      <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wideish text-muted">
-        <Icon size={11} className="text-accent" />
+    <div className="rounded-sm border border-border bg-card p-3">
+      <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
+        <Icon size={11} className="text-primary" />
         {label}
       </div>
-      <div className="mt-1.5 font-mono text-base font-semibold tabular-nums text-fg">
+      <div className="mt-1.5 font-mono text-base font-semibold tabular-nums text-foreground">
         {value}
       </div>
       {hint && (
-        <div className="font-mono text-[10px] tabular-nums text-muted-2">
+        <div className="font-mono text-[10px] tabular-nums text-fg-dim">
           {hint}
         </div>
       )}
@@ -348,7 +348,7 @@ function Tile({
 
 function Th({ children }: { children: React.ReactNode }) {
   return (
-    <th className="px-2 py-1.5 font-mono text-[10px] uppercase tracking-wideish text-muted">
+    <th className="px-2 py-1.5 font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
       {children}
     </th>
   );
@@ -361,13 +361,13 @@ function Td({
   className?: string;
 }) {
   return (
-    <td className={`px-2 py-1.5 text-fg ${className ?? ""}`}>{children}</td>
+    <td className={`px-2 py-1.5 text-foreground ${className ?? ""}`}>{children}</td>
   );
 }
 
 /**
  * Tiny inline-SVG bar chart — avoids pulling recharts in just for a
- * 30-bar histogram. ViewBox is fixed to 30×100 so each bar lives in a
+ * 30-bar histogram. ViewBox is fixed to 30Ă—100 so each bar lives in a
  * 1-unit-wide slot; height in % is computed from the running max.
  */
 function DailyBars({
@@ -398,7 +398,7 @@ function DailyBars({
             height={height}
             fill="currentColor"
             opacity={opacity}
-            className="text-accent"
+            className="text-primary"
           >
             <title>
               {b.date}: {fmt(b.messages)} message

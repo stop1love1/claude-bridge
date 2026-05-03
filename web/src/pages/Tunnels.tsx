@@ -122,15 +122,15 @@ export default function TunnelsPage() {
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <Globe2 size={18} className="text-accent" />
-            <h1 className="font-mono text-display font-semibold tracking-tightish text-fg">
+            <Globe2 size={18} className="text-primary" />
+            <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
               tunnels
             </h1>
-            <span className="font-mono text-micro uppercase tracking-wideish text-muted">
+            <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
               {tunnels.length} row{tunnels.length === 1 ? "" : "s"}
             </span>
           </div>
-          <p className="mt-2 max-w-xl text-small text-muted">
+          <p className="mt-2 max-w-xl text-small text-muted-foreground">
             expose a local port to the public internet. tunnels die when the
             bridge process exits.
           </p>
@@ -144,7 +144,7 @@ export default function TunnelsPage() {
       {ngrok && <NgrokStatusPanel status={ngrok} />}
 
       {isLoading ? (
-        <p className="font-mono text-micro tracking-wideish text-muted">
+        <p className="font-mono text-micro tracking-wideish text-muted-foreground">
           loading tunnels…
         </p>
       ) : tunnels.length === 0 ? (
@@ -157,7 +157,7 @@ export default function TunnelsPage() {
         <div className="space-y-6">
           {live.length > 0 && (
             <section>
-              <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted">
+              <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
                 active ({live.length})
               </h3>
               <div className="space-y-2">
@@ -174,7 +174,7 @@ export default function TunnelsPage() {
           )}
           {ended.length > 0 && (
             <section>
-              <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted">
+              <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
                 ended ({ended.length})
               </h3>
               <div className="space-y-2">
@@ -358,11 +358,11 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
       <section className="mb-6 rounded-sm border border-status-doing/40 bg-status-doing/5 p-3">
         <div className="mb-1 flex items-center gap-2">
           <AlertTriangle size={14} className="text-status-doing" />
-          <span className="font-mono text-micro uppercase tracking-wideish text-fg">
+          <span className="font-mono text-micro uppercase tracking-wideish text-foreground">
             ngrok not installed
           </span>
         </div>
-        <p className="mb-3 text-[11px] text-muted">{status.hint ?? ""}</p>
+        <p className="mb-3 text-[11px] text-muted-foreground">{status.hint ?? ""}</p>
         <div className="flex gap-2">
           {status.installable ? (
             <Button
@@ -400,17 +400,17 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
       <section className="mb-6 rounded-sm border border-status-doing/40 bg-status-doing/5 p-3">
         <div className="mb-1 flex items-center gap-2">
           <Key size={14} className="text-status-doing" />
-          <span className="font-mono text-micro uppercase tracking-wideish text-fg">
+          <span className="font-mono text-micro uppercase tracking-wideish text-foreground">
             ngrok authtoken needed
           </span>
         </div>
-        <p className="mb-3 text-[11px] text-muted">
+        <p className="mb-3 text-[11px] text-muted-foreground">
           get your token from{" "}
           <a
             href={NGROK_AUTHTOKEN_DASHBOARD}
             target="_blank"
             rel="noreferrer"
-            className="text-accent underline-offset-2 hover:underline"
+            className="text-primary underline-offset-2 hover:underline"
           >
             dashboard.ngrok.com
           </a>
@@ -452,13 +452,13 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
     <section className="mb-6 rounded-sm border border-status-done/30 bg-status-done/5 p-3">
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         <CheckCircle2 size={14} className="text-status-done" />
-        <span className="font-mono uppercase tracking-wideish text-fg">
+        <span className="font-mono uppercase tracking-wideish text-foreground">
           ngrok ready
         </span>
         {status.version && (
-          <span className="font-mono text-muted">v{status.version}</span>
+          <span className="font-mono text-muted-foreground">v{status.version}</span>
         )}
-        <span className="text-muted">· authtoken saved</span>
+        <span className="text-muted-foreground">· authtoken saved</span>
       </div>
     </section>
   );
@@ -506,7 +506,7 @@ function TunnelRow({
   return (
     <div
       className={cn(
-        "rounded-sm border bg-surface p-3 transition-colors",
+        "rounded-sm border bg-card p-3 transition-colors",
         t.status === "running"
           ? "border-status-done/30"
           : t.status === "error"
@@ -516,14 +516,14 @@ function TunnelRow({
     >
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill status={t.status} />
-        <span className="rounded-sm bg-bg px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wideish text-muted">
+        <span className="rounded-sm bg-background px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
           {t.provider}
         </span>
-        <span className="font-mono text-sm text-fg">:{t.port}</span>
+        <span className="font-mono text-sm text-foreground">:{t.port}</span>
         {t.label && (
-          <span className="text-small text-muted truncate">— {t.label}</span>
+          <span className="text-small text-muted-foreground truncate">— {t.label}</span>
         )}
-        <span className="ml-auto font-mono text-[10px] uppercase tracking-wideish text-muted">
+        <span className="ml-auto font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
           uptime {uptime}
         </span>
         {live && (
@@ -531,7 +531,7 @@ function TunnelRow({
             variant="ghost"
             size="xs"
             onClick={onStop}
-            className="text-muted hover:text-status-blocked"
+            className="text-muted-foreground hover:text-status-blocked"
           >
             <Square size={11} />
             stop
@@ -541,7 +541,7 @@ function TunnelRow({
           variant="ghost"
           size="xs"
           onClick={onRemove}
-          className="text-muted hover:text-status-blocked"
+          className="text-muted-foreground hover:text-status-blocked"
         >
           <Trash2 size={11} />
           remove
@@ -555,7 +555,7 @@ function TunnelRow({
               href={t.url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 break-all font-mono text-sm text-accent underline-offset-2 hover:underline"
+              className="inline-flex items-center gap-1 break-all font-mono text-sm text-primary underline-offset-2 hover:underline"
             >
               {t.url}
               <ExternalLink size={11} />
@@ -566,12 +566,12 @@ function TunnelRow({
             </Button>
           </>
         ) : t.status === "starting" ? (
-          <span className="inline-flex items-center gap-1.5 text-small text-muted">
+          <span className="inline-flex items-center gap-1.5 text-small text-muted-foreground">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-status-doing" />
             waiting for URL…
           </span>
         ) : (
-          <span className="text-small text-muted">no URL</span>
+          <span className="text-small text-muted-foreground">no URL</span>
         )}
       </div>
 
@@ -596,7 +596,7 @@ function StatusPill({ status }: { status: TunnelEntry["status"] }) {
     },
     stopped: {
       label: "stopped",
-      cls: "bg-surface-2 text-muted",
+      cls: "bg-secondary text-muted-foreground",
     },
     error: {
       label: "error",

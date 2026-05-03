@@ -34,14 +34,14 @@ export default function Settings() {
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10 space-y-6">
       <div className="flex items-center gap-2">
-        <SettingsIcon size={18} className="text-accent" />
-        <h1 className="font-mono text-display font-semibold tracking-tightish text-fg">
+        <SettingsIcon size={18} className="text-primary" />
+        <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
           settings
         </h1>
       </div>
-      <p className="-mt-2 max-w-xl text-small text-muted">
+      <p className="-mt-2 max-w-xl text-small text-muted-foreground">
         per-machine configuration stored in{" "}
-        <span className="font-mono text-fg">~/.claude/bridge.json</span> and the
+        <span className="font-mono text-foreground">~/.claude/bridge.json</span> and the
         bridge process. token lives in this browser&apos;s localStorage only.
       </p>
 
@@ -81,18 +81,18 @@ function AuthSection({ reason }: { reason: string | null }) {
   }
 
   return (
-    <section className="rounded-sm border border-border bg-surface p-5">
+    <section className="rounded-sm border border-border bg-card p-5">
       <div className="mb-1 flex items-center gap-2">
-        <KeyRound size={14} className="text-accent" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-fg">
+        <KeyRound size={14} className="text-primary" />
+        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
           auth
         </h2>
       </div>
-      <p className="mb-4 text-small text-muted">
+      <p className="mb-4 text-small text-muted-foreground">
         the bridge requires{" "}
-        <span className="font-mono text-fg">x-bridge-internal-token</span> on
+        <span className="font-mono text-foreground">x-bridge-internal-token</span> on
         every request — except when it runs with{" "}
-        <span className="font-mono text-fg">--localhost-only</span>, where
+        <span className="font-mono text-foreground">--localhost-only</span>, where
         loopback bypasses auth.
       </p>
 
@@ -138,7 +138,7 @@ function AuthSection({ reason }: { reason: string | null }) {
               "border-status-doing/40 bg-status-doing/10 text-status-doing",
             test.kind === "err" &&
               "border-status-blocked/40 bg-status-blocked/10 text-status-blocked",
-            test.kind === "pending" && "border-border text-muted",
+            test.kind === "pending" && "border-border text-muted-foreground",
           )}
         >
           {test.kind === "pending" && "checking…"}
@@ -189,14 +189,14 @@ function BridgeSection() {
   };
 
   return (
-    <section className="rounded-sm border border-border bg-surface p-5">
+    <section className="rounded-sm border border-border bg-card p-5">
       <div className="mb-1 flex items-center gap-2">
-        <Globe size={14} className="text-accent" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-fg">
+        <Globe size={14} className="text-primary" />
+        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
           bridge
         </h2>
       </div>
-      <p className="mb-4 text-small text-muted">
+      <p className="mb-4 text-small text-muted-foreground">
         the origin the bridge is reachable at after deploy. used to render
         clickable links in webhook payloads.
       </p>
@@ -214,7 +214,7 @@ function BridgeSection() {
             spellCheck={false}
             inputMode="url"
           />
-          <p className="text-[11px] text-muted">
+          <p className="text-[11px] text-muted-foreground">
             origin only — http:// or https://. path / query / hash get stripped.
           </p>
           <div className="flex items-center gap-2 pt-1">
@@ -230,7 +230,7 @@ function BridgeSection() {
                 onClick={() => {
                   setDraft("");
                 }}
-                className="text-muted hover:text-status-blocked"
+                className="text-muted-foreground hover:text-status-blocked"
               >
                 clear
               </Button>
@@ -246,16 +246,16 @@ function BridgeSection() {
 
 function DetectSection() {
   return (
-    <section className="rounded-sm border border-dashed border-border bg-surface/50 p-5">
+    <section className="rounded-sm border border-dashed border-border bg-card/50 p-5">
       <div className="mb-1 flex items-center gap-2">
-        <Sparkles size={14} className="text-accent" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-fg">
+        <Sparkles size={14} className="text-primary" />
+        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
           scope detection
         </h2>
       </div>
-      <p className="text-small text-muted">
+      <p className="text-small text-muted-foreground">
         detect source: auto (LLM + heuristic) — controls landing soon. backend{" "}
-        <span className="font-mono text-fg">/api/detect/settings</span>{" "}
+        <span className="font-mono text-foreground">/api/detect/settings</span>{" "}
         endpoint isn&apos;t ported yet.
       </p>
     </section>
@@ -266,14 +266,14 @@ function DetectSection() {
 
 function ScanRootsSection() {
   return (
-    <section className="rounded-sm border border-dashed border-border bg-surface/50 p-5">
+    <section className="rounded-sm border border-dashed border-border bg-card/50 p-5">
       <div className="mb-1 flex items-center gap-2">
-        <FolderTree size={14} className="text-accent" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-fg">
+        <FolderTree size={14} className="text-primary" />
+        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
           apps registry root
         </h2>
       </div>
-      <p className="text-small text-muted">
+      <p className="text-small text-muted-foreground">
         scan-roots editor not yet ported. the auto-detect dialog uses the
         bridge default root for now.
       </p>
@@ -285,11 +285,11 @@ function ScanRootsSection() {
 
 function Card({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-sm border border-border bg-bg p-3">
-      <div className="font-mono text-[10px] uppercase tracking-wideish text-muted">
+    <div className="rounded-sm border border-border bg-background p-3">
+      <div className="font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
         {label}
       </div>
-      <div className="mt-1.5 font-mono text-small tabular-nums text-fg">
+      <div className="mt-1.5 font-mono text-small tabular-nums text-foreground">
         {value}
       </div>
     </div>

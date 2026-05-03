@@ -56,15 +56,15 @@ export function HeaderShell({
   const connLabel = conn.state === "ok" ? "online" : conn.state;
 
   return (
-    <header className="sticky top-0 z-40 h-12 shrink-0 border-b border-border bg-bg/85 backdrop-blur-md">
+    <header className="sticky top-0 z-40 h-12 shrink-0 border-b border-border bg-background/85 backdrop-blur-md">
       <div className="mx-auto flex h-full w-full max-w-[1400px] items-center gap-2 px-3 sm:gap-3 sm:px-4">
         <Link to="/" className="group flex items-center gap-2 shrink-0" title="claude/bridge — home">
           <span
             aria-hidden
-            className="block h-2.5 w-2.5 rotate-45 bg-accent transition-transform duration-300 group-hover:rotate-[135deg]"
+            className="block h-2.5 w-2.5 rotate-45 bg-primary transition-transform duration-300 group-hover:rotate-[135deg]"
           />
           <span className="hidden md:inline font-mono text-[13px] font-semibold tracking-wideish uppercase">
-            claude<span className="text-muted">/</span>bridge
+            claude<span className="text-muted-foreground">/</span>bridge
           </span>
         </Link>
 
@@ -75,16 +75,16 @@ export function HeaderShell({
         </div>
 
         <span
-          className="hidden sm:inline font-mono text-micro uppercase tracking-wideish text-muted shrink-0"
+          className="hidden sm:inline font-mono text-micro uppercase tracking-wideish text-muted-foreground shrink-0"
           aria-label={`${total} tasks`}
         >
-          <span className="text-fg tnum">{String(total).padStart(2, "0")}</span>
-          <span className="px-1.5 text-muted-2">·</span>
+          <span className="text-foreground tnum">{String(total).padStart(2, "0")}</span>
+          <span className="px-1.5 text-fg-dim">·</span>
           tasks
         </span>
 
         <div
-          className="flex items-center gap-1.5 font-mono text-micro uppercase tracking-wideish text-muted shrink-0"
+          className="flex items-center gap-1.5 font-mono text-micro uppercase tracking-wideish text-muted-foreground shrink-0"
           title={`bridge ${connLabel}${conn.version ? ` v${conn.version}` : ""}`}
         >
           <span className={cn("h-1.5 w-1.5 rounded-full", connColor)} />
@@ -108,18 +108,18 @@ export function HeaderShell({
               onValueChange={(v) => setPref(v as ThemePref)}
             >
               <DropdownMenuRadioItem value="system">
-                <Monitor className="h-3.5 w-3.5 text-muted" />
+                <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
                 <span>system</span>
-                <span className="ml-auto text-[10px] text-muted capitalize">
+                <span className="ml-auto text-[10px] text-muted-foreground capitalize">
                   {resolved}
                 </span>
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="light">
-                <Sun className="h-3.5 w-3.5 text-muted" />
+                <Sun className="h-3.5 w-3.5 text-muted-foreground" />
                 <span>light</span>
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="dark">
-                <Moon className="h-3.5 w-3.5 text-muted" />
+                <Moon className="h-3.5 w-3.5 text-muted-foreground" />
                 <span>dark</span>
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>

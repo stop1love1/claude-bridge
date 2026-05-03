@@ -247,7 +247,7 @@ export function SessionLog({ sessionId, repo, role, title, hideKill }: Props) {
 
   if (!sessionId || !repo) {
     return (
-      <div className="flex h-full items-center justify-center px-6 py-12 font-mono text-micro uppercase tracking-wideish text-muted-2">
+      <div className="flex h-full items-center justify-center px-6 py-12 font-mono text-micro uppercase tracking-wideish text-fg-dim">
         select a session to view its transcript.
       </div>
     );
@@ -256,15 +256,15 @@ export function SessionLog({ sessionId, repo, role, title, hideKill }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Header */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface px-4 py-2">
-        <span className="font-mono text-micro uppercase tracking-wideish text-muted">
+      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-2">
+        <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
           session
         </span>
-        <span className="truncate font-mono text-micro text-fg">
+        <span className="truncate font-mono text-micro text-foreground">
           {title ?? sessionId.slice(0, 8)}
         </span>
         {role && (
-          <span className="rounded-sm border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wideish text-accent">
+          <span className="rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wideish text-primary">
             {role}
           </span>
         )}
@@ -303,24 +303,24 @@ export function SessionLog({ sessionId, repo, role, title, hideKill }: Props) {
       </header>
 
       {showSearch && (
-        <div className="shrink-0 border-b border-border bg-surface-2 px-4 py-2">
+        <div className="shrink-0 border-b border-border bg-secondary px-4 py-2">
           <div className="relative">
             <Search
               size={12}
-              className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-2"
+              className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-dim"
             />
             <input
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="filter transcript…"
-              className="w-full rounded-sm border border-border bg-bg pl-7 pr-7 py-1 font-mono text-micro text-fg focus:border-accent focus:outline-none"
+              className="w-full rounded-sm border border-border bg-background pl-7 pr-7 py-1 font-mono text-micro text-foreground focus:border-primary focus:outline-none"
             />
             {search && (
               <button
                 type="button"
                 onClick={() => setSearch("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-2 hover:text-fg"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground"
                 aria-label="clear search"
               >
                 <X size={11} />
@@ -348,14 +348,14 @@ export function SessionLog({ sessionId, repo, role, title, hideKill }: Props) {
               type="button"
               onClick={() => void loadOlder()}
               disabled={loading}
-              className="rounded-sm border border-border bg-surface px-3 py-1 font-mono text-micro uppercase tracking-wideish text-muted hover:border-accent/40 hover:text-accent disabled:opacity-50"
+              className="rounded-sm border border-border bg-card px-3 py-1 font-mono text-micro uppercase tracking-wideish text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50"
             >
               {loading ? "loading…" : "load earlier"}
             </button>
           </div>
         )}
         {entries.length === 0 ? (
-          <div className="flex h-full items-center justify-center font-mono text-micro uppercase tracking-wideish text-muted-2">
+          <div className="flex h-full items-center justify-center font-mono text-micro uppercase tracking-wideish text-fg-dim">
             no messages yet — type below to start the conversation.
           </div>
         ) : (
@@ -380,7 +380,7 @@ export function SessionLog({ sessionId, repo, role, title, hideKill }: Props) {
             const el = scrollRef.current;
             if (el) el.scrollTop = el.scrollHeight;
           }}
-          className="absolute bottom-16 right-6 inline-flex items-center gap-1 rounded-full border border-border bg-surface px-3 py-1.5 font-mono text-micro uppercase tracking-wideish text-muted shadow-lg hover:border-accent/40 hover:text-accent"
+          className="absolute bottom-16 right-6 inline-flex items-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 font-mono text-micro uppercase tracking-wideish text-muted-foreground shadow-lg hover:border-primary/40 hover:text-primary"
         >
           <ArrowDown size={11} />
           jump to latest
@@ -415,8 +415,8 @@ function ToolbarBtn({
         tone === "danger"
           ? "border-status-blocked/30 text-status-blocked hover:bg-status-blocked/10"
           : active
-            ? "border-accent bg-accent/10 text-accent"
-            : "border-border text-muted hover:border-border-strong hover:text-fg",
+            ? "border-primary bg-primary/10 text-primary"
+            : "border-border text-muted-foreground hover:border-input hover:text-foreground",
       )}
       title={label}
     >

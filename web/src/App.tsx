@@ -17,7 +17,7 @@ import Settings from "@/pages/Settings";
  */
 export default function App() {
   return (
-    <div className="min-h-full flex flex-col bg-bg text-fg">
+    <div className="min-h-full flex flex-col bg-background text-foreground">
       <HeaderShell />
       <main className="flex-1">
         <Routes>

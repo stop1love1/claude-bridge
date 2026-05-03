@@ -69,14 +69,14 @@ function colorClass(line: string): string {
     line.startsWith("--- ") ||
     line.startsWith("+++ ")
   ) {
-    return "text-muted";
+    return "text-muted-foreground";
   }
   if (line.startsWith("@@")) return "text-info";
   if (line.startsWith("+") && !line.startsWith("+++"))
     return "text-success bg-success/5";
   if (line.startsWith("-") && !line.startsWith("---"))
     return "text-destructive bg-destructive/5";
-  return "text-fg/80";
+  return "text-foreground/80";
 }
 
 interface DiffViewerProps {
@@ -144,8 +144,8 @@ function DiffViewerBody({
         <DialogTitle className="flex items-center gap-2">
           <GitBranch size={15} className="text-info" />
           diff for{" "}
-          {role && <span className="font-mono text-fg normal-case">{role}</span>}
-          <span className="text-muted text-xs font-mono">
+          {role && <span className="font-mono text-foreground normal-case">{role}</span>}
+          <span className="text-muted-foreground text-xs font-mono">
             {sessionId.slice(0, 8)}…
           </span>
         </DialogTitle>
@@ -163,7 +163,7 @@ function DiffViewerBody({
           <div className="relative flex-1">
             <Search
               size={12}
-              className="absolute left-2 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
+              className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
             />
             <Input
               value={filter}
@@ -172,18 +172,18 @@ function DiffViewerBody({
               className="pl-7"
             />
           </div>
-          <span className="text-[11px] font-mono text-muted">
+          <span className="text-[11px] font-mono text-muted-foreground">
             {filteredChunks.length}/{chunks.length} files
           </span>
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-auto rounded-sm border border-border bg-bg">
+      <div className="flex-1 min-h-0 overflow-auto rounded-sm border border-border bg-background">
         {isLoading && (
           <div className="p-6 space-y-2">
-            <div className="h-3 w-2/3 rounded bg-surface-2 animate-pulse" />
-            <div className="h-3 w-3/4 rounded bg-surface-2 animate-pulse" />
-            <div className="h-3 w-1/2 rounded bg-surface-2 animate-pulse" />
+            <div className="h-3 w-2/3 rounded bg-secondary animate-pulse" />
+            <div className="h-3 w-3/4 rounded bg-secondary animate-pulse" />
+            <div className="h-3 w-1/2 rounded bg-secondary animate-pulse" />
           </div>
         )}
         {error && (
@@ -198,7 +198,7 @@ function DiffViewerBody({
           </div>
         )}
         {isEmpty && (
-          <div className="p-6 text-sm text-muted text-center">
+          <div className="p-6 text-sm text-muted-foreground text-center">
             no changes recorded for this run.
           </div>
         )}
@@ -215,14 +215,14 @@ function DiffViewerBody({
                   <button
                     type="button"
                     onClick={() => toggle(c.path)}
-                    className="w-full flex items-center gap-1.5 px-3 py-1.5 sticky top-0 bg-surface text-left hover:bg-surface-2 z-10"
+                    className="w-full flex items-center gap-1.5 px-3 py-1.5 sticky top-0 bg-card text-left hover:bg-secondary z-10"
                   >
                     {isCollapsed ? (
-                      <ChevronRight size={11} className="text-muted" />
+                      <ChevronRight size={11} className="text-muted-foreground" />
                     ) : (
-                      <ChevronDown size={11} className="text-muted" />
+                      <ChevronDown size={11} className="text-muted-foreground" />
                     )}
-                    <span className="text-fg truncate">{c.path}</span>
+                    <span className="text-foreground truncate">{c.path}</span>
                   </button>
                   {!isCollapsed && (
                     <pre className="m-0">

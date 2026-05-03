@@ -94,11 +94,11 @@ function PermissionCard({
   const summary = summarize(req.input);
 
   return (
-    <li className="rounded-sm border border-warning/30 bg-surface p-2">
+    <li className="rounded-sm border border-warning/30 bg-card p-2">
       <div className="flex items-center justify-between gap-2 mb-1.5">
-        <div className="text-[12px] font-medium text-fg">
+        <div className="text-[12px] font-medium text-foreground">
           allow{" "}
-          <span className="font-mono text-accent">{req.tool}</span>?
+          <span className="font-mono text-primary">{req.tool}</span>?
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -118,11 +118,11 @@ function PermissionCard({
         </div>
       </div>
       {summary && (
-        <pre className="text-[10.5px] font-mono bg-bg border border-border rounded-sm p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words text-muted">
+        <pre className="text-[10.5px] font-mono bg-background border border-border rounded-sm p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
           {summary}
         </pre>
       )}
-      <label className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted select-none cursor-pointer">
+      <label className="mt-1.5 flex items-center gap-1.5 text-[10px] text-muted-foreground select-none cursor-pointer">
         <input
           type="checkbox"
           checked={remember}

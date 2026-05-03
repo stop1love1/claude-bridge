@@ -100,7 +100,7 @@ export function ChatSettingsMenu({
           title={currentMeta.label}
           className="gap-1.5"
         >
-          <ModeIcon className="h-3 w-3 text-accent" />
+          <ModeIcon className="h-3 w-3 text-primary" />
           <span className="font-medium">{currentMeta.label}</span>
         </Button>
       </DropdownMenuTrigger>
@@ -123,25 +123,25 @@ export function ChatSettingsMenu({
                 }}
                 className={cn(
                   "w-full text-left rounded-sm px-2.5 py-2 flex items-start gap-2.5 transition-colors",
-                  active ? "bg-surface text-fg" : "hover:bg-surface/60",
+                  active ? "bg-card text-foreground" : "hover:bg-card/60",
                 )}
               >
                 <Icon
                   className={cn(
                     "h-3.5 w-3.5 mt-0.5 shrink-0",
-                    active ? "text-accent" : "text-muted",
+                    active ? "text-primary" : "text-muted-foreground",
                   )}
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[12px] font-medium leading-tight text-fg">
+                  <div className="text-[12px] font-medium leading-tight text-foreground">
                     {m.label}
                   </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-muted">
+                  <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
                     {m.hint}
                   </p>
                 </div>
                 {active && (
-                  <Check className="h-3.5 w-3.5 text-fg shrink-0 mt-0.5" />
+                  <Check className="h-3.5 w-3.5 text-foreground shrink-0 mt-0.5" />
                 )}
               </button>
             );
@@ -164,23 +164,23 @@ export function ChatSettingsMenu({
                 }}
                 className={cn(
                   "w-full text-left rounded-sm px-2.5 py-1.5 flex items-center gap-2 text-[12px] font-mono transition-colors",
-                  active ? "bg-surface text-fg" : "hover:bg-surface/60 text-fg",
+                  active ? "bg-card text-foreground" : "hover:bg-card/60 text-foreground",
                 )}
               >
                 <span className="flex-1 truncate">{m.label}</span>
-                {active && <Check className="h-3 w-3 text-accent" />}
+                {active && <Check className="h-3 w-3 text-primary" />}
               </button>
             );
           })}
         </div>
         <DropdownMenuSeparator />
         <div className="px-3 py-2 space-y-2">
-          <div className="flex items-center gap-1.5 text-micro uppercase tracking-wideish text-muted">
+          <div className="flex items-center gap-1.5 text-micro uppercase tracking-wideish text-muted-foreground">
             <SettingsIcon className="h-3 w-3" />
             <span>Tool gates</span>
           </div>
           <label className="block">
-            <span className="block text-[10px] uppercase tracking-wideish text-muted mb-1">
+            <span className="block text-[10px] uppercase tracking-wideish text-muted-foreground mb-1">
               Allowed tools (csv)
             </span>
             <Input
@@ -195,7 +195,7 @@ export function ChatSettingsMenu({
             />
           </label>
           <label className="block">
-            <span className="block text-[10px] uppercase tracking-wideish text-muted mb-1">
+            <span className="block text-[10px] uppercase tracking-wideish text-muted-foreground mb-1">
               Disallowed tools (csv)
             </span>
             <Input
@@ -209,7 +209,7 @@ export function ChatSettingsMenu({
               }
             />
           </label>
-          <p className="text-[10px] text-muted">
+          <p className="text-[10px] text-muted-foreground">
             Tip: tool gates apply to the next message; current run keeps
             the gates it was launched with.
           </p>

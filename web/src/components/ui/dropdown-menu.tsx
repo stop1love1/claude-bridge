@@ -18,7 +18,7 @@ export const DropdownMenuSubTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none",
-      "focus:bg-surface data-[state=open]:bg-surface",
+      "focus:bg-card data-[state=open]:bg-card",
       inset && "pl-8",
       className,
     )}
@@ -72,7 +72,7 @@ export const DropdownMenuItem = React.forwardRef<
     ref={ref}
     className={cn(
       "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-xs outline-none transition-colors",
-      "focus:bg-surface focus:text-fg",
+      "focus:bg-card focus:text-foreground",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       "[&_svg]:size-3.5 [&_svg]:shrink-0",
       inset && "pl-8",
@@ -91,7 +91,7 @@ export const DropdownMenuCheckboxItem = React.forwardRef<
     ref={ref}
     className={cn(
       "relative flex cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-xs outline-none transition-colors",
-      "focus:bg-surface focus:text-fg data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "focus:bg-card focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}
     checked={checked}
@@ -115,7 +115,7 @@ export const DropdownMenuRadioItem = React.forwardRef<
     ref={ref}
     className={cn(
       "relative flex cursor-default select-none items-center gap-2 rounded-sm py-1.5 pl-8 pr-2 text-xs outline-none transition-colors",
-      "focus:bg-surface focus:text-fg data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "focus:bg-card focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}
     {...props}
@@ -137,7 +137,7 @@ export const DropdownMenuLabel = React.forwardRef<
   <DropdownMenuPrimitive.Label
     ref={ref}
     className={cn(
-      "px-2 py-1.5 text-[10px] uppercase tracking-wideish font-medium text-muted",
+      "px-2 py-1.5 text-[10px] uppercase tracking-wideish font-medium text-muted-foreground",
       inset && "pl-8",
       className,
     )}

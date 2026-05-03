@@ -22,14 +22,14 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        "rounded-sm border border-dashed border-border bg-surface/50 p-8 text-center",
+        "rounded-sm border border-dashed border-border bg-card/50 p-8 text-center",
         className,
       )}
     >
       <Icon size={28} className="mx-auto mb-3 opacity-40" aria-hidden="true" />
-      <p className="text-small font-medium text-fg mb-1">{title}</p>
+      <p className="text-small font-medium text-foreground mb-1">{title}</p>
       {hint && (
-        <p className="text-small text-muted mb-4 max-w-sm mx-auto">{hint}</p>
+        <p className="text-small text-muted-foreground mb-4 max-w-sm mx-auto">{hint}</p>
       )}
       {action && <div className="mt-2">{action}</div>}
     </div>

@@ -37,12 +37,18 @@ export function writePref(pref: ThemePref): void {
   }
 }
 
-/** Apply a resolved theme to the document. Idempotent. */
+/** Apply a resolved theme to the document. Idempotent.
+ *
+ * The palette is keyed off `data-theme` (matches the main branch's
+ * shadcn-token CSS). The `dark` class is also kept in sync because
+ * Tailwind's `darkMode: ["selector", ':root[data-theme="dark"]']`
+ * resolves either way — but an older session that wrote `class="dark"`
+ * shouldn't drift, so we strip it cleanly each apply. */
 export function applyTheme(resolved: ThemeResolved): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
-  if (resolved === "dark") root.classList.add("dark");
-  else root.classList.remove("dark");
+  // Remove any stale class-based marker from a previous build.
+  root.classList.remove("dark");
   root.style.colorScheme = resolved;
   root.setAttribute("data-theme", resolved);
 }

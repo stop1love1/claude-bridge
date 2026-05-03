@@ -76,25 +76,25 @@ export function GlobalPermissionDialog() {
         <AlertDialogHeader>
           <AlertDialogTitle>
             allow{" "}
-            <span className="font-mono text-accent normal-case">
+            <span className="font-mono text-primary normal-case">
               {current.tool}
             </span>
             ?
           </AlertDialogTitle>
           <AlertDialogDescription>
             Claude is requesting permission to run this tool.{" "}
-            <span className="font-mono text-[11px] text-muted">
+            <span className="font-mono text-[11px] text-muted-foreground">
               session {current.sessionId.slice(0, 8)}…
             </span>
             {"\n"}Esc keeps the popup open. Click Deny to refuse.
           </AlertDialogDescription>
         </AlertDialogHeader>
 
-        <pre className="text-[11px] font-mono bg-bg border border-border rounded-sm p-2 max-h-56 overflow-auto whitespace-pre-wrap break-words">
+        <pre className="text-[11px] font-mono bg-background border border-border rounded-sm p-2 max-h-56 overflow-auto whitespace-pre-wrap break-words">
           {summarize(current.input) || "(no input)"}
         </pre>
 
-        <label className="mt-3 flex items-center gap-2 text-[11px] text-muted select-none">
+        <label className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground select-none">
           <input
             type="checkbox"
             checked={remember}
@@ -118,7 +118,7 @@ export function GlobalPermissionDialog() {
         </AlertDialogFooter>
 
         {sorted.length > 1 && (
-          <p className="mt-2 text-[10px] text-muted text-right">
+          <p className="mt-2 text-[10px] text-muted-foreground text-right">
             +{sorted.length - 1} more pending…
           </p>
         )}

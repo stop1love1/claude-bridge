@@ -27,10 +27,10 @@ export default function Column({ section, count, children }: Props) {
     <section className="flex min-w-0 flex-col">
       <header className="mb-4 flex items-baseline gap-3 border-b border-border pb-2">
         <span className={cn("h-1.5 w-1.5 self-center rounded-full", ACCENT[section])} />
-        <h2 className="font-mono text-micro uppercase tracking-wideish text-fg">
+        <h2 className="font-mono text-micro uppercase tracking-wideish text-foreground">
           {LABEL[section]}
         </h2>
-        <span className="ml-auto font-mono text-micro tabular-nums text-muted-2">
+        <span className="ml-auto font-mono text-micro tabular-nums text-fg-dim">
           {String(count).padStart(2, "0")}
         </span>
       </header>

@@ -191,7 +191,7 @@ function CommandPaletteInner({
     const active = idx === effCursor;
     const base = cn(
       "flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors",
-      active ? "bg-accent/15" : "hover:bg-surface-2",
+      active ? "bg-primary/15" : "hover:bg-secondary",
     );
     const optionProps = {
       role: "option" as const,
@@ -203,10 +203,10 @@ function CommandPaletteInner({
       const Icon = it.icon;
       return (
         <div key={`a-${it.id}`} className={base} {...optionProps} onClick={it.run}>
-          <Icon size={14} className="text-muted shrink-0" />
+          <Icon size={14} className="text-muted-foreground shrink-0" />
           <span className="flex-1 text-sm">{it.label}</span>
           {it.hint && (
-            <kbd className="text-[10px] text-muted font-mono">{it.hint}</kbd>
+            <kbd className="text-[10px] text-muted-foreground font-mono">{it.hint}</kbd>
           )}
         </div>
       );
@@ -216,10 +216,10 @@ function CommandPaletteInner({
       const t = it.task;
       return (
         <div key={`t-${t.id}`} className={base} {...optionProps} onClick={it.run}>
-          <ListTodo size={14} className="text-accent shrink-0" />
+          <ListTodo size={14} className="text-primary shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="text-sm truncate">{t.title}</div>
-            <div className="text-[10px] text-muted font-mono">
+            <div className="text-[10px] text-muted-foreground font-mono">
               {t.id} · {t.section}
             </div>
           </div>
@@ -237,14 +237,14 @@ function CommandPaletteInner({
           {...optionProps}
           onClick={it.run}
         >
-          <RoleIcon size={14} className="text-muted shrink-0" />
+          <RoleIcon size={14} className="text-muted-foreground shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="text-sm truncate">
               {s.preview || (
-                <span className="text-muted italic">(no preview)</span>
+                <span className="text-muted-foreground italic">(no preview)</span>
               )}
             </div>
-            <div className="text-[10px] text-muted font-mono truncate">
+            <div className="text-[10px] text-muted-foreground font-mono truncate">
               {s.sessionId.slice(0, 8)}… @ {s.repo}
               {s.link ? ` · ${s.link.role} ↔ ${s.link.taskId}` : " · orphan"}
             </div>
@@ -259,7 +259,7 @@ function CommandPaletteInner({
         <Layers size={14} className="text-info shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="text-sm truncate">{a.name}</div>
-          <div className="text-[10px] text-muted font-mono truncate">
+          <div className="text-[10px] text-muted-foreground font-mono truncate">
             {a.path}
           </div>
         </div>
@@ -286,9 +286,9 @@ function CommandPaletteInner({
         className="fixed inset-0 bg-black/60 backdrop-blur-sm pointer-events-auto"
         aria-hidden="true"
       />
-      <div className="relative w-full max-w-xl bg-surface border border-border rounded-md shadow-2xl overflow-hidden animate-fade-up pointer-events-auto">
+      <div className="relative w-full max-w-xl bg-card border border-border rounded-md shadow-2xl overflow-hidden animate-fade-up pointer-events-auto">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
-          <Search size={14} className="text-muted shrink-0" aria-hidden="true" />
+          <Search size={14} className="text-muted-foreground shrink-0" aria-hidden="true" />
           <input
             ref={inputRef}
             value={q}
@@ -305,7 +305,7 @@ function CommandPaletteInner({
             aria-autocomplete="list"
             aria-label="Search"
           />
-          <kbd className="text-[10px] text-muted font-mono">Esc</kbd>
+          <kbd className="text-[10px] text-muted-foreground font-mono">Esc</kbd>
         </div>
         <div
           id="cmdk-listbox"
@@ -314,12 +314,12 @@ function CommandPaletteInner({
           className="max-h-96 overflow-y-auto"
         >
           {items.length === 0 ? (
-            <div className="p-6 text-center text-xs text-muted">No matches</div>
+            <div className="p-6 text-center text-xs text-muted-foreground">No matches</div>
           ) : (
             items.map((it, i) => renderItem(it, i))
           )}
         </div>
-        <div className="px-3 py-1.5 border-t border-border bg-surface-2 text-[10px] text-muted flex gap-3">
+        <div className="px-3 py-1.5 border-t border-border bg-secondary text-[10px] text-muted-foreground flex gap-3">
           <span>{groupedCount.actions} actions</span>
           <span>{groupedCount.tasks} tasks</span>
           <span>{groupedCount.sessions} sessions</span>

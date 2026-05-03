@@ -421,7 +421,7 @@ function MessageComposerInner({
         e.preventDefault();
         void submit();
       }}
-      className="px-2 pt-1.5 pb-2 relative bg-surface"
+      className="px-2 pt-1.5 pb-2 relative bg-card"
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) {
           e.preventDefault();
@@ -439,17 +439,17 @@ function MessageComposerInner({
       />
 
       {uploadPct && (
-        <div className="mb-2 rounded-sm border border-border bg-surface-2 px-2 py-1.5">
-          <div className="flex items-center gap-1.5 text-[10.5px] text-muted mb-1">
-            <Loader2 size={11} className="animate-spin text-accent" />
+        <div className="mb-2 rounded-sm border border-border bg-secondary px-2 py-1.5">
+          <div className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground mb-1">
+            <Loader2 size={11} className="animate-spin text-primary" />
             <span className="font-medium truncate flex-1 min-w-0">
               {uploadPct.name}
             </span>
             <span className="tabular-nums shrink-0">{uploadPct.pct}%</span>
           </div>
-          <div className="h-1 rounded-full overflow-hidden bg-bg">
+          <div className="h-1 rounded-full overflow-hidden bg-background">
             <div
-              className="h-full bg-accent transition-[width] duration-150"
+              className="h-full bg-primary transition-[width] duration-150"
               style={{ width: `${uploadPct.pct}%` }}
             />
           </div>
@@ -458,11 +458,11 @@ function MessageComposerInner({
 
       <div
         className={cn(
-          "relative rounded-md border bg-bg transition-colors overflow-visible",
+          "relative rounded-md border bg-background transition-colors overflow-visible",
           focused
-            ? "border-accent/60 shadow-[0_0_0_3px_rgba(232,116,61,0.12)]"
+            ? "border-primary/60 ring-2 ring-primary/20"
             : dragOver
-              ? "border-accent border-dashed"
+              ? "border-primary border-dashed"
               : "border-border",
         )}
       >
@@ -471,23 +471,23 @@ function MessageComposerInner({
             {attachments.map((a) => (
               <li
                 key={a.path}
-                className="group inline-flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-sm bg-surface-2 border border-border text-[10.5px]"
+                className="group inline-flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-sm bg-secondary border border-border text-[10.5px]"
               >
                 {a.isImage ? (
                   <ImageIcon size={11} className="text-success" />
                 ) : (
-                  <FileText size={11} className="text-muted" />
+                  <FileText size={11} className="text-muted-foreground" />
                 )}
                 <span className="font-medium truncate max-w-[180px]">
                   {a.name}
                 </span>
-                <span className="text-muted tabular-nums">
+                <span className="text-muted-foreground tabular-nums">
                   {(a.size / 1024).toFixed(1)} KB
                 </span>
                 <button
                   type="button"
                   onClick={() => removeAttachment(a.path)}
-                  className="text-muted hover:text-destructive p-0.5 rounded-sm"
+                  className="text-muted-foreground hover:text-destructive p-0.5 rounded-sm"
                   aria-label="Remove attachment"
                 >
                   <X size={10} />
@@ -509,7 +509,7 @@ function MessageComposerInner({
             onBlur={() => setFocused(false)}
             placeholder={placeholder}
             rows={1}
-            className="w-full bg-transparent border-0 rounded-t-md pl-3 pr-9 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none leading-relaxed placeholder:text-muted overflow-y-hidden"
+            className="w-full bg-transparent border-0 rounded-t-md pl-3 pr-9 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none leading-relaxed placeholder:text-muted-foreground overflow-y-hidden"
             style={{ minHeight: `${MIN_H}px`, maxHeight: `${MAX_H}px` }}
           />
           {/* MicButton placeholder — voice input deferred. */}
@@ -518,7 +518,7 @@ function MessageComposerInner({
             disabled
             title="Voice input not available in this build"
             aria-label="Voice input (disabled)"
-            className="absolute right-1.5 top-1.5 inline-flex items-center justify-center h-6 w-6 rounded-sm text-muted/50 cursor-not-allowed"
+            className="absolute right-1.5 top-1.5 inline-flex items-center justify-center h-6 w-6 rounded-sm text-muted-foreground/50 cursor-not-allowed"
           >
             <Mic size={12} />
           </button>
@@ -530,11 +530,11 @@ function MessageComposerInner({
             onMention={() => insertAtCaret("@")}
           />
           {uploading && (
-            <Loader2 size={12} className="text-muted animate-spin" />
+            <Loader2 size={12} className="text-muted-foreground animate-spin" />
           )}
 
           <span
-            className="hidden sm:inline text-[10px] text-muted ml-1 truncate"
+            className="hidden sm:inline text-[10px] text-muted-foreground ml-1 truncate"
             aria-hidden="true"
           >
             Enter to send · Shift+Enter newline · @ mention · / commands

@@ -33,7 +33,7 @@ export default function StatusDot({
         className={cn("inline-block rounded-full shrink-0", sz, COLOR[status])}
       />
       {label && (
-        <span className="font-mono text-micro uppercase tracking-wideish text-muted">
+        <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
           {status}
         </span>
       )}

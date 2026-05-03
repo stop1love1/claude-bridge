@@ -11,9 +11,9 @@ const badgeVariants = cva(
     variants: {
       variant: {
         default: "border-transparent bg-primary text-primary-foreground",
-        accent:  "border-accent/30 bg-accent/15 text-accent",
-        outline: "border-border text-fg",
-        muted:   "border-border bg-surface text-muted",
+        accent:  "border-primary/30 bg-primary/15 text-primary",
+        outline: "border-border text-foreground",
+        muted:   "border-border bg-card text-muted-foreground",
         "status-todo":    "border-status-todo/30 bg-status-todo/15 text-status-todo",
         "status-doing":   "border-status-doing/30 bg-status-doing/15 text-status-doing",
         "status-blocked": "border-status-blocked/30 bg-status-blocked/15 text-status-blocked",

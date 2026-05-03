@@ -35,7 +35,7 @@ export const AlertDialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         "fixed left-1/2 top-1/2 z-50 w-[440px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2",
-        "rounded-sm border border-border bg-surface text-fg shadow-2xl",
+        "rounded-sm border border-border bg-card text-foreground shadow-2xl",
         "p-5 outline-none animate-fade-up",
         className,
       )}
@@ -66,7 +66,7 @@ export const AlertDialogTitle = React.forwardRef<
   <AlertDialogPrimitive.Title
     ref={ref}
     className={cn(
-      "font-mono text-micro uppercase tracking-wideish text-muted",
+      "font-mono text-micro uppercase tracking-wideish text-muted-foreground",
       className,
     )}
     {...props}
@@ -81,7 +81,7 @@ export const AlertDialogDescription = React.forwardRef<
   <AlertDialogPrimitive.Description
     ref={ref}
     className={cn(
-      "text-small text-fg leading-relaxed whitespace-pre-wrap",
+      "text-small text-foreground leading-relaxed whitespace-pre-wrap",
       className,
     )}
     {...props}
@@ -119,7 +119,7 @@ export const AlertDialogCancel = React.forwardRef<
     ref={ref}
     className={cn(
       "inline-flex items-center justify-center h-8 px-3 rounded-md text-xs font-medium transition-colors",
-      "border border-border bg-bg hover:bg-surface hover:text-fg",
+      "border border-border bg-background hover:bg-card hover:text-foreground",
       "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       className,
     )}

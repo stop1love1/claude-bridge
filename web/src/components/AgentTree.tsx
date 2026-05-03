@@ -31,13 +31,13 @@ import { cn } from "@/lib/cn";
 
 const ROLE_COLOR: Record<string, string> = {
   coordinator: "text-status-doing",
-  reviewer: "text-accent",
+  reviewer: "text-primary",
   fixer: "text-status-done",
-  coder: "text-accent",
-  planner: "text-muted",
-  surveyor: "text-muted",
-  researcher: "text-muted",
-  writer: "text-muted",
+  coder: "text-primary",
+  planner: "text-muted-foreground",
+  surveyor: "text-muted-foreground",
+  researcher: "text-muted-foreground",
+  writer: "text-muted-foreground",
   "ui-tester": "text-status-done",
   tester: "text-status-done",
   qa: "text-status-done",
@@ -45,7 +45,7 @@ const ROLE_COLOR: Record<string, string> = {
   "api-builder": "text-status-doing",
   "ui-builder": "text-status-doing",
   "style-critic": "text-status-blocked",
-  "semantic-verifier": "text-accent",
+  "semantic-verifier": "text-primary",
 };
 
 function normalizeRole(role: string): string {
@@ -53,7 +53,7 @@ function normalizeRole(role: string): string {
 }
 
 function roleColor(role: string): string {
-  return ROLE_COLOR[normalizeRole(role)] ?? "text-muted";
+  return ROLE_COLOR[normalizeRole(role)] ?? "text-muted-foreground";
 }
 
 function RoleIcon({ role, size = 12 }: { role: string; size?: number }) {
@@ -163,19 +163,19 @@ function AgentNode({
           className={cn(
             "flex w-full items-center gap-2 rounded-sm border px-2.5 py-1.5 text-left font-mono text-xs transition-colors",
             active
-              ? "border-accent/60 bg-accent/10 ring-1 ring-accent/30"
-              : "border-border bg-surface hover:bg-surface-2",
+              ? "border-primary/60 bg-primary/10 ring-1 ring-primary/30"
+              : "border-border bg-card hover:bg-secondary",
           )}
           title={`${run.role} @ ${run.repo}\n${run.sessionId}`}
         >
           <span className={cn("shrink-0", roleColor(run.role))}>
             <RoleIcon role={run.role} size={12} />
           </span>
-          <span className="shrink-0 font-semibold text-fg">{run.role}</span>
-          <span className="truncate text-muted">@ {run.repo || "—"}</span>
+          <span className="shrink-0 font-semibold text-foreground">{run.role}</span>
+          <span className="truncate text-muted-foreground">@ {run.repo || "—"}</span>
           {run.worktreeBranch && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[9px] text-muted"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-secondary px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground"
               title={`branch: ${run.worktreeBranch}`}
             >
               <GitBranch size={9} className="opacity-70" />
@@ -183,7 +183,7 @@ function AgentNode({
             </span>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-2">
-            <span className="font-mono text-[10px] tabular-nums text-muted-2">
+            <span className="font-mono text-[10px] tabular-nums text-fg-dim">
               {dur}
             </span>
             <StatusDot status={run.status} size="xs" />
@@ -196,7 +196,7 @@ function AgentNode({
               e.stopPropagation();
               onKill!(run);
             }}
-            className="absolute -right-1 -top-1 rounded-full border border-border bg-surface p-0.5 text-muted opacity-0 hover:bg-status-blocked/10 hover:text-status-blocked group-hover/node:opacity-100"
+            className="absolute -right-1 -top-1 rounded-full border border-border bg-card p-0.5 text-muted-foreground opacity-0 hover:bg-status-blocked/10 hover:text-status-blocked group-hover/node:opacity-100"
             aria-label={`kill ${run.role}`}
             title={`kill ${run.role}`}
           >
@@ -235,7 +235,7 @@ function AgentTreeInner({
   const tree = useMemo(() => buildTree(meta?.runs ?? []), [meta?.runs]);
   if (tree.length === 0) {
     return (
-      <p className="font-mono text-micro tracking-wideish text-muted-2">
+      <p className="font-mono text-micro tracking-wideish text-fg-dim">
         no sessions linked yet.
       </p>
     );

@@ -158,7 +158,7 @@ export function AppSettingsDialog({ app, onClose }: Props) {
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            edit <span className="font-mono text-fg">{app.name}</span>
+            edit <span className="font-mono text-foreground">{app.name}</span>
           </DialogTitle>
           <DialogDescription>
             git workflow, retry budgets, verify commands, and extras for the
@@ -255,7 +255,7 @@ export function AppSettingsDialog({ app, onClose }: Props) {
 
           {/* ─── Retry ─── */}
           <TabsContent value="retry" className="grid gap-2">
-            <p className="text-[11px] text-muted -mt-1">
+            <p className="text-[11px] text-muted-foreground -mt-1">
               per-gate attempt cap. unset = bridge default (1). higher budgets
               unlock the strategy ladder.
             </p>
@@ -267,10 +267,10 @@ export function AppSettingsDialog({ app, onClose }: Props) {
                   className="flex items-center justify-between gap-3 rounded-sm border border-border p-2"
                 >
                   <div className="min-w-0">
-                    <div className="font-mono text-micro uppercase tracking-wideish text-fg">
+                    <div className="font-mono text-micro uppercase tracking-wideish text-foreground">
                       {gate.label}
                     </div>
-                    <div className="text-[11px] text-muted">{gate.hint}</div>
+                    <div className="text-[11px] text-muted-foreground">{gate.hint}</div>
                   </div>
                   <select
                     value={String(value)}
@@ -278,7 +278,7 @@ export function AppSettingsDialog({ app, onClose }: Props) {
                       const n = parseInt(e.target.value, 10);
                       setRetry({ ...retry, [gate.key]: n });
                     }}
-                    className="h-7 rounded-sm border border-border bg-bg px-2 font-mono text-xs"
+                    className="h-7 rounded-sm border border-border bg-background px-2 font-mono text-xs"
                   >
                     {Array.from({ length: MAX_RETRY_PER_GATE + 1 }, (_, i) => (
                       <option key={i} value={i}>
@@ -293,7 +293,7 @@ export function AppSettingsDialog({ app, onClose }: Props) {
 
           {/* ─── Verify ─── */}
           <TabsContent value="verify" className="grid gap-3">
-            <p className="text-[11px] text-muted -mt-1">
+            <p className="text-[11px] text-muted-foreground -mt-1">
               shell commands the verify-chain runs after each successful
               child. leave blank to skip a step.
             </p>
@@ -317,7 +317,7 @@ export function AppSettingsDialog({ app, onClose }: Props) {
 
           {/* ─── Extras ─── */}
           <TabsContent value="extras" className="grid gap-2">
-            <p className="text-[11px] text-muted">
+            <p className="text-[11px] text-muted-foreground">
               freeform JSON object. the bridge round-trips this verbatim;
               consumers like the coordinator prompt may read it.
             </p>
@@ -399,10 +399,10 @@ function SwitchRow({
         className="mt-0.5 accent-accent"
       />
       <span className="flex-1 min-w-0">
-        <span className="block font-mono text-micro uppercase tracking-wideish text-fg">
+        <span className="block font-mono text-micro uppercase tracking-wideish text-foreground">
           {label}
         </span>
-        <span className="block text-[11px] text-muted">{hint}</span>
+        <span className="block text-[11px] text-muted-foreground">{hint}</span>
       </span>
     </label>
   );

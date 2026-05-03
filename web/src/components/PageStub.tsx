@@ -10,10 +10,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 export function PageStub({ title }: { title: string }) {
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-12">
-      <h1 className="font-mono text-display font-semibold tracking-tightish text-fg mb-1">
+      <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground mb-1">
         {title.toLowerCase()}
       </h1>
-      <p className="mb-8 text-small text-muted">
+      <p className="mb-8 text-small text-muted-foreground">
         page scaffold — implementation pending
       </p>
       <EmptyState

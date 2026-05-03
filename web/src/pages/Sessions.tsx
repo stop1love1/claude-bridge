@@ -60,7 +60,7 @@ export default function Sessions() {
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col">
       {/* Mobile tab bar */}
-      <div className="flex shrink-0 border-b border-border bg-surface md:hidden">
+      <div className="flex shrink-0 border-b border-border bg-card md:hidden">
         <Tabs
           value={mobileTab}
           onValueChange={(v) => setMobileTab(v as "browser" | "chat")}
@@ -99,7 +99,7 @@ export default function Sessions() {
           }
         >
           {isLoading && sessions.length === 0 ? (
-            <div className="flex h-full w-full items-center justify-center font-mono text-micro tracking-wideish text-muted-2">
+            <div className="flex h-full w-full items-center justify-center font-mono text-micro tracking-wideish text-fg-dim">
               loading sessions…
             </div>
           ) : (

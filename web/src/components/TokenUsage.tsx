@@ -67,19 +67,19 @@ export function TokenUsage({
     return (
       <span
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2 px-1.5 h-6 text-[10px] font-mono text-muted",
+          "inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary px-1.5 h-6 text-[10px] font-mono text-muted-foreground",
           className,
         )}
         title={tooltip}
       >
         <Coins size={10} className="text-info" />
-        <span className="inline-flex items-center gap-0.5 text-fg">
+        <span className="inline-flex items-center gap-0.5 text-foreground">
           {formatTokens(t.input)}
-          <span className="text-muted">in</span>
+          <span className="text-muted-foreground">in</span>
         </span>
-        <span className="inline-flex items-center gap-0.5 text-fg">
+        <span className="inline-flex items-center gap-0.5 text-foreground">
           {formatTokens(t.output)}
-          <span className="text-muted">out</span>
+          <span className="text-muted-foreground">out</span>
         </span>
         {t.cacheRead > 0 && (
           <span className="inline-flex items-center gap-0.5 opacity-80">
@@ -121,7 +121,7 @@ export function TokenUsage({
         </span>
       )}
       {t.turns > 0 && (
-        <span className="text-muted font-mono">
+        <span className="text-muted-foreground font-mono">
           {t.turns} {t.turns === 1 ? "turn" : "turns"}
         </span>
       )}

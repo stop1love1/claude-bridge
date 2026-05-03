@@ -35,28 +35,28 @@ export default function TaskCard({ task, index }: Props) {
       to={`/tasks/${task.taskId}`}
       style={{ animationDelay: delay }}
       className={cn(
-        "group block rounded-sm border border-border bg-surface p-4",
+        "group block rounded-sm border border-border bg-card p-4",
         "animate-fade-up transition-all duration-200",
-        "hover:-translate-y-px hover:border-border-strong hover:bg-surface-2",
+        "hover:-translate-y-px hover:border-input hover:bg-secondary",
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <span className="font-mono text-micro tracking-wideish text-muted-2">
+        <span className="font-mono text-micro tracking-wideish text-fg-dim">
           {task.taskId}
         </span>
-        <span className="font-mono text-micro tabular-nums text-muted-2">
+        <span className="font-mono text-micro tabular-nums text-fg-dim">
           {relTime(task.createdAt)}
         </span>
       </div>
 
-      <h3 className="mt-2 font-sans text-base font-medium leading-snug text-fg group-hover:text-accent">
+      <h3 className="mt-2 font-sans text-base font-medium leading-snug text-foreground group-hover:text-primary">
         {task.taskTitle || (
-          <span className="italic text-muted">untitled task</span>
+          <span className="italic text-muted-foreground">untitled task</span>
         )}
       </h3>
 
       {task.taskBody && (
-        <p className="mt-2 line-clamp-3 text-small text-muted">
+        <p className="mt-2 line-clamp-3 text-small text-muted-foreground">
           {preview(task.taskBody)}
         </p>
       )}
@@ -72,12 +72,12 @@ export default function TaskCard({ task, index }: Props) {
               />
             ))}
             {runs.length > 8 && (
-              <span className="font-mono text-micro text-muted-2">
+              <span className="font-mono text-micro text-fg-dim">
                 +{runs.length - 8}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3 font-mono text-micro tracking-wideish text-muted-2">
+          <div className="flex items-center gap-3 font-mono text-micro tracking-wideish text-fg-dim">
             {task.taskApp && (
               <span className="truncate" title={task.taskApp}>
                 {task.taskApp}

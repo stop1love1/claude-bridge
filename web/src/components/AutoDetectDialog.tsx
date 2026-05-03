@@ -146,12 +146,12 @@ export function AutoDetectDialog({ open, onOpenChange }: Props) {
         </div>
 
         {detect.isPending && (
-          <div className="rounded-sm border border-border bg-surface p-4 text-center">
+          <div className="rounded-sm border border-border bg-card p-4 text-center">
             <FolderSearch
               size={20}
-              className="mx-auto mb-2 animate-pulse text-accent"
+              className="mx-auto mb-2 animate-pulse text-primary"
             />
-            <p className="text-small text-muted">scanning…</p>
+            <p className="text-small text-muted-foreground">scanning…</p>
           </div>
         )}
 
@@ -163,10 +163,10 @@ export function AutoDetectDialog({ open, onOpenChange }: Props) {
         )}
 
         {!detect.isPending && rows.length === 0 && !errorMsg && (
-          <div className="rounded-sm border border-dashed border-border bg-surface/50 p-6 text-center text-small text-muted">
+          <div className="rounded-sm border border-dashed border-border bg-card/50 p-6 text-center text-small text-muted-foreground">
             no candidates found.
             {deferred && (
-              <p className="mt-2 font-mono text-[10px] tracking-wideish text-muted-2">
+              <p className="mt-2 font-mono text-[10px] tracking-wideish text-fg-dim">
                 {deferred}
               </p>
             )}
@@ -176,8 +176,8 @@ export function AutoDetectDialog({ open, onOpenChange }: Props) {
         {rows.length > 0 && (
           <>
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-muted">
-                <span className="text-fg">{newRows.length}</span> new
+              <span className="text-muted-foreground">
+                <span className="text-foreground">{newRows.length}</span> new
                 {newRows.length === 1 ? " candidate" : " candidates"}
               </span>
               {newRows.length > 1 && (
@@ -188,7 +188,7 @@ export function AutoDetectDialog({ open, onOpenChange }: Props) {
                     onChange={(e) => toggleAll(e.target.checked)}
                     className="h-3.5 w-3.5 accent-accent"
                   />
-                  <span className="font-mono text-micro uppercase tracking-wideish text-muted">
+                  <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
                     select all
                   </span>
                 </label>
@@ -229,22 +229,22 @@ export function AutoDetectDialog({ open, onOpenChange }: Props) {
                         className="h-6 max-w-[200px]"
                       />
                       {row.candidate.alreadyRegistered && (
-                        <span className="rounded-full bg-muted/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wideish text-muted">
+                        <span className="rounded-full bg-muted/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wideish text-muted-foreground">
                           registered
                         </span>
                       )}
-                      <span className="rounded-full border border-border bg-surface px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-muted">
+                      <span className="rounded-full border border-border bg-card px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-muted-foreground">
                         score {row.candidate.score}
                       </span>
                     </div>
                     <div
-                      className="mt-1 truncate font-mono text-[11px] text-muted"
+                      className="mt-1 truncate font-mono text-[11px] text-muted-foreground"
                       title={row.candidate.absolutePath}
                     >
                       {row.candidate.rawPath}
                     </div>
                     {row.candidate.description && (
-                      <p className="mt-1 line-clamp-2 text-[11px] text-fg/80">
+                      <p className="mt-1 line-clamp-2 text-[11px] text-foreground/80">
                         {row.candidate.description}
                       </p>
                     )}

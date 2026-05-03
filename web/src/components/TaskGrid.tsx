@@ -145,7 +145,7 @@ export default function TaskGrid({ newTaskTrigger }: Props) {
         <div className="relative min-w-[220px] flex-1">
           <Search
             size={12}
-            className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-2"
+            className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-dim"
           />
           <Input
             value={query}
@@ -157,7 +157,7 @@ export default function TaskGrid({ newTaskTrigger }: Props) {
             <button
               type="button"
               onClick={() => setQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-2 hover:text-fg"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground"
               aria-label="clear search"
             >
               <X size={11} />
@@ -171,7 +171,7 @@ export default function TaskGrid({ newTaskTrigger }: Props) {
               <Filter size={12} />
               sections
               {sectionFilter.size < SECTIONS.length && (
-                <span className="rounded-full bg-accent px-1 text-[10px] text-bg">
+                <span className="rounded-full bg-primary px-1 text-[10px] text-bg">
                   {sectionFilter.size}
                 </span>
               )}
@@ -239,7 +239,7 @@ export default function TaskGrid({ newTaskTrigger }: Props) {
         </div>
       )}
       {isLoading && (
-        <div className="font-mono text-micro tracking-wideish text-muted">
+        <div className="font-mono text-micro tracking-wideish text-muted-foreground">
           loading sessions…
         </div>
       )}
@@ -260,7 +260,7 @@ export default function TaskGrid({ newTaskTrigger }: Props) {
       )}
 
       {sorted.length === 0 && !isLoading && (
-        <div className="rounded-sm border border-dashed border-border bg-surface/50 p-10 text-center font-mono text-micro tracking-wideish text-muted">
+        <div className="rounded-sm border border-dashed border-border bg-card/50 p-10 text-center font-mono text-micro tracking-wideish text-muted-foreground">
           no tasks match these filters.
         </div>
       )}
@@ -292,16 +292,16 @@ function KanbanColumn({
             ACCENT[section],
           )}
         />
-        <h2 className="font-mono text-micro uppercase tracking-wideish text-fg">
+        <h2 className="font-mono text-micro uppercase tracking-wideish text-foreground">
           {SECTION_LABEL[section]}
         </h2>
-        <span className="ml-auto font-mono text-micro tabular-nums text-muted-2">
+        <span className="ml-auto font-mono text-micro tabular-nums text-fg-dim">
           {String(tasks.length).padStart(2, "0")}
         </span>
       </header>
       <div className="flex flex-col gap-3">
         {tasks.length === 0 ? (
-          <p className="rounded-sm border border-dashed border-border px-3 py-4 font-mono text-micro tracking-wideish text-muted-2">
+          <p className="rounded-sm border border-dashed border-border px-3 py-4 font-mono text-micro tracking-wideish text-fg-dim">
             empty.
           </p>
         ) : (
@@ -314,7 +314,7 @@ function KanbanColumn({
 
 function FlatList({ tasks }: { tasks: TaskMeta[] }) {
   return (
-    <ul className="divide-y divide-border rounded-sm border border-border bg-surface">
+    <ul className="divide-y divide-border rounded-sm border border-border bg-card">
       {tasks.map((t, i) => (
         <li key={t.taskId} className="px-4 py-3">
           <TaskRowFlat task={t} index={i} />
@@ -400,31 +400,31 @@ function TaskCardFull({ task, index }: { task: TaskMeta; index: number }) {
       to={`/tasks/${task.taskId}`}
       style={{ animationDelay: delay }}
       className={cn(
-        "group block rounded-sm border border-border bg-surface p-4",
+        "group block rounded-sm border border-border bg-card p-4",
         "animate-fade-up transition-all duration-200",
-        "hover:-translate-y-px hover:border-border-strong hover:bg-surface-2",
+        "hover:-translate-y-px hover:border-input hover:bg-secondary",
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <span className="font-mono text-micro tracking-wideish text-muted-2">
+        <span className="font-mono text-micro tracking-wideish text-fg-dim">
           {task.taskId}
         </span>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-micro tabular-nums text-muted-2">
+          <span className="font-mono text-micro tabular-nums text-fg-dim">
             {relTime(task.createdAt)}
           </span>
           <ArchiveCheckbox task={task} />
         </div>
       </div>
 
-      <h3 className="mt-2 font-sans text-base font-medium leading-snug text-fg group-hover:text-accent">
+      <h3 className="mt-2 font-sans text-base font-medium leading-snug text-foreground group-hover:text-primary">
         {task.taskTitle || (
-          <span className="italic text-muted">untitled task</span>
+          <span className="italic text-muted-foreground">untitled task</span>
         )}
       </h3>
 
       {task.taskBody && (
-        <p className="mt-2 line-clamp-3 text-small text-muted">
+        <p className="mt-2 line-clamp-3 text-small text-muted-foreground">
           {preview(task.taskBody)}
         </p>
       )}
@@ -436,19 +436,19 @@ function TaskCardFull({ task, index }: { task: TaskMeta; index: number }) {
               <StatusDot key={run.sessionId} status={run.status} size="xs" />
             ))}
             {runs.length > 8 && (
-              <span className="font-mono text-micro text-muted-2">
+              <span className="font-mono text-micro text-fg-dim">
                 +{runs.length - 8}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-3 font-mono text-micro tracking-wideish text-muted-2">
+          <div className="flex items-center gap-3 font-mono text-micro tracking-wideish text-fg-dim">
             {task.taskApp && (
               <span className="truncate" title={task.taskApp}>
                 {task.taskApp}
               </span>
             )}
             {liveRuns > 0 && (
-              <span className="text-status-doing">● {liveRuns} live</span>
+              <span className="text-status-doing">↏ {liveRuns} live</span>
             )}
             {!liveRuns && lastRun && (
               <span className="uppercase">{lastRun.role}</span>
@@ -468,16 +468,16 @@ function TaskRowFlat({ task, index }: { task: TaskMeta; index: number }) {
     <Link
       to={`/tasks/${task.taskId}`}
       style={{ animationDelay: delay }}
-      className="group flex animate-fade-up items-center gap-4 hover:bg-surface-2"
+      className="group flex animate-fade-up items-center gap-4 hover:bg-secondary"
     >
-      <span className="w-32 shrink-0 font-mono text-micro tracking-wideish text-muted-2">
+      <span className="w-32 shrink-0 font-mono text-micro tracking-wideish text-fg-dim">
         {task.taskId}
       </span>
-      <span className="w-24 shrink-0 font-mono text-micro uppercase tracking-wideish text-muted">
+      <span className="w-24 shrink-0 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
         {task.taskSection.replace(" — not yet archived", "")}
       </span>
-      <span className="flex-1 truncate font-sans text-small text-fg group-hover:text-accent">
-        {task.taskTitle || <em className="text-muted">untitled task</em>}
+      <span className="flex-1 truncate font-sans text-small text-foreground group-hover:text-primary">
+        {task.taskTitle || <em className="text-muted-foreground">untitled task</em>}
       </span>
       <div className="flex w-[120px] items-center gap-1">
         {runs.slice(-6).map((r) => (
@@ -485,14 +485,14 @@ function TaskRowFlat({ task, index }: { task: TaskMeta; index: number }) {
         ))}
         {liveRuns > 0 && (
           <span className="font-mono text-[10px] text-status-doing">
-            ●{liveRuns}
+            ↏{liveRuns}
           </span>
         )}
       </div>
-      <span className="w-16 shrink-0 truncate text-right font-mono text-micro text-muted-2">
+      <span className="w-16 shrink-0 truncate text-right font-mono text-micro text-fg-dim">
         {task.taskApp ?? "—"}
       </span>
-      <span className="w-12 shrink-0 text-right font-mono text-micro tabular-nums text-muted-2">
+      <span className="w-12 shrink-0 text-right font-mono text-micro tabular-nums text-fg-dim">
         {relTime(task.createdAt)}
       </span>
       <span onClick={(e) => e.preventDefault()}>

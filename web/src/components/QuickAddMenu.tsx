@@ -33,11 +33,11 @@ export function QuickAddMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="w-56">
         <DropdownMenuItem onSelect={() => onAttach()}>
-          <Upload className="text-muted" />
+          <Upload className="text-muted-foreground" />
           <span>Upload from computer</span>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onMention()}>
-          <FileText className="text-muted" />
+          <FileText className="text-muted-foreground" />
           <span>Add file from repo</span>
         </DropdownMenuItem>
       </DropdownMenuContent>

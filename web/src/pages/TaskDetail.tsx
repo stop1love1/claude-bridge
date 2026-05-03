@@ -19,10 +19,10 @@ export default function TaskDetail() {
 
   return (
     <div className="flex min-h-[calc(100vh-3.5rem)] flex-col">
-      <div className="shrink-0 border-b border-border bg-bg px-6 py-2">
+      <div className="shrink-0 border-b border-border bg-background px-6 py-2">
         <Link
           to="/tasks"
-          className="inline-flex items-center gap-2 font-mono text-micro uppercase tracking-wideish text-muted hover:text-fg"
+          className="inline-flex items-center gap-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft size={12} />
           tasks

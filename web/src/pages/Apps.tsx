@@ -80,17 +80,17 @@ export default function AppsPage() {
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <Boxes size={18} className="text-accent" />
-            <h1 className="font-mono text-display font-semibold tracking-tightish text-fg">
+            <Boxes size={18} className="text-primary" />
+            <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
               apps
             </h1>
-            <span className="font-mono text-micro uppercase tracking-wideish text-muted">
+            <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
               {apps.length} app{apps.length === 1 ? "" : "s"}
             </span>
           </div>
-          <p className="mt-2 max-w-xl text-small text-muted">
+          <p className="mt-2 max-w-xl text-small text-muted-foreground">
             registered in{" "}
-            <span className="font-mono text-fg">~/.claude/bridge.json</span>.
+            <span className="font-mono text-foreground">~/.claude/bridge.json</span>.
             the coordinator dispatches agents into these folders by name.
           </p>
         </div>
@@ -134,9 +134,9 @@ export default function AppsPage() {
               <li
                 key={app.name}
                 className={cn(
-                  "rounded-sm border bg-surface p-3 transition-colors",
+                  "rounded-sm border bg-card p-3 transition-colors",
                   exists
-                    ? "border-border hover:border-border-strong"
+                    ? "border-border hover:border-input"
                     : "border-status-doing/40 bg-status-doing/5",
                 )}
               >
@@ -145,12 +145,12 @@ export default function AppsPage() {
                     size={16}
                     className={cn(
                       "mt-0.5 shrink-0",
-                      exists ? "text-accent" : "text-status-doing",
+                      exists ? "text-primary" : "text-status-doing",
                     )}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-sm font-semibold text-fg">
+                      <span className="font-mono text-sm font-semibold text-foreground">
                         {app.name}
                       </span>
                       <span
@@ -166,19 +166,19 @@ export default function AppsPage() {
                         </span>
                       )}
                       {branch && (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-border bg-bg px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                        <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                           <GitBranch size={9} className="opacity-70" />
                           {branch}
                         </span>
                       )}
                     </div>
                     {app.description && (
-                      <p className="mt-1 text-small text-fg/85 whitespace-pre-line">
+                      <p className="mt-1 text-small text-foreground/85 whitespace-pre-line">
                         {app.description}
                       </p>
                     )}
                     <p
-                      className="mt-1 break-all font-mono text-[11px] text-muted"
+                      className="mt-1 break-all font-mono text-[11px] text-muted-foreground"
                       title={
                         app.rawPath && app.rawPath !== app.path
                           ? `${app.rawPath} → ${app.path}`
@@ -213,7 +213,7 @@ export default function AppsPage() {
                         size={13}
                         className={
                           scanApp.isPending && scanApp.variables === app.name
-                            ? "animate-pulse text-accent"
+                            ? "animate-pulse text-primary"
                             : ""
                         }
                       />
@@ -224,7 +224,7 @@ export default function AppsPage() {
                       onClick={() => void onDelete(app.name)}
                       title="remove from registry"
                       aria-label={`remove ${app.name}`}
-                      className="text-muted hover:text-status-blocked"
+                      className="text-muted-foreground hover:text-status-blocked"
                     >
                       <Trash2 size={13} />
                     </Button>

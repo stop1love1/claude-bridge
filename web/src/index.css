@@ -2,17 +2,78 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --bg: #0e0e0f;
-  --surface: #161617;
-  --surface-2: #1c1c1e;
-  --border: #262628;
-  --border-strong: #3a3a3c;
-  --fg: #e8e6df;
-  --muted: #8a8784;
-  --muted-2: #6b6864;
-  --accent: #e8743d;
-  --accent-soft: #a85528;
+/**
+ * shadcn-flavoured token schema, ported wholesale from the `main`
+ * branch's globals.css so the Vite SPA shares its visual identity
+ * with the Next.js app. Two themes (dark default + light) are toggled
+ * via `data-theme` on <html>; the no-flash bootstrap in index.html
+ * sets that attribute before React mounts.
+ *
+ * Tailwind v3 maps these CSS vars onto utility colors via
+ * tailwind.config.js — components reference `bg-card`, `text-foreground`,
+ * `border-input`, etc. and the palette swap is automatic.
+ */
+@layer base {
+  :root,
+  :root[data-theme="dark"] {
+    --background:           #0b0d12;
+    --foreground:           #e3e6ec;
+    --card:                 #12151c;
+    --card-foreground:      #e3e6ec;
+    --popover:              #12151c;
+    --popover-foreground:   #e3e6ec;
+    --secondary:            #1a1e27;
+    --secondary-foreground: #e3e6ec;
+    --muted:                #1a1e27;
+    --muted-foreground:     #8b92a0;
+    --accent:               #21262f;
+    --accent-foreground:    #e3e6ec;
+
+    --primary:                #6aa8ff;
+    --primary-foreground:     #0b0d12;
+    --destructive:            #e27070;
+    --destructive-foreground: #0b0d12;
+
+    --border: #262b35;
+    --input:  #333944;
+    --ring:   #6aa8ff;
+
+    --success: #65c58c;
+    --warning: #e3b95a;
+    --info:    #b17ad8;
+    --fg-dim:  #636a78;
+
+    --radius: 0.625rem;
+  }
+
+  :root[data-theme="light"] {
+    --background:           #f7f8fb;
+    --foreground:           #14181f;
+    --card:                 #ffffff;
+    --card-foreground:      #14181f;
+    --popover:              #ffffff;
+    --popover-foreground:   #14181f;
+    --secondary:            #eef0f5;
+    --secondary-foreground: #14181f;
+    --muted:                #eef0f5;
+    --muted-foreground:     #5a6372;
+    --accent:               #e3e7ee;
+    --accent-foreground:    #14181f;
+
+    --primary:                #2563eb;
+    --primary-foreground:     #ffffff;
+    --destructive:            #c8423a;
+    --destructive-foreground: #ffffff;
+
+    --border: #d8dde6;
+    --input:  #c4cad6;
+    --ring:   #2563eb;
+
+    --success: #1f9d59;
+    --warning: #b58200;
+    --info:    #7d3aac;
+    --fg-dim:  #8a92a0;
+  }
 }
 
 html,
@@ -23,9 +84,10 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font-family: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Inter", "Inter Tight", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
   font-feature-settings: "ss01", "cv11";
   font-size: 14px;
   line-height: 1.55;
@@ -35,7 +97,7 @@ body {
 }
 
 /* Tabular figures for any element flagged .tnum so timestamps and
-   counts align cleanly under the editorial monospace styling. */
+   counts align cleanly. */
 .tnum,
 time,
 .font-mono {
@@ -51,25 +113,23 @@ time,
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #262628;
+  background: var(--border);
   border-radius: 6px;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--background);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3a3c;
+  background: var(--input);
 }
 
-/* Selection — coral on bone, not the browser default blue. */
 ::selection {
-  background: rgba(232, 116, 61, 0.28);
-  color: #fff7ee;
+  background: color-mix(in srgb, var(--primary) 30%, transparent);
+  color: var(--primary-foreground);
 }
 
-/* Focus ring — a quiet 1px outline + offset, no chunky browser default. */
 :focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius);
 }
 
 a {
@@ -79,4 +139,17 @@ a {
 
 button {
   font-family: inherit;
+}
+
+/* Pointer cursor on interactive controls (matches main). */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+select:not(:disabled),
+summary,
+a[href] {
+  cursor: pointer;
+}
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
 }
