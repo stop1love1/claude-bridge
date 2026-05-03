@@ -51,7 +51,7 @@ After finishing a cross-repo task:
 |---|---|---|---|
 | `BRIDGE.md` | This playbook | Bridge maintainers | very low |
 | `prompts/coordinator.md` | Coordinator prompt template | Bridge maintainers | very low |
-| `prompts/report-template.md` | Child agent report contract (canonical copy; `libs/childPrompt.ts` injects it into every child) | Bridge maintainers | very low |
+| `prompts/report-template.md` | Child agent report contract (canonical copy; `internal/childprompt` injects it into every child) | Bridge maintainers | very low |
 | `prompts/playbooks/<role>.md` | Per-role playbook (style-critic, semantic-verifier, ui-tester, devops, …). Auto-injected into a child whose role matches the file's basename. | Bridge maintainers | low |
 | `prompts/tasks.md` | Legacy notebook — runtime state lives in `sessions/<id>/meta.json` | (none — bridge writes meta.json) | n/a |
 | `prompts/decisions.md` | Decisions log (append-only, dated) | Any repo | low |
