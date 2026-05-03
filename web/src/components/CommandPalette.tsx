@@ -335,7 +335,20 @@ function CommandPaletteInner({
  * Mountable host. Owns the global Cmd+K / Ctrl+K listener and the
  * open-state. Drop one instance into App.tsx and the palette is
  * available everywhere.
+ *
+ * Buttons that want to open the palette dispatch a `bridge:open-palette`
+ * CustomEvent on `window` instead of poking ref handles — keeps the
+ * host self-contained and avoids prop-drilling an opener through the
+ * router.
  */
+export const PALETTE_OPEN_EVENT = "bridge:open-palette";
+
+/** Imperative opener for buttons / hotkeys other than Cmd+K. */
+export function openCommandPalette(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(PALETTE_OPEN_EVENT));
+}
+
 export function CommandPaletteHost() {
   const [open, setOpen] = useState(false);
   const tasksQ = useTasks();
@@ -349,8 +362,13 @@ export function CommandPaletteHost() {
         setOpen((v) => !v);
       }
     };
+    const onOpen = () => setOpen(true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener(PALETTE_OPEN_EVENT, onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(PALETTE_OPEN_EVENT, onOpen);
+    };
   }, []);
 
   if (!open) return null;

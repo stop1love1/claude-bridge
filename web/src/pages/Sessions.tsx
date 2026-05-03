@@ -15,7 +15,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import SessionsBrowser from "@/components/SessionsBrowser";
 import { SessionLog } from "@/components/SessionLog";
 import { useToast } from "@/components/Toasts";
@@ -230,23 +229,36 @@ export default function Sessions() {
 
   return (
     <div className="flex h-[calc(100vh-2.75rem)] flex-col">
-      {/* Mobile tab bar */}
-      <div className="flex shrink-0 border-b border-border bg-card md:hidden">
-        <Tabs
-          value={mobileTab}
-          onValueChange={(v) => setMobileTab(v as "browser" | "chat")}
-          className="w-full"
+      {/* Mobile tab bar — picks which pane fills the viewport.
+          On md+ both panes render side-by-side and this bar is hidden.
+          Mirrors main's TaskDetail / sessions chrome: simple two-button
+          row with a `border-b-2 border-primary` underline pattern, not
+          the rounded Tabs pill. */}
+      <div className="md:hidden shrink-0 flex border-b border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setMobileTab("browser")}
+          aria-pressed={mobileTab === "browser"}
+          className={`flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors ${
+            mobileTab === "browser"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
         >
-          <TabsList className="m-2 w-[calc(100%-1rem)]">
-            <TabsTrigger value="browser" className="flex-1">
-              Sessions ({sessions.length})
-              {orphanCount > 0 ? ` · ${orphanCount}` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="chat" className="flex-1">
-              {activeSession ? activeSession.sessionId.slice(0, 8) : "Chat"}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+          Sessions{orphanCount > 0 ? ` · ${orphanCount}` : ""}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab("chat")}
+          aria-pressed={mobileTab === "chat"}
+          className={`flex-1 py-1.5 text-[11.5px] font-medium border-b-2 transition-colors truncate px-2 ${
+            mobileTab === "chat"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Chat{activeSession?.link ? ` · ${activeSession.link.role}` : activeSession ? ` · ${activeSession.sessionId.slice(0, 8)}` : ""}
+        </button>
       </div>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">

@@ -46,6 +46,7 @@ import { type Run } from "@/api/types";
 import StatusDot from "@/components/StatusDot";
 import AgentTree from "@/components/AgentTree";
 import { SessionLog } from "@/components/SessionLog";
+import { MessageComposer } from "@/components/MessageComposer";
 import { TokenUsage, type TokenTotals } from "@/components/TokenUsage";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/Toasts";
@@ -623,8 +624,7 @@ export default function TaskDetailView({
           </div>
         </section>
 
-        {/* Right pane — embedded SessionLog. The composer lives inside
-            SessionLog (parent scope rules: don't add it here). */}
+        {/* Right pane — embedded SessionLog with composer slot. */}
         <section
           className={cn(
             "min-h-0 min-w-0 md:flex md:flex-col",
@@ -636,6 +636,14 @@ export default function TaskDetailView({
               sessionId={activeRun.sessionId}
               repo={activeRun.repo}
               role={activeRun.role}
+              composer={
+                <MessageComposer
+                  sessionId={activeRun.sessionId}
+                  repo={activeRun.repo}
+                  role={activeRun.role}
+                  taskId={taskId}
+                />
+              }
             />
           ) : (
             <div className="flex flex-1 items-center justify-center px-6 py-12 text-center text-xs text-fg-dim">

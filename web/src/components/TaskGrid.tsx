@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/select";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { useToast } from "@/components/Toasts";
+import { openCommandPalette } from "@/components/CommandPalette";
 import { relTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 
@@ -354,6 +355,17 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
           />
         </div>
         <span className="ml-auto" />
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          onClick={() => openCommandPalette()}
+          title="Command palette — Cmd/Ctrl+K"
+          aria-label="Open command palette"
+          className="hidden md:inline-flex font-mono text-[10px] text-fg-dim"
+        >
+          ⌘K
+        </Button>
         {newTaskTrigger}
       </div>
 

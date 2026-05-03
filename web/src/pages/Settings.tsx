@@ -50,13 +50,19 @@ export default function Settings() {
         your bot tokens / detection mode.
       </p>
 
-      <AuthSection reason={reason} />
+      {/* Core sections — order mirrors main's settings page so the
+          operator's muscle memory carries over. */}
       <PublicUrlSection />
       <DetectSettingsSection />
-      <ScanRootsSection />
       <TrustedDevicesSection />
       <TelegramBotStub />
       <TelegramUserStub />
+
+      {/* SPA-specific extras — auth (bridge token) + apps registry root
+          stub. Pinned to the bottom so the canonical sections above
+          aren't perturbed when these eventually move into main. */}
+      <AuthSection reason={reason} />
+      <ScanRootsSection />
     </div>
   );
 }
