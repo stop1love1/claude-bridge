@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   Boxes,
   Globe2,
@@ -18,58 +18,68 @@ const ITEMS: {
   label: string;
   Icon: LucideIcon;
 }[] = [
-  { key: "apps",     href: "/apps",     label: "apps",     Icon: Boxes },
-  { key: "tasks",    href: "/tasks",    label: "tasks",    Icon: LayoutGrid },
-  { key: "sessions", href: "/sessions", label: "sessions", Icon: Terminal },
-  { key: "tunnels",  href: "/tunnels",  label: "tunnels",  Icon: Globe2 },
-  { key: "settings", href: "/settings", label: "settings", Icon: SettingsIcon },
+  { key: "apps",     href: "/apps",     label: "Apps",     Icon: Boxes },
+  { key: "tasks",    href: "/tasks",    label: "Tasks",    Icon: LayoutGrid },
+  { key: "sessions", href: "/sessions", label: "Sessions", Icon: Terminal },
+  { key: "tunnels",  href: "/tunnels",  label: "Tunnels",  Icon: Globe2 },
+  { key: "settings", href: "/settings", label: "Settings", Icon: SettingsIcon },
 ];
 
 /**
- * Top-level five-section navigation rendered as a horizontally
- * scrollable pill row. Mobile collapses labels to icons-only so all
- * five fit on a phone without sideways scrolling; the active tab
- * keeps its label so the operator always knows where they are.
+ * The five top-level navigations: Apps (registry), Tasks (board),
+ * Sessions (raw chats), Tunnels (ngrok/localtunnel), Settings (config).
+ * Renders as a horizontally scrollable pill row at every breakpoint —
+ * on mobile the labels collapse to icons-only so all five fit on a
+ * phone without sideways scrolling; the active tab keeps its label so
+ * the user always knows where they are. `min-w-0` on the wrapper
+ * prevents the row from pushing the header buttons off-screen.
  *
- * `min-w-0` on the wrapper lets the scrollable nav shrink instead
- * of pushing the theme/token buttons off-screen on narrow viewports.
+ * `active` highlights the current page; if omitted, the active section
+ * is auto-derived from `useLocation()`. Pass `badges` for per-tab
+ * counters (e.g. orphan sessions).
  */
 export function MainNav({
+  active,
   badges,
 }: {
+  /**
+   * The currently-active top-level section, if any. Off-nav pages
+   * (e.g. `/usage`) pass nothing so no pill gets highlighted.
+   */
+  active?: MainNavSection;
   badges?: Partial<Record<MainNavSection, ReactNode>>;
 }) {
+  const loc = useLocation();
+  const auto = ITEMS.find((it) => loc.pathname.startsWith(it.href))?.key;
+  const current = active ?? auto;
   return (
     <nav
-      className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5 min-w-0 overflow-x-auto"
+      className="flex items-center gap-0.5 bg-secondary rounded-md p-0.5 border border-border min-w-0 overflow-x-auto no-scrollbar"
       aria-label="Primary navigation"
       style={{ scrollbarWidth: "none" }}
     >
-      {ITEMS.map(({ key, href, label, Icon }) => (
-        <NavLink
-          key={key}
-          to={href}
-          end={false}
-          aria-label={label}
-          title={label}
-          className={({ isActive }) =>
-            cn(
-              "inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 sm:px-2.5 font-mono text-micro uppercase tracking-wideish whitespace-nowrap transition-colors",
+      {ITEMS.map(({ key, href, label, Icon }) => {
+        const isActive = key === current;
+        return (
+          <Link
+            key={key}
+            to={href}
+            aria-current={isActive ? "page" : undefined}
+            aria-label={label}
+            title={label}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 px-2 sm:px-2.5 py-1 sm:py-0.5 rounded text-xs whitespace-nowrap transition-colors",
               isActive
-                ? "bg-background text-foreground"
+                ? "bg-accent text-foreground"
                 : "text-muted-foreground hover:text-foreground",
-            )
-          }
-        >
-          {({ isActive }) => (
-            <>
-              <Icon size={13} />
-              <span className={isActive ? "inline" : "hidden sm:inline"}>{label}</span>
-              {!isActive && badges?.[key]}
-            </>
-          )}
-        </NavLink>
-      ))}
+            )}
+          >
+            <Icon size={13} />
+            <span className={isActive ? "inline" : "hidden sm:inline"}>{label}</span>
+            {!isActive && badges?.[key]}
+          </Link>
+        );
+      })}
     </nav>
   );
 }
