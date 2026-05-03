@@ -50,27 +50,25 @@ export function DetectSettingsSection() {
     setSource(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
-      toast.success("detect source", `stored locally · ${next}`);
+      toast.success("Detect source", `Stored locally · ${next}`);
     } catch (e) {
-      toast.error("could not save", (e as Error).message);
+      toast.error("Could not save", (e as Error).message);
     }
   };
 
   return (
-    <section className="rounded-sm border border-border bg-card p-5">
+    <section className="rounded-lg border border-border bg-card p-4">
       <div className="mb-1 flex items-center gap-2">
         <Sparkles size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          scope detection
-        </h2>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Scope detection</h3>
       </div>
-      <p className="mb-3 text-small text-muted-foreground">
-        controls how the bridge picks repo + features for a new task. detection
+      <p className="mb-3 text-[11px] text-muted-foreground">
+        Controls how the bridge picks repo + features for a new task. Detection
         runs once at task-create time and is cached in{" "}
         <span className="font-mono text-foreground">meta.json</span>.
       </p>
-      <div className="mb-3 rounded-sm border border-status-doing/40 bg-status-doing/10 px-3 py-2 font-mono text-micro text-status-doing">
-        backend port pending — settings stored client-side only
+      <div className="mb-3 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+        Backend port pending — settings stored client-side only
         (<span className="font-mono">localStorage:{STORAGE_KEY}</span>).
       </div>
 
@@ -83,7 +81,7 @@ export function DetectSettingsSection() {
               type="button"
               onClick={() => choose(opt.value)}
               aria-pressed={active}
-              className={`rounded-sm border p-3 text-left transition-colors ${
+              className={`rounded-md border p-3 text-left transition-colors ${
                 active
                   ? "border-primary/40 bg-primary/5"
                   : "border-border hover:border-primary/30 hover:bg-accent/30"
@@ -98,7 +96,7 @@ export function DetectSettingsSection() {
                       : "border-border bg-transparent"
                   }`}
                 />
-                <span className="text-small font-medium text-foreground">
+                <span className="text-sm font-medium text-foreground">
                   {opt.label}
                 </span>
                 <span className="font-mono text-[10px] text-muted-foreground">

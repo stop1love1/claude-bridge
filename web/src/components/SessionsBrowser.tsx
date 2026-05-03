@@ -3,12 +3,12 @@
 // project path so the layout mirrors VS Code's CLAUDE SESSIONS panel.
 //
 // Filters: free-text search (matches id, preview, repo, repo path,
-// linked taskId), repo dropdown.
+// linked taskId).
 //
 // Header surfaces a + New session button (NewSessionDialog) and a
 // bulk-select toggle. In bulk mode each row gets a checkbox plus a
 // group-level select-all with indeterminate state, and a sticky
-// action bar at the top of the list shows "N selected · Kill".
+// action bar at the top of the list shows "N selected · Delete".
 //
 // Selection drives the parent's URL state (`?sid=&repo=`).
 
@@ -23,21 +23,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NewSessionDialog } from "@/components/NewSessionDialog";
 import { relTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import type { Repo, SessionSummary } from "@/api/types";
-
-const REPO_ALL = "__all__";
 
 interface Props {
   sessions: SessionSummary[];
@@ -52,7 +42,7 @@ interface Props {
   onCreateSession?: (args: { repo: string }) => void;
   /**
    * Bulk-kill / delete handler. The browser surfaces the toggle and
-   * collects the selection; the page decides what "kill" means
+   * collects the selection; the page decides what "delete" means
    * (today: POST /api/sessions/{sid}/kill via useKillSession).
    */
   onBulkKill?: (selected: SessionSummary[]) => void | Promise<void>;
@@ -78,23 +68,15 @@ export default function SessionsBrowser({
   newSessionRef,
 }: Props) {
   const [query, setQuery] = useState("");
-  const [repoFilter, setRepoFilter] = useState<string>(REPO_ALL);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  // Bulk-kill mode is opt-in: the operator clicks the toolbar toggle
+  // Bulk-delete mode is opt-in: the operator clicks the toolbar toggle
   // to reveal checkboxes + the action bar. Default view stays clean.
-  const [killMode, setKillMode] = useState(false);
+  const [deleteMode, setDeleteMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  const repoOptions = useMemo(() => {
-    const seen = new Set<string>();
-    for (const s of sessions) seen.add(s.repo);
-    return [...seen].sort();
-  }, [sessions]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return sessions.filter((s) => {
-      if (repoFilter !== REPO_ALL && s.repo !== repoFilter) return false;
       if (!q) return true;
       return (
         s.sessionId.toLowerCase().includes(q) ||
@@ -104,7 +86,7 @@ export default function SessionsBrowser({
         (s.link?.taskId.toLowerCase().includes(q) ?? false)
       );
     });
-  }, [sessions, query, repoFilter]);
+  }, [sessions, query]);
 
   const groups = useMemo(() => {
     const m = new Map<string, SessionSummary[]>();
@@ -137,8 +119,8 @@ export default function SessionsBrowser({
       return next;
     });
 
-  const exitKillMode = () => {
-    setKillMode(false);
+  const exitDeleteMode = () => {
+    setDeleteMode(false);
     setSelected(new Set());
   };
 
@@ -150,14 +132,14 @@ export default function SessionsBrowser({
   const handleBulkKill = async () => {
     if (!onBulkKill || selectedSessions.length === 0) return;
     await onBulkKill(selectedSessions);
-    exitKillMode();
+    exitDeleteMode();
   };
 
   const showNewSessionRow =
     !!onCreateSession && !!repos && repos.length > 0;
 
   return (
-    <aside className="flex h-full w-full flex-col overflow-hidden border-border md:w-80 md:shrink-0 md:border-r">
+    <aside className="flex h-full w-full flex-col overflow-hidden border-border bg-card md:w-80 md:shrink-0 md:border-r">
       <div className="sticky top-0 z-10 shrink-0 space-y-2 border-b border-border bg-card p-2">
         {showNewSessionRow && (
           <NewSessionDialog
@@ -170,84 +152,71 @@ export default function SessionsBrowser({
         <div className="flex items-center gap-1.5">
           <div className="relative min-w-0 flex-1">
             <Search
-              size={12}
-              className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-dim"
+              size={13}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-dim"
             />
-            <Input
+            <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="search sessions…"
-              className="pl-7 pr-7"
+              placeholder="Search sessions…"
+              className="h-7 w-full rounded-md border border-border bg-background pl-8 pr-7 text-xs focus:outline-none focus:border-primary"
             />
             {query && (
               <button
-                type="button"
                 onClick={() => setQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground"
-                aria-label="clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-fg-dim hover:text-foreground"
+                aria-label="Clear"
               >
-                <X size={11} />
+                <X size={12} />
               </button>
             )}
           </div>
           {onBulkKill && (
             <button
               type="button"
-              onClick={() => (killMode ? exitKillMode() : setKillMode(true))}
+              onClick={() => (deleteMode ? exitDeleteMode() : setDeleteMode(true))}
               className={cn(
                 "inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md border text-xs",
-                killMode
-                  ? "border-status-blocked/50 bg-status-blocked/10 text-status-blocked"
-                  : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
+                deleteMode
+                  ? "border-destructive/50 bg-destructive/10 text-destructive"
+                  : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
               )}
-              title={killMode ? "Exit bulk-kill mode" : "Bulk kill"}
-              aria-label={killMode ? "Exit bulk-kill mode" : "Enter bulk-kill mode"}
-              aria-pressed={killMode}
+              title={deleteMode ? "Exit bulk-delete mode" : "Bulk delete"}
+              aria-label={
+                deleteMode ? "Exit bulk-delete mode" : "Enter bulk-delete mode"
+              }
+              aria-pressed={deleteMode}
             >
               <CheckSquare size={13} />
             </button>
           )}
         </div>
-        <Select value={repoFilter} onValueChange={setRepoFilter}>
-          <SelectTrigger>
-            <SelectValue placeholder="repo" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={REPO_ALL}>— all repos —</SelectItem>
-            {repoOptions.map((r) => (
-              <SelectItem key={r} value={r}>
-                {r}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
-      {killMode && onBulkKill && (
-        <div className="sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b border-border bg-status-blocked/5 px-2 py-1.5 text-xs">
-          <CheckSquare size={12} className="shrink-0 text-status-blocked" />
+      {deleteMode && onBulkKill && (
+        <div className="sticky top-[88px] z-10 flex shrink-0 items-center gap-2 border-b border-border bg-destructive/5 px-2 py-1.5 text-xs">
+          <CheckSquare size={12} className="shrink-0 text-destructive" />
           <span className="tabular-nums text-foreground">
             {selected.size} selected
           </span>
           <button
             type="button"
-            onClick={handleBulkKill}
+            onClick={() => void handleBulkKill()}
             disabled={selected.size === 0}
-            className="ml-auto inline-flex h-6 items-center gap-1 rounded border border-status-blocked/40 px-2 text-status-blocked hover:bg-status-blocked/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-            title="Kill selected sessions"
-            aria-label="Kill selected sessions"
+            className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded border border-destructive/40 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+            title="Delete selected sessions"
+            aria-label="Delete selected sessions"
           >
-            <Trash2 size={11} />
-            Kill
+            <Trash2 size={12} />
           </button>
           <button
             type="button"
-            onClick={exitKillMode}
-            className="inline-flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground hover:bg-secondary"
+            onClick={exitDeleteMode}
+            className="inline-flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground hover:bg-accent"
             title="Cancel"
-            aria-label="Cancel bulk-kill"
+            aria-label="Cancel bulk-delete"
           >
-            <X size={11} />
+            <X size={12} />
           </button>
         </div>
       )}
@@ -256,11 +225,11 @@ export default function SessionsBrowser({
         {filtered.length === 0 ? (
           <EmptyState
             icon={Terminal}
-            title={query ? "no matches" : "no sessions yet"}
+            title={query ? "No matches" : "No sessions yet"}
             hint={
               query
-                ? "try a different search term."
-                : "child claude sessions show up here once they start."
+                ? "Try a different search term."
+                : "Click New session to start a Claude chat in any registered repo."
             }
             className="mt-4"
           />
@@ -280,10 +249,10 @@ export default function SessionsBrowser({
             return (
               <div key={path} className="mb-2">
                 <div
-                  className="group/header flex w-full items-center gap-1.5 rounded-sm px-1.5 py-1 text-left hover:bg-secondary"
+                  className="group/header flex w-full items-center gap-1.5 rounded px-1.5 py-1 hover:bg-accent"
                   title={branch ? `${path}\n\non branch ${branch}` : path}
                 >
-                  {killMode && onBulkKill && (
+                  {deleteMode && onBulkKill && (
                     <input
                       type="checkbox"
                       aria-label={
@@ -297,13 +266,13 @@ export default function SessionsBrowser({
                       }}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => setGroupSelected(list, e.target.checked)}
-                      className="h-3 w-3 shrink-0 cursor-pointer accent-status-blocked"
+                      className="h-3 w-3 shrink-0 cursor-pointer accent-destructive"
                     />
                   )}
                   <button
                     type="button"
                     onClick={() => toggleGroup(path)}
-                    className="flex min-w-0 flex-1 items-center gap-1.5"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                   >
                     <Chevron size={11} className="shrink-0 text-fg-dim" />
                     <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground">
@@ -311,7 +280,7 @@ export default function SessionsBrowser({
                     </span>
                     {branch && (
                       <span
-                        className="inline-flex shrink-0 items-center gap-0.5 truncate font-mono text-[9.5px] text-primary"
+                        className="inline-flex max-w-[80px] shrink-0 items-center gap-0.5 truncate font-mono text-[9.5px] text-info"
                         title={`branch: ${branch}`}
                       >
                         <GitBranch size={9} />
@@ -329,26 +298,26 @@ export default function SessionsBrowser({
                       <li key={s.sessionId}>
                         <div
                           className={cn(
-                            "group flex items-center gap-1 rounded-sm border transition-colors",
+                            "group flex items-center gap-1 rounded transition-colors",
                             activeSessionId === s.sessionId
-                              ? "border-primary/40 bg-primary/10"
-                              : "border-transparent hover:bg-secondary",
+                              ? "border-primary/30 bg-primary/10"
+                              : "border-transparent hover:bg-accent",
                           )}
                         >
-                          {killMode && onBulkKill && (
+                          {deleteMode && onBulkKill && (
                             <input
                               type="checkbox"
                               aria-label="Select session"
                               checked={selected.has(s.sessionId)}
                               onChange={() => toggleOne(s.sessionId)}
                               onClick={(e) => e.stopPropagation()}
-                              className="ml-1.5 h-3 w-3 shrink-0 cursor-pointer accent-status-blocked"
+                              className="ml-1.5 h-3 w-3 shrink-0 cursor-pointer accent-destructive"
                             />
                           )}
                           <button
                             type="button"
                             onClick={() =>
-                              killMode ? toggleOne(s.sessionId) : onSelect(s)
+                              deleteMode ? toggleOne(s.sessionId) : onSelect(s)
                             }
                             className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left"
                           >
@@ -360,16 +329,16 @@ export default function SessionsBrowser({
                               )}
                             </span>
                             {s.link && (
-                              <span className="shrink-0 rounded border border-status-done/40 bg-status-done/10 px-1 py-px font-mono text-[10px] font-semibold text-status-done">
+                              <span className="shrink-0 rounded bg-success/15 px-1 py-px font-mono text-[10px] font-semibold text-success">
                                 {s.link.role}
                               </span>
                             )}
                             {s.link && (
-                              <code className="max-w-[110px] shrink-0 truncate font-mono text-[10px] text-fg-dim">
+                              <code className="max-w-[110px] shrink-0 truncate font-mono text-[10px] text-muted-foreground">
                                 {s.link.taskId}
                               </code>
                             )}
-                            <span className="shrink-0 font-mono text-[10px] tabular-nums text-fg-dim">
+                            <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
                               {relTime(new Date(s.mtime).toISOString())}
                             </span>
                           </button>

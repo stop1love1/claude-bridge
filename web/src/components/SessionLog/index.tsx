@@ -27,15 +27,19 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  Check,
   Copy,
   Download,
-  RotateCcw,
+  MoreVertical,
+  RotateCw,
   Search,
-  Square,
+  Terminal,
+  Wrench,
   X,
 } from "lucide-react";
 import { api } from "@/api/client";
@@ -45,6 +49,12 @@ import {
   useKillSession,
   useRewindSession,
 } from "@/api/queries";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cn";
 import { ActivityRow, LogRow } from "./views";
 import {
@@ -72,6 +82,18 @@ interface Props {
   /** Hide the kill-session toolbar action (used inside TaskDetail
    *  where the per-run kill lives in AgentTree). */
   hideKill?: boolean;
+  /**
+   * Optional handler — when provided, surfaces a `Clear` button in the
+   * header and a `Clear conversation` row in the mobile kebab.
+   */
+  onClearConversation?: () => void;
+  /**
+   * Optional composer slot. When provided, mounts the node inside the
+   * sticky bottom strip beneath the transcript. Standalone surfaces
+   * (e.g. the /sessions browser) omit this and host the composer
+   * elsewhere.
+   */
+  composer?: ReactNode;
 }
 
 const POLL_MS = 1_500;
@@ -84,6 +106,8 @@ export function SessionLog({
   role,
   title,
   hideKill,
+  onClearConversation,
+  composer,
 }: Props) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -100,6 +124,8 @@ export function SessionLog({
   const [matchIdx, setMatchIdx] = useState(0);
   const [pinnedUserUuid, setPinnedUserUuid] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [showTools, setShowTools] = useState(true);
+  const [copied, setCopied] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickyBottomRef = useRef(true);
@@ -309,13 +335,21 @@ export function SessionLog({
   const trimmed = entries.length > MAX_RENDERED
     ? entries.length - MAX_RENDERED
     : 0;
-  const visibleEntries = useMemo(
-    () =>
+  const visibleEntries = useMemo(() => {
+    const cut =
       entries.length > MAX_RENDERED
         ? entries.slice(entries.length - MAX_RENDERED)
-        : entries,
-    [entries],
-  );
+        : entries;
+    if (showTools) return cut;
+    // When tools are hidden, drop tool_result rows AND any user entries
+    // whose content is exclusively tool results (LogRow already classifies
+    // these — but we filter at this layer so the activity row + counts
+    // line up with what's visible).
+    return cut.filter((e) => {
+      const k = classify(e);
+      return k !== "tool_result";
+    });
+  }, [entries, showTools]);
 
   // Pre-build lowercase index so per-keystroke filtering doesn't restringify.
   const searchIndex = useMemo(
@@ -479,26 +513,18 @@ export function SessionLog({
     return null;
   }, [pinnedUserUuid, visibleEntries, userTextOf]);
 
-  const scrollToPinned = useCallback(() => {
-    if (!pinnedUserUuid) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    const row = el.querySelector<HTMLElement>(
-      `[data-user-uuid="${CSS.escape(pinnedUserUuid)}"]`,
-    );
-    if (row) row.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [pinnedUserUuid]);
-
   // -- Toolbar handlers --------------------------------------------------
 
-  const handleCopy = async () => {
+  const copySessionId = useCallback(async () => {
+    if (!sessionId) return;
     try {
-      await navigator.clipboard.writeText(exportMarkdown(entries));
-      toast.success("copied", "transcript on clipboard");
+      await navigator.clipboard.writeText(sessionId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
     } catch {
       toast.error("copy failed");
     }
-  };
+  }, [sessionId, toast]);
 
   const handleDownload = () => {
     const blob = new Blob([exportMarkdown(entries)], {
@@ -576,24 +602,113 @@ export function SessionLog({
     e.message?.id ||
     (e.timestamp ? `${e.timestamp}:${e.type ?? ""}` : `pos-${trimmed + i}`);
 
-  const headerTitle = sessionTitle ?? title ?? sessionId.slice(0, 8);
-
+  // Header chrome — main's tight one-line layout: terminal icon + role +
+  // "@ repo" + italic ai-title + responding pulse pill. No "session"
+  // eyebrow; no uppercase role badge.
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* Header */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-2">
-        <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-          session
-        </span>
-        <span className="truncate font-mono text-micro text-foreground">
-          {headerTitle}
-        </span>
+    <section className="flex-1 min-w-0 min-h-0 flex flex-col bg-card relative overflow-hidden">
+      {showSearch && (
+        <div className="absolute top-2 right-3 z-30 flex items-center gap-1 rounded-md border border-border bg-card shadow-lg px-2 py-1.5 text-xs">
+          <Search size={12} className="text-fg-dim shrink-0" />
+          <input
+            ref={searchInputRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (matchedIndices.length === 0) return;
+                setMatchIdx((i) =>
+                  e.shiftKey
+                    ? (i - 1 + matchedIndices.length) % matchedIndices.length
+                    : (i + 1) % matchedIndices.length,
+                );
+              } else if (e.key === "Escape") {
+                setShowSearch(false);
+              }
+            }}
+            placeholder="Search conversation"
+            className="bg-transparent border-0 outline-none text-xs w-44 placeholder:text-fg-dim"
+            aria-label="Search conversation"
+          />
+          <span className="text-[10px] text-fg-dim tabular-nums shrink-0 min-w-[44px] text-right">
+            {search
+              ? matchedIndices.length === 0
+                ? "no matches"
+                : `${matchIdx + 1}/${matchedIndices.length}`
+              : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              matchedIndices.length &&
+              setMatchIdx((i) => (i - 1 + matchedIndices.length) % matchedIndices.length)
+            }
+            disabled={matchedIndices.length === 0}
+            className="p-1 rounded text-fg-dim hover:text-foreground disabled:opacity-40"
+            title="Previous match (Shift+Enter)"
+            aria-label="Previous match"
+          >
+            <ArrowUp size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              matchedIndices.length &&
+              setMatchIdx((i) => (i + 1) % matchedIndices.length)
+            }
+            disabled={matchedIndices.length === 0}
+            className="p-1 rounded text-fg-dim hover:text-foreground disabled:opacity-40"
+            title="Next match (Enter)"
+            aria-label="Next match"
+          >
+            <ArrowDown size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSearch(false)}
+            className="p-1 rounded text-fg-dim hover:text-foreground"
+            title="Close (Esc)"
+            aria-label="Close search"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      <header className="px-3 py-2 border-b border-border flex items-center gap-2 text-xs min-w-0">
+        <Terminal size={13} className="text-muted-foreground shrink-0" />
         {role && (
-          <span className="rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wideish text-primary">
-            {role}
+          <span className="font-medium whitespace-nowrap shrink-0">{role}</span>
+        )}
+        {repo && (
+          <span className="text-muted-foreground whitespace-nowrap shrink-0">
+            @ {repo}
           </span>
         )}
-        <span className="ml-auto flex items-center gap-1">
+        {sessionTitle && (
+          <span
+            className="text-muted-foreground italic truncate min-w-0"
+            title={sessionTitle}
+          >
+            · {sessionTitle}
+          </span>
+        )}
+        {!sessionTitle && title && (
+          <span className="text-muted-foreground italic truncate min-w-0" title={title}>
+            · {title}
+          </span>
+        )}
+        {activity.kind !== "idle" && (
+          <span className="inline-flex items-center gap-1 text-warning text-[10.5px] whitespace-nowrap shrink-0">
+            <span className="relative inline-flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
+            </span>
+            responding…
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1 shrink-0">
           {(sessionTotals.turns ?? 0) > 0 && (
             <TokenUsage
               totals={sessionTotals}
@@ -601,120 +716,109 @@ export function SessionLog({
               title={`This window: ${sessionTotals.turns} assistant turns · in ${sessionTotals.input.toLocaleString()} · out ${sessionTotals.output.toLocaleString()} · cache read ${(sessionTotals.cacheRead ?? 0).toLocaleString()}`}
             />
           )}
-          <ToolbarBtn
-            icon={<Search size={12} />}
-            label="search"
-            onClick={() => setShowSearch((v) => !v)}
-            active={showSearch}
-          />
-          <ToolbarBtn
-            icon={<Copy size={12} />}
-            label="copy"
-            onClick={handleCopy}
-          />
-          <ToolbarBtn
-            icon={<Download size={12} />}
-            label="md"
-            onClick={handleDownload}
-          />
-          <ToolbarBtn
-            icon={<RotateCcw size={12} />}
-            label="rewind"
-            onClick={() => void handleRewind()}
-            disabled={!lastUserUuid}
-          />
-          {!hideKill && (
-            <ToolbarBtn
-              icon={<Square size={12} />}
-              label="kill"
-              onClick={() => void handleKill()}
-              tone="danger"
-            />
-          )}
-        </span>
-      </header>
-
-      {showSearch && (
-        <div className="shrink-0 border-b border-border bg-secondary px-4 py-2">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search
-                size={12}
-                className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-dim"
-              />
-              <input
-                autoFocus
-                ref={searchInputRef}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    if (matchedIndices.length === 0) return;
-                    setMatchIdx((i) =>
-                      e.shiftKey
-                        ? (i - 1 + matchedIndices.length) %
-                          matchedIndices.length
-                        : (i + 1) % matchedIndices.length,
-                    );
-                  } else if (e.key === "Escape") {
-                    setShowSearch(false);
-                  }
-                }}
-                placeholder="search transcript… (enter for next, shift+enter prev)"
-                className="w-full rounded-sm border border-border bg-background pl-7 pr-7 py-1 font-mono text-micro text-foreground focus:border-primary focus:outline-none"
-              />
-              {search && (
-                <button
-                  type="button"
-                  onClick={() => setSearch("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground"
-                  aria-label="clear search"
-                >
-                  <X size={11} />
-                </button>
-              )}
-            </div>
-            {search && (
-              <>
-                <span className="font-mono text-[10px] tabular-nums text-fg-dim min-w-[44px] text-right">
-                  {matchedIndices.length === 0
-                    ? "0/0"
-                    : `${matchIdx + 1}/${matchedIndices.length}`}
-                </span>
-                <button
-                  type="button"
-                  disabled={matchedIndices.length === 0}
-                  onClick={() =>
-                    setMatchIdx(
-                      (i) =>
-                        (i - 1 + matchedIndices.length) %
-                        matchedIndices.length,
-                    )
-                  }
-                  className="rounded-sm border border-border bg-background p-1 text-fg-dim hover:text-foreground disabled:opacity-40"
-                  title="previous (shift+enter)"
-                  aria-label="previous match"
-                >
-                  <ArrowUp size={11} />
-                </button>
-                <button
-                  type="button"
-                  disabled={matchedIndices.length === 0}
-                  onClick={() =>
-                    setMatchIdx((i) => (i + 1) % matchedIndices.length)
-                  }
-                  className="rounded-sm border border-border bg-background p-1 text-fg-dim hover:text-foreground disabled:opacity-40"
-                  title="next (enter)"
-                  aria-label="next match"
-                >
-                  <ArrowDown size={11} />
-                </button>
-              </>
+          <button
+            onClick={() => {
+              setShowSearch(true);
+              setTimeout(() => searchInputRef.current?.focus(), 0);
+            }}
+            className="inline-flex items-center gap-1 h-7 w-7 md:w-auto md:px-1.5 md:h-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px] transition-colors"
+            title="Search this conversation (Ctrl/⌘+F)"
+            aria-label="Search conversation"
+          >
+            <Search size={11} />
+            <span className="hidden md:inline">Search</span>
+          </button>
+          <button
+            onClick={() => setShowTools((v) => !v)}
+            className={cn(
+              "hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border text-[10px] transition-colors",
+              showTools
+                ? "border-border bg-secondary text-foreground"
+                : "border-border text-muted-foreground hover:text-foreground hover:bg-accent",
             )}
-          </div>
+            title="Toggle tool results"
+          >
+            <Wrench size={10} /> {showTools ? "tools" : "no tools"}
+          </button>
+          <button
+            onClick={handleDownload}
+            className="hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
+            title="Export this conversation as Markdown"
+          >
+            <Download size={10} /> Export
+          </button>
+          <button
+            onClick={() => void copySessionId()}
+            className="hidden md:inline-flex items-center gap-1 text-muted-foreground hover:text-foreground font-mono text-[11px]"
+            title="Copy session ID"
+          >
+            {sessionId.slice(0, 8)}…
+            {copied ? (
+              <Check size={11} className="text-success" />
+            ) : (
+              <Copy size={11} />
+            )}
+          </button>
+          {onClearConversation && (
+            <button
+              onClick={onClearConversation}
+              className="hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
+              title="Spawn a fresh coordinator"
+            >
+              <RotateCw size={10} /> Clear
+            </button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="md:hidden inline-flex items-center justify-center h-7 w-7 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+                title="More actions"
+                aria-label="More actions"
+              >
+                <MoreVertical size={14} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => setShowTools((v) => !v)}>
+                <Wrench size={12} />
+                {showTools ? "Hide tool results" : "Show tool results"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDownload}>
+                <Download size={12} />
+                Export Markdown
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void copySessionId()}>
+                {copied ? (
+                  <Check size={12} className="text-success" />
+                ) : (
+                  <Copy size={12} />
+                )}
+                <span className="font-mono">{sessionId.slice(0, 8)}…</span>
+              </DropdownMenuItem>
+              {onClearConversation && (
+                <DropdownMenuItem onClick={onClearConversation}>
+                  <RotateCw size={12} />
+                  Clear conversation
+                </DropdownMenuItem>
+              )}
+              {!hideKill && (
+                <DropdownMenuItem onClick={() => void handleKill()}>
+                  <X size={12} />
+                  Kill session
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                onClick={() => void handleRewind()}
+                disabled={!lastUserUuid}
+              >
+                <ArrowUp size={12} />
+                Rewind
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      )}
+      </header>
 
       {error && (
         <div className="shrink-0 border-b border-border bg-status-blocked/10 px-4 py-2 font-mono text-micro text-status-blocked">
@@ -722,122 +826,81 @@ export function SessionLog({
         </div>
       )}
 
-      {/* Scroll body */}
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="relative flex-1 min-h-0 overflow-y-auto"
-      >
-        {pinnedUserText && (
-          <button
-            type="button"
-            onClick={scrollToPinned}
-            className="sticky top-0 z-10 block w-full border-b border-border bg-card/85 px-4 py-1.5 text-left backdrop-blur supports-[backdrop-filter]:bg-card/85 hover:bg-card"
-            title="scroll back to this user message"
-          >
-            <div className="flex items-baseline gap-2">
-              <span className="shrink-0 font-mono text-[10px] uppercase tracking-wideish text-primary">
-                ↥ user
-              </span>
-              <span className="line-clamp-2 break-words font-sans text-[11.5px] text-foreground">
+      <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="flex-1 overflow-y-auto overflow-x-hidden font-sans text-xs leading-relaxed"
+        >
+          {pinnedUserText && (
+            <div className="sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-card/85 border-b border-border px-3 py-1.5">
+              <p className="text-[11.5px] text-foreground line-clamp-2 break-words">
                 {pinnedUserText}
-              </span>
+              </p>
             </div>
+          )}
+          {trimmed > 0 && (
+            <p className="px-4 py-1 text-center text-[11px] italic text-muted-foreground">
+              … {trimmed} earlier entries trimmed
+            </p>
+          )}
+          {headOffset !== null && headOffset > 0 && (
+            <div className="flex justify-center px-4 py-2">
+              <button
+                type="button"
+                onClick={() => void loadOlder()}
+                disabled={loading}
+                className="rounded-sm border border-border bg-card px-3 py-1 font-mono text-micro uppercase tracking-wideish text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50"
+              >
+                {loading ? "loading…" : "load earlier"}
+              </button>
+            </div>
+          )}
+          {entries.length === 0 ? (
+            <div className="flex h-full items-center justify-center font-mono text-micro uppercase tracking-wideish text-fg-dim">
+              no messages yet — type below to start the conversation.
+            </div>
+          ) : (
+            <div className="py-2 px-1">
+              {visibleEntries.map((e, i) => (
+                <div key={entryKey(e, i)} data-row-idx={i}>
+                  <LogRow
+                    entry={e}
+                    sessionId={sessionId}
+                    repo={repo}
+                    onRewind={(uuid) => void handleRewind(uuid)}
+                    searchQuery={search}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {!stickyBottomRef.current && entries.length > 0 && (
+          <button
+            onClick={() => {
+              stickyBottomRef.current = true;
+              const el = scrollRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+            }}
+            className="absolute bottom-3 right-4 z-20 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary text-primary-foreground text-[11px] font-medium shadow-lg hover:bg-primary/90"
+          >
+            <ArrowDown size={11} /> Jump to latest
           </button>
         )}
-        {trimmed > 0 && (
-          <p className="px-4 py-1 text-center font-mono text-[11px] italic text-muted-foreground">
-            … {trimmed} earlier entries trimmed
-          </p>
-        )}
-        {headOffset !== null && headOffset > 0 && (
-          <div className="flex justify-center px-4 py-2">
-            <button
-              type="button"
-              onClick={() => void loadOlder()}
-              disabled={loading}
-              className="rounded-sm border border-border bg-card px-3 py-1 font-mono text-micro uppercase tracking-wideish text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50"
-            >
-              {loading ? "loading…" : "load earlier"}
-            </button>
-          </div>
-        )}
-        {entries.length === 0 ? (
-          <div className="flex h-full items-center justify-center font-mono text-micro uppercase tracking-wideish text-fg-dim">
-            no messages yet — type below to start the conversation.
-          </div>
-        ) : (
-          <div className="py-2">
-            {visibleEntries.map((e, i) => (
-              <div key={entryKey(e, i)} data-row-idx={i}>
-                <LogRow
-                  entry={e}
-                  sessionId={sessionId}
-                  repo={repo}
-                  onRewind={(uuid) => void handleRewind(uuid)}
-                  searchQuery={search}
-                />
-              </div>
-            ))}
-          </div>
-        )}
       </div>
-
-      {!stickyBottomRef.current && entries.length > 0 && (
-        <button
-          type="button"
-          onClick={() => {
-            stickyBottomRef.current = true;
-            const el = scrollRef.current;
-            if (el) el.scrollTop = el.scrollHeight;
-          }}
-          className="absolute bottom-16 right-6 inline-flex items-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 font-mono text-micro uppercase tracking-wideish text-muted-foreground shadow-lg hover:border-primary/40 hover:text-primary"
-        >
-          <ArrowDown size={11} />
-          jump to latest
-        </button>
-      )}
 
       <ActivityRow activity={activity} />
 
       <InlinePermissionRequests sessionId={sessionId} />
-    </div>
-  );
-}
 
-function ToolbarBtn({
-  icon,
-  label,
-  onClick,
-  active,
-  disabled,
-  tone = "default",
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  disabled?: boolean;
-  tone?: "default" | "danger";
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-sm border px-2 py-1 font-mono text-micro uppercase tracking-wideish transition-colors disabled:opacity-40",
-        tone === "danger"
-          ? "border-status-blocked/30 text-status-blocked hover:bg-status-blocked/10"
-          : active
-            ? "border-primary bg-primary/10 text-primary"
-            : "border-border text-muted-foreground hover:border-input hover:text-foreground",
+      {composer && (
+        <div className="sticky bottom-0 z-20 border-t border-border bg-card">
+          {composer}
+        </div>
       )}
-      title={label}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
+    </section>
   );
 }
 

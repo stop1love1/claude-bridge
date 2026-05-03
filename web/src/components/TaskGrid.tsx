@@ -1,18 +1,12 @@
-// TaskGrid — replaces the v0.1 Board's hardcoded 4-column layout with
-// a filter / sort / view-toggle surface that handles both kanban and
-// flat-list arrangements over the same underlying data.
-//
-// Filters: free-text search (matches title / body / id / app), section
-// multi-select, app dropdown.
-// Sort: created-desc (default) | updated-desc (proxied via the most-
-// recent run on each task — meta.json has no updatedAt today).
-// View: kanban (4 columns) or flat list (one row per task), with
-// drag-and-drop between kanban columns.
+// TaskGrid — kanban board over the bridge's task meta. Mirrors main's
+// `app/_components/TaskGrid.tsx` chrome: a thin search + quick-add
+// toolbar above a 4-column kanban with drag-and-drop between columns,
+// per-section empty hints, and an inline bulk-action toolbar that
+// appears above the grid only when at least one card is selected.
 //
 // Per-card surface: id, title, body preview (3 lines), per-run status
 // dots, age, section pill, archive checkbox (with confirm),
-// hover/selected checkbox for bulk operations, role icon (Crown for
-// coordinator, Sparkles otherwise).
+// hover/selected checkbox for bulk operations.
 
 import {
   forwardRef,
@@ -22,24 +16,13 @@ import {
   useState,
 } from "react";
 import { Link } from "react-router-dom";
-import {
-  Check,
-  Crown,
-  Filter,
-  KanbanSquare,
-  List,
-  Search,
-  Sparkles,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Check, Trash2, X } from "lucide-react";
 import {
   patchTasksMetaCache,
   useCreateTask,
   useDeleteTask,
   usePatchTask,
   useTasksMeta,
-  useApps,
 } from "@/api/queries";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -49,7 +32,6 @@ import {
   type TaskSection,
 } from "@/api/types";
 import StatusDot from "@/components/StatusDot";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -58,78 +40,46 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { useToast } from "@/components/Toasts";
-import { useLocalStorage } from "@/lib/useLocalStorage";
 import { relTime } from "@/lib/time";
 import { cn } from "@/lib/cn";
-
-type SortKey = "created-desc" | "updated-desc";
-type ViewMode = "kanban" | "list";
 
 const APP_ALL = "__all__";
 const APP_AUTO = "__auto__";
 
-// MIME used by the kanban drag-and-drop. Keep in sync with main's
-// dashboard so the same mechanism survives a future port.
+// MIME used by the kanban drag-and-drop. Matches main's dashboard so
+// the same mechanism survives a future port.
 const DND_MIME = "application/x-bridge-task-id";
 
-const LAYOUT_KEY = "bridge.tasks.layout";
-const loadLayout = (raw: string | null): ViewMode =>
-  raw === "list" ? "list" : "kanban";
-const dumpLayout = (v: ViewMode): string => v;
-
 // Per-section copy for empty Kanban columns. Tailored hints feel more
-// purposeful than a generic "empty." stamp and tell the operator what
+// purposeful than a generic "empty" stamp and tell the operator what
 // dropping a card here means.
 const SECTION_EMPTY: Record<TaskSection, { title: string; hint: string }> = {
   TODO: {
-    title: "nothing queued",
-    hint: "drag a card here, or quick-add above.",
+    title: "Nothing queued",
+    hint: "Drag a card here, or quick-add above.",
   },
   DOING: {
-    title: "idle",
-    hint: "drag a card here to mark it in-progress.",
+    title: "Idle",
+    hint: "Drag a card here to mark it in-progress.",
   },
   BLOCKED: {
-    title: "nothing blocked",
-    hint: "drag a card here when work can't proceed.",
+    title: "Nothing blocked",
+    hint: "Drag a card here when work can't proceed.",
   },
   "DONE — not yet archived": {
-    title: "nothing shipped yet",
-    hint: "tick the checkbox on a card to land it here.",
+    title: "Nothing shipped yet",
+    hint: "Tick the checkbox on a card to land it here.",
   },
 };
 
-// Lucide icons are ForwardRef SVG components — typing the registry as
-// `ComponentType<any>` keeps the call sites readable without fighting
-// the variadic prop shapes under strict mode (mirrors how
-// CommandPalette already types its role-icon slots).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type IconComponent = React.ComponentType<any>;
-
-const ROLE_ICON: Record<string, IconComponent> = {
-  coordinator: Crown,
+const SECTION_ACCENT: Record<TaskSection, string> = {
+  TODO: "border-fg-dim/40",
+  DOING: "border-warning/40",
+  BLOCKED: "border-destructive/40",
+  "DONE — not yet archived": "border-success/40",
 };
-const ROLE_COLOR: Record<string, string> = {
-  coordinator: "text-status-doing",
-};
-
-function roleIcon(role: string) {
-  return ROLE_ICON[role] ?? Sparkles;
-}
-function roleColor(role: string) {
-  return ROLE_COLOR[role] ?? "text-muted-foreground";
-}
 
 interface Props {
   /** Slot for the "+ new task" trigger (rendered in the toolbar). */
@@ -156,25 +106,9 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
   ref,
 ) {
   const { data, isLoading, error } = useTasksMeta();
-  const { data: apps } = useApps();
 
   const [query, setQuery] = useState("");
-  const [internalAppFilter, setInternalAppFilter] = useState<string>(APP_ALL);
-  const appFilter = appFilterProp ?? internalAppFilter;
-  const setAppFilter = (v: string) => {
-    if (onAppFilterChange) onAppFilterChange(v);
-    else setInternalAppFilter(v);
-  };
-  const [sectionFilter, setSectionFilter] = useState<Set<TaskSection>>(
-    new Set(SECTIONS),
-  );
-  const [sort, setSort] = useState<SortKey>("created-desc");
-  const [view, setView] = useLocalStorage<ViewMode>(
-    LAYOUT_KEY,
-    loadLayout,
-    "kanban",
-    dumpLayout,
-  );
+  const appFilter = appFilterProp ?? APP_ALL;
 
   // Bulk selection — Set of taskIds. Visible-only (a delete drops the
   // card; we prune `selected` synchronously below so the count never
@@ -199,7 +133,6 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return tasks.filter((t) => {
-      if (!sectionFilter.has(t.taskSection)) return false;
       if (appFilter === APP_AUTO) {
         if (t.taskApp) return false;
       } else if (appFilter !== APP_ALL && (t.taskApp ?? "") !== appFilter) {
@@ -213,25 +146,13 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
         (t.taskApp ?? "").toLowerCase().includes(q)
       );
     });
-  }, [tasks, query, appFilter, sectionFilter]);
+  }, [tasks, query, appFilter]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
-    if (sort === "updated-desc") {
-      const lastTouch = (t: TaskMeta) => {
-        let max = t.createdAt;
-        for (const r of t.runs) {
-          const ended = r.endedAt ?? r.startedAt ?? null;
-          if (ended && ended > max) max = ended;
-        }
-        return max;
-      };
-      copy.sort((a, b) => lastTouch(b).localeCompare(lastTouch(a)));
-    } else {
-      copy.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    }
+    copy.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return copy;
-  }, [filtered, sort]);
+  }, [filtered]);
 
   const grouped = useMemo(() => {
     const m: Record<TaskSection, TaskMeta[]> = {
@@ -265,16 +186,6 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
     if (changed) setSelected(next);
   }
 
-  const toggleSection = (s: TaskSection) =>
-    setSectionFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(s)) next.delete(s);
-      else next.add(s);
-      // Don't allow zero — clearing the last one resets to "all".
-      if (next.size === 0) return new Set(SECTIONS);
-      return next;
-    });
-
   const toggleSelect = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -286,6 +197,11 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
   const selectAllVisible = () =>
     setSelected(new Set(sorted.map((t) => t.taskId)));
   const allSelected = sorted.length > 0 && selected.size === sorted.length;
+
+  // Silence unused-prop warning for `onAppFilterChange` while keeping
+  // the prop in the public API (the Tasks page wires it for the URL
+  // mirror; future filter UI can call it).
+  void onAppFilterChange;
 
   // ---- Mutations ---------------------------------------------------
   const qc = useQueryClient();
@@ -317,7 +233,7 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
         },
       });
     } catch (e) {
-      toast.error("move failed", (e as Error).message);
+      toast.error("Move failed", (e as Error).message);
     }
   };
 
@@ -357,10 +273,10 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
   const handleBulkDelete = async () => {
     if (selected.size === 0) return;
     const ok = await confirm({
-      title: `delete ${selected.size} task${selected.size === 1 ? "" : "s"}?`,
+      title: `Delete ${selected.size} task${selected.size === 1 ? "" : "s"}?`,
       description:
-        "removes per-task sessions/<id>/ metadata and any linked claude sessions.",
-      confirmLabel: "delete all",
+        "Removes per-task sessions/<id>/ metadata and any linked Claude sessions.",
+      confirmLabel: "Delete all",
       variant: "destructive",
     });
     if (!ok) return;
@@ -422,183 +338,51 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
     };
 
   return (
-    <div className="relative space-y-6">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] flex-1">
-          <Search
-            size={12}
-            className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-dim"
-          />
-          <Input
+    <div className="relative space-y-4">
+      {/* Toolbar — search + quick-add slot + new-task trigger. Mirrors
+          main's terse `flex items-center gap-2` row instead of SPA's
+          earlier elaborate filter bar. */}
+      <div className="flex items-center gap-2">
+        <div className="min-w-[220px] flex-1">
+          <input
             ref={searchRef}
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="search title, body, id, app…  (press / to focus)"
-            className="pl-7 pr-7"
+            placeholder="Search tasks"
+            className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs focus:outline-none focus:border-primary"
           />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-dim hover:text-foreground"
-              aria-label="clear search"
-            >
-              <X size={11} />
-            </button>
-          )}
         </div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="gap-1.5">
-              <Filter size={12} />
-              sections
-              {sectionFilter.size < SECTIONS.length && (
-                <span className="rounded-full bg-primary px-1 text-[10px] text-bg">
-                  {sectionFilter.size}
-                </span>
-              )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuLabel>section filter</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {SECTIONS.map((s) => (
-              <DropdownMenuCheckboxItem
-                key={s}
-                checked={sectionFilter.has(s)}
-                onCheckedChange={() => toggleSection(s)}
-              >
-                {SECTION_LABEL[s]}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <Select value={appFilter} onValueChange={setAppFilter}>
-          <SelectTrigger className="w-[170px]" title="filter tasks by target app">
-            <SelectValue placeholder="app" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={APP_ALL}>— any app —</SelectItem>
-            <SelectItem value={APP_AUTO}>auto (no app set)</SelectItem>
-            {(apps?.apps ?? []).map((a) => (
-              <SelectItem key={a.name} value={a.name}>
-                {a.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-          <SelectTrigger className="w-[160px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="created-desc">created · newest</SelectItem>
-            <SelectItem value="updated-desc">updated · newest</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Tabs value={view} onValueChange={(v) => setView(v as ViewMode)}>
-          <TabsList>
-            <TabsTrigger value="kanban" className="gap-1.5">
-              <KanbanSquare size={12} />
-              kanban
-            </TabsTrigger>
-            <TabsTrigger value="list" className="gap-1.5">
-              <List size={12} />
-              list
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-
         <span className="ml-auto" />
         {newTaskTrigger}
       </div>
 
-      {/* Quick-add inline input. Mirrors main's lines 224-238: plus
-          icon + Enter-to-create, calls the same `useCreateTask`
-          mutation indirectly via NewTaskDialog parity. */}
-      <QuickAddRow />
-
-      {error && (
-        <div className="rounded-sm border border-status-blocked/40 bg-status-blocked/10 px-4 py-3 font-mono text-small text-status-blocked">
-          {(error as Error).message}
-        </div>
-      )}
-      {isLoading && (
-        <div className="font-mono text-micro tracking-wideish text-muted-foreground">
-          loading sessions…
-        </div>
-      )}
-
-      {/* Body */}
-      {view === "kanban" ? (
-        <div className="grid grid-cols-1 gap-x-6 gap-y-10 md:grid-cols-2 xl:grid-cols-4">
-          {SECTIONS.filter((s) => sectionFilter.has(s)).map((s) => {
-            const isDropTarget = dragOverSection === s;
-            return (
-              <KanbanColumn
-                key={s}
-                section={s}
-                tasks={grouped[s]}
-                isDropTarget={isDropTarget}
-                onDragOver={onColumnDragOver(s)}
-                onDragLeave={onColumnDragLeave(s)}
-                onDrop={onColumnDrop(s)}
-                draggingId={draggingId}
-                onCardDragStart={handleCardDragStart}
-                onCardDragEnd={handleCardDragEnd}
-                selected={selected}
-                onToggleSelect={toggleSelect}
-                activeTaskId={activeTaskId ?? null}
-              />
-            );
-          })}
-        </div>
-      ) : (
-        <FlatList
-          tasks={sorted}
-          selected={selected}
-          onToggleSelect={toggleSelect}
-          activeTaskId={activeTaskId ?? null}
-        />
-      )}
-
-      {sorted.length === 0 && !isLoading && (
-        <div className="rounded-sm border border-dashed border-border bg-card/50 p-10 text-center font-mono text-micro tracking-wideish text-muted-foreground">
-          no tasks match these filters.
-        </div>
-      )}
-
-      {/* Floating bulk action bar */}
+      {/* Bulk action toolbar — appears inline above the grid only when
+          at least one card is selected. */}
       {selected.size > 0 && (
         <div
-          className="fixed left-1/2 bottom-4 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card px-3 py-2 shadow-lg max-w-[95%]"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5"
           role="toolbar"
           aria-label="Bulk actions"
         >
-          <span className="font-mono text-xs tabular-nums">
+          <span className="text-xs font-medium tabular-nums">
             {selected.size} selected
           </span>
           <Button
             size="xs"
             variant="ghost"
             onClick={allSelected ? clearSelect : selectAllVisible}
-            title={allSelected ? "clear selection" : "select all visible"}
+            title={allSelected ? "Clear selection" : "Select all visible"}
             className="text-fg-dim"
           >
-            {allSelected ? "clear" : "select all"}
+            {allSelected ? "Clear" : "Select all"}
           </Button>
           <Select
             onValueChange={(v) => void handleBulkMove(v as TaskSection)}
             disabled={bulkBusy}
           >
             <SelectTrigger className="h-7 w-auto gap-1 px-2 text-[11px]">
-              <SelectValue placeholder="move to…" />
+              <SelectValue placeholder="Move to…" />
             </SelectTrigger>
             <SelectContent>
               {SECTIONS.map((s) => (
@@ -613,12 +397,67 @@ const TaskGrid = forwardRef<TaskGridHandle, Props>(function TaskGrid(
             variant="ghost"
             onClick={() => void handleBulkDelete()}
             disabled={bulkBusy}
-            title="delete selected"
-            className="text-status-blocked hover:bg-status-blocked/10"
+            title="Delete selected"
+            className="text-destructive hover:bg-destructive/10"
           >
             <Trash2 size={12} />
-            delete
+            Delete
           </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={clearSelect}
+            title="Cancel"
+            className="ml-auto text-muted-foreground"
+          >
+            <X size={12} />
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      {/* Quick-add inline input. Mirrors main's lines 371-386: plus
+          icon + Enter-to-create. */}
+      <QuickAddRow />
+
+      {error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-small text-destructive">
+          {(error as Error).message}
+        </div>
+      )}
+      {isLoading && (
+        <div className="font-mono text-micro tracking-wideish text-muted-foreground">
+          Loading sessions…
+        </div>
+      )}
+
+      {/* Body — kanban only. Drop the SPA's old view toggle. */}
+      <div className="grid grid-cols-1 gap-x-6 gap-y-10 md:grid-cols-2 xl:grid-cols-4">
+        {SECTIONS.map((s) => {
+          const isDropTarget = dragOverSection === s;
+          return (
+            <KanbanColumn
+              key={s}
+              section={s}
+              tasks={grouped[s]}
+              isDropTarget={isDropTarget}
+              onDragOver={onColumnDragOver(s)}
+              onDragLeave={onColumnDragLeave(s)}
+              onDrop={onColumnDrop(s)}
+              draggingId={draggingId}
+              onCardDragStart={handleCardDragStart}
+              onCardDragEnd={handleCardDragEnd}
+              selected={selected}
+              onToggleSelect={toggleSelect}
+              activeTaskId={activeTaskId ?? null}
+            />
+          );
+        })}
+      </div>
+
+      {sorted.length === 0 && !isLoading && (
+        <div className="rounded-lg border border-dashed border-border bg-card/50 p-10 text-center text-small text-muted-foreground">
+          No tasks match these filters.
         </div>
       )}
     </div>
@@ -644,15 +483,15 @@ function QuickAddRow() {
       // useCreateTask invalidates `tasks` but not the keyed-map cache
       // some places consume.
       qc.invalidateQueries({ queryKey: ["tasks", "meta"] });
-      toast.success("created", t.id);
+      toast.success("Created", t.id);
       setBody("");
     } catch (e) {
-      toast.error("create failed", (e as Error).message);
+      toast.error("Create failed", (e as Error).message);
     }
   };
 
   return (
-    <div className="flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2">
+    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5">
       <span className="text-fg-dim" aria-hidden="true">
         +
       </span>
@@ -667,9 +506,9 @@ function QuickAddRow() {
             setBody("");
           }
         }}
-        placeholder="quick add — press Enter"
+        placeholder="Quick add — press Enter"
         className="flex-1 bg-transparent text-xs placeholder:text-fg-dim focus:outline-none"
-        aria-label="quick-add task"
+        aria-label="Quick-add task"
       />
     </div>
   );
@@ -706,12 +545,6 @@ function KanbanColumn({
   onToggleSelect,
   activeTaskId,
 }: KanbanColumnProps) {
-  const ACCENT: Record<TaskSection, string> = {
-    TODO: "bg-status-todo",
-    DOING: "bg-status-doing",
-    BLOCKED: "bg-status-blocked",
-    "DONE — not yet archived": "bg-status-done",
-  };
   const empty = SECTION_EMPTY[section];
   return (
     <section
@@ -719,37 +552,32 @@ function KanbanColumn({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={cn(
-        "flex min-w-0 flex-col rounded-sm transition-colors",
-        isDropTarget && "bg-primary/5 ring-1 ring-primary/40",
+        "flex min-w-0 flex-col rounded-lg border-2 transition-colors",
+        isDropTarget
+          ? "border-primary bg-primary/10"
+          : `${SECTION_ACCENT[section]} bg-secondary/30`,
       )}
     >
-      <header className="mb-4 flex items-baseline gap-3 border-b border-border pb-2">
-        <span
-          className={cn(
-            "h-1.5 w-1.5 self-center rounded-full",
-            ACCENT[section],
-          )}
-        />
-        <h2 className="font-mono text-micro uppercase tracking-wideish text-foreground">
+      <header className="flex items-center justify-between border-b border-border/60 px-3 py-2">
+        <span className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
           {SECTION_LABEL[section]}
-        </h2>
-        <span className="ml-auto font-mono text-micro tabular-nums text-fg-dim">
-          {String(tasks.length).padStart(2, "0")}
+        </span>
+        <span className="text-[10px] tabular-nums text-fg-dim">
+          {tasks.length}
         </span>
       </header>
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-1 flex-col gap-2 p-2">
         {tasks.length === 0 ? (
-          <div className="rounded-sm border border-dashed border-border bg-card/40 px-3 py-6 text-center">
-            <p className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
+          <div className="select-none px-2 py-6 text-center pointer-events-none">
+            <p className="text-[11px] font-medium text-muted-foreground">
               {empty.title}
             </p>
-            <p className="mt-1 text-[10px] text-fg-dim">{empty.hint}</p>
+            <p className="mt-0.5 text-[10px] text-fg-dim">{empty.hint}</p>
           </div>
         ) : (
-          tasks.map((t, i) => (
+          tasks.map((t) => (
             <TaskCardFull
               task={t}
-              index={i}
               key={t.taskId}
               draggable
               isDragging={draggingId === t.taskId}
@@ -766,35 +594,7 @@ function KanbanColumn({
   );
 }
 
-function FlatList({
-  tasks,
-  selected,
-  onToggleSelect,
-  activeTaskId,
-}: {
-  tasks: TaskMeta[];
-  selected: Set<string>;
-  onToggleSelect: (id: string) => void;
-  activeTaskId: string | null;
-}) {
-  return (
-    <ul className="divide-y divide-border rounded-sm border border-border bg-card">
-      {tasks.map((t, i) => (
-        <li key={t.taskId} className="px-4 py-3">
-          <TaskRowFlat
-            task={t}
-            index={i}
-            isSelected={selected.has(t.taskId)}
-            onToggleSelect={() => onToggleSelect(t.taskId)}
-            isActive={activeTaskId === t.taskId}
-          />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-// ---- card / row ---------------------------------------------------------
+// ---- card ---------------------------------------------------------
 
 function preview(body: string, max = 220): string {
   const cleaned = body
@@ -814,11 +614,11 @@ function ArchiveCheckbox({ task }: { task: TaskMeta }) {
 
   const onChange = async (next: boolean) => {
     const ok = await confirm({
-      title: next ? "mark task done?" : "un-archive task?",
+      title: next ? "Mark task done?" : "Un-archive task?",
       description: next
-        ? "moves the card to the done column and ticks the archive box."
-        : "drops the archive flag — task returns to its current section.",
-      confirmLabel: next ? "mark done" : "un-archive",
+        ? "Moves the card to the done column and ticks the archive box."
+        : "Drops the archive flag — task returns to its current section.",
+      confirmLabel: next ? "Mark done" : "Un-archive",
     });
     if (!ok) return;
     patchTasksMetaCache(qc, (list) =>
@@ -841,14 +641,14 @@ function ArchiveCheckbox({ task }: { task: TaskMeta }) {
         },
       });
     } catch (e) {
-      toast.error("update failed", (e as Error).message);
+      toast.error("Update failed", (e as Error).message);
     }
   };
 
   return (
     <input
       type="checkbox"
-      aria-label="archive task"
+      aria-label="Archive task"
       checked={task.taskChecked}
       onChange={(e) => void onChange(e.target.checked)}
       onClick={(e) => e.stopPropagation()}
@@ -876,10 +676,10 @@ function SelectCheckbox({
       }}
       aria-pressed={selected}
       aria-label={
-        selected ? `deselect task ${taskId}` : `select task ${taskId}`
+        selected ? `Deselect task ${taskId}` : `Select task ${taskId}`
       }
       className={cn(
-        "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
+        "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
         selected
           ? "border-primary bg-primary text-primary-foreground"
           : "border-border bg-background opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
@@ -890,30 +690,8 @@ function SelectCheckbox({
   );
 }
 
-function RoleBadges({ task }: { task: TaskMeta }) {
-  const runs = task.runs ?? [];
-  const roleSet = Array.from(new Set(runs.map((r) => r.role)));
-  if (roleSet.length === 0) return null;
-  return (
-    <span className="inline-flex items-center gap-1">
-      {roleSet.map((role) => {
-        const Icon = roleIcon(role);
-        return (
-          <Icon
-            key={role}
-            size={11}
-            className={cn("shrink-0", roleColor(role))}
-            aria-label={role}
-          />
-        );
-      })}
-    </span>
-  );
-}
-
 interface TaskCardFullProps {
   task: TaskMeta;
-  index: number;
   draggable?: boolean;
   isDragging?: boolean;
   onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -925,7 +703,6 @@ interface TaskCardFullProps {
 
 function TaskCardFull({
   task,
-  index,
   draggable,
   isDragging,
   onDragStart,
@@ -937,7 +714,6 @@ function TaskCardFull({
   const runs = task.runs ?? [];
   const lastRun = runs[runs.length - 1];
   const liveRuns = runs.filter((r) => r.status === "running").length;
-  const delay = `${Math.min(index * 30, 360)}ms`;
 
   return (
     <div
@@ -952,15 +728,15 @@ function TaskCardFull({
     >
       <Link
         to={`/tasks/${task.taskId}`}
-        style={{ animationDelay: delay }}
         className={cn(
-          "block rounded-sm border bg-card p-4 animate-fade-up transition-all duration-200",
-          "hover:-translate-y-px hover:bg-secondary",
+          "block rounded-lg border bg-card p-3 transition-colors",
+          "hover:bg-accent",
           isSelected
-            ? "border-primary/60 ring-1 ring-primary/40"
+            ? "border-primary/70 ring-1 ring-primary/40"
             : isActive
-              ? "border-primary ring-2 ring-primary/40"
+              ? "border-primary ring-2 ring-primary"
               : "border-border hover:border-input",
+          liveRuns > 0 && !isSelected && !isActive && "ring-1 ring-warning/30",
         )}
       >
         <div className="flex items-start gap-2">
@@ -969,11 +745,11 @@ function TaskCardFull({
             onToggle={onToggleSelect}
             taskId={task.taskId}
           />
-          <div className="flex flex-1 items-start justify-between gap-3 min-w-0">
-            <span className="font-mono text-micro tracking-wideish text-fg-dim shrink-0">
+          <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+            <span className="shrink-0 font-mono text-micro tracking-wideish text-fg-dim">
               {task.taskId}
             </span>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex shrink-0 items-center gap-2">
               <span className="font-mono text-micro tabular-nums text-fg-dim">
                 {relTime(task.createdAt)}
               </span>
@@ -982,9 +758,9 @@ function TaskCardFull({
           </div>
         </div>
 
-        <h3 className="ml-6 mt-2 font-sans text-base font-medium leading-snug text-foreground group-hover:text-primary">
+        <h3 className="ml-6 mt-2 text-[13px] font-medium leading-snug text-foreground group-hover:text-primary sm:text-sm">
           {task.taskTitle || (
-            <span className="italic text-muted-foreground">untitled task</span>
+            <span className="italic text-muted-foreground">Untitled task</span>
           )}
         </h3>
 
@@ -995,9 +771,8 @@ function TaskCardFull({
         )}
 
         {(runs.length > 0 || task.taskApp) && (
-          <div className="ml-6 mt-4 flex items-center justify-between gap-3">
+          <div className="ml-6 mt-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-1.5">
-              <RoleBadges task={task} />
               {runs.slice(-8).map((run) => (
                 <StatusDot key={run.sessionId} status={run.status} size="xs" />
               ))}
@@ -1007,14 +782,14 @@ function TaskCardFull({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-3 font-mono text-micro tracking-wideish text-fg-dim">
+            <div className="flex items-center gap-3 text-[10px] text-fg-dim">
               {task.taskApp && (
-                <span className="truncate" title={task.taskApp}>
+                <span className="truncate font-mono" title={task.taskApp}>
                   {task.taskApp}
                 </span>
               )}
               {liveRuns > 0 && (
-                <span className="text-status-doing">↏ {liveRuns} live</span>
+                <span className="text-warning">↏ {liveRuns} live</span>
               )}
               {!liveRuns && lastRun && (
                 <span className="uppercase">{lastRun.role}</span>
@@ -1024,68 +799,5 @@ function TaskCardFull({
         )}
       </Link>
     </div>
-  );
-}
-
-function TaskRowFlat({
-  task,
-  index,
-  isSelected,
-  onToggleSelect,
-  isActive,
-}: {
-  task: TaskMeta;
-  index: number;
-  isSelected: boolean;
-  onToggleSelect: () => void;
-  isActive: boolean;
-}) {
-  const runs = task.runs ?? [];
-  const liveRuns = runs.filter((r) => r.status === "running").length;
-  const delay = `${Math.min(index * 15, 240)}ms`;
-  return (
-    <Link
-      to={`/tasks/${task.taskId}`}
-      style={{ animationDelay: delay }}
-      className={cn(
-        "group flex animate-fade-up items-center gap-4 rounded-sm hover:bg-secondary",
-        isActive && "ring-2 ring-primary/40 bg-primary/5",
-      )}
-    >
-      <SelectCheckbox
-        selected={isSelected}
-        onToggle={onToggleSelect}
-        taskId={task.taskId}
-      />
-      <span className="w-32 shrink-0 font-mono text-micro tracking-wideish text-fg-dim">
-        {task.taskId}
-      </span>
-      <span className="w-24 shrink-0 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-        {task.taskSection.replace(" — not yet archived", "")}
-      </span>
-      <span className="flex-1 truncate font-sans text-small text-foreground group-hover:text-primary">
-        {task.taskTitle || <em className="text-muted-foreground">untitled task</em>}
-      </span>
-      <RoleBadges task={task} />
-      <div className="flex w-[120px] items-center gap-1">
-        {runs.slice(-6).map((r) => (
-          <StatusDot key={r.sessionId} status={r.status} size="xs" />
-        ))}
-        {liveRuns > 0 && (
-          <span className="font-mono text-[10px] text-status-doing">
-            ↏{liveRuns}
-          </span>
-        )}
-      </div>
-      <span className="w-16 shrink-0 truncate text-right font-mono text-micro text-fg-dim">
-        {task.taskApp ?? "—"}
-      </span>
-      <span className="w-12 shrink-0 text-right font-mono text-micro tabular-nums text-fg-dim">
-        {relTime(task.createdAt)}
-      </span>
-      <span onClick={(e) => e.preventDefault()}>
-        <ArchiveCheckbox task={task} />
-      </span>
-    </Link>
   );
 }

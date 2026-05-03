@@ -18,7 +18,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import SessionsBrowser from "@/components/SessionsBrowser";
 import { SessionLog } from "@/components/SessionLog";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/Toasts";
 import { useConfirm } from "@/components/ConfirmProvider";
 import {
@@ -223,28 +222,14 @@ export default function Sessions() {
 
   if (error) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-10 font-mono text-small text-status-blocked">
+      <div className="mx-auto max-w-3xl px-6 py-10 text-sm text-destructive">
         {(error as Error).message}
       </div>
     );
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col">
-      {/* Page sub-header — orphan count badge mirrors main's MainNav
-          badge for /sessions. We render it at the page level (not on
-          MainNav) so the count stays visible even on the page itself. */}
-      <div className="hidden shrink-0 items-center justify-between border-b border-border bg-card px-3 py-1.5 md:flex">
-        <h1 className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-          sessions
-          {orphanCount > 0 && (
-            <Badge variant="warning" className="ml-2 px-1.5 py-0 text-[9px]">
-              {orphanCount} orphan{orphanCount > 1 ? "s" : ""}
-            </Badge>
-          )}
-        </h1>
-      </div>
-
+    <div className="flex h-[calc(100vh-2.75rem)] flex-col">
       {/* Mobile tab bar */}
       <div className="flex shrink-0 border-b border-border bg-card md:hidden">
         <Tabs
@@ -254,11 +239,11 @@ export default function Sessions() {
         >
           <TabsList className="m-2 w-[calc(100%-1rem)]">
             <TabsTrigger value="browser" className="flex-1">
-              sessions ({sessions.length})
+              Sessions ({sessions.length})
               {orphanCount > 0 ? ` · ${orphanCount}` : ""}
             </TabsTrigger>
             <TabsTrigger value="chat" className="flex-1">
-              {activeSession ? activeSession.sessionId.slice(0, 8) : "chat"}
+              {activeSession ? activeSession.sessionId.slice(0, 8) : "Chat"}
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -291,8 +276,8 @@ export default function Sessions() {
           }
         >
           {isLoading && sessions.length === 0 ? (
-            <div className="flex h-full w-full items-center justify-center font-mono text-micro tracking-wideish text-fg-dim">
-              loading sessions…
+            <div className="flex h-full w-full items-center justify-center text-xs text-fg-dim">
+              Loading sessions…
             </div>
           ) : (
             <div className="flex w-full flex-col">

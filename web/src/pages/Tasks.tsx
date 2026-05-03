@@ -1,6 +1,6 @@
-// Tasks page — replaces v0.1 Board.tsx. Hosts the editorial header,
-// the TaskGrid (filters / sort / view-toggle, DnD, bulk actions) and
-// the NewTaskDialog action.
+// Tasks page — hosts TaskGrid in a viewport-filling shell. The page no
+// longer renders an editorial title block; per main, the global
+// HeaderShell + the grid's own sub-toolbar own all the chrome.
 //
 // Owns three URL-state and keybinding behaviors that don't belong
 // inside the grid component:
@@ -13,16 +13,11 @@
 //     `focusSearch` handle exposed on the grid).
 //   * Cmd/Ctrl+K is owned by `<CommandPaletteHost />` mounted at the
 //     app root — no extra wiring needed here.
-//
-// The header also surfaces a "running" pulse pill that counts every
-// run with status === "running" across all tasks. Mirrors main lines
-// 354-362.
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import TaskGrid, { type TaskGridHandle } from "@/components/TaskGrid";
 import NewTaskDialog from "@/components/NewTaskDialog";
-import { useTasksMeta } from "@/api/queries";
 
 const APP_PARAM = "app";
 const APP_ALL = "__all__";
@@ -48,18 +43,6 @@ export default function Tasks() {
   // doesn't expose an imperative open(). Hidden trigger keeps the
   // header layout untouched.
   const openTriggerRef = useRef<HTMLButtonElement>(null);
-
-  // Running-pulse pill data. The keyed-map cache the grid uses already
-  // refetches every 5s, so reading the same hook here is essentially
-  // free.
-  const { data } = useTasksMeta();
-  const runningCount = useMemo(() => {
-    let n = 0;
-    for (const t of data?.tasks ?? []) {
-      for (const r of t.runs) if (r.status === "running") n += 1;
-    }
-    return n;
-  }, [data]);
 
   useEffect(() => {
     const isTextInput = (el: EventTarget | null) => {
@@ -87,34 +70,7 @@ export default function Tasks() {
   }, []);
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-6 py-10">
-      <header className="mb-10 flex items-end justify-between gap-6">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
-              cross-repo console
-            </h1>
-            {runningCount > 0 && (
-              <span
-                className="inline-flex items-center gap-1.5 rounded-full bg-status-doing/15 px-2 py-0.5 font-mono text-[11px] font-medium text-status-doing"
-                title={`${runningCount} run${runningCount === 1 ? "" : "s"} in flight`}
-              >
-                <span className="relative inline-flex h-1.5 w-1.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-60" />
-                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
-                </span>
-                {runningCount} live
-              </span>
-            )}
-          </div>
-          <p className="mt-2 max-w-xl text-small text-muted-foreground">
-            tasks coordinate child claude sessions across the apps registered in{" "}
-            <span className="font-mono text-foreground">bridge.json</span>. move cards
-            between sections as work progresses; the bridge owns git.
-          </p>
-        </div>
-      </header>
-
+    <div className="flex h-[calc(100vh-2.75rem)] min-h-0 flex-col">
       <TaskGrid
         ref={gridRef}
         appFilter={appFilter}
@@ -125,11 +81,11 @@ export default function Tasks() {
               <button
                 ref={openTriggerRef}
                 type="button"
-                className="inline-flex h-8 items-center gap-2 rounded-sm border border-border bg-card px-3 font-mono text-xs hover:bg-secondary"
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-card px-2 text-xs hover:bg-secondary"
                 aria-keyshortcuts="Control+N Meta+N"
-                title="new task — Cmd/Ctrl+N"
+                title="New task — Cmd/Ctrl+N"
               >
-                + new task
+                + New task
                 <kbd className="hidden font-mono text-[10px] text-fg-dim sm:inline">
                   ⌘N
                 </kbd>

@@ -18,6 +18,9 @@ import {
   useState,
 } from "react";
 import { Bookmark, BookmarkPlus, GitBranch, Plus, X } from "lucide-react";
+// Note: title is no longer collected as a separate field — we derive it
+// from the first non-empty line of the body at submit time. The
+// imported `Input` is still used by the "Save as template" pill.
 import {
   Dialog,
   DialogContent,
@@ -79,7 +82,7 @@ const NewTaskDialog = forwardRef<NewTaskDialogHandle, Props>(
             className="gap-2"
           >
             <Plus size={14} />
-            new task
+            New task
           </Button>
         )}
         {/* Body only mounts while open so localStorage reads + lazy
@@ -117,10 +120,20 @@ function NewTaskDialogBody({
     [repos],
   );
 
-  const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [app, setApp] = useState<string>(APP_AUTO);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  // Derive a concise title from the first non-empty line of the body.
+  // Mirrors the behaviour main relies on so the operator only fills
+  // one field instead of two.
+  const deriveTitle = (raw: string): string => {
+    const firstLine = raw
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    return (firstLine ?? "").slice(0, 200);
+  };
 
   // Lazy initialiser — runs once on mount (i.e. when the dialog
   // opens). Safe to read localStorage here because this component
@@ -142,18 +155,10 @@ function NewTaskDialogBody({
   );
 
   const applyTemplate = useCallback((t: TaskTemplate) => {
-    // First non-empty line of the template body becomes the title;
-    // rest stays as the body. If the title field already has content
-    // we still overwrite it — the operator clicked the template, so
-    // they want it applied wholesale.
-    const lines = t.body.split("\n");
-    const firstIdx = lines.findIndex((l) => l.trim().length > 0);
-    if (firstIdx >= 0) {
-      setTitle(lines[firstIdx].trim());
-      setBody(lines.slice(firstIdx + 1).join("\n").trimStart());
-    } else {
-      setBody(t.body);
-    }
+    // The whole template body lands in the textarea verbatim — main
+    // derives the title from the first non-empty line at submit, so
+    // there's nothing else to split.
+    setBody(t.body);
     setTimeout(() => bodyRef.current?.focus(), 0);
   }, []);
 
@@ -178,9 +183,10 @@ function NewTaskDialogBody({
       return;
     }
     try {
+      const trimmedBody = body.trim();
       const created = await create.mutateAsync({
-        title: title.trim(),
-        body: body.trim(),
+        title: deriveTitle(trimmedBody),
+        body: trimmedBody,
         app: app === APP_AUTO ? null : app,
       });
       toast.success("task created", created.id);
@@ -189,15 +195,15 @@ function NewTaskDialogBody({
     } catch (err) {
       toast.error("create failed", (err as Error).message);
     }
-  }, [body, title, app, create, toast, onClose, onCreated]);
+  }, [body, app, create, toast, onClose, onCreated]);
 
   return (
     <DialogContent className="max-w-xl">
       <DialogHeader>
-        <DialogTitle>new task</DialogTitle>
+        <DialogTitle>Describe the task</DialogTitle>
         <DialogDescription>
-          tasks coordinate child claude sessions. write the brief here —
-          the coordinator picks the app + role from your description.
+          The coordinator reads this as the brief. Keep the first line short
+          — the bridge promotes it to the title automatically.
         </DialogDescription>
       </DialogHeader>
 
@@ -207,23 +213,12 @@ function NewTaskDialogBody({
           e.preventDefault();
           void submit();
         }}
-        className="space-y-4"
+        className="grid gap-3"
       >
-        <div className="space-y-1.5">
-          <Label htmlFor="new-task-title">title</Label>
-          <Input
-            id="new-task-title"
-            autoFocus
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="short, imperative — e.g. embed dist into go binary"
-          />
-        </div>
-
         {/* Templates row */}
         <div className="flex flex-wrap items-center gap-1">
-          <span className="mr-1 font-mono text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
-            templates
+          <span className="mr-1 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Templates
           </span>
           {builtinTemplates.map((t) => (
             <button
@@ -233,7 +228,7 @@ function NewTaskDialogBody({
               className="inline-flex items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-[10.5px] hover:bg-accent"
               title={`Insert "${t.label}" template`}
             >
-              <Bookmark size={10} className="text-status-doing" />
+              <Bookmark size={10} className="text-info" />
               {t.label}
             </button>
           ))}
@@ -248,13 +243,13 @@ function NewTaskDialogBody({
                 className="inline-flex items-center gap-1"
                 title={`Insert "${t.label}" template`}
               >
-                <Bookmark size={10} className="text-status-blocked" />
+                <Bookmark size={10} className="text-warning" />
                 {t.label}
               </button>
               <button
                 type="button"
                 onClick={() => handleDeleteTemplate(t.id)}
-                className="ml-0.5 text-fg-dim hover:text-status-blocked"
+                className="ml-0.5 text-fg-dim hover:text-destructive"
                 aria-label={`Remove template ${t.label}`}
                 title="Remove template"
               >
@@ -274,7 +269,7 @@ function NewTaskDialogBody({
             }
           >
             <BookmarkPlus size={10} />
-            save current
+            Save as template
           </button>
         </div>
 
@@ -303,7 +298,7 @@ function NewTaskDialogBody({
               onClick={handleSaveTemplate}
               disabled={!tplLabel.trim()}
             >
-              save
+              Save
             </Button>
             <Button
               type="button"
@@ -314,38 +309,23 @@ function NewTaskDialogBody({
                 setTplLabel("");
               }}
             >
-              cancel
+              Cancel
             </Button>
           </div>
         )}
 
-        <div className="space-y-1.5">
-          <Label htmlFor="new-task-body">body</Label>
-          <Textarea
-            ref={bodyRef}
-            id="new-task-body"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                void submit();
-              }
-            }}
-            rows={10}
-            placeholder="context, links, acceptance criteria, repos involved…"
-            className="min-h-[200px] font-mono text-xs leading-relaxed"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>target app</Label>
+        {/* Target app picker — shown above the body so the operator
+            decides the dispatch target before drafting the brief. */}
+        <div className="grid gap-1.5">
+          <Label htmlFor="new-task-app">Target app</Label>
           <Select value={app} onValueChange={setApp}>
-            <SelectTrigger>
-              <SelectValue placeholder="auto (coordinator decides)" />
+            <SelectTrigger id="new-task-app" className="h-8">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={APP_AUTO}>— auto —</SelectItem>
+              <SelectItem value={APP_AUTO}>
+                Auto (let the coordinator decide)
+              </SelectItem>
               {apps.map((a) => {
                 const branch = branchByApp.get(a.name);
                 return (
@@ -364,25 +344,41 @@ function NewTaskDialogBody({
               })}
             </SelectContent>
           </Select>
+          <p className="text-[11px] text-muted-foreground">
+            Pick a specific app to constrain dispatch — leave blank to let the
+            coordinator decide based on the task body.
+          </p>
         </div>
 
-        {create.isError && (
-          <div className="rounded-sm border border-status-blocked/40 bg-status-blocked/10 px-3 py-2 font-mono text-micro text-status-blocked">
-            {(create.error as Error).message}
-          </div>
-        )}
+        <Textarea
+          ref={bodyRef}
+          id="new-task-body"
+          autoFocus
+          required
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              void submit();
+            }
+          }}
+          rows={8}
+          placeholder="What needs to happen? First line becomes the task title; rest is context, acceptance criteria, contract links…"
+          className="font-mono min-h-[180px]"
+        />
       </form>
 
       <DialogFooter className="gap-2">
         <Button type="button" variant="ghost" onClick={onClose}>
-          cancel
+          Cancel
         </Button>
         <Button
           type="submit"
           form="new-task-form"
           disabled={create.isPending || !body.trim()}
         >
-          {create.isPending ? "creating…" : "create task"}
+          {create.isPending ? "Creating…" : "Create"}
           <kbd className="ml-1 font-mono text-[9px] opacity-60">⌘↵</kbd>
         </Button>
       </DialogFooter>

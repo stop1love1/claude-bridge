@@ -13,11 +13,11 @@ import {
   Image as ImageIcon,
   FileText,
   X,
-  Mic,
 } from "lucide-react";
 import { api } from "@/api/client";
 import { useToast } from "@/components/Toasts";
 import { ChatSettingsMenu } from "@/components/ChatSettingsMenu";
+import { MicButton } from "@/components/MicButton";
 import { QuickAddMenu } from "@/components/QuickAddMenu";
 import { SlashActionsPalette } from "@/components/SlashActionsPalette";
 import {
@@ -148,6 +148,12 @@ export interface MessageComposerProps {
   onStop?: () => Promise<void> | void;
   /** Optional slot — fired after a successful send. */
   onSent?: () => void;
+  /** Optional handler for the slash palette's `/clear` row. When omitted
+   *  the row renders disabled. */
+  onClearConversation?: () => void;
+  /** Optional handler for the slash palette's `/rewind` row. When omitted
+   *  the row renders disabled. */
+  onRewindRequest?: () => void;
 }
 
 /**
@@ -164,6 +170,8 @@ function MessageComposerInner({
   onSend,
   onStop,
   onSent,
+  onClearConversation,
+  onRewindRequest,
 }: MessageComposerProps) {
   const storageKey = useMemo(() => settingsKey(taskId), [taskId]);
   const [draft, setDraft] = useState("");
@@ -394,10 +402,10 @@ function MessageComposerInner({
   };
 
   // ── Drag-and-drop ──────────────────────────────────────────────────
-  const [dragOver, setDragOver] = useState(false);
+  // We no longer track drag state visually (main has no dragover
+  // indicator), but we still listen for the drop so the file lands.
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    setDragOver(false);
     const f = e.dataTransfer.files?.[0];
     if (f) await uploadOne(f);
   };
@@ -507,10 +515,8 @@ function MessageComposerInner({
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) {
           e.preventDefault();
-          setDragOver(true);
         }
       }}
-      onDragLeave={() => setDragOver(false)}
       onDrop={(e) => void onDrop(e)}
     >
       <input
@@ -540,12 +546,8 @@ function MessageComposerInner({
 
       <div
         className={cn(
-          "relative rounded-md border bg-background transition-colors overflow-visible",
-          focused
-            ? "border-primary/60 ring-2 ring-primary/20"
-            : dragOver
-              ? "border-primary border-dashed"
-              : "border-border",
+          "relative rounded-xl border bg-background transition-colors overflow-visible",
+          focused ? "border-primary/60" : "border-border",
         )}
       >
         {attachments.length > 0 && (
@@ -553,7 +555,7 @@ function MessageComposerInner({
             {attachments.map((a) => (
               <li
                 key={a.path}
-                className="group inline-flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-sm bg-secondary border border-border text-[10.5px]"
+                className="group inline-flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded bg-secondary border border-border text-[10.5px]"
               >
                 {a.isImage ? (
                   <ImageIcon size={11} className="text-success" />
@@ -569,7 +571,7 @@ function MessageComposerInner({
                 <button
                   type="button"
                   onClick={() => removeAttachment(a.path)}
-                  className="text-muted-foreground hover:text-destructive p-0.5 rounded-sm"
+                  className="text-muted-foreground hover:text-destructive p-0.5 rounded"
                   aria-label="Remove attachment"
                 >
                   <X size={10} />
@@ -591,32 +593,53 @@ function MessageComposerInner({
             onBlur={() => setFocused(false)}
             placeholder={placeholder}
             rows={1}
-            className="w-full bg-transparent border-0 rounded-t-md pl-3 pr-9 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none leading-relaxed placeholder:text-muted-foreground overflow-y-hidden"
+            className="w-full bg-transparent border-0 rounded-t-xl pl-3 pr-9 pt-2.5 pb-1 text-[13px] resize-none focus:outline-none leading-relaxed placeholder:text-muted-foreground overflow-y-hidden"
             style={{ minHeight: `${MIN_H}px`, maxHeight: `${MAX_H}px` }}
           />
-          {/* MicButton placeholder — voice input deferred. */}
-          <button
-            type="button"
-            disabled
-            title="Voice input not available in this build"
-            aria-label="Voice input (disabled)"
-            className="absolute right-1.5 top-1.5 inline-flex items-center justify-center h-6 w-6 rounded-sm text-muted-foreground/50 cursor-not-allowed"
-          >
-            <Mic size={12} />
-          </button>
+          <div className="absolute right-1.5 top-1.5">
+            <MicButton
+              onTranscript={(text, opts) => {
+                // Append final transcripts only — interim live preview
+                // would conflict with the auto-resize / mention detection
+                // logic. Drop them silently.
+                if (!opts.final) return;
+                const trimmed = text.trim();
+                if (!trimmed) return;
+                setDraft((d) => (d ? `${d} ${trimmed}` : trimmed));
+              }}
+            />
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5 px-1.5 pb-1.5 pt-1">
           <QuickAddMenu
             onAttach={onPickFile}
-            onMention={() => insertAtCaret("@")}
+            onMention={() => {
+              // Open the MentionPicker at the caret instead of inserting
+              // a bare `@`. We splice an `@` in then prime the mention
+              // detector via a microtask so it picks the new position.
+              const ta = taRef.current;
+              const caret = ta?.selectionStart ?? draft.length;
+              const before = draft.slice(0, caret);
+              const after = draft.slice(caret);
+              const next = `${before}@${after}`;
+              setDraft(next);
+              requestAnimationFrame(() => {
+                const el = taRef.current;
+                if (!el) return;
+                el.focus();
+                const newCaret = before.length + 1;
+                el.setSelectionRange(newCaret, newCaret);
+                setMention({ start: before.length, query: "" });
+              });
+            }}
           />
           {uploading && (
             <Loader2 size={12} className="text-muted-foreground animate-spin" />
           )}
 
           <span
-            className="hidden sm:inline text-[10px] text-muted-foreground ml-1 truncate"
+            className="hidden sm:inline text-[10px] text-muted-foreground/60 ml-1 truncate"
             aria-hidden="true"
           >
             Enter to send · Shift+Enter newline · @ mention · / commands
@@ -629,7 +652,7 @@ function MessageComposerInner({
                 type="button"
                 onClick={() => void handleStop()}
                 disabled={stopping}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
+                className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
                 title={stopping ? "Stopping…" : "Stop response"}
                 aria-label="Stop"
               >
@@ -643,7 +666,7 @@ function MessageComposerInner({
               <button
                 type="submit"
                 disabled={!canSend || sending}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
+                className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
                 title={sending ? "Sending…" : "Send (Enter)"}
                 aria-label="Send"
               >
@@ -665,6 +688,8 @@ function MessageComposerInner({
           repo={repo}
           query={slashQuery}
           onPick={onSlashPick}
+          onClearConversation={onClearConversation}
+          onRewind={onRewindRequest}
         />
       </div>
 

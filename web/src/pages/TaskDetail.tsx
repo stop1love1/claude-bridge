@@ -9,7 +9,6 @@
 
 import { useCallback, useEffect } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
 import TaskDetailView from "@/components/TaskDetailView";
 
 type MobileTab = "detail" | "chat";
@@ -70,22 +69,24 @@ export default function TaskDetail() {
 
   if (!id) {
     return (
-      <div className="px-6 py-10 font-mono text-small text-status-blocked">
-        missing task id.
+      <div className="px-6 py-10 text-sm text-destructive">
+        Missing task id.
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-[calc(100vh-3.5rem)] flex-col">
-      <div className="shrink-0 border-b border-border bg-background px-6 py-2 flex items-center gap-3">
+    <div className="flex h-[calc(100vh-2.75rem)] flex-col">
+      <div className="shrink-0 px-3 py-2 border-b border-border bg-card flex items-center gap-2 text-xs">
         <Link
           to="/tasks"
-          className="inline-flex items-center gap-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground hover:text-foreground"
+          className="font-mono text-fg-dim hover:text-foreground"
+          title="Back to tasks"
         >
-          <ArrowLeft size={12} />
-          tasks
+          {id}
         </Link>
+        <span className="text-fg-dim">·</span>
+        <span className="text-foreground truncate">Task detail</span>
         <span className="ml-auto hidden font-mono text-[10px] text-fg-dim md:inline">
           press <kbd className="rounded border border-border px-1">Esc</kbd> to go back
         </span>

@@ -64,10 +64,10 @@ export function PublicUrlSection() {
     try {
       await update.mutateAsync({ ...data, publicUrl: validation.origin });
       toast.success(
-        validation.origin ? "public URL saved" : "public URL cleared",
+        validation.origin ? "Public URL saved" : "Public URL cleared",
       );
     } catch (e) {
-      toast.error("save failed", (e as Error).message);
+      toast.error("Save failed", (e as Error).message);
     }
   };
 
@@ -75,31 +75,29 @@ export function PublicUrlSection() {
     try {
       await update.mutateAsync({ ...data, publicUrl: "" });
       setDraft("");
-      toast.info("public URL cleared");
+      toast.info("Public URL cleared");
     } catch (e) {
-      toast.error("clear failed", (e as Error).message);
+      toast.error("Clear failed", (e as Error).message);
     }
   };
 
   return (
-    <section className="rounded-sm border border-border bg-card p-5">
+    <section className="rounded-lg border border-border bg-card p-4">
       <div className="mb-1 flex items-center gap-2">
         <Globe size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          public URL
-        </h2>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Public URL</h3>
       </div>
-      <p className="mb-4 text-small text-muted-foreground">
-        the origin the bridge is reachable at after deploy. used to render
-        clickable links in webhook payloads, telegram pings, magic-link
-        emails. leave blank when running locally.
+      <p className="mb-4 text-[11px] text-muted-foreground">
+        The origin the bridge is reachable at after deploy. Used to render
+        clickable links in webhook payloads, Telegram pings, magic-link
+        emails. Leave blank when running locally.
       </p>
 
       {isLoading ? (
-        <Skeleton className="h-8 w-full rounded-sm" />
+        <Skeleton className="h-8 w-full rounded-md" />
       ) : (
         <div className="grid gap-2">
-          <Label htmlFor="public-url">public origin</Label>
+          <Label htmlFor="public-url">Public origin</Label>
           <Input
             id="public-url"
             value={draft}
@@ -110,12 +108,12 @@ export function PublicUrlSection() {
             autoComplete="off"
           />
           {!validation.ok && trimmed !== "" ? (
-            <p className="font-mono text-[11px] text-status-blocked">
+            <p className="text-[11px] text-destructive">
               {validation.reason}
             </p>
           ) : (
             <p className="text-[11px] text-muted-foreground">
-              origin only — http:// or https://. path / query / hash get stripped on save.
+              Origin only — http:// or https://. Path / query / hash get stripped on save.
             </p>
           )}
           <div className="flex items-center gap-2 pt-1">
@@ -123,7 +121,7 @@ export function PublicUrlSection() {
               onClick={() => void submit()}
               disabled={update.isPending || !canSave}
             >
-              {update.isPending ? "saving…" : "save"}
+              {update.isPending ? "Saving…" : "Save"}
             </Button>
             {current && (
               <>
@@ -132,9 +130,9 @@ export function PublicUrlSection() {
                   variant="ghost"
                   onClick={() => void clear()}
                   disabled={update.isPending}
-                  className="text-muted-foreground hover:text-status-blocked"
+                  className="text-fg-dim hover:text-destructive"
                 >
-                  clear
+                  Clear
                 </Button>
               </>
             )}

@@ -1,4 +1,11 @@
+// Reshaped to match main's tighter, single-scroll form: a `<fieldset>`
+// per concern (branch strategy / toggles / integration / retry budgets)
+// instead of the seven-tab spread we used to ship. Drops verify /
+// quality / extras (SPA-only additions main doesn't carry) — those land
+// when their own panels return.
+
 import { useMemo, useState } from "react";
+import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,14 +18,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/Toasts";
 import { api } from "@/api/client";
 import { qk } from "@/api/queries";
@@ -26,13 +25,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
   App,
   AppGitSettings,
-  AppQuality,
   AppRetry,
-  AppVerify,
   GitBranchMode,
   GitIntegrationMode,
-  GitWorktreeMode,
-  AppExtras,
 } from "@/api/types";
 
 interface Props {
@@ -44,49 +39,88 @@ interface Props {
 // before the round-trip. Same regex Go uses server-side.
 const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-const BRANCH_MODES: { value: GitBranchMode; label: string }[] = [
-  { value: "current", label: "current — use whatever HEAD is on" },
-  { value: "fixed", label: "fixed — checkout a named branch" },
-  { value: "auto-create", label: "auto-create — claude/<task-id>" },
+const MODE_OPTIONS: Array<{
+  value: GitBranchMode;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "current",
+    label: "Use the currently-checked-out branch",
+    hint: "Default. Claude works on whatever branch HEAD points at when the agent starts.",
+  },
+  {
+    value: "fixed",
+    label: "Always work on a fixed branch",
+    hint: "Bridge runs `git checkout <branch>` (or creates it from the current branch) before each task.",
+  },
+  {
+    value: "auto-create",
+    label: "Auto-create a new branch per task",
+    hint: "Bridge creates `claude/<task-id>` from the current branch — keeps each task isolated.",
+  },
 ];
 
-const WORKTREE_MODES: { value: GitWorktreeMode; label: string }[] = [
-  { value: "disabled", label: "disabled — operate in the main tree" },
-  { value: "enabled", label: "enabled — isolated worktree per run" },
-];
-
-const INTEGRATION_MODES: {
+const INTEGRATION_OPTIONS: Array<{
   value: GitIntegrationMode;
   label: string;
   hint: string;
-}[] = [
+}> = [
   {
     value: "none",
-    label: "none — leave the work branch alone",
-    hint: "default. operator merges or opens a PR by hand.",
+    label: "None — leave the work branch alone",
+    hint: "Default. Operator merges or opens a PR by hand.",
   },
   {
     value: "auto-merge",
-    label: "auto-merge — git merge into target",
-    hint: "bridge runs git merge --no-ff after a successful task. conflict aborts cleanly.",
+    label: "Auto-merge into a target branch (local git)",
+    hint: "Bridge runs `git merge --no-ff` after the work branch commits. Conflict aborts cleanly; work branch preserved.",
   },
   {
     value: "pull-request",
-    label: "pull-request — open a PR/MR",
-    hint: "bridge spawns a devops agent that uses gh / glab. requires remote + matching CLI.",
+    label: "Open a PR/MR via gh / glab (devops agent)",
+    hint: "Bridge spawns a devops agent that uses the matching CLI. Requires git remote + `gh` or `glab` installed.",
   },
 ];
 
-const RETRY_GATES: Array<{ key: keyof AppRetry; label: string; hint: string }> = [
-  { key: "crash", label: "crash", hint: "child agent exited non-zero" },
-  { key: "verify", label: "verify", hint: "format/lint/typecheck/test/build" },
-  { key: "claim", label: "claim", hint: "claim-vs-diff mismatch" },
-  { key: "preflight", label: "preflight", hint: "preflight gate failure" },
-  { key: "style", label: "style", hint: "style-critic gate" },
-  { key: "semantic", label: "semantic", hint: "semantic verifier" },
-];
-
 const MAX_RETRY_PER_GATE = 5;
+
+const RETRY_GATES: Array<{
+  key: keyof AppRetry;
+  label: string;
+  hint: string;
+}> = [
+  {
+    key: "crash",
+    label: "Crash retry",
+    hint: "Child agent exited non-zero. Re-runs with the failure transcript injected.",
+  },
+  {
+    key: "verify",
+    label: "Verify-chain retry",
+    hint: "format/lint/typecheck/test/build failed. Re-runs with the failing step's output.",
+  },
+  {
+    key: "claim",
+    label: "Claim-vs-diff retry",
+    hint: "Report's `## Changed files` didn't match the actual diff. Re-runs to fix the discrepancy.",
+  },
+  {
+    key: "preflight",
+    label: "Preflight retry",
+    hint: "Agent edited code without enough Read calls first. Re-runs with a process directive.",
+  },
+  {
+    key: "style",
+    label: "Style-critic retry",
+    hint: "LLM critic flagged the diff as alien to the codebase. Re-runs with critic findings.",
+  },
+  {
+    key: "semantic",
+    label: "Semantic-verifier retry",
+    hint: "LLM verifier judged the diff doesn't accomplish the task. Re-runs with concerns.",
+  },
+];
 
 /**
  * Strategy ladder for attempt N (purely informational — the prompt
@@ -94,58 +128,36 @@ const MAX_RETRY_PER_GATE = 5;
  */
 const STRATEGY_AT_ATTEMPT: Record<number, string> = {
   1: "same-context (full prompt + failure)",
-  2: "fresh-focus (drop chatter, narrow scope)",
+  2: "fresh-focus (drop chatter, focus narrowly)",
   3: "fixer-only (one-line directive)",
-  4: "fixer-only",
-  5: "fixer-only",
 };
 
-/**
- * Tabbed editor — Identity / Git / Retry / Verify / Quality / Extras.
- * Pass `app=null` to close. Use `key={app?.name ?? "closed"}` on the
- * parent so the local draft resets when the target app changes.
- */
+function defaultGit(): AppGitSettings {
+  return {
+    branchMode: "current",
+    fixedBranch: "",
+    autoCommit: false,
+    autoPush: false,
+    worktreeMode: "disabled",
+    mergeTargetBranch: "",
+    integrationMode: "none",
+  };
+}
+
 export function AppSettingsDialog({ app, onClose }: Props) {
   const toast = useToast();
   const qc = useQueryClient();
 
   // ---- draft state ------------------------------------------------------
   const [name, setName] = useState<string>(app?.name ?? "");
-  const [description, setDescription] = useState<string>(app?.description ?? "");
+  const [description, setDescription] = useState<string>(
+    app?.description ?? "",
+  );
   const [git, setGit] = useState<AppGitSettings>(() =>
-    app?.git
-      ? {
-          branchMode: app.git.branchMode ?? "current",
-          fixedBranch: app.git.fixedBranch ?? "",
-          autoCommit: app.git.autoCommit ?? false,
-          autoPush: app.git.autoPush ?? false,
-          worktreeMode: app.git.worktreeMode ?? "disabled",
-          mergeTargetBranch: app.git.mergeTargetBranch ?? "",
-          integrationMode: app.git.integrationMode ?? "none",
-        }
-      : {
-          branchMode: "current",
-          fixedBranch: "",
-          autoCommit: false,
-          autoPush: false,
-          worktreeMode: "disabled",
-          mergeTargetBranch: "",
-          integrationMode: "none",
-        },
+    app?.git ? { ...defaultGit(), ...app.git } : defaultGit(),
   );
   const [retry, setRetry] = useState<AppRetry>(() => app?.retry ?? {});
-  const [verify, setVerify] = useState<AppVerify>(() => app?.verify ?? {});
-  const [quality, setQuality] = useState<AppQuality>(() => app?.quality ?? {});
-  const [pinnedFilesText, setPinnedFilesText] = useState<string>(() =>
-    (app?.pinnedFiles ?? []).join("\n"),
-  );
-  const [symbolDirsText, setSymbolDirsText] = useState<string>(() =>
-    (app?.symbolDirs ?? []).join("\n"),
-  );
-  const [extrasText, setExtrasText] = useState<string>(() =>
-    app?.extras ? JSON.stringify(app.extras, null, 2) : "{}",
-  );
-  const [extrasError, setExtrasError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   // The Go bridge doesn't expose PATCH /api/apps/{name}; the only
   // documented mutations are POST /api/apps (add) and DELETE. We
@@ -167,28 +179,34 @@ export function AppSettingsDialog({ app, onClose }: Props) {
     },
   });
 
-  const extrasParsed = useMemo<AppExtras | null>(() => {
-    try {
-      const parsed = JSON.parse(extrasText) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as AppExtras;
-      }
-      return null;
-    } catch {
-      return null;
+  // ---- dirty tracking ---------------------------------------------------
+  const dirty = useMemo(() => {
+    if (!app) return false;
+    if (name.trim() !== app.name) return true;
+    if ((description ?? "").trim() !== (app.description ?? "")) return true;
+    const orig = app.git ?? defaultGit();
+    if (git.branchMode !== (orig.branchMode ?? "current")) return true;
+    if ((git.fixedBranch ?? "").trim() !== (orig.fixedBranch ?? "")) return true;
+    if ((git.autoCommit ?? false) !== (orig.autoCommit ?? false)) return true;
+    if ((git.autoPush ?? false) !== (orig.autoPush ?? false)) return true;
+    if (
+      (git.mergeTargetBranch ?? "").trim() !== (orig.mergeTargetBranch ?? "")
+    )
+      return true;
+    if ((git.integrationMode ?? "none") !== (orig.integrationMode ?? "none"))
+      return true;
+    const origRetry = app.retry ?? {};
+    const keys = new Set<keyof AppRetry>([
+      ...(Object.keys(origRetry) as (keyof AppRetry)[]),
+      ...(Object.keys(retry) as (keyof AppRetry)[]),
+    ]);
+    for (const k of keys) {
+      if ((origRetry[k] ?? null) !== (retry[k] ?? null)) return true;
     }
-  }, [extrasText]);
-
-  const trimmedName = name.trim();
-  const nameValid = APP_NAME_RE.test(trimmedName);
+    return false;
+  }, [app, name, description, git, retry]);
 
   if (!app) return null;
-
-  const splitLines = (txt: string): string[] =>
-    txt
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
 
   // Switching integration mode promotes the matching git settings so
   // the mode is internally consistent the moment it lands.
@@ -210,7 +228,8 @@ export function AppSettingsDialog({ app, onClose }: Props) {
   };
 
   const submit = async () => {
-    if (!nameValid) {
+    const trimmedName = name.trim();
+    if (!APP_NAME_RE.test(trimmedName)) {
       toast.error(
         "invalid name",
         "letters, digits, dot, dash, underscore; must start alphanumeric",
@@ -222,424 +241,307 @@ export function AppSettingsDialog({ app, onClose }: Props) {
       return;
     }
     const targetBranch = (git.mergeTargetBranch ?? "").trim();
-    if (
-      (git.integrationMode ?? "none") !== "none" &&
-      !targetBranch
-    ) {
+    if ((git.integrationMode ?? "none") !== "none" && !targetBranch) {
       toast.error(
         "validation",
-        "integration needs a target branch (or set mode to none)",
+        "integration needs a target branch (or set mode to None)",
       );
       return;
     }
-    if (extrasText.trim().length > 0) {
-      try {
-        const parsed = JSON.parse(extrasText) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          setExtrasError("extras must be a JSON object");
-          return;
-        }
-      } catch (e) {
-        setExtrasError(`invalid JSON: ${(e as Error).message}`);
-        return;
-      }
-    }
-    setExtrasError(null);
+    setSubmitting(true);
     try {
       await update.mutateAsync({
         name: trimmedName,
         description: description.trim(),
         git,
         retry,
-        verify,
-        quality,
-        pinnedFiles: splitLines(pinnedFilesText),
-        symbolDirs: splitLines(symbolDirsText),
-        extras: extrasParsed ?? {},
       });
       toast.success(`saved ${trimmedName}`);
       onClose();
     } catch (e) {
       toast.error("save failed", (e as Error).message);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>
-            edit <span className="font-mono text-foreground">{app.name}</span>
+          <DialogTitle className="flex items-center gap-2">
+            <Settings size={16} />
+            <span>
+              Edit app — <span className="font-mono">{app.name}</span>
+            </span>
           </DialogTitle>
           <DialogDescription>
-            git workflow, retry budgets, verify commands, quality gates, and
-            extras for the bridge to honor when running tasks here.
+            Update the app&apos;s identity and how the bridge prepares git for
+            tasks targeting it.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="id" className="w-full">
-          <TabsList>
-            <TabsTrigger value="id">identity</TabsTrigger>
-            <TabsTrigger value="git">git</TabsTrigger>
-            <TabsTrigger value="integration">integration</TabsTrigger>
-            <TabsTrigger value="retry">retry</TabsTrigger>
-            <TabsTrigger value="verify">verify</TabsTrigger>
-            <TabsTrigger value="quality">quality</TabsTrigger>
-            <TabsTrigger value="extras">extras</TabsTrigger>
-          </TabsList>
-
-          {/* ─── Identity ─── */}
-          <TabsContent value="id" className="grid gap-3">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+          className="grid gap-4"
+        >
+          <div className="grid gap-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="app-name">name</Label>
+              <Label htmlFor="app-name">Name</Label>
               <Input
                 id="app-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder={app.name}
-                spellCheck={false}
+                className="font-mono h-8"
                 autoComplete="off"
               />
-              {!nameValid && (
-                <p className="font-mono text-micro text-status-blocked">
-                  invalid characters — use letters, digits, dot, dash,
-                  underscore; must start alphanumeric
-                </p>
-              )}
+              <p className="text-[11px] text-muted-foreground">
+                Used by the coordinator to dispatch tasks to this folder.
+              </p>
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="app-desc">description</Label>
+              <Label htmlFor="app-description">Description</Label>
               <Textarea
-                id="app-desc"
+                id="app-description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
-                placeholder="one or two lines about what this app does — fed to dispatch heuristic"
+                placeholder="One or two lines about what this app does — fed to the dispatch heuristic."
+                className="text-xs"
               />
             </div>
-          </TabsContent>
+          </div>
 
-          {/* ─── Git ─── */}
-          <TabsContent value="git" className="grid gap-3">
+          <fieldset className="grid gap-2 border-t border-border pt-3">
+            <legend className="text-xs font-medium text-foreground mb-1">
+              Branch strategy
+            </legend>
+            {MODE_OPTIONS.map((opt) => {
+              const checked = git.branchMode === opt.value;
+              return (
+                <label
+                  key={opt.value}
+                  className={`flex gap-2 rounded-md border p-2 cursor-pointer transition-colors ${
+                    checked
+                      ? "border-primary/50 bg-primary/5"
+                      : "border-border hover:bg-accent/40"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="branchMode"
+                    value={opt.value}
+                    checked={checked}
+                    onChange={() =>
+                      setGit((g) => ({ ...g, branchMode: opt.value }))
+                    }
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-xs font-medium">
+                      {opt.label}
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      {opt.hint}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+
+          {git.branchMode === "fixed" && (
             <div className="grid gap-1.5">
-              <Label htmlFor="branch-mode">branch mode</Label>
-              <Select
-                value={git.branchMode}
-                onValueChange={(v) =>
-                  setGit({ ...git, branchMode: v as GitBranchMode })
+              <Label htmlFor="fixed-branch">Branch name</Label>
+              <Input
+                id="fixed-branch"
+                value={git.fixedBranch}
+                onChange={(e) =>
+                  setGit((g) => ({ ...g, fixedBranch: e.target.value }))
                 }
-              >
-                <SelectTrigger id="branch-mode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {BRANCH_MODES.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {git.branchMode === "fixed" && (
-              <div className="grid gap-1.5">
-                <Label htmlFor="fixed-branch">fixed branch</Label>
-                <Input
-                  id="fixed-branch"
-                  value={git.fixedBranch}
-                  onChange={(e) =>
-                    setGit({ ...git, fixedBranch: e.target.value })
-                  }
-                  placeholder="develop"
-                />
-              </div>
-            )}
-
-            <div className="grid gap-1.5">
-              <Label htmlFor="worktree-mode">worktree mode</Label>
-              <Select
-                value={git.worktreeMode ?? "disabled"}
-                onValueChange={(v) =>
-                  setGit({ ...git, worktreeMode: v as GitWorktreeMode })
-                }
-              >
-                <SelectTrigger id="worktree-mode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {WORKTREE_MODES.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <SwitchRow
-              label="auto-commit"
-              hint="run `git add -A && git commit` after a successful run"
-              checked={git.autoCommit}
-              onChange={(v) =>
-                setGit({
-                  ...git,
-                  autoCommit: v,
-                  autoPush: v ? git.autoPush : false,
-                })
-              }
-            />
-            <SwitchRow
-              label="auto-push"
-              hint="run `git push` after auto-commit (requires auto-commit)"
-              checked={git.autoPush}
-              disabled={!git.autoCommit}
-              onChange={(v) => setGit({ ...git, autoPush: v })}
-            />
-          </TabsContent>
-
-          {/* ─── Integration ─── */}
-          <TabsContent value="integration" className="grid gap-3">
-            <p className="-mt-1 text-[11px] text-muted-foreground">
-              what the bridge does after a task lands a successful commit on
-              the work branch.
-            </p>
-            <div className="grid gap-1.5">
-              <Label htmlFor="integration-mode">mode</Label>
-              <Select
-                value={git.integrationMode ?? "none"}
-                onValueChange={(v) =>
-                  onIntegrationModeChange(v as GitIntegrationMode)
-                }
-              >
-                <SelectTrigger id="integration-mode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {INTEGRATION_MODES.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                placeholder="develop"
+                className="font-mono h-8"
+                autoFocus
+              />
               <p className="text-[11px] text-muted-foreground">
-                {INTEGRATION_MODES.find(
-                  (m) => m.value === (git.integrationMode ?? "none"),
-                )?.hint ?? ""}
+                Bridge will check out this branch (creating it from the
+                current HEAD if missing) before each task.
               </p>
             </div>
+          )}
 
-            {(git.integrationMode === "auto-merge" ||
-              git.integrationMode === "pull-request") && (
-              <div className="grid gap-1.5">
-                <Label htmlFor="merge-target">merge target branch</Label>
+          <div className="grid gap-2 border-t border-border pt-3">
+            <ToggleRow
+              label="Auto-commit when the task finishes"
+              hint="Runs `git add -A && git commit` with the task title as the message after a successful run."
+              checked={git.autoCommit}
+              onChange={(v) =>
+                setGit((g) => ({
+                  ...g,
+                  autoCommit: v,
+                  // Disabling auto-commit cascades: no push, no integration.
+                  autoPush: v ? g.autoPush : false,
+                  integrationMode: v ? g.integrationMode : "none",
+                  mergeTargetBranch: v ? g.mergeTargetBranch : "",
+                }))
+              }
+            />
+            <ToggleRow
+              label="Auto-push after auto-commit"
+              hint="Runs `git push` to the tracked upstream. Implies auto-commit."
+              checked={git.autoPush}
+              disabled={
+                !git.autoCommit || git.integrationMode === "pull-request"
+              }
+              onChange={(v) =>
+                setGit((g) => ({
+                  ...g,
+                  autoPush: v,
+                  autoCommit: v || g.autoCommit,
+                }))
+              }
+            />
+          </div>
+
+          <fieldset className="grid gap-2 border-t border-border pt-3">
+            <legend className="text-xs font-medium text-foreground mb-1">
+              Post-success integration
+            </legend>
+            {INTEGRATION_OPTIONS.map((opt) => {
+              const checked = (git.integrationMode ?? "none") === opt.value;
+              return (
+                <label
+                  key={opt.value}
+                  className={`flex gap-2 rounded-md border p-2 cursor-pointer transition-colors ${
+                    checked
+                      ? "border-primary/50 bg-primary/5"
+                      : "border-border hover:bg-accent/40"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="integrationMode"
+                    value={opt.value}
+                    checked={checked}
+                    onChange={() => onIntegrationModeChange(opt.value)}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-xs font-medium">
+                      {opt.label}
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      {opt.hint}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+            {(git.integrationMode ?? "none") !== "none" && (
+              <div className="grid gap-1.5 mt-1">
+                <Label htmlFor="merge-target" className="text-xs font-medium">
+                  Target branch
+                </Label>
                 <Input
                   id="merge-target"
                   value={git.mergeTargetBranch ?? ""}
                   onChange={(e) =>
-                    setGit({ ...git, mergeTargetBranch: e.target.value })
+                    setGit((g) => ({
+                      ...g,
+                      mergeTargetBranch: e.target.value,
+                    }))
                   }
                   placeholder="main"
+                  className="font-mono h-8"
                 />
                 <p className="text-[11px] text-muted-foreground">
                   {git.integrationMode === "auto-merge"
-                    ? "bridge runs git checkout <target> + git merge --no-ff. conflict aborts cleanly."
-                    : "bridge spawns the devops agent which uses gh / glab to open a PR/MR."}
+                    ? "Bridge runs git checkout <target> + git merge --no-ff. Conflict aborts cleanly; work branch preserved."
+                    : "Bridge spawns the devops agent which uses gh / glab to open a PR/MR. Requires git remote + the matching CLI installed."}
                 </p>
               </div>
             )}
-          </TabsContent>
+          </fieldset>
 
-          {/* ─── Retry ─── */}
-          <TabsContent value="retry" className="grid gap-2">
-            <p className="-mt-1 text-[11px] text-muted-foreground">
-              per-gate attempt cap. unset = bridge default (1). higher budgets
-              unlock the strategy ladder.
+          <fieldset className="grid gap-2 border-t border-border pt-3">
+            <legend className="text-xs font-medium text-foreground mb-1">
+              Retry budgets
+            </legend>
+            <p className="text-[11px] text-muted-foreground -mt-1 mb-1">
+              Per-gate attempt cap. Default 1 = single retry. Higher budgets
+              unlock the strategy ladder: attempt 2 = focused re-prompt,
+              attempt 3+ = fixer-only directive.
             </p>
             {RETRY_GATES.map((gate) => {
               const value = retry[gate.key] ?? 1;
               return (
                 <div
                   key={gate.key}
-                  className="flex items-center justify-between gap-3 rounded-sm border border-border p-2"
+                  className="grid gap-1 rounded-md border border-border p-2"
                 >
-                  <div className="min-w-0">
-                    <div className="font-mono text-micro uppercase tracking-wideish text-foreground">
-                      {gate.label}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {gate.hint}
-                    </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium">{gate.label}</span>
+                    <select
+                      value={String(value)}
+                      onChange={(e) => {
+                        const n = parseInt(e.target.value, 10);
+                        setRetry((r) => ({ ...r, [gate.key]: n }));
+                      }}
+                      className="h-7 rounded border border-input bg-background px-2 text-xs font-mono"
+                    >
+                      {Array.from(
+                        { length: MAX_RETRY_PER_GATE + 1 },
+                        (_, i) => (
+                          <option key={i} value={i}>
+                            {i === 0
+                              ? "0 (off)"
+                              : i === MAX_RETRY_PER_GATE
+                                ? `${i} attempts (max)`
+                                : `${i} attempt${i === 1 ? "" : "s"}`}
+                          </option>
+                        ),
+                      )}
+                    </select>
                   </div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={MAX_RETRY_PER_GATE}
-                    value={value}
-                    onChange={(e) => {
-                      let n = parseInt(e.target.value, 10);
-                      if (Number.isNaN(n)) n = 0;
-                      if (n < 0) n = 0;
-                      if (n > MAX_RETRY_PER_GATE) n = MAX_RETRY_PER_GATE;
-                      setRetry({ ...retry, [gate.key]: n });
-                    }}
-                    className="h-7 w-20 text-center font-mono text-xs"
-                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    {gate.hint}
+                  </span>
+                  {value >= 2 && (
+                    <span className="text-[10px] text-muted-foreground/80 font-mono">
+                      strategy: 1→{STRATEGY_AT_ATTEMPT[1]}; 2→
+                      {STRATEGY_AT_ATTEMPT[2]}
+                      {value >= 3 ? `; ≥3→${STRATEGY_AT_ATTEMPT[3]}` : ""}
+                    </span>
+                  )}
                 </div>
               );
             })}
+          </fieldset>
 
-            <div className="mt-2 rounded-sm border border-border p-2">
-              <div className="mb-1 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-                strategy ladder
-              </div>
-              <table className="w-full font-mono text-[11px]">
-                <thead>
-                  <tr className="text-left text-muted-foreground">
-                    <th className="w-16 font-normal">attempt</th>
-                    <th className="font-normal">strategy</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(STRATEGY_AT_ATTEMPT).map(([n, s]) => (
-                    <tr key={n} className="text-foreground">
-                      <td className="tabular-nums">{n}</td>
-                      <td className="text-muted-foreground">{s}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </TabsContent>
-
-          {/* ─── Verify ─── */}
-          <TabsContent value="verify" className="grid gap-3">
-            <p className="-mt-1 text-[11px] text-muted-foreground">
-              shell commands the verify-chain runs after each successful
-              child. leave blank to skip a step.
-            </p>
-            {(["format", "lint", "typecheck", "test", "build"] as const).map(
-              (key) => (
-                <div key={key} className="grid gap-1.5">
-                  <Label htmlFor={`verify-${key}`}>{key}</Label>
-                  <Input
-                    id={`verify-${key}`}
-                    value={verify[key] ?? ""}
-                    onChange={(e) =>
-                      setVerify({ ...verify, [key]: e.target.value })
-                    }
-                    placeholder={defaultPlaceholder(key)}
-                    spellCheck={false}
-                  />
-                </div>
-              ),
-            )}
-          </TabsContent>
-
-          {/* ─── Quality ─── */}
-          <TabsContent value="quality" className="grid gap-3">
-            <p className="-mt-1 text-[11px] text-muted-foreground">
-              optional LLM-driven gates that run on a successful diff. each
-              one can re-prompt via its own retry budget.
-            </p>
-            <SwitchRow
-              label="style critic"
-              hint="LLM critic flags diffs that look alien to the codebase"
-              checked={!!quality.critic}
-              onChange={(v) => setQuality({ ...quality, critic: v })}
-            />
-            <SwitchRow
-              label="semantic verifier"
-              hint="LLM verifier judges whether the diff accomplishes the task"
-              checked={!!quality.verifier}
-              onChange={(v) => setQuality({ ...quality, verifier: v })}
-            />
-
-            <div className="grid gap-1.5">
-              <Label htmlFor="pinned-files">pinned files</Label>
-              <Textarea
-                id="pinned-files"
-                value={pinnedFilesText}
-                onChange={(e) => setPinnedFilesText(e.target.value)}
-                rows={4}
-                spellCheck={false}
-                placeholder="one path per line — always injected into the agent context"
-                className="font-mono"
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="symbol-dirs">symbol dirs</Label>
-              <Textarea
-                id="symbol-dirs"
-                value={symbolDirsText}
-                onChange={(e) => setSymbolDirsText(e.target.value)}
-                rows={3}
-                spellCheck={false}
-                placeholder="one directory per line — symbol indexer scopes here"
-                className="font-mono"
-              />
-            </div>
-          </TabsContent>
-
-          {/* ─── Extras ─── */}
-          <TabsContent value="extras" className="grid gap-2">
-            <p className="text-[11px] text-muted-foreground">
-              freeform JSON object. the bridge round-trips this verbatim;
-              consumers like the coordinator prompt may read it.
-            </p>
-            <Textarea
-              value={extrasText}
-              onChange={(e) => {
-                setExtrasText(e.target.value);
-                setExtrasError(null);
-              }}
-              rows={10}
-              spellCheck={false}
-              className="font-mono"
-            />
-            {extrasError && (
-              <p className="font-mono text-micro text-status-blocked">
-                {extrasError}
-              </p>
-            )}
-          </TabsContent>
-        </Tabs>
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={update.isPending}>
-            cancel
-          </Button>
-          <Button
-            onClick={() => void submit()}
-            disabled={update.isPending || !nameValid}
-          >
-            {update.isPending ? "saving…" : "save"}
-          </Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting || !dirty}>
+              {submitting ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
 }
 
-function defaultPlaceholder(key: keyof AppVerify): string {
-  switch (key) {
-    case "format":
-      return "pnpm fmt";
-    case "lint":
-      return "pnpm lint";
-    case "typecheck":
-      return "pnpm tsc --noEmit";
-    case "test":
-      return "pnpm test";
-    case "build":
-      return "pnpm build";
-    default:
-      return "";
-  }
-}
-
-function SwitchRow({
+function ToggleRow({
   label,
   hint,
   checked,
@@ -654,7 +556,7 @@ function SwitchRow({
 }) {
   return (
     <label
-      className={`flex items-start gap-2 rounded-sm border border-border p-2 ${
+      className={`flex items-start gap-2 ${
         disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
       }`}
     >
@@ -663,12 +565,10 @@ function SwitchRow({
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 accent-accent"
+        className="mt-0.5 accent-primary"
       />
       <span className="flex-1 min-w-0">
-        <span className="block font-mono text-micro uppercase tracking-wideish text-foreground">
-          {label}
-        </span>
+        <span className="block text-xs font-medium">{label}</span>
         <span className="block text-[11px] text-muted-foreground">{hint}</span>
       </span>
     </label>

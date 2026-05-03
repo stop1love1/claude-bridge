@@ -75,7 +75,7 @@ export default function TunnelsPage() {
 
   // ----- inline start form state -----
   const [provider, setProvider] = useState<TunnelProvider>("localtunnel");
-  const [port, setPort] = useState("7777");
+  const [port, setPort] = useState("3000");
   const [subdomain, setSubdomain] = useState("");
   const [label, setLabel] = useState("");
 
@@ -232,33 +232,26 @@ export default function TunnelsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-10">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Globe2 size={18} className="text-primary" />
-            <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
-              tunnels
-            </h1>
-            <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-              {tunnels.length} row{tunnels.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          <p className="mt-2 max-w-xl text-small text-muted-foreground">
-            expose a local port to the public internet. tunnels die when the
-            bridge process exits.
-          </p>
-        </div>
+    <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 space-y-5 sm:space-y-6">
+      <div className="flex items-center gap-2 mb-2">
+        <Globe2 size={18} className="text-primary" />
+        <h2 className="text-base sm:text-lg font-semibold">Tunnels</h2>
       </div>
+      <p className="text-[11px] sm:text-xs text-muted-foreground">
+        Expose a local port to the public internet. Pick{" "}
+        <code className="font-mono text-foreground">localtunnel</code>{" "}
+        for a one-click free tunnel, or{" "}
+        <code className="font-mono text-foreground">ngrok</code> for a
+        faster connection (one-time authtoken setup). Tunnels die when
+        the bridge process exits.
+      </p>
 
       {/* Inline start form — primary path. Modal flow is gone; the
           form is always visible above the list. */}
-      <section className="mb-6 rounded-sm border border-border bg-card p-4">
+      <section className="rounded-lg border border-border bg-card p-4">
         <div className="mb-3 flex items-center gap-2">
           <Play size={14} className="text-primary" />
-          <h3 className="font-mono text-micro uppercase tracking-wideish text-foreground">
-            start a tunnel
-          </h3>
+          <h3 className="text-[13px] sm:text-sm font-semibold">Start a tunnel</h3>
         </div>
 
         <form
@@ -270,7 +263,7 @@ export default function TunnelsPage() {
         >
           <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
             <div className="grid gap-1.5">
-              <Label htmlFor="tunnel-provider">provider</Label>
+              <Label htmlFor="tunnel-provider">Provider</Label>
               <Select
                 value={provider}
                 onValueChange={(v) => setProvider(v as TunnelProvider)}
@@ -287,7 +280,7 @@ export default function TunnelsPage() {
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="tunnel-port">port</Label>
+              <Label htmlFor="tunnel-port">Port</Label>
               <Input
                 id="tunnel-port"
                 value={port}
@@ -295,7 +288,7 @@ export default function TunnelsPage() {
                   setPort(e.target.value.replace(/[^\d]/g, ""))
                 }
                 inputMode="numeric"
-                placeholder="7777"
+                placeholder="3000"
                 autoComplete="off"
               />
               <div className="flex flex-wrap gap-1.5 text-[11px]">
@@ -308,7 +301,7 @@ export default function TunnelsPage() {
           <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
             <div className="grid gap-1.5">
               <Label htmlFor="tunnel-subdomain">
-                subdomain{" "}
+                Subdomain{" "}
                 <span className="text-muted-foreground">
                   {provider === "localtunnel"
                     ? "(optional)"
@@ -332,13 +325,13 @@ export default function TunnelsPage() {
               />
               <p className="text-[11px] text-muted-foreground sm:min-h-[2.6em] leading-snug">
                 {provider === "localtunnel"
-                  ? "sticky URL across restarts. 4–63 chars, lowercase + digits + hyphens."
+                  ? "Sticky URL across restarts. 4–63 chars, lowercase + digits + hyphens."
                   : "ngrok free-plan subdomains are randomized."}
               </p>
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="tunnel-label">
-                label <span className="text-muted-foreground">(optional)</span>
+                Label <span className="text-muted-foreground">(optional)</span>
               </Label>
               <Input
                 id="tunnel-label"
@@ -348,7 +341,7 @@ export default function TunnelsPage() {
                 autoComplete="off"
               />
               <p className="text-[11px] text-muted-foreground sm:min-h-[2.6em] leading-snug">
-                shows in the row so you can tell parallel tunnels apart.
+                Shows in the row so you can tell parallel tunnels apart.
               </p>
             </div>
           </div>
@@ -368,19 +361,19 @@ export default function TunnelsPage() {
               disabled={startTunnel.isPending || !ready}
             >
               <Play size={12} />
-              {startTunnel.isPending ? "starting…" : "start tunnel"}
+              {startTunnel.isPending ? "Starting…" : "Start tunnel"}
             </Button>
           </div>
         </form>
 
         <p className="mt-3 border-t border-border pt-3 text-[11px] text-muted-foreground">
-          ⚠ anyone with the URL can reach the port — don&apos;t expose
+          ⚠ Anyone with the URL can reach the port — don&apos;t expose
           services without auth.
           {provider === "localtunnel" && (
             <>
               {" "}localtunnel shows an interstitial on first visit asking
               for the &ldquo;tunnel password&rdquo; = your machine&apos;s
-              public IP. click{" "}
+              public IP. Click{" "}
               <a
                 href={LOCALTUNNEL_PASSWORD_DOC}
                 target="_blank"
@@ -398,21 +391,19 @@ export default function TunnelsPage() {
       {provider === "ngrok" && ngrok && <NgrokStatusPanel status={ngrok} />}
 
       {isLoading ? (
-        <p className="font-mono text-micro tracking-wideish text-muted-foreground">
-          loading tunnels…
-        </p>
+        <p className="text-xs text-muted-foreground">Loading tunnels…</p>
       ) : tunnels.length === 0 ? (
         <EmptyState
           icon={Globe2}
-          title="no tunnels yet"
-          hint="start one above to share a local port over the public internet."
+          title="No tunnels yet"
+          hint="Start one above to share a local port over the public internet."
         />
       ) : (
         <div className="space-y-6">
           {live.length > 0 && (
             <section>
-              <h3 className="mb-2 font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-                active ({live.length})
+              <h3 className="mb-2 text-[13px] sm:text-sm font-semibold">
+                Active ({live.length})
               </h3>
               <div className="space-y-2">
                 {live.map((t) => (
@@ -430,18 +421,18 @@ export default function TunnelsPage() {
           {ended.length > 0 && (
             <section>
               <div className="mb-2 flex items-center gap-2">
-                <h3 className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-                  ended ({ended.length})
+                <h3 className="text-[13px] sm:text-sm font-semibold">
+                  Ended ({ended.length})
                 </h3>
                 <div className="flex-1" />
                 <Button
                   variant="ghost"
                   size="xs"
                   onClick={() => void onClearEnded()}
-                  className="text-muted-foreground hover:text-status-blocked"
+                  className="text-fg-dim hover:text-destructive"
                 >
                   <Trash2 size={11} />
-                  clear ended
+                  Clear all
                 </Button>
               </div>
               <div className="space-y-2">
@@ -476,7 +467,7 @@ function PortChip({
     <button
       type="button"
       onClick={() => onPick(value)}
-      className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-foreground hover:bg-accent"
+      className="rounded bg-secondary px-1.5 py-0.5 font-mono text-foreground hover:bg-accent"
     >
       {value} {label}
     </button>
@@ -507,12 +498,10 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
 
   if (!status.installed) {
     return (
-      <section className="mb-6 rounded-sm border border-status-doing/40 bg-status-doing/5 p-3">
-        <div className="mb-1 flex items-center gap-2">
-          <AlertTriangle size={14} className="text-status-doing" />
-          <span className="font-mono text-micro uppercase tracking-wideish text-foreground">
-            ngrok not installed
-          </span>
+      <section className="rounded-lg border border-warning/30 bg-warning/5 p-4">
+        <div className="mb-2 flex items-center gap-2">
+          <AlertTriangle size={14} className="text-warning" />
+          <h3 className="text-[13px] sm:text-sm font-semibold">ngrok not installed</h3>
         </div>
         <p className="mb-3 text-[11px] text-muted-foreground">
           {status.hint ?? ""}
@@ -535,8 +524,8 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
             >
               <Download size={12} />
               {installNgrok.isPending
-                ? "installing… (1–2 min)"
-                : "install ngrok"}
+                ? "Installing… (1–2 min)"
+                : "Install ngrok"}
             </Button>
           ) : (
             <Button asChild variant="outline">
@@ -546,7 +535,7 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
                 rel="noreferrer"
               >
                 <ExternalLink size={12} />
-                download manually
+                Download manually
               </a>
             </Button>
           )}
@@ -562,17 +551,17 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
 
   if (showInput) {
     return (
-      <section className="mb-6 rounded-sm border border-status-doing/40 bg-status-doing/5 p-3">
-        <div className="mb-1 flex items-center gap-2">
-          <Key size={14} className="text-status-doing" />
-          <span className="font-mono text-micro uppercase tracking-wideish text-foreground">
+      <section className="rounded-lg border border-warning/30 bg-warning/5 p-4">
+        <div className="mb-2 flex items-center gap-2">
+          <Key size={14} className="text-warning" />
+          <h3 className="text-[13px] sm:text-sm font-semibold">
             {status.authtokenSet
-              ? "replace ngrok authtoken"
+              ? "Replace ngrok authtoken"
               : "ngrok authtoken needed"}
-          </span>
+          </h3>
         </div>
         <p className="mb-3 text-[11px] text-muted-foreground">
-          get your token from{" "}
+          Get your token from{" "}
           <a
             href={NGROK_AUTHTOKEN_DASHBOARD}
             target="_blank"
@@ -582,12 +571,12 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
             dashboard.ngrok.com
             <ExternalLink size={10} />
           </a>
-          . saved to{" "}
+          {" "}— free signup, takes a minute. Saved to{" "}
           <code className="font-mono">~/.claude/bridge.json</code> with mode 0600.
         </p>
         <div className="flex flex-wrap items-end gap-2">
           <div className="grid min-w-[260px] flex-1 gap-1.5">
-            <Label htmlFor="ngrok-token">authtoken</Label>
+            <Label htmlFor="ngrok-token">Authtoken</Label>
             <Input
               id="ngrok-token"
               value={token}
@@ -612,7 +601,7 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
             }
             disabled={setAuth.isPending || !token.trim()}
           >
-            {setAuth.isPending ? "saving…" : "save"}
+            {setAuth.isPending ? "Saving…" : "Save"}
           </Button>
           {status.authtokenSet && (
             <Button
@@ -621,9 +610,9 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
                 setEditing(false);
                 setToken("");
               }}
-              className="text-muted-foreground"
+              className="text-fg-dim"
             >
-              cancel
+              Cancel
             </Button>
           )}
         </div>
@@ -632,14 +621,12 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
   }
 
   return (
-    <section className="mb-6 rounded-sm border border-status-done/30 bg-status-done/5 p-3">
-      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        <CheckCircle2 size={14} className="text-status-done" />
-        <span className="font-mono uppercase tracking-wideish text-foreground">
-          ngrok ready
-        </span>
+    <section className="rounded-lg border border-success/30 bg-success/5 p-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <CheckCircle2 size={14} className="text-success" />
+        <span className="font-medium">ngrok ready</span>
         {status.version && (
-          <span className="font-mono text-muted-foreground">
+          <span className="text-muted-foreground font-mono text-[11px]">
             v{status.version}
           </span>
         )}
@@ -649,10 +636,10 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
           variant="ghost"
           size="xs"
           onClick={() => setEditing(true)}
-          className="text-muted-foreground"
+          className="text-fg-dim"
         >
           <Pencil size={11} />
-          replace
+          Replace
         </Button>
         <Button
           variant="ghost"
@@ -665,10 +652,10 @@ function NgrokStatusPanel({ status }: { status: TunnelProviderStatus }) {
             })
           }
           disabled={setAuth.isPending}
-          className="text-muted-foreground hover:text-status-blocked"
+          className="text-fg-dim hover:text-destructive"
         >
           <Trash2 size={11} />
-          clear
+          Clear
         </Button>
       </div>
     </section>
@@ -722,17 +709,17 @@ function TunnelRow({
   return (
     <div
       className={cn(
-        "rounded-sm border bg-card p-3 transition-colors",
+        "rounded-lg border bg-card p-3 transition-colors",
         t.status === "running"
-          ? "border-status-done/30"
+          ? "border-success/30"
           : t.status === "error"
-            ? "border-status-blocked/30"
+            ? "border-destructive/30"
             : "border-border",
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
         <StatusPill status={t.status} />
-        <span className="rounded-sm bg-background px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
+        <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
           {t.provider}
         </span>
         <span className="font-mono text-sm text-foreground">:{t.port}</span>
@@ -742,11 +729,11 @@ function TunnelRow({
           </span>
         )}
         {t.label && (
-          <span className="text-small text-muted-foreground truncate">
+          <span className="text-xs text-muted-foreground truncate">
             — {t.label}
           </span>
         )}
-        <span className="ml-auto font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
+        <span className="ml-auto font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
           uptime {uptime}
         </span>
         {live && (
@@ -754,12 +741,12 @@ function TunnelRow({
             variant="ghost"
             size="xs"
             onClick={onStop}
-            title="stop tunnel"
-            aria-label="stop tunnel"
-            className="text-muted-foreground hover:text-status-blocked"
+            title="Stop tunnel"
+            aria-label="Stop tunnel"
+            className="text-fg-dim hover:text-destructive"
           >
             <Square size={11} />
-            stop
+            <span className="hidden sm:inline">Stop</span>
           </Button>
         )}
         {canRestart && (
@@ -767,24 +754,24 @@ function TunnelRow({
             variant="ghost"
             size="xs"
             onClick={onRestart}
-            title="restart tunnel"
-            aria-label="restart tunnel"
-            className="text-muted-foreground hover:text-foreground"
+            title="Restart tunnel"
+            aria-label="Restart tunnel"
+            className="text-fg-dim hover:text-foreground"
           >
             <RotateCw size={11} />
-            restart
+            <span className="hidden sm:inline">Restart</span>
           </Button>
         )}
         <Button
           variant="ghost"
           size="xs"
           onClick={onRemove}
-          title="remove tunnel"
-          aria-label="remove tunnel"
-          className="text-muted-foreground hover:text-status-blocked"
+          title="Remove tunnel"
+          aria-label="Remove tunnel"
+          className="text-fg-dim hover:text-destructive"
         >
           <Trash2 size={11} />
-          remove
+          <span className="hidden sm:inline">Remove</span>
         </Button>
       </div>
 
@@ -802,10 +789,10 @@ function TunnelRow({
             </a>
             <Button variant="ghost" size="xs" onClick={() => void copy()}>
               <Copy size={11} />
-              {copied ? "copied" : "copy"}
+              <span className="hidden sm:inline">{copied ? "Copied" : "Copy"}</span>
             </Button>
             {t.provider === "ngrok" && live && (
-              <Button asChild variant="ghost" size="xs" className="text-muted-foreground">
+              <Button asChild variant="ghost" size="xs" className="text-fg-dim">
                 <a
                   href={NGROK_INSPECTOR_URL}
                   target="_blank"
@@ -814,33 +801,33 @@ function TunnelRow({
                   aria-label="ngrok web inspector"
                 >
                   <Eye size={11} />
-                  inspect
+                  <span className="hidden sm:inline">Inspect</span>
                 </a>
               </Button>
             )}
           </>
         ) : t.status === "starting" ? (
-          <span className="inline-flex items-center gap-1.5 text-small text-muted-foreground">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-status-doing" />
-            waiting for URL…
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
+            Waiting for URL…
           </span>
         ) : (
-          <span className="text-small text-muted-foreground">no URL</span>
+          <span className="text-xs text-muted-foreground">No URL</span>
         )}
       </div>
 
       {t.error && (
-        <p className="mt-2 break-all font-mono text-[11px] text-status-blocked">
+        <p className="mt-2 break-all text-xs text-destructive">
           {t.error}
         </p>
       )}
 
       <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
         {t.startedAt && (
-          <span>started {new Date(t.startedAt).toLocaleTimeString()}</span>
+          <span>Started {new Date(t.startedAt).toLocaleTimeString()}</span>
         )}
         {t.endedAt && (
-          <span>· ended {new Date(t.endedAt).toLocaleTimeString()}</span>
+          <span>· Ended {new Date(t.endedAt).toLocaleTimeString()}</span>
         )}
         {logLines.length > 0 && (
           <button
@@ -848,7 +835,7 @@ function TunnelRow({
             onClick={() => setShowLog((v) => !v)}
             className="underline-offset-2 hover:underline"
           >
-            {showLog ? "hide log" : `show log (${logLines.length})`}
+            {showLog ? "Hide log" : `Show log (${logLines.length})`}
           </button>
         )}
       </div>
@@ -866,11 +853,11 @@ function StatusPill({ status }: { status: TunnelEntry["status"] }) {
   const map: Record<TunnelEntry["status"], { label: string; cls: string }> = {
     starting: {
       label: "starting",
-      cls: "bg-status-doing/15 text-status-doing animate-pulse",
+      cls: "bg-warning/15 text-warning-foreground animate-pulse",
     },
     running: {
       label: "running",
-      cls: "bg-status-done/15 text-status-done",
+      cls: "bg-success/15 text-success-foreground",
     },
     stopped: {
       label: "stopped",
@@ -878,14 +865,14 @@ function StatusPill({ status }: { status: TunnelEntry["status"] }) {
     },
     error: {
       label: "error",
-      cls: "bg-status-blocked/15 text-status-blocked",
+      cls: "bg-destructive/15 text-destructive",
     },
   };
   const { label, cls } = map[status];
   return (
     <span
       className={cn(
-        "rounded-sm px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wideish",
+        "rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide font-medium",
         cls,
       )}
     >

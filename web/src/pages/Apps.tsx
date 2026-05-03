@@ -1,10 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Boxes,
   Folder,
   GitBranch,
-  Plus,
   Settings as SettingsIcon,
   Sparkles,
   Trash2,
@@ -19,11 +18,10 @@ import {
 } from "@/api/queries";
 import { useToast } from "@/components/Toasts";
 import { useConfirm } from "@/components/ConfirmProvider";
-import { AddAppDialog } from "@/components/AddAppDialog";
+import { AddAppDialog, type AddAppDialogHandle } from "@/components/AddAppDialog";
 import { AppSettingsDialog } from "@/components/AppSettingsDialog";
-import { AutoDetectDialog } from "@/components/AutoDetectDialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ListSkeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import type { App, TaskMetaMap } from "@/api/types";
 import { cn } from "@/lib/cn";
@@ -59,9 +57,6 @@ export default function AppsPage() {
   const { data: metaMap } = useTasksMetaMap(15_000);
   const cadence = pickPollInterval(metaMap);
   const tasksQuery = useTasks(cadence);
-  // Re-subscribe with the live cadence whenever it flips. The hook
-  // accepts a single arg, so we just pass the derived cadence on each
-  // render — react-query handles the timer swap.
   const tasks = tasksQuery.data ?? [];
 
   const scanApp = useScanApp();
@@ -70,8 +65,8 @@ export default function AppsPage() {
   const confirm = useConfirm();
 
   const [addOpen, setAddOpen] = useState(false);
-  const [autoOpen, setAutoOpen] = useState(false);
   const [settingsApp, setSettingsApp] = useState<App | null>(null);
+  const addDialogRef = useRef<AddAppDialogHandle>(null);
 
   const apps = appsData?.apps ?? [];
   const repos = reposData?.repos ?? [];
@@ -122,35 +117,35 @@ export default function AppsPage() {
       // count or a neutral "no change" toast.
       if (r.profile) {
         toast.success(
-          `scanned ${name}`,
+          `Scanned ${name}`,
           r.symbolCount != null
             ? `${r.symbolCount} symbols indexed`
             : undefined,
         );
       } else if (r.symbolCount != null) {
-        toast.info(`re-indexed ${name}`, `${r.symbolCount} symbols`);
+        toast.info(`Re-indexed ${name}`, `${r.symbolCount} symbols`);
       } else {
-        toast.info(`scan returned no changes for ${name}`);
+        toast.info(`Scan returned no changes for ${name}`);
       }
     } catch (e) {
-      toast.error("scan failed", (e as Error).message);
+      toast.error("Scan failed", (e as Error).message);
     }
   };
 
   const onDelete = async (name: string) => {
     const ok = await confirm({
-      title: `remove ${name}?`,
+      title: `Remove ${name}?`,
       description:
-        "removes the entry from the apps registry. the folder on disk is untouched.",
-      confirmLabel: "remove",
+        "This only removes the entry from the apps registry. The folder on disk is untouched.",
+      confirmLabel: "Remove",
       variant: "destructive",
     });
     if (!ok) return;
     try {
       await removeApp.mutateAsync(name);
-      toast.info(`removed ${name}`);
+      toast.info(`Removed ${name}`);
     } catch (e) {
-      toast.error("delete failed", (e as Error).message);
+      toast.error("Delete failed", (e as Error).message);
     }
   };
 
@@ -158,51 +153,38 @@ export default function AppsPage() {
     navigate(`/tasks?app=${encodeURIComponent(name)}`);
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-6 py-10">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Boxes size={18} className="text-primary" />
-            <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
-              apps
-            </h1>
-            <span className="font-mono text-micro uppercase tracking-wideish text-muted-foreground">
-              {apps.length} app{apps.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          <p className="mt-2 max-w-xl text-small text-muted-foreground">
-            registered in{" "}
-            <span className="font-mono text-foreground">~/.claude/bridge.json</span>.
-            the coordinator dispatches agents into these folders by name.
-          </p>
-        </div>
+    <div className="mx-auto w-full max-w-4xl p-4 sm:p-6">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus size={12} />
-            add
-          </Button>
-          <Button variant="outline" onClick={() => setAutoOpen(true)}>
-            <Sparkles size={12} />
-            auto-detect
-          </Button>
+          <Boxes size={18} className="text-primary" />
+          <h2 className="text-base sm:text-lg font-semibold">Registered apps</h2>
+          <span className="text-[10px] text-muted-foreground">
+            {apps.length} app{apps.length === 1 ? "" : "s"}
+          </span>
         </div>
+        <AddAppDialog
+          ref={addDialogRef}
+          open={addOpen}
+          onOpenChange={setAddOpen}
+        />
       </div>
+      <p className="mb-6 text-[11px] sm:text-xs text-muted-foreground">
+        Apps live in <code className="font-mono text-foreground">~/.claude/bridge.json</code>
+        {" "}(outside this project, so version updates can&apos;t overwrite it).
+        The coordinator dispatches agents into these folders by name.
+        Use <strong>Add app</strong> to register a folder by hand or <strong>Auto-detect</strong> to scan siblings of the bridge for code repos.
+      </p>
 
       {isLoading ? (
-        <div className="grid gap-2">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full rounded-sm" />
-          ))}
-        </div>
+        <ListSkeleton rows={4} />
       ) : apps.length === 0 ? (
         <EmptyState
           icon={Boxes}
-          title="no apps registered yet"
-          hint="add your first app, or run auto-detect to scan the parent directory."
+          title="No apps registered yet"
+          hint="Click Add app in the header, or Auto-detect to scan the parent directory."
           action={
-            <Button onClick={() => setAddOpen(true)}>
-              <Plus size={12} />
-              add your first app
+            <Button onClick={() => addDialogRef.current?.open()} size="sm">
+              Add your first app
             </Button>
           }
         />
@@ -232,54 +214,50 @@ export default function AppsPage() {
                       open();
                     }
                   }}
-                  title={`view tasks for ${app.name}`}
+                  title={`View tasks for ${app.name}`}
                   className={cn(
-                    "rounded-sm border bg-card p-3 transition-colors cursor-pointer",
+                    "rounded-lg border bg-card p-3 transition-colors cursor-pointer",
                     "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                     exists
-                      ? "border-border hover:border-input hover:bg-accent/40"
-                      : "border-status-doing/40 bg-status-doing/5 hover:bg-status-doing/10",
+                      ? "border-border hover:border-primary/40 hover:bg-accent/40"
+                      : "border-warning/40 bg-warning/5 hover:bg-warning/10",
                   )}
                 >
                   <div className="flex items-start gap-3">
                     <Folder
-                      size={16}
+                      size={18}
                       className={cn(
                         "mt-0.5 shrink-0",
-                        exists ? "text-primary" : "text-status-doing",
+                        exists ? "text-primary" : "text-warning",
                       )}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-sm font-semibold text-foreground">
+                        <span className="font-mono text-[13px] sm:text-sm font-semibold">
                           {app.name}
                         </span>
-                        <span
-                          className={cn(
-                            "inline-block h-1.5 w-1.5 rounded-full",
-                            exists ? "bg-status-done" : "bg-status-doing",
-                          )}
-                          title={exists ? "on disk" : "missing on disk"}
-                        />
                         {!exists && (
-                          <span className="rounded-full bg-status-doing/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wideish text-status-doing">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-warning/20 text-warning text-[9px] font-medium uppercase tracking-wide">
                             missing
                           </span>
                         )}
                         {branch && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-secondary border border-border text-[10px] text-fg-dim font-mono"
+                            title={`branch: ${branch}`}
+                          >
                             <GitBranch size={9} className="opacity-70" />
                             {branch}
                           </span>
                         )}
                       </div>
                       {app.description && (
-                        <p className="mt-1 text-small text-foreground/85 whitespace-pre-line">
+                        <p className="mt-1 text-[11px] sm:text-xs text-foreground/80 line-clamp-3 sm:line-clamp-none whitespace-pre-line">
                           {app.description}
                         </p>
                       )}
                       <p
-                        className="mt-1 break-all font-mono text-[11px] text-muted-foreground"
+                        className="mt-1 text-[10.5px] sm:text-[11px] text-muted-foreground font-mono break-all line-clamp-2 sm:line-clamp-none"
                         title={
                           app.rawPath && app.rawPath !== app.path
                             ? `${app.rawPath} → ${app.path}`
@@ -293,35 +271,38 @@ export default function AppsPage() {
                       </p>
 
                       {/* Per-app counters: idle / doing / done / live. */}
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[10px]">
-                        <CounterPill
-                          label="doing"
-                          value={stats.doing}
-                          tone="doing"
-                        />
-                        <CounterPill
-                          label="done"
-                          value={stats.done}
-                          tone="done"
-                        />
-                        <CounterPill
-                          label="idle"
-                          value={stats.idle}
-                          tone="muted"
-                        />
+                      <div className="mt-2 flex items-center gap-1.5 flex-wrap text-[10px] font-medium">
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-warning/15 text-warning"
+                          title="Tasks in DOING"
+                        >
+                          <span className="tabular-nums">{stats.doing}</span> doing
+                        </span>
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-success/15 text-success"
+                          title="Tasks in DONE — not yet archived"
+                        >
+                          <span className="tabular-nums">{stats.done}</span> done
+                        </span>
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-fg-dim/15 text-fg-dim"
+                          title="Tasks in TODO"
+                        >
+                          <span className="tabular-nums">{stats.idle}</span> idle
+                        </span>
                         {stats.activeSessions > 0 && (
                           <span
-                            className="inline-flex items-center gap-1 rounded-full bg-status-doing/15 px-1.5 py-0.5 text-status-doing"
-                            title="sessions currently running for this app"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-warning/15 text-warning"
+                            title="Sessions currently running for this app"
                           >
                             <span className="relative inline-flex h-1.5 w-1.5">
-                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-doing opacity-60" />
-                              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-status-doing" />
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warning opacity-60" />
+                              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-warning" />
                             </span>
                             <span className="tabular-nums">
                               {stats.activeSessions}
                             </span>{" "}
-                            live
+                            active
                           </span>
                         )}
                       </div>
@@ -336,31 +317,13 @@ export default function AppsPage() {
                       <Button
                         variant="ghost"
                         size="iconSm"
-                        onClick={() => setSettingsApp(app)}
-                        title={
-                          settingsHighlight
-                            ? "git policy customised"
-                            : "settings"
-                        }
-                        aria-label={`settings for ${app.name}`}
-                        className={
-                          settingsHighlight
-                            ? "text-primary"
-                            : "text-muted-foreground hover:text-primary"
-                        }
-                      >
-                        <SettingsIcon size={13} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="iconSm"
                         onClick={() => void onScan(app.name)}
                         disabled={!exists || scanning}
-                        title={exists ? "re-scan" : "missing on disk"}
-                        aria-label={`scan ${app.name}`}
+                        title={exists ? "Re-scan" : "Missing on disk"}
+                        aria-label={`Scan ${app.name}`}
                       >
                         <Sparkles
-                          size={13}
+                          size={14}
                           className={
                             scanning ? "animate-pulse text-primary" : ""
                           }
@@ -369,12 +332,30 @@ export default function AppsPage() {
                       <Button
                         variant="ghost"
                         size="iconSm"
-                        onClick={() => void onDelete(app.name)}
-                        title="remove from registry"
-                        aria-label={`remove ${app.name}`}
-                        className="text-muted-foreground hover:text-status-blocked"
+                        onClick={() => setSettingsApp(app)}
+                        title={
+                          settingsHighlight
+                            ? "Git policy customised"
+                            : "Settings"
+                        }
+                        aria-label={`Settings for ${app.name}`}
+                        className={
+                          settingsHighlight
+                            ? "text-primary"
+                            : "text-fg-dim hover:text-primary"
+                        }
                       >
-                        <Trash2 size={13} />
+                        <SettingsIcon size={14} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="iconSm"
+                        onClick={() => void onDelete(app.name)}
+                        title="Remove from registry"
+                        aria-label={`Remove ${app.name}`}
+                        className="text-fg-dim hover:text-destructive"
+                      >
+                        <Trash2 size={14} />
                       </Button>
                     </div>
                   </div>
@@ -385,38 +366,11 @@ export default function AppsPage() {
         </ul>
       )}
 
-      <AddAppDialog open={addOpen} onOpenChange={setAddOpen} />
-      <AutoDetectDialog open={autoOpen} onOpenChange={setAutoOpen} />
       <AppSettingsDialog
         key={settingsApp?.name ?? "closed"}
         app={settingsApp}
         onClose={() => setSettingsApp(null)}
       />
     </div>
-  );
-}
-
-function CounterPill({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: "doing" | "done" | "muted";
-}) {
-  const cls =
-    tone === "doing"
-      ? "bg-status-doing/15 text-status-doing"
-      : tone === "done"
-        ? "bg-status-done/15 text-status-done"
-        : "bg-muted/40 text-muted-foreground";
-  return (
-    <span
-      className={cn("inline-flex items-center gap-1 rounded-full px-1.5 py-0.5", cls)}
-      title={`tasks: ${label}`}
-    >
-      <span className="tabular-nums">{value}</span> {label}
-    </span>
   );
 }

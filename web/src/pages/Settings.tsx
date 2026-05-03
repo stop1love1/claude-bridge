@@ -36,22 +36,19 @@ export default function Settings() {
   const reason = params.get("reason");
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-10 space-y-6">
-      <div className="sticky top-0 -mx-6 -mt-10 mb-2 border-b border-border bg-background/95 px-6 pb-3 pt-10 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="flex items-center gap-2">
-          <SettingsIcon size={18} className="text-primary" />
-          <h1 className="font-mono text-display font-semibold tracking-tightish text-foreground">
-            settings
-          </h1>
-        </div>
-        <p className="mt-1 max-w-xl text-small text-muted-foreground">
-          per-machine configuration stored in{" "}
-          <span className="font-mono text-foreground">~/.claude/bridge.json</span>
-          . outside the project tree so version updates can&apos;t overwrite
-          your bot tokens / detection mode. token lives in this browser&apos;s
-          localStorage only.
-        </p>
+    <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 space-y-6 sm:space-y-8">
+      <div className="flex items-center gap-2 mb-2">
+        <SettingsIcon size={18} className="text-primary" />
+        <h2 className="text-base sm:text-lg font-semibold">Settings</h2>
       </div>
+      <p className="text-[11px] sm:text-xs text-muted-foreground mt-4">
+        Per-machine configuration stored in{" "}
+        <code className="font-mono text-foreground">
+          ~/.claude/bridge.json
+        </code>
+        . Outside the project tree so version updates can&apos;t overwrite
+        your bot tokens / detection mode.
+      </p>
 
       <AuthSection reason={reason} />
       <PublicUrlSection />
@@ -92,15 +89,13 @@ function AuthSection({ reason }: { reason: string | null }) {
   }
 
   return (
-    <section className="rounded-sm border border-border bg-card p-5">
+    <section className="rounded-lg border border-border bg-card p-4">
       <div className="mb-1 flex items-center gap-2">
         <KeyRound size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          auth
-        </h2>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Auth</h3>
       </div>
-      <p className="mb-4 text-small text-muted-foreground">
-        the bridge requires{" "}
+      <p className="mb-4 text-[11px] text-muted-foreground">
+        The bridge requires{" "}
         <span className="font-mono text-foreground">x-bridge-internal-token</span> on
         every request — except when it runs with{" "}
         <span className="font-mono text-foreground">--localhost-only</span>, where
@@ -108,12 +103,12 @@ function AuthSection({ reason }: { reason: string | null }) {
       </p>
 
       {reason === "auth" && (
-        <div className="mb-4 rounded-sm border border-status-doing/40 bg-status-doing/10 px-3 py-2 font-mono text-micro text-status-doing">
-          your last request was rejected with 401 — paste a fresh token below.
+        <div className="mb-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          Your last request was rejected with 401 — paste a fresh token below.
         </div>
       )}
 
-      <Label htmlFor="bridge-token">internal token</Label>
+      <Label htmlFor="bridge-token">Internal token</Label>
       <div className="mt-1.5 flex items-stretch gap-2">
         <Input
           id="bridge-token"
@@ -128,43 +123,43 @@ function AuthSection({ reason }: { reason: string | null }) {
           variant="outline"
           onClick={() => setReveal((v) => !v)}
         >
-          {reveal ? "hide" : "show"}
+          {reveal ? "Hide" : "Show"}
         </Button>
       </div>
 
       <div className="mt-3 flex items-center gap-2">
-        <Button onClick={save}>save</Button>
+        <Button onClick={save}>Save</Button>
         <Button variant="outline" onClick={() => void tryConnection()}>
-          test connection
+          Test connection
         </Button>
       </div>
 
       {test.kind !== "idle" && (
         <div
           className={cn(
-            "mt-3 rounded-sm border px-3 py-2 font-mono text-micro tracking-wideish",
+            "mt-3 rounded-md border px-3 py-2 text-xs",
             test.kind === "ok" &&
-              "border-status-done/40 bg-status-done/10 text-status-done",
+              "border-success/40 bg-success/10 text-success",
             test.kind === "auth" &&
-              "border-status-doing/40 bg-status-doing/10 text-status-doing",
+              "border-warning/40 bg-warning/10 text-warning",
             test.kind === "err" &&
-              "border-status-blocked/40 bg-status-blocked/10 text-status-blocked",
+              "border-destructive/40 bg-destructive/10 text-destructive",
             test.kind === "pending" && "border-border text-muted-foreground",
           )}
         >
-          {test.kind === "pending" && "checking…"}
+          {test.kind === "pending" && "Checking…"}
           {test.kind === "ok" &&
-            `online — bridge ${test.version ?? "?"} · uptime ${formatUptime(
+            `Online — bridge ${test.version ?? "?"} · uptime ${formatUptime(
               test.uptime,
             )}`}
           {test.kind === "auth" && "401 unauthorized — token rejected"}
-          {test.kind === "err" && `error: ${test.message}`}
+          {test.kind === "err" && `Error: ${test.message}`}
         </div>
       )}
 
       <div className="mt-5 grid grid-cols-2 gap-3">
-        <Card label="bridge version" value={health?.version ?? "—"} />
-        <Card label="uptime" value={formatUptime(health?.uptime)} />
+        <Card label="Bridge version" value={health?.version ?? "—"} />
+        <Card label="Uptime" value={formatUptime(health?.uptime)} />
       </div>
     </section>
   );
@@ -174,21 +169,19 @@ function AuthSection({ reason }: { reason: string | null }) {
 
 function ScanRootsSection() {
   return (
-    <section className="rounded-sm border border-border bg-card p-5">
+    <section className="rounded-lg border border-border bg-card p-4">
       <div className="mb-1 flex items-center gap-2">
         <FolderTree size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          apps registry root
-        </h2>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Apps registry root</h3>
       </div>
-      <p className="mb-3 text-small text-muted-foreground">
-        the directory tree the auto-detect dialog walks when it scans for
-        sibling app folders. defaults to the bridge&apos;s parent dir; the
+      <p className="mb-3 text-[11px] text-muted-foreground">
+        The directory tree the auto-detect dialog walks when it scans for
+        sibling app folders. Defaults to the bridge&apos;s parent dir; the
         editor for explicit roots isn&apos;t ported yet — use auto-detect from
         the apps page in the meantime.
       </p>
-      <div className="rounded-sm border border-dashed border-border bg-background/50 px-3 py-2 font-mono text-micro text-muted-foreground">
-        scan-roots editor pending — using bridge default root.
+      <div className="rounded-md border border-dashed border-border bg-background/50 px-3 py-2 text-xs text-muted-foreground">
+        Scan-roots editor pending — using bridge default root.
       </div>
     </section>
   );
@@ -198,15 +191,13 @@ function ScanRootsSection() {
 
 function TelegramBotStub() {
   return (
-    <section className="rounded-sm border border-border bg-card p-5 opacity-90">
+    <section className="rounded-lg border border-border bg-card p-4 opacity-90">
       <div className="mb-1 flex items-center gap-2">
         <Send size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          telegram bot
-        </h2>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Telegram notifier</h3>
       </div>
-      <p className="text-small text-muted-foreground">
-        telegram integration not yet ported — coming soon. (will surface bot
+      <p className="text-[11px] text-muted-foreground">
+        Telegram integration not yet ported — coming soon. (Will surface bot
         token + chat id, forward-chat mode, notification level.)
       </p>
     </section>
@@ -215,15 +206,13 @@ function TelegramBotStub() {
 
 function TelegramUserStub() {
   return (
-    <section className="rounded-sm border border-border bg-card p-5 opacity-90">
+    <section className="rounded-lg border border-border bg-card p-4 opacity-90">
       <div className="mb-1 flex items-center gap-2">
         <User size={14} className="text-primary" />
-        <h2 className="font-mono text-small uppercase tracking-wideish text-foreground">
-          telegram user (MTProto)
-        </h2>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Telegram user (MTProto)</h3>
       </div>
-      <p className="text-small text-muted-foreground">
-        MTProto user-mode session not yet ported — coming soon. (will surface
+      <p className="text-[11px] text-muted-foreground">
+        MTProto user-mode session not yet ported — coming soon. (Will surface
         api id/hash, session string, target chat id.)
       </p>
     </section>
@@ -234,11 +223,9 @@ function TelegramUserStub() {
 
 function Card({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-sm border border-border bg-background p-3">
-      <div className="font-mono text-[10px] uppercase tracking-wideish text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-1.5 font-mono text-small tabular-nums text-foreground">
+    <div className="rounded-md border border-border bg-background p-3">
+      <div className="text-[10.5px] text-muted-foreground">{label}</div>
+      <div className="mt-1.5 text-sm font-mono tabular-nums text-foreground">
         {value}
       </div>
     </div>
