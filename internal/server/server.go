@@ -23,6 +23,7 @@ import (
 
 	"github.com/stop1love1/claude-bridge/internal/api"
 	bmw "github.com/stop1love1/claude-bridge/internal/middleware"
+	webdist "github.com/stop1love1/claude-bridge/internal/web"
 )
 
 // Config controls how a server instance is constructed. Zero values are
@@ -50,6 +51,14 @@ type Config struct {
 	// LocalhostOnly bypasses auth for loopback callers. Off by default;
 	// the operator opts in via cmd/bridge --localhost-only.
 	LocalhostOnly bool
+
+	// WebDir, when non-empty, serves the SPA from disk at that path
+	// instead of from the embedded bundle. cmd/bridge wires it from
+	// the --web-dir flag so a developer running `air` against
+	// `pnpm dev` (writing to web/dist live) sees changes without
+	// rebuilding the Go binary. Empty (the production default) means
+	// serve from internal/web/dist via embed.FS.
+	WebDir string
 }
 
 // ValidateAllowedOrigins refuses wildcards / null / empty entries. We
@@ -108,11 +117,14 @@ func NewHandler(cfg Config) http.Handler {
 	// Auth gate — runs AFTER CORS so OPTIONS preflight gets the right
 	// headers, but BEFORE every route below. Health is intentionally
 	// public so liveness probes from a load balancer don't need the
-	// shared secret.
+	// shared secret. AllowNonAPIPaths lets the SPA static handler
+	// (mounted as the chi catch-all at the bottom of NewHandler) serve
+	// index.html / hashed assets without a token; /api/* stays gated.
 	r.Use(bmw.NewAuth(bmw.AuthConfig{
-		InternalToken: cfg.InternalToken,
-		LocalhostOnly: cfg.LocalhostOnly,
-		PublicPaths:   []string{"/api/health"},
+		InternalToken:    cfg.InternalToken,
+		LocalhostOnly:    cfg.LocalhostOnly,
+		PublicPaths:      []string{"/api/health"},
+		AllowNonAPIPaths: true,
 	}))
 
 	startedAt := time.Now()
@@ -199,6 +211,24 @@ func NewHandler(cfg Config) http.Handler {
 	r.Get("/api/repos/{name}/files", api.ListRepoFiles)
 	r.Get("/api/repos/{name}/raw", api.GetRepoRawFile)
 	r.Get("/api/repos/{name}/slash-commands", api.ListRepoSlashCommands)
+
+	// SPA catch-all — must mount LAST so chi only falls through here
+	// when no real /api/* route matched. The handler returns 404 for
+	// /api/* (so a typo'd API URL doesn't get the SPA shell back),
+	// serves real files from the bundle for asset paths, and falls
+	// back to index.html for everything else so React Router can
+	// render client-side routes.
+	if h, err := webdist.StaticHandler(cfg.WebDir); err != nil {
+		// Don't fail the whole server — the API still works without
+		// the SPA. Log via the request logger upstream by mounting a
+		// small explainer handler in its place.
+		cfg.Logger.Warn().Err(err).Msg("spa static handler disabled")
+		r.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "SPA bundle unavailable — run `make build-web && make embed-web` or pass --web-dir", http.StatusNotFound)
+		}))
+	} else {
+		r.Handle("/*", h)
+	}
 
 	return r
 }

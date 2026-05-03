@@ -128,6 +128,29 @@ func TestAuthMiddleware(t *testing.T) {
 			header:     "anything",
 			wantStatus: http.StatusUnauthorized,
 		},
+		{
+			name:          "AllowNonAPIPaths lets / through without token",
+			cfg:           AuthConfig{InternalToken: testToken, AllowNonAPIPaths: true},
+			method:        http.MethodGet,
+			path:          "/",
+			wantStatus:    http.StatusOK,
+			wantHandlerOK: true,
+		},
+		{
+			name:          "AllowNonAPIPaths lets static asset through",
+			cfg:           AuthConfig{InternalToken: testToken, AllowNonAPIPaths: true},
+			method:        http.MethodGet,
+			path:          "/assets/main-abc.js",
+			wantStatus:    http.StatusOK,
+			wantHandlerOK: true,
+		},
+		{
+			name:       "AllowNonAPIPaths still gates /api/*",
+			cfg:        AuthConfig{InternalToken: testToken, AllowNonAPIPaths: true},
+			method:     http.MethodGet,
+			path:       "/api/tasks",
+			wantStatus: http.StatusUnauthorized,
+		},
 	}
 
 	for _, tc := range cases {

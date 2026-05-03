@@ -25,7 +25,7 @@ endif
 BIN := bin/bridge$(EXE)
 PKG := ./cmd/bridge
 
-.PHONY: dev dev-go dev-web build build-web build-go test contract lint clean tools
+.PHONY: dev dev-go dev-web build build-web embed-web build-go test contract lint clean tools
 
 dev:
 	$(MAKE) -j 2 dev-go dev-web
@@ -36,17 +36,30 @@ dev-go:
 dev-web:
 	cd web && pnpm dev
 
-build: build-web build-go
+build: build-web embed-web build-go
 
-# Vite output (web/dist/) is consumed by Go embed.FS in S37. Skipped
-# while the web/ scaffold (S30) hasn't landed so phase-0 `make build`
-# still succeeds.
+# Vite output (web/dist/) is consumed by Go embed.FS via the embed-web
+# step below. Fails loudly if web/package.json is missing so a stale
+# checkout doesn't silently produce an API-only binary.
 build-web:
-	@if [ -f web/package.json ]; then \
-		echo ">> vite build"; \
-		cd web && pnpm install --frozen-lockfile && pnpm build; \
+	@if [ ! -f web/package.json ]; then \
+		echo "!! web/package.json missing — scaffold the Vite app first"; \
+		exit 1; \
+	fi
+	@echo ">> vite build"
+	cd web && pnpm install --frozen-lockfile && pnpm build
+
+# Stage the Vite output into internal/web/dist/ so //go:embed all:dist
+# in internal/web/embed.go picks it up at compile time. Tolerates a
+# missing web/dist/ (no frontend yet) so `make build-go` alone still
+# produces a working API binary — the SPA route just 404s with a
+# helpful message until the bundle is staged.
+embed-web:
+	@if [ -d web/dist ]; then \
+		echo ">> stage embed: web/dist -> internal/web/dist"; \
+		rm -rf internal/web/dist && cp -r web/dist internal/web/dist; \
 	else \
-		echo ">> skip vite build (web/ scaffold lands in S30)"; \
+		echo ">> skip embed-web (web/dist not built — API-only binary)"; \
 	fi
 
 build-go:
@@ -68,6 +81,11 @@ lint:
 
 clean:
 	rm -rf bin dist web/dist
+	@# Wipe the embed staging dir but keep .gitkeep so the embed
+	@# directive still finds at least one file on a fresh tree.
+	@if [ -d internal/web/dist ]; then \
+		find internal/web/dist -mindepth 1 ! -name .gitkeep -exec rm -rf {} +; \
+	fi
 
 tools:
 	go install github.com/air-verse/air@latest

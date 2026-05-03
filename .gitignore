@@ -15,6 +15,12 @@
 *.out
 go.work.sum
 
+# embed staging — `make embed-web` copies web/dist/ here at build
+# time; we keep .gitkeep tracked so //go:embed all:dist compiles on a
+# fresh clone before the first frontend build.
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
+
 # local-only bridge runtime state — per-task meta.json + spawned sessions
 /sessions/*
 !/sessions/.gitkeep

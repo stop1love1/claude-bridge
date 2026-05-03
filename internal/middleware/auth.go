@@ -35,6 +35,17 @@ type AuthConfig struct {
 	// "exact OR HasPrefix(path+'/')" so /api/health matches just that,
 	// and "/static" matches /static/foo.js but not /staticky.
 	PublicPaths []string
+
+	// AllowNonAPIPaths, when true, bypasses auth for any request whose
+	// path does NOT start with "/api/". This is the bypass used by the
+	// SPA static handler: index.html, hashed JS bundles, fonts, the
+	// favicon — none of those carry operator data, and the SPA itself
+	// reads its bootstrap state from the (public) /api/health endpoint.
+	// The data layer (/api/*) remains fully gated.
+	//
+	// Off by default. cmd/bridge flips it on after mounting the SPA
+	// catch-all so chi's "/" route can serve without a token.
+	AllowNonAPIPaths bool
 }
 
 // NewAuth returns a chi-compatible middleware that:
@@ -63,11 +74,27 @@ func NewAuth(cfg AuthConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Static SPA bypass — anything outside /api/* is asset
+			// traffic (index.html / hashed JS / fonts / favicon). The
+			// data layer (/api/*) below stays fully gated. See
+			// AllowNonAPIPaths in AuthConfig for the rationale.
+			if cfg.AllowNonAPIPaths && !strings.HasPrefix(r.URL.Path, "/api/") {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if cfg.LocalhostOnly && isLoopback(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
 			tok := r.Header.Get(auth.InternalTokenHeader)
+			// EventSource (SSE) cannot set custom request headers, so the
+			// SPA passes the same token via ?token=… on /api/.../events
+			// endpoints. Accept either form. The query string is not
+			// logged by the request logger middleware (see hlog config),
+			// so the token does not leak via access logs.
+			if tok == "" {
+				tok = r.URL.Query().Get("token")
+			}
 			if tok != "" && cfg.InternalToken != "" &&
 				auth.ConstantTimeCompareString(tok, cfg.InternalToken) {
 				next.ServeHTTP(w, r)

@@ -58,6 +58,7 @@ func newServeCmd() *cobra.Command {
 		bridgeRoot     string
 		allowedOrigins []string
 		localhostOnly  bool
+		webDir         string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -164,7 +165,19 @@ func newServeCmd() *cobra.Command {
 				AllowedOrigins: allowedOrigins,
 				InternalToken:  internalToken,
 				LocalhostOnly:  localhostOnly,
+				WebDir:         webDir,
 			})
+
+			// SPA source: disk (--web-dir) for hot reload during dev,
+			// otherwise the embedded internal/web/dist/ bundle.
+			spaSource := "embed"
+			if webDir != "" {
+				spaSource = webDir
+			}
+			logger.Info().
+				Str("spa_source", spaSource).
+				Str("ui_url", fmt.Sprintf("http://%s:%d/", host, port)).
+				Msg("serving SPA")
 
 			errCh := make(chan error, 1)
 			go func() {
@@ -219,5 +232,7 @@ func newServeCmd() *cobra.Command {
 		"CORS origin permitted to call the API (repeatable). Default http://localhost:7777. Wildcards rejected.")
 	cmd.Flags().BoolVar(&localhostOnly, "localhost-only", false,
 		"Bypass auth for loopback (127.0.0.1 / ::1) callers. Off by default — only enable on a trusted single-machine setup.")
+	cmd.Flags().StringVar(&webDir, "web-dir", "",
+		"Serve the SPA from this directory on disk (e.g. web/dist) instead of the embedded bundle. Useful with `pnpm dev` for hot reload.")
 	return cmd
 }
