@@ -100,10 +100,25 @@ curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
 ```
 
 Resume rules:
-- Only valid when the prior `(parentSessionId, role, repo)` triple has a single completed run (`status: "done"` or `"failed"`); otherwise the bridge falls back to a fresh spawn.
+- Default lookup is by `(parentSessionId, role, repo)` — only valid when one completed run (`status: "done"` or `"failed"`) matches that triple.
 - The child's transcript is preserved, so your follow-up brief should be **short** — 1-3 sentences referencing the prior turn ("the reviewer flagged X — fix it"). Don't restate the original task.
 - The bridge skips repo pre-warm and prepareBranch on resume (the worktree / branch is already set up from the original spawn).
 - If you want a fresh agent on the same role+repo (different angle, parallel attempt), use `allowDuplicate: true` instead of resume.
+
+**Resume across role relabels (`priorSessionId`).** If you want to continue the same child but show a different label in the AgentTree (e.g. iterate the original `coder` as `coder-phase24` for a phased build), pass the prior session id explicitly. The bridge resumes that exact session and rewrites the row's role to whatever you sent — no new agent, no fresh transcript:
+
+```bash
+curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
+  -H 'content-type: application/json' \
+  -d "$(jq -n --arg role 'coder-phase24' --arg repo '{{EXAMPLE_REPO}}' \
+              --arg prompt "Phase 24: implement the ledger close-out. Prior phases delivered ingest + reconciliation." \
+              --arg parent '{{SESSION_ID}}' \
+              --arg prior '<sessionId from the previous spawn response>' \
+              '{role:$role, repo:$repo, prompt:$prompt, parentSessionId:$parent, mode:"resume", priorSessionId:$prior}')"
+# → {"sessionId":"<same as $prior>","action":"resumed","role":"coder-phase24","priorRole":"coder"}
+```
+
+Use this whenever the next turn is a CONTINUATION of the same agent's work (phase iterations, scope expansions, planner→coder handoff inside one mind). Don't spawn a fresh `coder` per phase — the child already has the codebase context, the prior plan, and every file it read.
 
 ### Mark task DOING
 

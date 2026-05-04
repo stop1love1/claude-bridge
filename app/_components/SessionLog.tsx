@@ -459,18 +459,17 @@ function SessionLogInner({
   }, [toast]);
 
   useEffect(() => {
-    // Note: state resets are handled by remounting via the `key={sessionId}`
-    // wrapper in `SessionLog` (see export below) — calling setEntries([])
-    // etc. synchronously here would trip
-    // `react-hooks/set-state-in-effect`. Refs are local and we still
-    // reset them, since they survive the same-instance re-runs that
-    // would happen if the parent re-renders without changing the key.
-    offsetRef.current = 0;
-    firstOffsetRef.current = null;
-    entryOffsetsRef.current = [];
-    loadedOlderCountRef.current = 0;
-    inFlightOlderRef.current = false;
-    pendingScrollRestoreRef.current = null;
+    // State + ref resets are handled by remounting via the
+    // `key={sessionId}` wrapper in `SessionLog` (see export below). DO
+    // NOT reset offsetRef / firstOffsetRef / entryOffsetsRef etc. here:
+    // under React Strict Mode (and Turbopack HMR) this effect re-runs
+    // on the SAME instance, so `entries` state survives but resetting
+    // the refs would put `offsetRef=0` against a populated `entries`.
+    // The next SSE would then open with `since=0`, replay every line
+    // we already have, and applyTail would append them all again —
+    // producing duplicate `uuid` keys (and React's duplicate-children
+    // warning). Fresh mounts get correct ref initial values from the
+    // `useRef(...)` calls, so no init code is needed here.
     if (!run) return;
 
     let stopped = false;

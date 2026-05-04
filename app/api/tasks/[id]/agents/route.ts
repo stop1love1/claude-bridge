@@ -92,6 +92,19 @@ interface AgentBody {
    *     duplicate is still running.
    */
   mode?: "spawn" | "resume";
+  /**
+   * Resume target override (only consulted when `mode: "resume"`).
+   * When set, the bridge resumes THIS exact session id instead of
+   * looking up the prior run by `(parentSessionId, role, repo)`. Lets
+   * the coordinator reuse a child across role-relabels — e.g. continue
+   * the original `coder` session under the new label `coder-phase24`
+   * without spawning a fresh agent. The `role` field becomes the new
+   * display label written back to meta.json. Validated: must exist in
+   * this task's runs[], must match the request's `repo`, must not be
+   * queued/running, must not be a speculative loser. Caller normally
+   * takes the value from a previous spawn's `{sessionId}` response.
+   */
+  priorSessionId?: string;
 }
 
 interface SpeculativeDecision {
@@ -161,6 +174,22 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return badRequest("invalid mode (must be 'spawn' or 'resume')");
     }
     mode = body.mode;
+  }
+  // Optional resume-target override. Validated as a sessionId so it
+  // can't smuggle path or shell content into the lookup. Only meaningful
+  // when mode==="resume" — in spawn mode we reject it loudly so a
+  // confused caller doesn't think the field worked.
+  const priorSessionId =
+    typeof body.priorSessionId === "string" && body.priorSessionId
+      ? body.priorSessionId
+      : undefined;
+  if (priorSessionId !== undefined) {
+    if (!isValidSessionId(priorSessionId)) {
+      return badRequest("invalid priorSessionId");
+    }
+    if (mode !== "resume") {
+      return badRequest("priorSessionId is only valid with mode: 'resume'");
+    }
   }
 
   if (!role) {
@@ -272,6 +301,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       repoCwd,
       prompt,
       parentSessionId: parentSessionId ?? null,
+      priorSessionId: priorSessionId ?? null,
       runs: meta.runs,
     });
   }
@@ -937,17 +967,31 @@ function waitForSpawnApproval(args: {
 }
 
 /**
- * Handle the `mode: "resume"` dispatch path. Looks up the prior run by
- * `(parentSessionId, role, repo)`, validates it is resumable (no live
- * sibling, not a speculative loser, sessionId still routable), updates
- * meta.json to flip status back to running, and calls `resumeClaude`
- * with a compact follow-up message.
+ * Handle the `mode: "resume"` dispatch path. Two ways to pick the
+ * target session:
+ *
+ *   - **By id (`priorSessionId` set)** — the coordinator passes the
+ *     exact sessionId it wants to continue. Bypasses the role-based
+ *     lookup so the same child can be resumed under a renamed role
+ *     (e.g. continue `coder` as `coder-phase24` without spawning a
+ *     fresh agent). The row's `role` is rewritten to the requested
+ *     `role` after the resume succeeds.
+ *
+ *   - **By triple (`priorSessionId` absent — legacy path)** — the
+ *     bridge looks up the most recent completed run matching
+ *     `(parentSessionId, role, repo)`. Same row mutates: the role
+ *     stays put, status flips back to running.
+ *
+ * Either way the bridge calls `resumeClaude` with the operator's brief
+ * as the new user message and reuses the existing `sessionId` /
+ * worktree.
  *
  * Failure modes (all return JSON with the bridge's standard error
  * shape):
- *   - 400 — no prior completed run for this triple.
- *   - 409 — a sibling is currently running for this triple.
- *   - 410 — prior run is a speculative loser (worktree destroyed).
+ *   - 400 — no prior completed run found / priorSessionId mismatched
+ *           the request's repo.
+ *   - 409 — the picked run is queued/running (sibling or itself).
+ *   - 410 — the picked run is a speculative loser (worktree destroyed).
  *   - 500 — `resumeClaude` threw (claude binary missing, EAGAIN, …).
  */
 async function handleResume(args: {
@@ -960,6 +1004,7 @@ async function handleResume(args: {
   repoCwd: string;
   prompt: string;
   parentSessionId: string | null;
+  priorSessionId: string | null;
   runs: Run[];
 }): Promise<NextResponse> {
   const {
@@ -970,74 +1015,132 @@ async function handleResume(args: {
     repoCwd,
     prompt,
     parentSessionId,
+    priorSessionId,
     runs,
   } = args;
 
-  const matchTriple = (r: Run) =>
-    (r.parentSessionId ?? null) === parentSessionId &&
-    r.role === role &&
-    r.repo === repo;
+  let prior: Run;
+  if (priorSessionId) {
+    // Direct lookup. The coordinator already knows the sessionId from a
+    // previous spawn's response, so we don't need to match by triple.
+    // Validate that the target exists in THIS task and resolves to the
+    // same repo the request specified — a mistyped sessionId from a
+    // different task would otherwise cross-resume into the wrong agent.
+    const found = runs.find((r) => r.sessionId === priorSessionId);
+    if (!found) {
+      return NextResponse.json(
+        {
+          error: "priorSessionId not found in this task",
+          reason:
+            "no run with that sessionId exists in this task's meta.json; check that the id is correct and that you're targeting the right task",
+          priorSessionId,
+        },
+        { status: 400 },
+      );
+    }
+    if (found.repo !== repo) {
+      return NextResponse.json(
+        {
+          error: "priorSessionId repo mismatch",
+          reason: `the run lives in repo \`${found.repo}\` but the request specified \`${repo}\`; resume must target the same repo`,
+          priorSessionId,
+          actualRepo: found.repo,
+        },
+        { status: 400 },
+      );
+    }
+    if (found.status === "queued" || found.status === "running") {
+      return NextResponse.json(
+        {
+          error: "cannot resume while target is running",
+          reason:
+            "the picked sessionId is still queued/running; wait for it to finish (or kill it) before resuming",
+          liveSessionId: found.sessionId,
+          liveStatus: found.status,
+        },
+        { status: 409 },
+      );
+    }
+    if (found.speculativeOutcome === "lost") {
+      return NextResponse.json(
+        {
+          error: "prior run is a speculative loser",
+          reason:
+            "this child was killed during speculative winner selection; its worktree was destroyed and its session cannot be safely resumed. Spawn fresh (omit `mode`) instead.",
+          priorSessionId: found.sessionId,
+        },
+        { status: 410 },
+      );
+    }
+    prior = found;
+  } else {
+    const matchTriple = (r: Run) =>
+      (r.parentSessionId ?? null) === parentSessionId &&
+      r.role === role &&
+      r.repo === repo;
 
-  // Reject if a sibling is still running. Resuming alongside an active
-  // run would race the .jsonl tail and confuse both turns' transcripts.
-  const liveSibling = runs.find(
-    (r) => matchTriple(r) && (r.status === "queued" || r.status === "running"),
-  );
-  if (liveSibling) {
-    return NextResponse.json(
-      {
-        error: "cannot resume while a sibling is running",
-        reason:
-          "a queued/running child with the same parentSessionId, role, and repo is already in flight; wait for it to finish (or kill it) before resuming",
-        liveSessionId: liveSibling.sessionId,
-        liveStatus: liveSibling.status,
-      },
-      { status: 409 },
+    // Reject if a sibling is still running. Resuming alongside an active
+    // run would race the .jsonl tail and confuse both turns' transcripts.
+    const liveSibling = runs.find(
+      (r) => matchTriple(r) && (r.status === "queued" || r.status === "running"),
     );
-  }
+    if (liveSibling) {
+      return NextResponse.json(
+        {
+          error: "cannot resume while a sibling is running",
+          reason:
+            "a queued/running child with the same parentSessionId, role, and repo is already in flight; wait for it to finish (or kill it) before resuming",
+          liveSessionId: liveSibling.sessionId,
+          liveStatus: liveSibling.status,
+        },
+        { status: 409 },
+      );
+    }
 
-  // Pick the most recent completed prior run. `done` ranks above
-  // `failed` so we don't accidentally resume the failure when a
-  // successful turn followed it (rare; the post-exit gates can flip
-  // status mid-flight). Among same-status candidates, the latest
-  // endedAt wins.
-  const completed = runs.filter(
-    (r) => matchTriple(r) && (r.status === "done" || r.status === "failed"),
-  );
-  if (completed.length === 0) {
-    return NextResponse.json(
-      {
-        error: "no prior run to resume",
-        reason:
-          "resume requires a completed (done/failed) prior child for the same parentSessionId, role, and repo; none was found in this task",
-        role,
-        repo,
-        parentSessionId,
-      },
-      { status: 400 },
+    // Pick the most recent completed prior run. `done` ranks above
+    // `failed` so we don't accidentally resume the failure when a
+    // successful turn followed it (rare; the post-exit gates can flip
+    // status mid-flight). Among same-status candidates, the latest
+    // endedAt wins.
+    const completed = runs.filter(
+      (r) => matchTriple(r) && (r.status === "done" || r.status === "failed"),
     );
-  }
-  const prior = [...completed].sort((a, b) => {
-    const ra = a.status === "done" ? 0 : 1;
-    const rb = b.status === "done" ? 0 : 1;
-    if (ra !== rb) return ra - rb;
-    return (b.endedAt ?? "").localeCompare(a.endedAt ?? "");
-  })[0];
+    if (completed.length === 0) {
+      return NextResponse.json(
+        {
+          error: "no prior run to resume",
+          reason:
+            "resume requires a completed (done/failed) prior child for the same parentSessionId, role, and repo; none was found in this task. Pass `priorSessionId` to resume a specific session under a different role label.",
+          role,
+          repo,
+          parentSessionId,
+        },
+        { status: 400 },
+      );
+    }
+    const picked = [...completed].sort((a, b) => {
+      const ra = a.status === "done" ? 0 : 1;
+      const rb = b.status === "done" ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      return (b.endedAt ?? "").localeCompare(a.endedAt ?? "");
+    })[0];
 
-  // Speculative losers had their worktree destroyed during winner
-  // selection. Their .jsonl transcript still exists, but the cwd they
-  // referenced is gone — resuming would either error on file ops or
-  // worse, edit the live tree as if it were the worktree.
-  if (prior.speculativeOutcome === "lost") {
-    return NextResponse.json(
-      {
-        error: "prior run is a speculative loser",
-        reason:
-          "this child was killed during speculative winner selection; its worktree was destroyed and its session cannot be safely resumed. Spawn fresh (omit `mode`) instead.",
-        priorSessionId: prior.sessionId,
-      },
-      { status: 410 },
-    );
+    // Speculative losers had their worktree destroyed during winner
+    // selection. Their .jsonl transcript still exists, but the cwd they
+    // referenced is gone — resuming would either error on file ops or
+    // worse, edit the live tree as if it were the worktree.
+    if (picked.speculativeOutcome === "lost") {
+      return NextResponse.json(
+        {
+          error: "prior run is a speculative loser",
+          reason:
+            "this child was killed during speculative winner selection; its worktree was destroyed and its session cannot be safely resumed. Spawn fresh (omit `mode`) instead.",
+          priorSessionId: picked.sessionId,
+        },
+        { status: 410 },
+      );
+    }
+    prior = picked;
   }
 
   // Pick spawn cwd: prefer the prior worktree when it still exists on
@@ -1052,12 +1155,16 @@ async function handleResume(args: {
   // Flip the prior run's status back to running. We DO NOT append a
   // new run — resume reuses the same sessionId, same row. The .jsonl
   // gets a new turn appended, the meta.json row's startedAt updates,
-  // endedAt clears.
+  // endedAt clears. When the caller renamed the agent (priorSessionId
+  // path with a different `role`), the row's role walks too so the
+  // AgentTree picks up the new label.
+  const priorRoleChanged = prior.role !== role;
   try {
     await updateRun(sessionsDir, prior.sessionId, {
       status: "running",
       startedAt: new Date().toISOString(),
       endedAt: null,
+      ...(priorRoleChanged ? { role } : {}),
     });
   } catch (e) {
     console.error("failed to flip resume run back to running", e);
@@ -1091,11 +1198,14 @@ async function handleResume(args: {
     );
   } catch (e) {
     // Roll the meta row back to its prior terminal state so the UI
-    // doesn't show a phantom-running row.
+    // doesn't show a phantom-running row. Restore the prior role too
+    // when the resume had renamed it — a half-applied "running with
+    // new label, no live process" row would lie about both.
     try {
       await updateRun(sessionsDir, prior.sessionId, {
         status: prior.status,
         endedAt: prior.endedAt,
+        ...(priorRoleChanged ? { role: prior.role } : {}),
       });
     } catch (uErr) {
       console.error("failed to roll resume run back after spawn error", uErr);
@@ -1115,6 +1225,8 @@ async function handleResume(args: {
       sessionId: prior.sessionId,
       action: "resumed",
       repo,
+      role,
+      priorRole: priorRoleChanged ? prior.role : undefined,
       priorStatus: prior.status,
       priorEndedAt: prior.endedAt,
       cwd: spawnCwd,

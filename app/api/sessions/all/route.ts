@@ -135,9 +135,23 @@ export function GET() {
     return branchCache.get(path) ?? null;
   };
 
+  // Two-level dedup. The repos[] array can contain different `path`
+  // strings that resolve to the same `~/.claude/projects/<slug>/` dir
+  // — case differences on Windows, separator mismatches, BRIDGE.md vs
+  // sibling-discovery overlap, cwd-recovered orphan paths that don't
+  // match an existing entry literally. Without these guards, `out`
+  // would contain duplicate `sessionId` rows and SessionsBrowser /
+  // CommandPalette (both keyed on `s.sessionId`) emit React's
+  // duplicate-children warning across updates.
+  const listedProjectDirs = new Set<string>();
+  const emittedSessionIds = new Set<string>();
   for (const r of repos) {
     const projectDir = projectDirFor(r.path);
+    if (listedProjectDirs.has(projectDir)) continue;
+    listedProjectDirs.add(projectDir);
     for (const s of listSessions(projectDir)) {
+      if (emittedSessionIds.has(s.sessionId)) continue;
+      emittedSessionIds.add(s.sessionId);
       const link = links.get(s.sessionId) ?? null;
       // For sessions linked to a task, prefer the task title (in the
       // operator's language) over the .jsonl preview (which is the
