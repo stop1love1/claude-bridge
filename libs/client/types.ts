@@ -7,27 +7,14 @@ export interface SlashCommandsItemDto {
   source: SlashCommandsItemSource;
 }
 
-export type TaskStatus = "todo" | "doing" | "blocked" | "done";
-export type TaskSection = "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived";
+// `TaskStatus` / `TaskSection` / `Task` live in `libs/tasks.ts` (the
+// server-side source of truth). Imported here so other interfaces in
+// this file can reference them, then re-exported so existing client
+// imports `from "@/libs/client/types"` keep working.
+import type { Task, TaskStatus, TaskSection } from "../tasks";
+import type { RunStatus } from "../runStatus";
 
-export interface Task {
-  id: string;
-  date: string;
-  title: string;
-  body: string;
-  status: TaskStatus;
-  section: TaskSection;
-  checked: boolean;
-  /** Target app name; `null` means "auto" (coordinator decides). */
-  app?: string | null;
-}
-
-/**
- * `role` is free-form — the coordinator picks names based on the task.
- * Common built-ins the UI recognizes: "coordinator", "coder", "reviewer".
- * Anything else renders with a generic badge.
- */
-export type RunStatus = "queued" | "running" | "done" | "failed" | "stale";
+export type { Task, TaskStatus, TaskSection, RunStatus };
 
 export interface Run {
   sessionId: string;
@@ -172,13 +159,16 @@ export interface SessionSummary {
   link: { taskId: string; role: string } | null;
 }
 
-export const SECTION_ORDER: TaskSection[] = ["TODO", "DOING", "BLOCKED", "DONE — not yet archived"];
+// SECTION_ORDER lives in `libs/tasks.ts` (single source of truth). Re-
+// exported here for back-compat with existing UI imports.
+export { SECTION_ORDER } from "../tasks";
+import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "../tasks";
 
 export const SECTION_LABEL: Record<TaskSection, string> = {
-  TODO: "Todo",
-  DOING: "Doing",
-  BLOCKED: "Blocked",
-  "DONE — not yet archived": "Done",
+  [SECTION_TODO]: "Todo",
+  [SECTION_DOING]: "Doing",
+  [SECTION_BLOCKED]: "Blocked",
+  [SECTION_DONE]: "Done",
 };
 
 export const STATUS_ORDER: TaskStatus[] = ["todo", "doing", "blocked", "done"];

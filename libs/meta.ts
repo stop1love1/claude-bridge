@@ -9,6 +9,11 @@ import { writeJsonAtomic } from "./atomicWrite";
 import type { TaskStatus, TaskSection } from "./tasks";
 import type { DetectedScopeCacheEntry } from "./detect/types";
 import { SESSIONS_DIR } from "./paths";
+import type { RunStatus } from "./runStatus";
+
+// Re-exported so existing call sites that did `import { RunStatus } from "./meta"`
+// keep working — single source of truth lives in `./runStatus`.
+export type { RunStatus };
 
 /**
  * Write `meta.json` atomically. Delegates to the shared
@@ -21,8 +26,6 @@ import { SESSIONS_DIR } from "./paths";
 function atomicWriteJson(filePath: string, value: unknown): void {
   writeJsonAtomic(filePath, value);
 }
-
-export type RunStatus = "queued" | "running" | "done" | "failed" | "stale";
 
 /**
  * A run is a single Claude Code session the coordinator spawned for a task.

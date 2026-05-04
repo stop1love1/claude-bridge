@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import { isValidRunStatus as isValidRunStatusShared, RUN_STATUSES, type RunStatus } from "./runStatus";
+
+// Re-export so existing imports `from "./validate"` keep working.
+export { RUN_STATUSES, isValidRunStatusShared as isValidRunStatus };
+export type { RunStatus };
 
 /**
  * Shared input validators for the API layer.
@@ -29,9 +34,9 @@ const UUID_RE =
  */
 const LABEL_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
-/** Allowed values for a task run's lifecycle status. */
-const RUN_STATUSES = ["queued", "running", "done", "failed", "stale"] as const;
-export type RunStatus = (typeof RUN_STATUSES)[number];
+// `RUN_STATUSES` / `RunStatus` / `isValidRunStatus` now live in
+// `./runStatus.ts` so the client bundle can import them without pulling
+// in NextResponse. Re-exported above for back-compat.
 
 /**
  * Allowed values for `ChatSettings.mode` — kept in sync with the enum
@@ -100,12 +105,6 @@ export function isValidRepoLabel(s: unknown): s is string {
 
 export function isValidToolName(s: unknown): s is string {
   return typeof s === "string" && LABEL_RE.test(s);
-}
-
-export function isValidRunStatus(s: unknown): s is RunStatus {
-  return (
-    typeof s === "string" && (RUN_STATUSES as readonly string[]).includes(s)
-  );
 }
 
 /**

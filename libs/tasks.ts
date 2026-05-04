@@ -1,6 +1,28 @@
 export type TaskStatus = "todo" | "doing" | "blocked" | "done";
 export type TaskSection = "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived";
 
+/**
+ * Canonical task section strings. Use these constants instead of writing
+ * the literal — especially `SECTION_DONE`, whose `"DONE — not yet
+ * archived"` text is easy to typo (en-dash variants, missing spaces) and
+ * was previously duplicated across ~10 files.
+ *
+ * Each is `as const` so callers using them as Record keys / switch cases
+ * keep literal-type narrowing.
+ */
+export const SECTION_TODO = "TODO" as const;
+export const SECTION_DOING = "DOING" as const;
+export const SECTION_BLOCKED = "BLOCKED" as const;
+export const SECTION_DONE = "DONE — not yet archived" as const;
+
+/** Display order used by the kanban + index pages. */
+export const SECTION_ORDER: readonly TaskSection[] = [
+  SECTION_TODO,
+  SECTION_DOING,
+  SECTION_BLOCKED,
+  SECTION_DONE,
+];
+
 export interface Task {
   id: string;
   date: string;          // YYYY-MM-DD
