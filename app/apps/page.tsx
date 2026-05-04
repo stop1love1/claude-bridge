@@ -210,21 +210,21 @@ function AppsPage() {
                 const exists = meta?.exists ?? false;
                 const branch = meta?.branch ?? null;
                 const stats = statsByApp.get(app.name) ?? { idle: 0, doing: 0, done: 0, activeSessions: 0 };
-                const openTasks = () =>
-                  router.push(`/tasks?app=${encodeURIComponent(app.name)}`);
+                const openDetail = () =>
+                  router.push(`/apps/${encodeURIComponent(app.name)}`);
                 return (
                   <div
                     key={app.name}
                     role="link"
                     tabIndex={0}
-                    onClick={openTasks}
+                    onClick={openDetail}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        openTasks();
+                        openDetail();
                       }
                     }}
-                    title={`View tasks for ${app.name}`}
+                    title={`Open ${app.name} — git, diff, terminal`}
                     className={`rounded-lg border p-3 bg-card transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${
                       exists
                         ? "border-border hover:border-primary/40 hover:bg-accent/40"

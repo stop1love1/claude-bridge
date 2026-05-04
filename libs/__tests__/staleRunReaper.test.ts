@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -7,6 +13,8 @@ import type { ChildProcess } from "node:child_process";
 import { createMeta, appendRun, readMeta } from "../meta";
 import { reapStaleRunsForDir } from "../staleRunReaper";
 import { registerChild, unregisterChild } from "../spawnRegistry";
+import { BRIDGE_FOLDER, BRIDGE_ROOT } from "../paths";
+import { pathToSlug } from "../sessions";
 
 let tmp: string;
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), "reaper-")); });
@@ -155,22 +163,97 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     }
   });
 
-  it("flips a running row to stale immediately when the process is gone, regardless of age", async () => {
+  it("flips a running row to stale immediately when the process is gone AND no JSONL exists, regardless of age", async () => {
     const dir = join(tmp, "t_gone");
     createMeta(dir, HEADER_FRESH);
     await appendRun(dir, {
       sessionId: "gone-fresh",
       role: "coder",
-      repo: "fake",
+      repo: "fake-no-such-repo",
       status: "running",
       // Started 5 seconds ago — fresh by any wall-clock measure, but
-      // never registered → registry-miss → stale.
+      // never registered AND repo isn't in bridge.md → can't even
+      // locate a `.jsonl` to fall back on → stale.
       startedAt: new Date(Date.now() - 5_000).toISOString(),
       endedAt: null,
     });
 
     const meta = await reapStaleRunsForDir(dir);
     expect(meta!.runs[0].status).toBe("stale");
+  });
+
+  it("keeps a registry-miss running row alive when its JSONL was written within the cutoff", async () => {
+    // Externally-spawned coordinator scenario: a Claude Code IDE
+    // session POSTed `/link` to register itself, but never went
+    // through the bridge's spawn path so it isn't in spawnRegistry.
+    // Its `.jsonl` keeps growing as it dispatches agents — that's
+    // the only liveness signal we have. Threshold is generous (30
+    // min by default) since coordinators idle between child runs.
+    const dir = join(tmp, "t_external_alive");
+    createMeta(dir, HEADER_FRESH);
+    const sid = "0123abcd-4567-89ef-cdef-aaaaaaaaaaaa";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coordinator",
+      // BRIDGE_FOLDER (basename of the actual bridge dir) — hits the
+      // fast path in resolveRunCwd that skips bridge.md parsing.
+      repo: BRIDGE_FOLDER,
+      status: "running",
+      startedAt: new Date(Date.now() - 90 * 60_000).toISOString(), // 90 min ago
+      endedAt: null,
+    });
+
+    // Plant a fresh `.jsonl` at the path the reaper will look up.
+    // We write to the real `~/.claude/projects/<slug-of-BRIDGE_ROOT>/`
+    // because mocking `homedir` would require resetting the module
+    // graph mid-test. The file is removed in the cleanup block so
+    // it doesn't pollute the developer's machine.
+    const slug = pathToSlug(BRIDGE_ROOT);
+    const projectsDir = join(process.env.USERPROFILE || process.env.HOME || "", ".claude", "projects", slug);
+    mkdirSync(projectsDir, { recursive: true });
+    const jsonlPath = join(projectsDir, `${sid}.jsonl`);
+    writeFileSync(jsonlPath, '{"type":"user","message":{"content":"hi"}}\n');
+    // Force mtime to "now" — Date.now() / 1000 in seconds.
+    const now = Date.now() / 1000;
+    utimesSync(jsonlPath, now, now);
+
+    try {
+      const meta = await reapStaleRunsForDir(dir);
+      expect(meta!.runs[0].status).toBe("running");
+      expect(meta!.runs[0].endedAt).toBeNull();
+    } finally {
+      try { rmSync(jsonlPath, { force: true }); } catch { /* best-effort */ }
+    }
+  });
+
+  it("flips a registry-miss running row to stale when its JSONL is older than the cutoff", async () => {
+    const dir = join(tmp, "t_external_idle");
+    createMeta(dir, HEADER_FRESH);
+    const sid = "0123abcd-4567-89ef-cdef-bbbbbbbbbbbb";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coordinator",
+      repo: BRIDGE_FOLDER,
+      status: "running",
+      startedAt: new Date(Date.now() - 90 * 60_000).toISOString(),
+      endedAt: null,
+    });
+
+    const slug = pathToSlug(BRIDGE_ROOT);
+    const projectsDir = join(process.env.USERPROFILE || process.env.HOME || "", ".claude", "projects", slug);
+    mkdirSync(projectsDir, { recursive: true });
+    const jsonlPath = join(projectsDir, `${sid}.jsonl`);
+    writeFileSync(jsonlPath, '{"type":"user","message":{"content":"hi"}}\n');
+    // Backdate mtime to 60 min ago — past the default 30-min cutoff.
+    const old = (Date.now() - 60 * 60_000) / 1000;
+    utimesSync(jsonlPath, old, old);
+
+    try {
+      const meta = await reapStaleRunsForDir(dir);
+      expect(meta!.runs[0].status).toBe("stale");
+    } finally {
+      try { rmSync(jsonlPath, { force: true }); } catch { /* best-effort */ }
+    }
   });
 
   it("does not touch done / failed rows", async () => {

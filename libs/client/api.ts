@@ -211,6 +211,71 @@ export const api = {
       `/tasks/${taskId}/runs/${sessionId}/diff`,
       { signal: opts?.signal },
     ),
+  commitRun: (
+    taskId: string,
+    sessionId: string,
+    body: { message: string; push?: boolean },
+  ) =>
+    req<{ ok: boolean; message: string; error?: string; cwd: string }>(
+      `/tasks/${taskId}/runs/${sessionId}/commit`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  suggestCommit: (taskId: string, sessionId: string, opts?: ReqOpts) =>
+    req<{ message: string; fileCount: number; cwd: string }>(
+      `/tasks/${taskId}/runs/${sessionId}/commit/suggest`,
+      { method: "POST", signal: opts?.signal },
+    ),
+
+  // ─── App detail page ─────────────────────────────────────────────
+  appStatus: (name: string, opts?: ReqOpts) =>
+    req<{
+      cwd: string;
+      branch: string | null;
+      upstream: string | null;
+      ahead: number;
+      behind: number;
+      head: string | null;
+      counts: { modified: number; added: number; deleted: number; renamed: number; untracked: number };
+      clean: boolean;
+    }>(`/apps/${encodeURIComponent(name)}/status`, { signal: opts?.signal }),
+  appLog: (name: string, limit?: number, opts?: ReqOpts) =>
+    req<{
+      cwd: string;
+      commits: Array<{ sha: string; shortSha: string; author: string; email: string; at: number; subject: string }>;
+    }>(
+      `/apps/${encodeURIComponent(name)}/log${limit ? `?limit=${limit}` : ""}`,
+      { signal: opts?.signal },
+    ),
+  appDiff: (name: string, opts?: ReqOpts) =>
+    req<{ kind: "live"; cwd: string; diff: string; truncated?: boolean }>(
+      `/apps/${encodeURIComponent(name)}/diff`,
+      { signal: opts?.signal },
+    ),
+  appCommit: (name: string, body: { message: string; push?: boolean }) =>
+    req<{ ok: boolean; message: string; error?: string; cwd: string }>(
+      `/apps/${encodeURIComponent(name)}/commit`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  appSuggestCommit: (name: string, opts?: ReqOpts) =>
+    req<{ message: string; fileCount: number; cwd: string }>(
+      `/apps/${encodeURIComponent(name)}/commit/suggest`,
+      { method: "POST", signal: opts?.signal },
+    ),
+  appExec: (name: string, command: string) =>
+    req<{
+      cwd: string;
+      command: string;
+      stdout: string;
+      stderr: string;
+      exitCode: number | null;
+      signal: string | null;
+      durationMs: number;
+      truncated?: boolean;
+      timedOut?: boolean;
+    }>(`/apps/${encodeURIComponent(name)}/exec`, {
+      method: "POST",
+      body: JSON.stringify({ command }),
+    }),
   taskUsage: (taskId: string, opts?: ReqOpts) =>
     req<{
       taskId: string;

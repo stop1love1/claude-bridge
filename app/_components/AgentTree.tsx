@@ -5,6 +5,7 @@ import {
   Crown,
   Sparkles,
   X,
+  Trash2,
   GitBranch,
   GitCompare,
   Search,
@@ -17,6 +18,7 @@ import {
   Hammer,
   Palette,
   ShieldCheck,
+  Folder,
 } from "lucide-react";
 import type { Meta, Run } from "@/libs/client/types";
 import { duration } from "@/libs/client/time";
@@ -25,8 +27,9 @@ import { DiffViewer } from "./DiffViewer";
 
 // Role-keyed color/icon. Roles are free-form strings the coordinator
 // invents per task, so the lookup falls through to a neutral default.
-// Retry suffixes (`-retry`, `-cretry`, `-svretry`) are stripped before
-// the lookup so a `fixer-cretry` follow-up still renders as a wrench.
+// Retry suffixes (`-retry`, `-cretry`, `-svretry`, `-vretry`,
+// `-stretry`) are stripped before the lookup so a `fixer-cretry`
+// follow-up still renders as a wrench.
 const ROLE_COLOR: Record<string, string> = {
   coordinator: "text-warning",
   reviewer: "text-primary",
@@ -47,7 +50,7 @@ const ROLE_COLOR: Record<string, string> = {
 };
 
 function normalizeRole(role: string): string {
-  return role.replace(/-(retry|cretry|svretry)$/, "");
+  return role.replace(/-(retry|cretry|svretry|vretry|stretry)\d*$/, "");
 }
 
 function roleColor(role: string) {
@@ -106,32 +109,54 @@ interface TreeNode {
   children: TreeNode[];
 }
 
+interface RepoGroup {
+  repo: string;
+  /** Top-level nodes inside this repo (their parent is the coordinator
+   *  or is missing from runs[]). Sub-children stay nested. */
+  roots: TreeNode[];
+  /** Most recent run in the group — used as the sessionId pivot for
+   *  the repo-level "View Diff" button (every run in a repo group
+   *  typically shares a worktree, so any of them produces the same
+   *  diff; pick the freshest for clearest provenance). */
+  pivotRun: Run;
+}
+
+interface Layout {
+  /** The coordinator (or first parentless run if no coordinator) — rendered at the top. */
+  owner: Run | null;
+  /** Everything else, grouped by repo so the user can scan per-project. */
+  repoGroups: RepoGroup[];
+}
+
 /**
- * Build a parent->child tree from a flat `runs[]` array. The root is
- * the run with no `parentSessionId` AND `role === "coordinator"`. If
- * neither matches (legacy meta.json), we fall back to the first run.
+ * Walk `runs[]` and produce: (a) the coordinator/owner row, (b) one
+ * group per distinct child repo containing the runs in that repo,
+ * already organised into parent-child sub-trees.
  *
- * Children = runs whose `parentSessionId === parent.sessionId`. Anything
- * orphaned (parentSessionId points at a run that doesn't exist in the
- * task's runs[]) is hoisted as a sibling of the root so it stays
- * visible.
+ * The previous flat tree layout intermixed runs across repos — when
+ * a coordinator dispatched to two apps, the user had to read the
+ * `@ <repo>` suffix on every row to know which project a run
+ * belonged to. Grouping by repo surfaces project boundaries
+ * visually and lets us hang a single "View Diff" button per repo
+ * (one diff per worktree, not per agent).
+ *
+ * Cycles in `parentSessionId` (pathological meta.json) are guarded
+ * by `visited` so the recursion can't loop forever.
  */
-function buildTree(runs: Run[]): TreeNode[] {
-  if (runs.length === 0) return [];
+function buildLayout(runs: Run[]): Layout {
+  if (runs.length === 0) return { owner: null, repoGroups: [] };
   const byId = new Map(runs.map((r) => [r.sessionId, r]));
 
-  const root =
+  // Coordinator picked the same way the legacy tree did: prefer a
+  // role==="coordinator" parentless run; otherwise the first
+  // parentless run; otherwise the first run.
+  const owner =
     runs.find((r) => !r.parentSessionId && r.role === "coordinator") ??
     runs.find((r) => !r.parentSessionId) ??
     runs[0];
 
-  // `visited` guards against pathological meta.json where a chain of
-  // parentSessionId references forms a cycle (e.g. A → B → A). Without
-  // this check `visit` would recurse forever.
   const visit = (run: Run, visited: Set<string>): TreeNode => {
-    if (visited.has(run.sessionId)) {
-      return { run, children: [] };
-    }
+    if (visited.has(run.sessionId)) return { run, children: [] };
     const next = new Set(visited);
     next.add(run.sessionId);
     return {
@@ -147,26 +172,43 @@ function buildTree(runs: Run[]): TreeNode[] {
     };
   };
 
-  const rooted = visit(root, new Set<string>());
+  // Repo groups: every run that isn't the owner. Top-level inside
+  // each group = runs whose parent IS the owner OR whose parent
+  // doesn't exist in the runs list (orphans). Sub-trees stay nested
+  // for the rare case where one child spawns another.
+  const groups = new Map<string, RepoGroup>();
+  for (const run of runs) {
+    if (run.sessionId === owner.sessionId) continue;
+    const isTopLevel =
+      !run.parentSessionId ||
+      run.parentSessionId === owner.sessionId ||
+      !byId.has(run.parentSessionId);
+    if (!isTopLevel) continue;
+    const node = visit(run, new Set<string>([owner.sessionId]));
+    let g = groups.get(run.repo);
+    if (!g) {
+      g = { repo: run.repo, roots: [], pivotRun: run };
+      groups.set(run.repo, g);
+    }
+    g.roots.push(node);
+    // Pivot is the latest started/created in the group — best proxy
+    // for "what worktree is currently most relevant".
+    if (
+      (run.startedAt ?? "") > (g.pivotRun.startedAt ?? "") ||
+      (!g.pivotRun.startedAt && run.startedAt)
+    ) {
+      g.pivotRun = run;
+    }
+  }
 
-  // Surface orphans (parentSessionId set but parent not in runs[]) as
-  // siblings of root so they don't disappear from the UI.
-  const accountedFor = new Set<string>();
-  const collect = (n: TreeNode) => {
-    accountedFor.add(n.run.sessionId);
-    n.children.forEach(collect);
-  };
-  collect(rooted);
-  const orphans = runs
-    .filter(
-      (r) =>
-        !accountedFor.has(r.sessionId) &&
-        r.parentSessionId &&
-        !byId.has(r.parentSessionId),
-    )
-    .map((r) => visit(r, new Set<string>()));
+  // Stable repo order: alphabetical by repo name. Predictable enough
+  // for the user to find the same project in the same place across
+  // tasks; deterministic for screenshot diff'ing.
+  const repoGroups = [...groups.values()].sort((a, b) =>
+    a.repo.localeCompare(b.repo),
+  );
 
-  return [rooted, ...orphans];
+  return { owner, repoGroups };
 }
 
 /**
@@ -198,21 +240,17 @@ function StatusPill({ run }: { run: Run }) {
 
 function AgentNode({
   node,
-  depth,
   activeSessionId,
   onSelectRun,
   onKill,
-  onDiff,
-  branchByRepo,
+  onDelete,
   liveStatusBySession,
 }: {
   node: TreeNode;
-  depth: number;
   activeSessionId: string | null;
   onSelectRun: (run: Run) => void;
   onKill?: (run: Run) => void;
-  onDiff?: (run: Run) => void;
-  branchByRepo?: Record<string, string | null>;
+  onDelete?: (run: Run) => void;
   liveStatusBySession?: Map<string, { kind: string; label?: string }>;
 }) {
   const { run } = node;
@@ -220,10 +258,10 @@ function AgentNode({
   const dur = duration(run.startedAt, run.endedAt);
   const active = activeSessionId === run.sessionId;
   const canKill = run.status === "running" && !!onKill;
-  const branch = branchByRepo?.[run.repo] ?? null;
-  // Live tool / activity label streamed from the child's stream-json
-  // events. Only shown while the run is `running` — terminal-state runs
-  // get their final label from meta.json's status pill.
+  // Delete makes sense for terminal-state rows. Running rows show
+  // Kill (SIGTERM) instead — the two actions are mutually exclusive
+  // by status to avoid accidentally nuking a live agent.
+  const canDelete = run.status !== "running" && run.status !== "queued" && !!onDelete;
   const live =
     run.status === "running"
       ? liveStatusBySession?.get(run.sessionId) ?? null
@@ -245,51 +283,45 @@ function AgentNode({
               ? "bg-primary/10 border-primary/60 ring-1 ring-primary/30"
               : "bg-card border-border hover:bg-accent"
           }`}
-          title={`${run.role} @ ${run.repo}${branch ? ` (${branch})` : ""}\n${run.sessionId}`}
+          title={`${run.role} @ ${run.repo}\n${run.sessionId}`}
         >
           <RoleIcon role={run.role} size={12} className={`${iconCls} shrink-0`} />
           <span className="text-foreground font-semibold shrink-0">{run.role}</span>
-          <span className="text-fg-dim truncate">@ {run.repo}</span>
-          {branch && (
-            <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-secondary border border-border text-[9px] text-fg-dim font-mono shrink-0"
-              title={`branch: ${branch}`}
-            >
-              <GitBranch size={9} className="opacity-70" />
-              {branch}
-            </span>
-          )}
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
             {dur && <span className="text-fg-dim text-[10px]">{dur}</span>}
             <StatusPill run={run} />
           </span>
         </button>
-        <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/node:flex items-center gap-0.5">
-          {onDiff && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onDiff(run); }}
-              className="p-1 rounded bg-card border border-border text-fg-dim hover:text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-              aria-label={`View diff for ${run.role}`}
-              title="View diff"
-            >
-              <GitCompare size={10} />
-            </button>
-          )}
-        </div>
-        {canKill && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onKill!(run);
-            }}
-            className="absolute -right-1 -top-1 p-1 rounded-full bg-card border border-border text-fg-dim hover:text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
-            aria-label={`Kill ${run.role}`}
-            title={`Kill ${run.role}`}
-          >
-            <X size={10} />
-          </button>
+        {(canKill || canDelete) && (
+          <div className="absolute -right-1 -top-1 hidden group-hover/node:flex">
+            {canKill ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onKill!(run);
+                }}
+                className="p-1 rounded-full bg-card border border-border text-fg-dim hover:text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
+                aria-label={`Kill ${run.role}`}
+                title={`Kill ${run.role} (SIGTERM)`}
+              >
+                <X size={10} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete!(run);
+                }}
+                className="p-1 rounded-full bg-card border border-border text-fg-dim hover:text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
+                aria-label={`Delete ${run.role}`}
+                title={`Delete ${run.role} (removes meta + transcript)`}
+              >
+                <Trash2 size={10} />
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -308,13 +340,11 @@ function AgentNode({
             <AgentNode
               key={c.run.sessionId}
               node={c}
-              depth={depth + 1}
               activeSessionId={activeSessionId}
               onSelectRun={onSelectRun}
               liveStatusBySession={liveStatusBySession}
               onKill={onKill}
-              onDiff={onDiff}
-              branchByRepo={branchByRepo}
+              onDelete={onDelete}
             />
           ))}
         </ul>
@@ -323,18 +353,90 @@ function AgentNode({
   );
 }
 
+function RepoGroupView({
+  group,
+  branch,
+  activeSessionId,
+  onSelectRun,
+  onKill,
+  onDelete,
+  onDiff,
+  liveStatusBySession,
+}: {
+  group: RepoGroup;
+  branch: string | null;
+  activeSessionId: string | null;
+  onSelectRun: (run: Run) => void;
+  onKill?: (run: Run) => void;
+  onDelete?: (run: Run) => void;
+  onDiff?: (pivot: Run, repo: string) => void;
+  liveStatusBySession?: Map<string, { kind: string; label?: string }>;
+}) {
+  return (
+    <section className="space-y-1.5">
+      <header className="flex items-center gap-2 px-2 py-1 rounded-md bg-secondary/40 border border-border/60">
+        <Folder size={11} className="text-fg-dim shrink-0" />
+        <span className="text-[11px] font-mono font-semibold text-foreground truncate">
+          {group.repo}
+        </span>
+        {branch && (
+          <span
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-card border border-border text-[9px] text-fg-dim font-mono shrink-0"
+            title={`branch: ${branch}`}
+          >
+            <GitBranch size={9} className="opacity-70" />
+            {branch}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-1">
+          <span className="text-[9px] text-fg-dim font-mono uppercase tracking-wide">
+            {group.roots.length} agent{group.roots.length === 1 ? "" : "s"}
+          </span>
+          {onDiff && (
+            <button
+              type="button"
+              onClick={() => onDiff(group.pivotRun, group.repo)}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-border bg-card text-[10px] text-fg-dim hover:text-primary hover:border-primary/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              title={`View diff for ${group.repo}`}
+              aria-label={`View diff for ${group.repo}`}
+            >
+              <GitCompare size={10} />
+              Diff
+            </button>
+          )}
+        </span>
+      </header>
+
+      <ul className="space-y-1 ml-1.5">
+        {group.roots.map((n) => (
+          <AgentNode
+            key={n.run.sessionId}
+            node={n}
+            activeSessionId={activeSessionId}
+            onSelectRun={onSelectRun}
+            onKill={onKill}
+            onDelete={onDelete}
+            liveStatusBySession={liveStatusBySession}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /**
- * Render a `meta.runs[]` array as a parent → child agent tree. Root is
- * the coordinator (or first parentless run); children are runs whose
- * `parentSessionId` points at their parent. Recursion is supported so
- * Phase D fix-agents under a coder still display correctly.
+ * Render a `meta.runs[]` array as: coordinator at the top, then one
+ * folder section per child repo with its agents grouped inside.
  *
  * - `onSelectRun` switches the chat panel to that run.
  * - `onKill` (optional) is called when the user clicks the hover-X on
  *   a `running` node. The parent should confirm + POST
  *   `/api/tasks/<id>/runs/<sid>/kill`.
- * - The tree is rendered even when only the coordinator exists — it's
- *   still useful as a one-glance status indicator.
+ * - `onDelete` (optional) is called when the user clicks the hover-
+ *   trash on a terminal-state node. The parent should confirm +
+ *   `DELETE /api/sessions/<sid>?repo=<folder>` to remove the run
+ *   from meta and delete the underlying `.jsonl`.
+ * - The tree is rendered even when only the coordinator exists.
  */
 function AgentTreeInner({
   meta,
@@ -342,6 +444,7 @@ function AgentTreeInner({
   activeSessionId,
   onSelectRun,
   onKill,
+  onDelete,
   branchByRepo,
   liveStatusBySession,
 }: {
@@ -350,45 +453,53 @@ function AgentTreeInner({
   activeSessionId: string | null;
   onSelectRun: (run: Run) => void;
   onKill?: (run: Run) => void;
+  onDelete?: (run: Run) => void;
   branchByRepo?: Record<string, string | null>;
   liveStatusBySession?: Map<string, { kind: string; label?: string }>;
 }) {
-  const tree = useMemo(() => buildTree(meta?.runs ?? []), [meta?.runs]);
-  const [diffRun, setDiffRun] = useState<Run | null>(null);
+  const layout = useMemo(() => buildLayout(meta?.runs ?? []), [meta?.runs]);
+  const [diff, setDiff] = useState<{ run: Run; repo: string } | null>(null);
   // Diff endpoint requires a task id to look up meta — without it we
   // suppress the inline diff button entirely instead of failing later.
-  const onDiff = taskId ? (run: Run) => setDiffRun(run) : undefined;
+  const onDiff = taskId ? (run: Run, repo: string) => setDiff({ run, repo }) : undefined;
 
-  if (tree.length === 0) {
+  if (layout.repoGroups.length === 0) {
     return (
-      <p className="text-xs text-fg-dim italic">No sessions linked yet.</p>
+      <p className="text-xs text-fg-dim italic">
+        No agent runs yet — the coordinator hasn&apos;t dispatched anything to a project.
+      </p>
     );
   }
 
   return (
     <>
-      <ul className="space-y-1.5">
-        {tree.map((n) => (
-          <AgentNode
-            key={n.run.sessionId}
-            node={n}
-            depth={0}
+      <div className="space-y-3">
+        {/* Coordinator is rendered by TaskDetail's separate Owner section
+            above the tree — duplicating it here would pad the tree with
+            a row the user already sees. We still use it for layout
+            decisions (parent linkage), just don't render its row. */}
+        {layout.repoGroups.map((g) => (
+          <RepoGroupView
+            key={g.repo}
+            group={g}
+            branch={branchByRepo?.[g.repo] ?? null}
             activeSessionId={activeSessionId}
             onSelectRun={onSelectRun}
             onKill={onKill}
+            onDelete={onDelete}
             onDiff={onDiff}
-            branchByRepo={branchByRepo}
             liveStatusBySession={liveStatusBySession}
           />
         ))}
-      </ul>
-      {taskId && diffRun && (
+      </div>
+      {taskId && diff && (
         <DiffViewer
           taskId={taskId}
-          sessionId={diffRun.sessionId}
-          role={diffRun.role}
-          open={!!diffRun}
-          onClose={() => setDiffRun(null)}
+          sessionId={diff.run.sessionId}
+          role={diff.run.role}
+          repo={diff.repo}
+          open={!!diff}
+          onClose={() => setDiff(null)}
         />
       )}
     </>

@@ -189,6 +189,23 @@ function TaskDetailInner({
     }
   };
 
+  const handleDelete = async (run: Run) => {
+    if (!task) return;
+    const ok = await confirm({
+      title: `Delete ${run.role}?`,
+      description: `Removes ${run.role} @ ${run.repo} (session ${run.sessionId.slice(0, 8)}…) from this task and deletes its transcript on disk. The git history of any commits the agent made is unaffected.`,
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteSession(run.sessionId, run.repo);
+      toast("info", `Deleted ${run.role}`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  };
+
   return (
     <section className="flex-1 min-w-0 overflow-y-auto border-r border-border">
       <div className="p-4 sm:p-6 max-w-3xl mx-auto">
@@ -360,6 +377,7 @@ function TaskDetailInner({
             activeSessionId={activeRunId}
             onSelectRun={onSelectRun}
             onKill={handleKill}
+            onDelete={handleDelete}
             branchByRepo={branchByRepo}
             liveStatusBySession={liveStatusBySession}
           />
