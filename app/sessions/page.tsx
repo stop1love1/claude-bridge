@@ -29,11 +29,11 @@ function SessionsPageInner() {
   const [query, setQuery] = useState("");
   // Mobile (< md) shows ONE pane at a time via the tab bar — same UX
   // as task-detail. Desktop keeps both panes side-by-side, so this
-  // only matters on phones.
-  const [mobileTab, setMobileTab] = useState<"browser" | "chat">(() => {
-    if (typeof window === "undefined") return "browser";
-    return new URLSearchParams(window.location.search).get("sid") ? "chat" : "browser";
-  });
+  // only matters on phones. Read via useSearchParams (not
+  // window.location) so server and client agree during hydration.
+  const [mobileTab, setMobileTab] = useState<"browser" | "chat">(() =>
+    search.get("sid") ? "chat" : "browser",
+  );
 
   const newSessionRef = useRef<(() => void) | null>(null);
 

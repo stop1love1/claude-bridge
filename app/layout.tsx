@@ -11,7 +11,10 @@ const SITE_URL =
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "Claude Bridge",
+  title: {
+    default: "Claude Bridge",
+    template: "%s | Claude Bridge",
+  },
   description: "Owner dashboard for dispatching cross-repo tasks to a Claude agent team.",
 };
 

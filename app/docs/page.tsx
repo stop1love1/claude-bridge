@@ -18,7 +18,7 @@ import { LandingFooter, LandingHeader } from "../_landing/sections";
 import { GithubIcon, REPO_URL } from "../_landing/constants";
 
 export const metadata: Metadata = {
-  title: "Docs · Claude Bridge",
+  title: "Docs",
   description:
     "Install, configure, and operate Claude Bridge — the cross-repo coordinator for Claude Code.",
 };

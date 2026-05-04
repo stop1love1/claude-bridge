@@ -1,5 +1,10 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { DEMO_MODE } from "@/libs/demoMode";
+
+export const metadata: Metadata = {
+  title: "Login",
+};
 
 /**
  * Demo deployments don't run a real auth backend (no persistent disk
