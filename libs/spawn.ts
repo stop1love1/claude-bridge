@@ -413,6 +413,18 @@ export interface SpawnOpts {
    * hook on a per-session basis.
    */
   settingsPath?: string;
+  /**
+   * Optional path to a file whose contents are appended to claude's
+   * default system prompt via `--append-system-prompt-file`. Used by the
+   * agents route to push stable per-app context (house rules, repo
+   * profile, available helpers, pinned files, …) into the cacheable
+   * system-prompt slot — the Anthropic API caches matching prefixes, so
+   * future spawns for the same app reuse the cache. The file path is
+   * preferred over the inline `--append-system-prompt <prompt>` form
+   * because multi-line prompts as CLI args get mangled by cmd.exe on
+   * Windows (same reason the user-message prompt is fed via stdin).
+   */
+  systemPromptFile?: string;
 }
 
 /**
@@ -426,6 +438,9 @@ export function buildCoordinatorArgs(opts: SpawnOpts, sessionId: string): string
   return [
     "--session-id", sessionId,
     ...(opts.settingsPath ? ["--settings", opts.settingsPath] : []),
+    ...(opts.systemPromptFile
+      ? ["--append-system-prompt-file", opts.systemPromptFile]
+      : []),
     ...settingsArgs(opts.settings),
     ...streamingArgs(),
     "-p",
@@ -473,6 +488,7 @@ export function spawnFreeSession(
   settings?: ChatSettings,
   settingsPath?: string,
   sessionId?: string,
+  systemPromptFile?: string,
 ): SpawnedSession {
   sessionId = sessionId ?? randomUUID();
   const child = spawnClaudeWithStdin(
@@ -480,6 +496,9 @@ export function spawnFreeSession(
     [
       "--session-id", sessionId,
       ...(settingsPath ? ["--settings", settingsPath] : []),
+      ...(systemPromptFile
+        ? ["--append-system-prompt-file", systemPromptFile]
+        : []),
       ...settingsArgs(settings),
       ...streamingArgs(),
       "-p",

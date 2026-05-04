@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildChildPrompt, sanitizeTaskBodyForFence } from "../childPrompt";
+import {
+  buildChildPrompt,
+  buildSystemPromptAppend,
+  buildUserMessage,
+  sanitizeTaskBodyForFence,
+} from "../childPrompt";
 import type { RepoProfile } from "../repoProfile";
 
 const baseOpts = {
@@ -499,6 +504,195 @@ describe("buildChildPrompt", () => {
     // sanitized payload lines so we know the substitution actually
     // ran rather than the input simply not containing fences.
     expect(bodySlice.some((l) => l.includes("​"))).toBe(true);
+  });
+});
+
+describe("buildSystemPromptAppend", () => {
+  it("returns empty string when no stable per-app section is provided", () => {
+    // baseOpts has neither houseRules / styleFingerprint / memoryEntries /
+    // profile / symbolIndex / pinnedFiles / verifyHint — Language alone
+    // is not worth the file + flag round-trip.
+    expect(buildSystemPromptAppend(baseOpts)).toBe("");
+  });
+
+  it("includes Language directive when at least one stable section is present", () => {
+    const out = buildSystemPromptAppend({
+      ...baseOpts,
+      houseRules: "- Prefer named exports.",
+    });
+    expect(out).toContain("## Language");
+    expect(out).toContain("Mirror the language of the task body");
+  });
+
+  it("emits stable per-app sections in the cacheable order", () => {
+    const out = buildSystemPromptAppend({
+      ...baseOpts,
+      houseRules: "- Prefer named exports.",
+      styleFingerprint: {
+        appName: "x",
+        refreshedAt: "now",
+        sampledFiles: 12,
+        indent: { kind: "spaces", width: 2 },
+        quotes: "double",
+        semicolons: "always",
+        trailingComma: "all",
+        exports: "named",
+        fileNaming: { tsx: "PascalCase", ts: "camelCase" },
+      },
+      memoryEntries: ["Use vitest globals."],
+      profile: {
+        name: "app-api",
+        path: "/parent/app-api",
+        summary: "API service",
+        stack: ["nestjs"],
+        keywords: [],
+        features: [],
+        entrypoints: [],
+        fileCounts: {},
+        refreshedAt: new Date().toISOString(),
+        signals: {
+          hasPackageJson: true, hasReadme: true, hasClaudeMd: false,
+          hasNextConfig: false, hasPrismaSchema: false, hasTailwindConfig: false,
+          hasNestCoreDep: true, hasReactDep: false,
+          routerStyle: "unknown", primaryLang: "ts",
+        },
+      },
+      symbolIndex: {
+        appName: "app-api", refreshedAt: "now", scannedDirs: ["lib"], fileCount: 1,
+        symbols: [{ name: "cn", kind: "function", file: "lib/cn.ts", signature: "" }],
+      },
+      pinnedFiles: [{ rel: "src/api.ts", content: "export const X = 1;", truncated: false }],
+      verifyHint: { test: "bun test" },
+    });
+    const indices = [
+      "## Language",
+      "## House rules",
+      "## House style (auto-detected)",
+      "## Memory",
+      "## Repo profile",
+      "## Available helpers",
+      "## Pinned context",
+      "## Verify commands",
+    ].map((h) => ({ h, idx: out.indexOf(h) }));
+    for (const { h, idx } of indices) {
+      expect(idx, `section "${h}" must be present`).toBeGreaterThan(-1);
+    }
+    // Strictly ascending — proves the cacheable section order
+    for (let i = 1; i < indices.length; i++) {
+      expect(indices[i].idx).toBeGreaterThan(indices[i - 1].idx);
+    }
+  });
+
+  it("excludes task-specific content (header, task body, self-register, spawn signals)", () => {
+    const out = buildSystemPromptAppend({
+      ...baseOpts,
+      houseRules: "- Prefer named exports.",
+    });
+    // Task-specific section headers must NOT appear
+    expect(out).not.toContain("## Task");
+    expect(out).not.toContain("## Self-register");
+    expect(out).not.toContain("## Report contract");
+    expect(out).not.toContain("## Spawn-time signals");
+    expect(out).not.toContain("## Your role");
+    expect(out).not.toContain("## Repo context (auto-captured by bridge)");
+    // Task-specific values must NOT leak in
+    expect(out).not.toContain(baseOpts.taskId);
+    expect(out).not.toContain(baseOpts.childSessionId);
+    expect(out).not.toContain(baseOpts.parentSessionId);
+    expect(out).not.toContain(baseOpts.coordinatorBody);
+  });
+
+  it("is byte-stable for identical opts (cache invariant)", () => {
+    const opts = {
+      ...baseOpts,
+      houseRules: "- a\n- b",
+      memoryEntries: ["m1", "m2"],
+    };
+    expect(buildSystemPromptAppend(opts)).toBe(buildSystemPromptAppend(opts));
+  });
+});
+
+describe("buildUserMessage", () => {
+  it("emits task-specific sections in order", () => {
+    const out = buildUserMessage(baseOpts);
+    const indices = [
+      "## Task",
+      "## Your role",
+      "## Repo context (auto-captured by bridge)",
+      "## Self-register",
+      "## Report contract",
+      "## Spawn-time signals",
+    ].map((h) => ({ h, idx: out.indexOf(h) }));
+    for (const { h, idx } of indices) {
+      expect(idx, `section "${h}" must be present`).toBeGreaterThan(-1);
+    }
+    for (let i = 1; i < indices.length; i++) {
+      expect(indices[i].idx).toBeGreaterThan(indices[i - 1].idx);
+    }
+  });
+
+  it("does NOT include stable per-app sections (those live in system prompt)", () => {
+    const out = buildUserMessage({
+      ...baseOpts,
+      houseRules: "- Prefer named exports.",
+      memoryEntries: ["m1"],
+      profile: {
+        name: "app-api", path: "/p", summary: "x", stack: [], keywords: [],
+        features: [], entrypoints: [], fileCounts: {},
+        refreshedAt: new Date().toISOString(),
+        signals: {
+          hasPackageJson: true, hasReadme: true, hasClaudeMd: false,
+          hasNextConfig: false, hasPrismaSchema: false, hasTailwindConfig: false,
+          hasNestCoreDep: false, hasReactDep: false,
+          routerStyle: "unknown", primaryLang: "ts",
+        },
+      },
+      pinnedFiles: [{ rel: "x.ts", content: "y", truncated: false }],
+      verifyHint: { test: "bun test" },
+    });
+    expect(out).not.toContain("## House rules");
+    expect(out).not.toContain("## House style");
+    expect(out).not.toContain("## Memory");
+    expect(out).not.toContain("## Repo profile");
+    expect(out).not.toContain("## Available helpers");
+    expect(out).not.toContain("## Pinned context");
+    expect(out).not.toContain("## Verify commands");
+  });
+
+  it("includes the header, task body, coordinator brief, and self-register snippet", () => {
+    const out = buildUserMessage(baseOpts);
+    expect(out).toContain(baseOpts.role);
+    expect(out).toContain(baseOpts.taskId);
+    expect(out).toContain(baseOpts.repo);
+    expect(out).toContain(baseOpts.taskBody);
+    expect(out).toContain(baseOpts.coordinatorBody);
+    expect(out).toContain(`"sessionId":"${baseOpts.childSessionId}"`);
+  });
+
+  it("references the system-prompt context so the agent knows where stable rules went", () => {
+    const out = buildUserMessage(baseOpts);
+    expect(out.toLowerCase()).toContain("system prompt");
+  });
+
+  it("preserves the report contract (taskId-specific path)", () => {
+    const out = buildUserMessage(baseOpts);
+    expect(out).toContain(
+      `../${baseOpts.bridgeFolder}/sessions/${baseOpts.taskId}/reports/${baseOpts.role}-${baseOpts.repo}.md`,
+    );
+  });
+
+  it("renders Recent direction and Reference files when provided (volatile / task-specific)", () => {
+    const out = buildUserMessage({
+      ...baseOpts,
+      recentDirection: { dir: "lib/forms", log: "abc1234 commit", truncated: false },
+      attachedReferences: [
+        { rel: "x.ts", content: "X", truncated: false, score: 3 },
+      ],
+    });
+    expect(out).toContain("## Recent direction");
+    expect(out).toContain("`lib/forms`");
+    expect(out).toContain("## Reference files");
+    expect(out).toContain("(score 3)");
   });
 });
 

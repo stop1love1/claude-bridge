@@ -45,6 +45,51 @@ function authHeaders() {
   return INTERNAL_TOKEN ? { "x-bridge-internal-token": INTERNAL_TOKEN } : {};
 }
 
+/**
+ * Fire-and-forget heartbeat. Always called at the top of the hook,
+ * before the bypass-permissions short-circuit, so the bridge gets a
+ * push-based "agent is using a tool" signal even for the headless
+ * `bypassPermissions` runs that otherwise never round-trip to the
+ * bridge per tool call. The reaper uses this as an alternative
+ * freshness signal alongside JSONL mtime — handles the edge case
+ * where the JSONL write is delayed or the file path can't be
+ * resolved (renamed repo, missing bridge.md, etc.).
+ *
+ * Errors are swallowed and the hook never waits for the response —
+ * the heartbeat must NEVER block a tool call. We give it a short
+ * connect window (1.5s) so a bridge in a degraded state can't queue
+ * up sockets per spawned tool use either.
+ */
+function fireHeartbeat(sessionId) {
+  if (!sessionId) return;
+  try {
+    const sidEnc = encodeURIComponent(sessionId);
+    const req = http.request(
+      {
+        host: BRIDGE_HOST,
+        port: BRIDGE_PORT,
+        method: "POST",
+        path: `/api/sessions/${sidEnc}/heartbeat`,
+        headers: { "content-length": 0, ...authHeaders() },
+        timeout: 1500,
+      },
+      (res) => {
+        // Drain so the socket can return to the pool quickly. We
+        // don't actually care about the response body or status code
+        // — any non-error reply means the heartbeat landed.
+        res.resume();
+      },
+    );
+    // Same fail-quiet contract: any error (bridge down, slow socket,
+    // EPIPE) is a non-event from the agent's POV.
+    req.on("error", () => {});
+    req.on("timeout", () => { req.destroy(); });
+    req.end();
+  } catch {
+    /* swallow — heartbeat must not crash the hook */
+  }
+}
+
 function readStdin() {
   return new Promise((resolve) => {
     let buf = "";
@@ -120,16 +165,10 @@ function failOpen(reason) {
 }
 
 (async function main() {
-  // By default the hook contacts the bridge so the user gets an
-  // Allow/Deny popup for every tool call. The spawner explicitly opts
-  // out by setting `BRIDGE_AUTO_APPROVE=1` — that path is wired only
-  // for permission-mode `bypassPermissions` (coordinator + auto-spawned
-  // children that have no TTY to prompt against). Empty stdout + exit
-  // 0 == claude proceeds with the call.
-  if (process.env.BRIDGE_AUTO_APPROVE === "1") {
-    process.exit(0);
-  }
-
+  // Read stdin FIRST so we have the sessionId for the heartbeat,
+  // even on the bypass-permissions path. Without this, headless
+  // children would never check in and the stale-run reaper would
+  // have no push-based liveness signal to consult.
   let payload = {};
   try {
     const raw = await readStdin();
@@ -145,6 +184,22 @@ function failOpen(reason) {
 
   if (!sessionId) {
     return failOpen("payload missing session_id");
+  }
+
+  // Fire heartbeat for every tool call regardless of permission mode.
+  // Async + non-blocking — the request goes out on the same event loop
+  // tick as everything that follows, so the bypass `process.exit(0)`
+  // below doesn't kill the request before it lands (Node lets pending
+  // requests drain on graceful exit).
+  fireHeartbeat(sessionId);
+
+  // Bypass-permissions path: the spawner opted out of the Allow/Deny
+  // popup by setting BRIDGE_AUTO_APPROVE=1. Wired for permission-mode
+  // `bypassPermissions` (coordinator + auto-spawned children that
+  // have no TTY to prompt against). Empty stdout + exit 0 == claude
+  // proceeds with the call.
+  if (process.env.BRIDGE_AUTO_APPROVE === "1") {
+    process.exit(0);
   }
 
   const requestId = randomUUID();

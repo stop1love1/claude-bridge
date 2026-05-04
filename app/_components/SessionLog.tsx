@@ -513,10 +513,34 @@ function SessionLogInner({
       }
       startTransition(() => {
         setEntries((prev) => {
-          const merged = [...prev, ...lines];
+          // Dedup by JSONL `uuid` against entries we already have. Belt-
+          // and-braces against any path that re-delivers a line we've
+          // already merged: SSE auto-reconnect racing the offset advance,
+          // visibility-flip catch-up REST overlapping the next SSE
+          // payload, server replay on a stale `since`, etc. Without this
+          // a single duplicated line surfaces as React's "two children
+          // with the same key" warning at the entry-render site (the
+          // `<div key={key}>` derived from `e.uuid`).
+          const seen = new Set<string>();
+          for (const e of prev) {
+            if (e.uuid) seen.add(e.uuid);
+          }
+          const dedupLines: LogEntry[] = [];
+          const dedupOffsets: number[] = [];
+          for (let i = 0; i < lines.length; i++) {
+            const l = lines[i];
+            const id = l?.uuid;
+            if (id && seen.has(id)) continue;
+            if (id) seen.add(id);
+            dedupLines.push(l);
+            dedupOffsets.push(newLineOffsets[i] ?? 0);
+          }
+          if (dedupLines.length === 0) return prev;
+
+          const merged = [...prev, ...dedupLines];
           const mergedOffsets = [
             ...entryOffsetsRef.current,
-            ...newLineOffsets,
+            ...dedupOffsets,
           ];
           // Cap accounting: never trim the FRONT entries that came in
           // via a backward load. Trim only the post-prefix tail-window
@@ -707,20 +731,57 @@ function SessionLogInner({
         pendingScrollRestoreRef.current = null;
         return;
       }
-      // Prepend.
-      setEntries((prev) => [...olderLines, ...prev]);
-      entryOffsetsRef.current = [...olderOffsets, ...entryOffsetsRef.current];
-      loadedOlderCountRef.current += olderLines.length;
+      // Prepend — dedup against the parallel offsets ref by `uuid`
+      // first. Same motivation as `applyTail`'s dedup: if the backward
+      // window overlaps the head of `entries` by even one line
+      // (server-side boundary off-by-one, a race with a freshly-arrived
+      // tail), we'd otherwise produce two entries with the same key
+      // and trip React's duplicate-children warning.
+      //
+      // We dedup using the closure `entries` (not `prev` inside the
+      // updater) so side-effects (ref / counter / setTrimmed) run
+      // exactly once per loadOlder call, not once per StrictMode
+      // re-invocation. Older-window vs. tail-window come from opposite
+      // ends of the file, so closure staleness can't cause a missed
+      // dedup in practice.
+      const seen = new Set<string>();
+      for (const e of entries) {
+        if (e.uuid) seen.add(e.uuid);
+      }
+      const dedupOlder: LogEntry[] = [];
+      const dedupOlderOffsets: number[] = [];
+      for (let i = 0; i < olderLines.length; i++) {
+        const l = olderLines[i];
+        const id = l?.uuid;
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        dedupOlder.push(l);
+        dedupOlderOffsets.push(olderOffsets[i] ?? 0);
+      }
+      setEntries((prev) => [...dedupOlder, ...prev]);
+      entryOffsetsRef.current = [...dedupOlderOffsets, ...entryOffsetsRef.current];
+      loadedOlderCountRef.current += dedupOlder.length;
       firstOffsetRef.current = result.fromOffset;
       // We just resurrected entries that the cap had previously dropped —
-      // shrink the "earlier entries trimmed" counter to match.
-      setTrimmed((t) => Math.max(0, t - olderLines.length));
+      // shrink the "earlier entries trimmed" counter to match the actual
+      // number of new rows we kept.
+      if (dedupOlder.length > 0) {
+        setTrimmed((t) => Math.max(0, t - dedupOlder.length));
+      }
     } catch {
       pendingScrollRestoreRef.current = null;
     } finally {
       inFlightOlderRef.current = false;
       setLoadingOlder(false);
     }
+    // `entries` is read above for dedup but intentionally excluded from
+    // the dep list — adding it would re-create `loadOlder` on every
+    // entries change, which cascades into `handleScroll` (deps include
+    // `loadOlder`) and forces a per-batch re-bind of the scroll handler.
+    // The dedup correctness doesn't need a fresh snapshot: older-window
+    // and tail-window come from opposite ends of the file, so even a
+    // few-batches-stale closure can't miss a real duplicate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run]);
 
   // "responding…" if a new entry landed in the last 4s. Lazy

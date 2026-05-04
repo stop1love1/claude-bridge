@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { appendRunIfNotDuplicate, readMeta, updateRun, type Run } from "@/libs/meta";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { resolveRepoCwd, resolveRepos } from "@/libs/repos";
 import { resumeClaude, spawnFreeSession } from "@/libs/spawn";
 import { wireRunLifecycle } from "@/libs/coordinator";
@@ -18,7 +18,11 @@ import {
   loadDetectInput,
   type DetectedScope,
 } from "@/libs/detect";
-import { buildChildPrompt } from "@/libs/childPrompt";
+import {
+  buildChildPrompt,
+  buildSystemPromptAppend,
+  buildUserMessage,
+} from "@/libs/childPrompt";
 import { buildResumePrompt } from "@/libs/resumePrompt";
 import { loadHouseRules } from "@/libs/houseRules";
 import { topMemoryEntries } from "@/libs/memory";
@@ -115,6 +119,49 @@ interface SpeculativeDecision {
 }
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/**
+ * Prompt-caching opt-in. Off by default — set `BRIDGE_PROMPT_CACHE=1`
+ * to enable. When on, the agents route splits the child prompt into:
+ *
+ *   - **System append** (stable per-app): house rules, house style,
+ *     memory, repo profile, available helpers, pinned files, verify
+ *     commands. Written to a content-addressed file under
+ *     `.bridge-state/cache/sys-prompts/<sha256>.txt` and passed via
+ *     `claude --append-system-prompt-file <path>`. Same content =
+ *     same file = same Anthropic API cache hit, so siblings + future
+ *     spawns for the same app reuse the cache.
+ *   - **User message** (task-specific): everything else (header, task
+ *     body, detected scope, shared plan, role brief, repo context git
+ *     log, references, self-register, report contract, spawn signals).
+ *     Fed via stdin as today.
+ *
+ * The two together carry the same content as the legacy
+ * `buildChildPrompt` output — no behavioral change beyond moving stable
+ * bits into the cacheable system-prompt slot.
+ */
+const PROMPT_CACHE_ENABLED = process.env.BRIDGE_PROMPT_CACHE === "1";
+
+const SYS_PROMPT_CACHE_DIR = join(BRIDGE_STATE_DIR, "cache", "sys-prompts");
+
+/**
+ * Write `content` to a content-addressed file under
+ * `.bridge-state/cache/sys-prompts/<sha256>.txt` (idempotent — same
+ * content writes to the same path). Returns the absolute path so
+ * the caller can pass it to `claude --append-system-prompt-file`.
+ *
+ * Returns `null` when content is empty (caller should skip the flag).
+ */
+function ensureSystemPromptFile(content: string): string | null {
+  if (!content || content.length === 0) return null;
+  const hash = createHash("sha256").update(content).digest("hex").slice(0, 32);
+  const path = join(SYS_PROMPT_CACHE_DIR, `${hash}.txt`);
+  if (!existsSync(path)) {
+    mkdirSync(SYS_PROMPT_CACHE_DIR, { recursive: true });
+    writeFileSync(path, content, "utf8");
+  }
+  return path;
+}
 
 /**
  * Spawn a child Claude agent for a task. Centralizes what the coordinator
@@ -509,7 +556,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       }) + "\n\n" + prompt
     : prompt;
 
-  const prependedPrompt = buildChildPrompt({
+  const childPromptOpts = {
     taskId: id,
     taskTitle: meta.taskTitle,
     taskBody: meta.taskBody,
@@ -532,7 +579,23 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     memoryEntries,
     detectedScope,
     sharedPlan,
-  });
+  };
+
+  // Prompt-cache split (opt-in via `BRIDGE_PROMPT_CACHE=1`). When on,
+  // stable per-app sections are written to a content-addressed file
+  // and passed via `--append-system-prompt-file` so the Anthropic API
+  // can cache them across spawns. The user message (stdin) keeps only
+  // the task-specific content. When off, everything goes via stdin
+  // exactly as before.
+  let prependedPrompt: string;
+  let systemPromptFile: string | undefined;
+  if (PROMPT_CACHE_ENABLED) {
+    const sysContent = buildSystemPromptAppend(childPromptOpts);
+    systemPromptFile = ensureSystemPromptFile(sysContent) ?? undefined;
+    prependedPrompt = buildUserMessage(childPromptOpts);
+  } else {
+    prependedPrompt = buildChildPrompt(childPromptOpts);
+  }
 
   // User mediation. We only ask if (a) the caller didn't opt out AND
   // (b) we have a parent session id to route the popup back to. Without
@@ -655,6 +718,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { mode: "bypassPermissions" },
       settingsPath,
       sessionId,
+      systemPromptFile,
     );
   } catch (e) {
     try {

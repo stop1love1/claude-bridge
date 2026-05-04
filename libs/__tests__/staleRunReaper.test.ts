@@ -24,11 +24,20 @@ afterEach(() => {
 
 /**
  * Build a fake ChildProcess for the spawn registry so a test can
- * assert "process alive → run stays running". Only the `on('exit')`
- * subscription is exercised; the EventEmitter satisfies it.
+ * assert "process alive → run stays running". The reaper checks
+ * `exitCode === null && !killed` to distinguish a healthy registry
+ * entry from a zombie (lifecycle-hook-missed) one, so the fake has
+ * to mirror Node's real "alive" shape: `exitCode = null` while the
+ * process is running.
  */
 function fakeChild(): ChildProcess {
-  return new EventEmitter() as unknown as ChildProcess;
+  const ee = new EventEmitter() as unknown as ChildProcess & {
+    exitCode: number | null;
+    killed: boolean;
+  };
+  ee.exitCode = null;
+  ee.killed = false;
+  return ee;
 }
 
 const HEADER_FRESH = {
@@ -244,8 +253,13 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     mkdirSync(projectsDir, { recursive: true });
     const jsonlPath = join(projectsDir, `${sid}.jsonl`);
     writeFileSync(jsonlPath, '{"type":"user","message":{"content":"hi"}}\n');
-    // Backdate mtime to 60 min ago — past the default 30-min cutoff.
-    const old = (Date.now() - 60 * 60_000) / 1000;
+    // Backdate mtime to 5 hours ago — past the default 4-hour cutoff
+    // (`DEFAULT_STALE_RUN_MIN = 240`). The default was bumped from
+    // 30 min to 240 min so legit long-running tasks (long Bash steps,
+    // multi-hour coordinator agent loops) don't false-positive flip
+    // to stale; this test still proves the cutoff fires when the
+    // transcript truly hasn't moved.
+    const old = (Date.now() - 5 * 60 * 60_000) / 1000;
     utimesSync(jsonlPath, old, old);
 
     try {
@@ -254,6 +268,63 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     } finally {
       try { rmSync(jsonlPath, { force: true }); } catch { /* best-effort */ }
     }
+  });
+
+  it("keeps a registry-miss running row alive when a recent heartbeat was recorded, even with a stale JSONL", async () => {
+    // Heartbeat-only liveness path: an externally-spawned coordinator
+    // whose JSONL hasn't moved in hours (long Bash, model thinking
+    // gap, etc.) but whose PreToolUse hook recently fired and
+    // POSTed to `/api/sessions/<sid>/heartbeat`. Heartbeat is OR'd
+    // with JSONL freshness — either being fresh keeps the run alive.
+    const { recordHeartbeat, _clearHeartbeatsForTest } = await import("../heartbeat");
+    _clearHeartbeatsForTest();
+
+    const dir = join(tmp, "t_heartbeat_alive");
+    createMeta(dir, HEADER_FRESH);
+    const sid = "deadbeef-1111-2222-3333-444455556666";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coordinator",
+      repo: BRIDGE_FOLDER,
+      status: "running",
+      // Started 5 hours ago; with no heartbeat AND no JSONL the row
+      // would normally flip to stale (past the 4-hour default).
+      startedAt: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
+      endedAt: null,
+    });
+    // Record a heartbeat just now → run should stay running.
+    recordHeartbeat(sid);
+
+    const meta = await reapStaleRunsForDir(dir);
+    expect(meta!.runs[0].status).toBe("running");
+    expect(meta!.runs[0].endedAt).toBeNull();
+
+    _clearHeartbeatsForTest();
+  });
+
+  it("flips a row stale when neither heartbeat nor JSONL is fresh", async () => {
+    // Belt-and-braces: the OR contract means BOTH signals have to
+    // miss for the reaper to fall through to OS probe (which is
+    // VITEST-shorted to empty Set in the test environment) and
+    // ultimately mark the row stale.
+    const { _clearHeartbeatsForTest } = await import("../heartbeat");
+    _clearHeartbeatsForTest();
+
+    const dir = join(tmp, "t_heartbeat_stale");
+    createMeta(dir, HEADER_FRESH);
+    const sid = "feedface-aaaa-bbbb-cccc-ddddeeeeffff";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-no-such-repo",
+      status: "running",
+      startedAt: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
+      endedAt: null,
+    });
+    // No heartbeat, no JSONL (fake repo isn't in bridge.md).
+
+    const meta = await reapStaleRunsForDir(dir);
+    expect(meta!.runs[0].status).toBe("stale");
   });
 
   it("does not touch done / failed rows", async () => {
