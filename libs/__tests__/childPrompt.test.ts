@@ -121,7 +121,11 @@ describe("buildChildPrompt", () => {
 
   it("tells the child to stop calling tools after the chat reply", () => {
     const out = buildChildPrompt(baseOpts);
-    expect(out).toMatch(/Strict end-of-turn order/);
+    // Compressed wording — the directive is now a single bolded line
+    // rather than a numbered "Strict end-of-turn order" header. Both
+    // assertions below probe the substantive contract: the order of
+    // operations and the explicit ban on a status-PATCH re-POST.
+    expect(out).toMatch(/end-of-turn/i);
     expect(out).toMatch(/no link re-POST/);
   });
 

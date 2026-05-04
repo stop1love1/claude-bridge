@@ -96,6 +96,27 @@ describe("stripSystemTags", () => {
   it("handles empty input", () => {
     expect(stripSystemTags("")).toBe("");
   });
+
+  it("strips a wrapping <task-notification> envelope and its inner fields", () => {
+    const text =
+      "before <task-notification><task-id>t_20260504_001</task-id><task-title>x</task-title></task-notification> after";
+    expect(stripSystemTags(text)).toBe("before  after");
+  });
+
+  it("strips orphan inner tags the assistant echoes standalone", () => {
+    // Real-world leak: model paraphrases the bridge envelope in prose
+    // and emits naked `<task-id>…</task-id>` without the wrapper.
+    const text = "the <task-id>t_20260504_001</task-id> just landed";
+    expect(stripSystemTags(text)).toBe("the  just landed");
+  });
+
+  it("strips an unclosed open tag from a streaming partial", () => {
+    // SSE chunk arrives with the open tag but the close hasn't streamed
+    // yet — the paired-strip would miss it, the orphan-strip catches it.
+    expect(stripSystemTags("foo <system-reminder>bar baz")).toBe(
+      "foo bar baz",
+    );
+  });
 });
 
 describe("summarizeInput", () => {

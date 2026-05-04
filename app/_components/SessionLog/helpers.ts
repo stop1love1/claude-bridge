@@ -106,8 +106,15 @@ export function asBlocks(content: unknown): ContentBlock[] {
 
 // Tags Claude re-emits inside user / tool_result messages that are pure
 // internal scaffolding — IDE breadcrumbs, slash-command echoes, system
-// reminders. Hide them. Only well-known tags are stripped, never arbitrary
+// reminders, the bridge's own task-notification envelope and its inner
+// fields. Hide them. Only well-known tags are stripped, never arbitrary
 // `<foo>` the user might have actually typed.
+//
+// The list intentionally separates the *envelope* tags (which are
+// always paired open/close) from *child fields* the assistant
+// sometimes paraphrases on their own (e.g. naked `<task-id>` without
+// the wrapping `<task-notification>`). Both are scaffolding from the
+// bridge's perspective; both deserve to be stripped.
 const SYSTEM_TAGS = [
   "system-reminder",
   "task-notification",
@@ -119,22 +126,50 @@ const SYSTEM_TAGS = [
   "local-command-stderr",
   "command-stdout",
   "command-stderr",
+  // Inner fields the bridge feeds into <task-notification> blocks. The
+  // assistant occasionally echoes one of these standalone when it
+  // paraphrases an event ("the <task-id> is …"); strip both forms.
+  "task-id",
+  "task-title",
+  "task-body",
+  "task-section",
+  "task-status",
+  "task-app",
+  "task-checked",
 ];
 const SYSTEM_TAG_RE = new RegExp(
   `<(${SYSTEM_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?<\\/\\1>`,
   "g",
 );
+// Single-tag forms — handles two real-world leaks the paired regex
+// misses:
+//   1. Streaming partials where the close tag hasn't arrived yet
+//      (`<system-reminder>foo` rendered before `</system-reminder>`).
+//   2. Self-contained orphan opens / closes the model emits when
+//      paraphrasing structure ("inside <task-id>t_…</task-id> we…").
+// Run AFTER the paired strip so we don't accidentally split inside a
+// well-formed pair.
+const SYSTEM_TAG_OPEN_RE = new RegExp(
+  `<(${SYSTEM_TAGS.join("|")})\\b[^>]*\\/?>`,
+  "g",
+);
+const SYSTEM_TAG_CLOSE_RE = new RegExp(
+  `<\\/(${SYSTEM_TAGS.join("|")})\\s*>`,
+  "g",
+);
 
 export function stripSystemTags(text: string): string {
   if (!text || text.indexOf("<") === -1) return text;
-  // Run repeatedly to catch nested cases. Cap iterations to avoid infinite
-  // loops on weird inputs.
+  // Run paired strip repeatedly to catch nested cases. Cap iterations
+  // to avoid infinite loops on weird inputs.
   let prev = text;
   for (let i = 0; i < 4; i++) {
     const next = prev.replace(SYSTEM_TAG_RE, "");
     if (next === prev) break;
     prev = next;
   }
+  // Then drop any orphan opens / closes the paired pass missed.
+  prev = prev.replace(SYSTEM_TAG_OPEN_RE, "").replace(SYSTEM_TAG_CLOSE_RE, "");
   // Collapse 3+ newlines left behind to a single blank line.
   return prev.replace(/\n{3,}/g, "\n\n").trim();
 }

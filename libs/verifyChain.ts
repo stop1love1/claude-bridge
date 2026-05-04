@@ -302,11 +302,13 @@ export function renderVerifyRetryContextBlock(verify: RunVerify): string {
 }
 
 /**
- * Spawn a verify-retry. Mirrors `childRetry.spawnRetryRun`: direct
- * `spawnFreeSession` call (no HTTP self-loop), inherits the failed
- * run's `parentSessionId` so the new run renders as a sibling under the
- * same coordinator, role gets the `-vretry` suffix to keep the retry
- * budget separate from crash retries.
+ * Spawn a verify-retry by resuming the failed run's Claude session
+ * (`claude --resume <sid>`). The agent already has the original brief
+ * and prior turn's tool calls in its `.jsonl`, so the retry only sends
+ * the strategy prefix + verify-failure context as the new user turn.
+ * Same row in meta.json mutates: role gets the `-vretry` suffix,
+ * status flips back to running, retryAttempt records the attempt
+ * number. Shared spawn boilerplate lives in `libs/retrySpawn.ts`.
  */
 export async function spawnVerifyRetry(args: {
   taskId: string;

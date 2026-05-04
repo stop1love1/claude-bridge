@@ -903,7 +903,8 @@ export function wireRunLifecycle(
     //
     // Safety net: if postExitFlow throws BEFORE any gate had a chance to
     // call attachGateResult (which writes status:done), the run would
-    // stay status:running until the stale-run reaper kicks in (~30 min).
+    // stay status:running until the stale-run reaper notices the
+    // registry-miss on the next read.
     // The catch below explicitly flips status:done (precondition: still
     // running) so a crash in loadVerifyChain / verifyConfigOf cannot
     // ghost a successful child indefinitely.
@@ -953,7 +954,8 @@ export function wireRunLifecycle(
       // code === null means the child was terminated by a signal
       // (e.g. SIGTERM from the stop button or speculative-loser
       // selection). Without an explicit branch the run would stay
-      // status:running until the stale-run reaper fires (~30 min).
+      // status:running until the stale-run reaper notices the
+      // registry-miss on the next read.
       // Treat it as a failed run so failRun's tryAutoRetry logic
       // (which knows about speculativeOutcome === "lost") can decide
       // whether to retry or just terminate cleanly.

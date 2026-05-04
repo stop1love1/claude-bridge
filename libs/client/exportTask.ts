@@ -65,8 +65,11 @@ interface MinimalEntry {
   };
 }
 
+// Both the envelope tags and the inner field tags the assistant
+// sometimes echoes standalone — kept in sync with
+// `app/_components/SessionLog/helpers.ts`.
 const SYSTEM_TAG_RE =
-  /<\/?(system-reminder|task-notification|ide_opened_file|ide_selection|command-message|local-command-stdout)[^>]*>/gi;
+  /<\/?(system-reminder|task-notification|ide_opened_file|ide_selection|command-message|command-name|local-command-stdout|local-command-stderr|command-stdout|command-stderr|task-id|task-title|task-body|task-section|task-status|task-app|task-checked)\b[^>]*>/gi;
 
 function strip(s: string): string {
   return s.replace(SYSTEM_TAG_RE, "").trim();

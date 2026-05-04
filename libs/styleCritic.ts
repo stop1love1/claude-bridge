@@ -190,8 +190,6 @@ export async function spawnStyleCriticRetry(args: {
     finishedRun: args.finishedRun,
     gate: "style",
     ctxBlock: renderStyleRetryContextBlock(args.critic),
-    fallbackBody:
-      "(original prompt unavailable — repo state and the failure context above are the only signals you have. Inspect the repo, infer the intent, and try to make forward progress while addressing the style issues.)",
     logLabel: "style-retry",
   });
 }

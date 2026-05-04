@@ -357,8 +357,6 @@ export async function spawnClaimRetry(args: {
     finishedRun: args.finishedRun,
     gate: "claim",
     ctxBlock: renderClaimRetryContextBlock(args.verifier),
-    fallbackBody:
-      "(original prompt unavailable — repo state and the failure context above are the only signals you have. Re-read the report at sessions/<task>/reports/<role>-<repo>.md, fix the discrepancy, and re-attempt.)",
     logLabel: "claim-retry",
   });
 }

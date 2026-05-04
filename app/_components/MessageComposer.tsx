@@ -532,10 +532,32 @@ function MessageComposerInner({
             Enter to send · Shift+Enter newline · @ mention · / commands
           </span>
 
-          {/* Mode pill + Send live on the right edge, like Claude. */}
+          {/* Mode pill + Send live on the right edge, like Claude.
+              Send takes priority over Stop the moment the user has
+              anything to send — even while the agent is mid-response,
+              so the queued-message workflow ("Queue another message…"
+              placeholder) is reachable. Stop only surfaces when the
+              draft is empty AND something is in flight, which is the
+              only time the user genuinely has no other action. */}
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
             <ChatSettingsMenu value={settings} onChange={setSettings} />
-            {isResponding ? (
+            {canSend || !isResponding ? (
+              <button
+                type="submit"
+                disabled={!canSend || sending}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
+                title={
+                  sending
+                    ? "Sending…"
+                    : isResponding
+                      ? "Queue message (Enter)"
+                      : "Send (Enter)"
+                }
+                aria-label={isResponding ? "Queue message" : "Send"}
+              >
+                {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              </button>
+            ) : (
               <button
                 type="button"
                 onClick={handleStop}
@@ -545,16 +567,6 @@ function MessageComposerInner({
                 aria-label="Stop"
               >
                 {stopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} fill="currentColor" />}
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!canSend || sending}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 transition-colors"
-                title={sending ? "Sending…" : "Send (Enter)"}
-                aria-label="Send"
-              >
-                {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               </button>
             )}
           </div>

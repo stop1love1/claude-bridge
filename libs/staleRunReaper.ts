@@ -6,28 +6,29 @@ import { SESSIONS_DIR } from "./paths";
 
 /**
  * Lazy reaper for runs whose `running` / `queued` state no longer
- * reflects reality. Two signals drive a flip to `stale`:
+ * reflects reality. The bridge trusts the OS process registry as the
+ * single source of truth for "is this run actually alive":
  *
- *   1. **Process gone (authoritative):** the run says `running` but
- *      `spawnRegistry` has no live `ChildProcess` for that session id.
- *      That means either (a) the bridge restarted (children died with
- *      it via tree-kill), (b) the child crashed and the lifecycle hook
- *      never got to flip the row, or (c) hot-reload dropped the
- *      listener. Either way the on-disk `running` is a lie — flip to
- *      `stale` immediately, no time grace, so the UI stops claiming
- *      work is in progress.
+ *   - **`running` row + process alive in `spawnRegistry`** → trust it,
+ *     never flip to stale. A coordinator coordinating multiple child
+ *     retries can legitimately stay running for hours; flipping it on
+ *     a wall-clock cutoff while the OS process is healthy lies to the
+ *     UI and breaks workflows. The user has the Stop button if a run
+ *     genuinely needs to be killed.
  *
- *   2. **Time-based fallback:** a row that survived the registry check
- *      (still `running` or `queued`) but has been in that state past
- *      `BRIDGE_STALE_RUN_MIN` (default 30 min) / `BRIDGE_QUEUED_STALE_MIN`
- *      (default 2 min) — covers cases where the registry entry exists
- *      but the wall-clock makes the run implausibly long.
+ *   - **`running` row + process gone (registry-miss)** → flip to
+ *     `stale` immediately, no time grace. The lifecycle hook should
+ *     have already turned this into `done` / `failed` on clean exit;
+ *     a registry-miss `running` row is by definition a zombie (bridge
+ *     restart, crashed child, hot-reload dropped the listener).
  *
- * H4 introduced the `queued` intermediate state — a run is appended as
- * `queued` BEFORE the spawn, then promoted to `running` (or `failed`)
- * after the spawn returns. The queued cutoff is anchored to
- * `meta.createdAt`: if the meta was written more than 2 minutes ago and
- * we still see queued, the spawn definitely never promoted.
+ *   - **`queued` row past `BRIDGE_QUEUED_STALE_MIN`** → flip to
+ *     `stale`. A run is appended as `queued` BEFORE the spawn and
+ *     promoted to `running` after the spawn returns; queued is only
+ *     supposed to exist for milliseconds, so a row that survived
+ *     past the cutoff means the spawn definitely never promoted. The
+ *     cutoff is anchored to `meta.createdAt` (no `startedAt` exists
+ *     yet on a queued row).
  *
  * On the very first call after bridge boot, `bootSweepIfNeeded` walks
  * every task's meta and flips zombie `running`/`queued` rows in bulk so
@@ -35,14 +36,7 @@ import { SESSIONS_DIR } from "./paths";
  * to open each task. Idempotent; no background timer or cron.
  */
 
-const DEFAULT_STALE_MIN = 30;
 const DEFAULT_QUEUED_STALE_MIN = 2;
-
-function staleThresholdMs(): number {
-  const raw = process.env.BRIDGE_STALE_RUN_MIN;
-  const n = raw ? Number(raw) : DEFAULT_STALE_MIN;
-  return (Number.isFinite(n) && n > 0 ? n : DEFAULT_STALE_MIN) * 60_000;
-}
 
 function queuedStaleThresholdMs(): number {
   const raw = process.env.BRIDGE_QUEUED_STALE_MIN;
@@ -79,7 +73,6 @@ export async function reapStaleRunsForDir(sessionsDir: string): Promise<Meta | n
  */
 function computeStalePatches(meta: Meta): Array<{ sessionId: string; patch: Partial<Run> }> {
   const nowMs = Date.now();
-  const runningCutoff = nowMs - staleThresholdMs();
   const queuedCutoff = nowMs - queuedStaleThresholdMs();
   const metaCreated = Date.parse(meta.createdAt);
   const nowIso = new Date().toISOString();
@@ -88,27 +81,23 @@ function computeStalePatches(meta: Meta): Array<{ sessionId: string; patch: Part
     let isStale = false;
 
     if (run.status === "running") {
-      // Authoritative truth-check: if the bridge has no live child for
-      // this session id, the run cannot still be running — bridge
-      // restarted, child crashed, or hot-reload dropped the listener.
-      // Bypass the time cutoff entirely so the UI stops lying within
-      // the next polling tick instead of after 30 minutes.
-      if (!getChild(run.sessionId)) {
-        isStale = true;
-      } else {
-        const started = run.startedAt ? Date.parse(run.startedAt) : NaN;
-        // No parseable startedAt → treat as already-stale: better to
-        // flip a healthy run to stale (recoverable: Continue/Clear)
-        // than to leave a ghost forever.
-        isStale = !Number.isFinite(started) || started < runningCutoff;
-      }
+      // Single authoritative signal: is the OS process still alive?
+      // - alive  → trust the run, regardless of how long it's been
+      //            going. A coordinator orchestrating many child
+      //            retries can legitimately run for hours.
+      // - gone   → flip to stale immediately. The lifecycle hook
+      //            should have already settled the row to done/failed
+      //            on clean exit; a registry-miss `running` row means
+      //            the bridge restarted, the child crashed, or
+      //            hot-reload dropped the listener.
+      isStale = !getChild(run.sessionId);
     } else if (run.status === "queued") {
-      // H4-introduced state: appended before spawn, promoted after.
-      // A queued row whose meta was written more than `queuedStale`
-      // ago means the spawn definitely never promoted (queued is only
-      // supposed to exist for milliseconds). The registry check is
-      // skipped here on purpose — queued runs are pre-spawn so they
-      // never had a registry entry to lose.
+      // Queued is pre-spawn — promoted to running within milliseconds
+      // when the spawn returns. A queued row past the cutoff means
+      // the spawn definitely never promoted. Anchored to
+      // `meta.createdAt` because queued runs have no `startedAt`.
+      // Registry check is skipped on purpose: queued runs were never
+      // registered.
       isStale =
         !Number.isFinite(metaCreated) || metaCreated < queuedCutoff;
     } else {

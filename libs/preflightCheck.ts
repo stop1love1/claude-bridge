@@ -263,8 +263,6 @@ export async function spawnPreflightRetry(args: {
     finishedRun: args.finishedRun,
     gate: "preflight",
     ctxBlock: renderPreflightRetryContextBlock(args.preflight),
-    fallbackBody:
-      "(original prompt unavailable — repo state and the failure context above are the only signals you have. Read several relevant files first, then re-attempt.)",
     logLabel: "preflight-retry",
   });
 }
