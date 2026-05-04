@@ -12,8 +12,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { getApp, isValidAppName } from "@/libs/apps";
-import { badRequest } from "@/libs/validate";
+import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
@@ -24,9 +23,8 @@ const CAP_BYTES = 256 * 1024;
 type Ctx = { params: Promise<{ name: string }> };
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) return badRequest("invalid app name");
-  const app = getApp(name);
+  const { name: segment } = await ctx.params;
+  const app = resolveAppFromRouteSegment(segment);
   if (!app) return NextResponse.json({ error: "app not found" }, { status: 404 });
   const cwd = app.path;
   if (!existsSync(cwd) || !existsSync(join(cwd, ".git"))) {

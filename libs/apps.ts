@@ -22,14 +22,19 @@
  * is consumed today; additional top-level keys (e.g. `settings`) are
  * preserved on write so other modules can claim their own sections.
  *
- * Apps are addressed by `name`; names must match
+ * Apps are addressed by `name` in bridge.json; names must match
  * `^[A-Za-z0-9][A-Za-z0-9._-]*$` (same shape as a folder slug). `path`
  * is stored verbatim — the caller resolves it against `BRIDGE_ROOT`
  * when needed.
+ *
+ * Web routes use `resolveAppFromRouteSegment`: the URL segment is
+ * usually `encodeURIComponent(app.path)` so two entries with the same
+ * name still open the correct folder; legacy `/apps/<slug>` URLs still
+ * work when the slug is unique.
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { BRIDGE_ROOT } from "./paths";
 import {
   BRIDGE_JSON,
@@ -769,6 +774,67 @@ export function saveApps(apps: App[]): void {
 export function getApp(name: string): App | null {
   if (!isValidAppName(name)) return null;
   return loadApps().find((a) => a.name === name) ?? null;
+}
+
+function pathsEqualFilesystem(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    return normalize(a) === normalize(b);
+  } catch {
+    return false;
+  }
+}
+
+function safeDecodeURIComponent(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * Resolve an app from a dynamic route or API `[name]` segment.
+ *
+ * 1. Decoded segment equals a registered app's resolved `path` (or
+ *    normalizes to the same path).
+ * 2. Segment resolves via `resolveAppPath` to a registered `path`.
+ * 3. Exact `rawPath` match (manifest string).
+ * 4. Legacy: valid `name` slug matching **exactly one** app; if more
+ *    than one app shares the name, returns null (caller should use
+ *    path-based URLs).
+ */
+export function resolveAppFromRouteSegment(segment: string): App | null {
+  if (typeof segment !== "string" || segment.length === 0 || segment.length > 12_000) {
+    return null;
+  }
+  const decoded = safeDecodeURIComponent(segment);
+  const apps = loadApps();
+
+  for (const app of apps) {
+    if (pathsEqualFilesystem(app.path, decoded)) return app;
+  }
+
+  let decodedResolved: string | null = null;
+  try {
+    decodedResolved = resolveAppPath(decoded);
+  } catch {
+    decodedResolved = null;
+  }
+  if (decodedResolved) {
+    for (const app of apps) {
+      if (pathsEqualFilesystem(app.path, decodedResolved)) return app;
+    }
+  }
+
+  for (const app of apps) {
+    if (app.rawPath === decoded || app.rawPath === segment) return app;
+  }
+
+  if (!isValidAppName(decoded)) return null;
+  const byName = apps.filter((a) => a.name === decoded);
+  if (byName.length === 1) return byName[0];
+  return null;
 }
 
 export interface AppInput {

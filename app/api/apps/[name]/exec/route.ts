@@ -29,7 +29,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { getApp, isValidAppName } from "@/libs/apps";
+import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
@@ -86,8 +86,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 403 },
     );
   }
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) return badRequest("invalid app name");
+  const { name: segment } = await ctx.params;
 
   let body: ExecBody;
   try {
@@ -108,7 +107,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  const app = getApp(name);
+  const app = resolveAppFromRouteSegment(segment);
   if (!app) return NextResponse.json({ error: "app not found" }, { status: 404 });
   const cwd = app.path;
   if (!existsSync(cwd)) {

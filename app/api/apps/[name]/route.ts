@@ -4,6 +4,7 @@ import {
   isValidAppName,
   removeApp,
   renameApp,
+  resolveAppFromRouteSegment,
   updateAppDescription,
   updateAppGitSettings,
   updateAppQuality,
@@ -70,9 +71,10 @@ export async function PATCH(
   req: Request,
   ctx: { params: Promise<{ name: string }> },
 ) {
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) {
-    return NextResponse.json({ error: "invalid app name" }, { status: 400 });
+  const { name: segment } = await ctx.params;
+  const existingApp = resolveAppFromRouteSegment(segment);
+  if (!existingApp) {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
   }
   let body: PatchBody;
   try {
@@ -104,13 +106,6 @@ export async function PATCH(
       { error: "patch is empty (expected name, description, git, verify, quality, or retry)" },
       { status: 400 },
     );
-  }
-  // Confirm the app exists before any validation so a missing app surfaces
-  // as 404 rather than a misleading 400 from a cross-field rule that
-  // happened to inspect the (null) existing record.
-  const existingApp = getApp(name);
-  if (!existingApp) {
-    return NextResponse.json({ error: "not found" }, { status: 404 });
   }
   if (hasGit) {
     const gp = gitPatch as Partial<AppGitSettings>;
@@ -178,7 +173,7 @@ export async function PATCH(
     }
   }
 
-  let currentName = name;
+  let currentName = existingApp.name;
   let migratedTasks = 0;
 
   // Order matters: rename FIRST so subsequent description/git updates
@@ -297,11 +292,12 @@ export async function DELETE(
   _req: Request,
   ctx: { params: Promise<{ name: string }> },
 ) {
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) {
-    return NextResponse.json({ error: "invalid app name" }, { status: 400 });
+  const { name: segment } = await ctx.params;
+  const app = resolveAppFromRouteSegment(segment);
+  if (!app) {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
   }
-  const ok = removeApp(name);
+  const ok = removeApp(app.name);
   if (!ok) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

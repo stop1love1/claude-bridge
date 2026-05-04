@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
-import { getApp, isValidAppName, updateAppDescription } from "@/libs/apps";
+import { resolveAppFromRouteSegment, updateAppDescription } from "@/libs/apps";
 import { scanAppWithClaude } from "@/libs/scanApp";
 import { getClientIp } from "@/libs/clientIp";
 import { checkRateLimit } from "@/libs/rateLimit";
@@ -42,11 +42,8 @@ export async function POST(
   if (denied) {
     return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
   }
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) {
-    return NextResponse.json({ error: "invalid app name" }, { status: 400 });
-  }
-  const app = getApp(name);
+  const { name: segment } = await ctx.params;
+  const app = resolveAppFromRouteSegment(segment);
   if (!app) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
@@ -65,7 +62,7 @@ export async function POST(
     );
   }
 
-  const updated = updateAppDescription(name, summary);
+  const updated = updateAppDescription(app.name, summary);
   return NextResponse.json(
     { ok: true, app: updated ?? app, scanned: true, description: summary },
     { status: 200 },

@@ -5,7 +5,7 @@ import type { Meta, Task, TaskSection } from "@/libs/client/types";
 import { SECTION_ORDER, SECTION_LABEL } from "@/libs/client/types";
 import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "@/libs/tasks";
 import {
-  Crown, Sparkles, Plus, Inbox, Trash2, LayoutGrid, Columns, Check,
+  Plus, Inbox, Trash2, LayoutGrid, Columns, Check,
 } from "lucide-react";
 import { relativeTime } from "@/libs/client/time";
 import { STATUS_PILL, type DerivedStatus } from "@/libs/client/runStatus";
@@ -21,21 +21,11 @@ import {
   SelectValue,
 } from "./ui/select";
 
-const ROLE_ICON: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
-  coordinator: Crown,
-};
-const ROLE_COLOR: Record<string, string> = {
-  coordinator: "text-warning",
-};
-
 const LAYOUT_KEY = "bridge.tasks.layout";
 type Layout = "grid" | "kanban";
 const loadLayout = (raw: string | null): Layout =>
   raw === "kanban" ? "kanban" : "grid";
 const dumpLayout = (v: Layout) => v;
-
-function roleIcon(role: string) { return ROLE_ICON[role] ?? Sparkles; }
-function roleColor(role: string) { return ROLE_COLOR[role] ?? "text-muted-foreground"; }
 
 function deriveStatus(task: Task, meta: Meta | undefined): DerivedStatus {
   if (task.checked) return "completed";
@@ -74,7 +64,6 @@ function GridCard({
   onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
   const runs = meta?.runs ?? [];
-  const roleSet = Array.from(new Set(runs.map((r) => r.role)));
   // The bridge itself runs the coordinator role; hide it from the
   // sibling-repo + agent count summaries so a task that only has the
   // coordinator running doesn't read as "1 agent" (zero have been
@@ -132,7 +121,7 @@ function GridCard({
         </button>
         <h3
           className={`flex-1 text-[13px] sm:text-sm font-medium line-clamp-2 min-w-0 leading-snug ${
-            task.checked ? "line-through text-muted-foreground" : "text-foreground"
+            task.checked ? "text-muted-foreground" : "text-foreground"
           }`}
         >
           {task.title}
@@ -150,15 +139,8 @@ function GridCard({
         </span>
       </div>
 
-      {(roleSet.length > 0 || repoSet.length > 0 || agentCount > 0) && (
+      {(repoSet.length > 0 || agentCount > 0) && (
         <div className="flex items-center gap-1.5 flex-wrap mt-2 ml-6">
-          {roleSet.map((role) => {
-            const Icon = roleIcon(role);
-            const color = roleColor(role);
-            return (
-              <Icon key={role} size={12} className={`${color} shrink-0`} aria-label={role} />
-            );
-          })}
           {agentCount > 0 && (
             <span className="text-[10px] text-muted-foreground">
               {agentCount} {agentCount === 1 ? "agent" : "agents"}

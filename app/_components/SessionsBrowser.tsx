@@ -268,16 +268,6 @@ export function SessionsBrowser({
                             </span>
                           )}
                         </span>
-                        {s.link && (
-                          <span className="font-mono font-semibold text-[10px] px-1 py-px rounded bg-success/15 text-success shrink-0">
-                            {s.link.role}
-                          </span>
-                        )}
-                        {s.link && (
-                          <code className="font-mono text-[10px] text-muted-foreground truncate max-w-[110px] shrink-0">
-                            {s.link.taskId}
-                          </code>
-                        )}
                         <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
                           {relativeTime(new Date(s.mtime).toISOString())}
                         </span>

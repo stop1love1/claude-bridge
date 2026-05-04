@@ -420,6 +420,27 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  appTree: (appRouteKey: string, dir = "", opts?: ReqOpts) =>
+    req<{
+      rel: string;
+      entries: Array<{ name: string; type: "dir" | "file" | "other" }>;
+      truncated?: boolean;
+    }>(
+      `/apps/${encodeURIComponent(appRouteKey)}/tree${
+        dir ? `?dir=${encodeURIComponent(dir)}` : ""
+      }`,
+      { signal: opts?.signal },
+    ),
+  appFile: (appRouteKey: string, filePath: string, opts?: ReqOpts) =>
+    req<{
+      path: string;
+      content: string;
+      size?: number;
+      truncated?: boolean;
+    }>(
+      `/apps/${encodeURIComponent(appRouteKey)}/file?path=${encodeURIComponent(filePath)}`,
+      { signal: opts?.signal },
+    ),
   scanApp: (name: string) =>
     req<{
       ok: true;

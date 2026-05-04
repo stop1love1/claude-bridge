@@ -67,6 +67,22 @@ function TaskPageInner() {
     };
   }, [search, meta, repos]);
 
+  /** List fetch (`task`) can lag `meta.json`. SSE updates `meta` only
+   *  (e.g. chat send re-opens a done task via `updateTask`); merge the
+   *  live header so Detail / toolbar match disk without a full reload. */
+  const resolvedTask = useMemo((): Task | null => {
+    if (!task) return null;
+    if (!meta || meta.taskId !== task.id) return task;
+    return {
+      ...task,
+      title: meta.taskTitle,
+      body: meta.taskBody,
+      status: meta.taskStatus,
+      section: meta.taskSection,
+      checked: meta.taskChecked,
+    };
+  }, [task, meta]);
+
   const setActiveRun = useCallback((run: ActiveRun | null) => {
     const params = new URLSearchParams(Array.from(search.entries()));
     if (run) params.set("sid", run.sessionId);
@@ -254,14 +270,14 @@ function TaskPageInner() {
   );
 
   const handleDelete = useCallback(async () => {
-    if (!id || !task) return;
+    if (!id || !resolvedTask) return;
     const runCount = meta?.runs.length ?? 0;
     const sessionsLine = runCount > 0
       ? `Also removes ${runCount} linked Claude session${runCount === 1 ? "" : "s"} from ~/.claude/projects/.`
       : `Also removes sessions/${id}/ metadata.`;
     const ok = await confirm({
       title: `Delete task ${id}?`,
-      description: `"${task.title}"\n\n${sessionsLine}`,
+      description: `"${resolvedTask.title}"\n\n${sessionsLine}`,
       confirmLabel: "Delete",
       destructive: true,
     });
@@ -276,7 +292,7 @@ function TaskPageInner() {
     } catch (e) {
       toast("error", (e as Error).message);
     }
-  }, [id, task, meta, router, toast, confirm]);
+  }, [id, resolvedTask, meta, router, toast, confirm]);
 
   const handleSelectRun = useCallback(
     (run: Run) => {
@@ -369,6 +385,8 @@ function TaskPageInner() {
     );
   }
 
+  const headerTask = resolvedTask ?? task;
+
   return (
     <div className="flex flex-col h-dvh overflow-hidden">
       <HeaderShell active="tasks" />
@@ -389,9 +407,9 @@ function TaskPageInner() {
           <ArrowLeft size={14} />
         </button>
         <span className="hidden sm:inline text-fg-dim shrink-0">/</span>
-        <span className="hidden sm:inline font-mono text-xs text-fg-dim shrink-0">{task.id}</span>
+        <span className="hidden sm:inline font-mono text-xs text-fg-dim shrink-0">{headerTask.id}</span>
         <span className="hidden sm:inline text-fg-dim shrink-0">·</span>
-        <span className="text-[13px] sm:text-sm font-medium truncate flex-1 min-w-0">{task.title}</span>
+        <span className="text-[13px] sm:text-sm font-medium truncate flex-1 min-w-0">{headerTask.title}</span>
         <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border shrink-0">
           Esc back
         </kbd>
@@ -437,7 +455,7 @@ function TaskPageInner() {
           }`}
         >
           <TaskDetail
-            task={task}
+            task={resolvedTask}
             meta={meta}
             repos={repos}
             activeRunId={activeRun?.sessionId ?? null}

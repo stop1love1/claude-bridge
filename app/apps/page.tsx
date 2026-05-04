@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Boxes, Folder, GitBranch, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/libs/client/api";
+import { appDetailRouteSegment } from "@/libs/client/appRoutes";
 import type { App, Meta, Task } from "@/libs/client/types";
 import { SECTION_DOING, SECTION_DONE, SECTION_TODO } from "@/libs/tasks";
 import { HeaderShell } from "../_components/HeaderShell";
@@ -127,30 +128,31 @@ function AppsPage() {
     return stats;
   }, [tasks, metaByTask]);
 
-  const handleScan = async (name: string) => {
-    setScanning((s) => new Set(s).add(name));
+  const handleScan = async (app: App) => {
+    const key = app.name;
+    setScanning((s) => new Set(s).add(key));
     try {
-      const r = await api.scanApp(name);
+      const r = await api.scanApp(appDetailRouteSegment(app));
       if (r.scanned) {
-        toast("success", `Claude updated description for ${name}`);
+        toast("success", `Claude updated description for ${app.name}`);
         await refresh();
       } else {
-        toast("info", `No new description for ${name} (${r.reason ?? "scan-failed"})`);
+        toast("info", `No new description for ${app.name} (${r.reason ?? "scan-failed"})`);
       }
     } catch (e) {
       toast("error", (e as Error).message);
     } finally {
       setScanning((s) => {
         const next = new Set(s);
-        next.delete(name);
+        next.delete(key);
         return next;
       });
     }
   };
 
-  const handleDelete = async (name: string) => {
+  const handleDelete = async (app: App) => {
     const ok = await confirm({
-      title: `Remove ${name}?`,
+      title: `Remove ${app.name}?`,
       description:
         "This only removes the entry from the apps registry. The folder on disk is untouched.",
       confirmLabel: "Remove",
@@ -158,9 +160,9 @@ function AppsPage() {
     });
     if (!ok) return;
     try {
-      await api.removeApp(name);
+      await api.removeApp(appDetailRouteSegment(app));
       await refresh();
-      toast("info", `Removed ${name}`);
+      toast("info", `Removed ${app.name}`);
     } catch (e) {
       toast("error", (e as Error).message);
     }
@@ -212,7 +214,7 @@ function AppsPage() {
                 const branch = meta?.branch ?? null;
                 const stats = statsByApp.get(app.name) ?? { idle: 0, doing: 0, done: 0, activeSessions: 0 };
                 const openDetail = () =>
-                  router.push(`/apps/${encodeURIComponent(app.name)}`);
+                  router.push(`/apps/${appDetailRouteSegment(app)}`);
                 return (
                   <div
                     key={app.name}
@@ -301,7 +303,7 @@ function AppsPage() {
                         </div>
                       </div>
                       <Button
-                        onClick={(e) => { e.stopPropagation(); handleScan(app.name); }}
+                        onClick={(e) => { e.stopPropagation(); handleScan(app); }}
                         disabled={scanning.has(app.name) || !exists}
                         variant="ghost"
                         size="iconSm"
@@ -326,7 +328,7 @@ function AppsPage() {
                         <Settings size={14} />
                       </Button>
                       <Button
-                        onClick={(e) => { e.stopPropagation(); handleDelete(app.name); }}
+                        onClick={(e) => { e.stopPropagation(); handleDelete(app); }}
                         variant="ghost"
                         size="iconSm"
                         title="Remove from registry (folder on disk is kept)"

@@ -283,7 +283,7 @@ function TaskDetailInner({
 
         <h2
           className={`mb-3 border-b border-border pb-2 text-base sm:text-lg font-medium leading-snug ${
-            task.checked ? "line-through text-muted-foreground" : ""
+            task.checked ? "text-muted-foreground" : ""
           }`}
         >
           {task.title}

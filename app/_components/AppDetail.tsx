@@ -5,8 +5,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ChevronDown,
-  ChevronRight,
-  Folder,
+  FolderTree,
   GitBranch,
   GitCommit,
   RefreshCw,
@@ -25,7 +24,9 @@ import {
   FileDiffPane,
   type FileDiffEntry,
 } from "./DiffViewer";
+import { AppSourceTreeTab } from "./AppSourceTreeTab";
 import { Button } from "./ui/button";
+import { HeaderShell } from "./HeaderShell";
 import { useToast } from "./Toasts";
 import { relativeTime } from "@/libs/client/time";
 import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "@/libs/tasks";
@@ -51,17 +52,17 @@ interface CommitEntry {
   subject: string;
 }
 
-type Tab = "diff" | "commits" | "tasks";
+type Tab = "source" | "diff" | "commits" | "tasks";
 
 /**
  * App detail page — git management + uncommitted diff + an inline
  * terminal for one-shot shell commands.
  *
  * Layout (Linear/Notion-style clean):
- *   - Thin breadcrumb row (back link only, h-9)
- *   - Page header block: app name as the page title (text-xl), subtitle
- *     row with branch + change summary, actions on the right
- *   - Tab bar (h-10, real navigation): Diff / Commits / Tasks
+ *   - Global `HeaderShell` (same as other bridge pages) stays visible
+ *   - Combined app header: back to Apps, app title, refresh; second row
+ *     for git branch chip, change summary, cwd path
+ *   - Tab bar: Source code / Diff / Commits / Tasks
  *   - Tab content fills the remaining space
  *   - Terminal docks at the bottom: collapsed by default to a 36px bar,
  *     drag-resizable when open, click the chevron to toggle
@@ -78,10 +79,29 @@ export function AppDetail({ name }: { name: string }) {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("diff");
+  /** Registry `name` for the header; `name` prop is often an encoded path segment. */
+  const [displayTitle, setDisplayTitle] = useState(name);
   // Terminal docking state. Collapsed by default so the diff/commits
   // tab gets the full viewport on first paint.
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDisplayTitle(name);
+    void api.apps().then((apps) => {
+      if (cancelled) return;
+      const byPath = apps.find((a) => a.path === name);
+      const bySlug = apps.find((a) => a.name === name);
+      const hit = byPath ?? bySlug;
+      if (hit) setDisplayTitle(hit.name);
+    }).catch(() => { /* keep `name` as fallback */ });
+    return () => { cancelled = true; };
+  }, [name]);
+
+  useEffect(() => {
+    document.title = `${displayTitle} · Apps | Claude Bridge`;
+  }, [displayTitle]);
 
   // Initial + manual refresh for the status header.
   const reloadStatus = useCallback(() => {
@@ -97,50 +117,58 @@ export function AppDetail({ name }: { name: string }) {
   useEffect(() => reloadStatus(), [reloadStatus]);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-background">
-      <Breadcrumb />
-      <PageHeader name={name} status={status} error={statusError} onRefresh={reloadStatus} />
-      <TabBar
-        active={tab}
-        onChange={setTab}
-        diffCount={
-          status && !status.clean
-            ? status.counts.modified +
-              status.counts.added +
-              status.counts.deleted +
-              status.counts.renamed +
-              status.counts.untracked
-            : 0
-        }
-      />
-
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <main className="flex-1 min-h-0 overflow-hidden">
-          {tab === "diff" && (
-            <DiffTab name={name} onAfterCommit={reloadStatus} />
-          )}
-          {tab === "commits" && <CommitsTab name={name} />}
-          {tab === "tasks" && <TasksTab name={name} />}
-        </main>
-
-        {/* Terminal: collapsed bar by default; drag the top edge to
-            resize when open; click the chevron to toggle. */}
-        <TerminalPanel
-          name={name}
-          open={terminalOpen}
-          height={terminalHeight}
-          minHeight={TERMINAL_MIN_HEIGHT}
-          barHeight={TERMINAL_BAR_HEIGHT}
-          onToggle={() => setTerminalOpen((v) => !v)}
-          onResize={setTerminalHeight}
-          onMaybeChangedRepo={() => {
-            // Most commands the operator runs (git pull, git checkout,
-            // pnpm install creating a lockfile diff…) plausibly mutate
-            // the working tree. Refresh the header status after every
-            // command so badges stay honest.
-            reloadStatus();
-          }}
+    <div className="flex flex-col h-dvh overflow-hidden bg-background">
+      <HeaderShell active="apps" />
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+        <AppDetailPageHeader
+          title={displayTitle}
+          status={status}
+          error={statusError}
+          onRefresh={reloadStatus}
         />
+        <TabBar
+          active={tab}
+          onChange={setTab}
+          diffCount={
+            status && !status.clean
+              ? status.counts.modified +
+                status.counts.added +
+                status.counts.deleted +
+                status.counts.renamed +
+                status.counts.untracked
+              : 0
+          }
+        />
+
+        <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+          <main className="flex-1 min-h-0 overflow-hidden">
+            {tab === "source" && <AppSourceTreeTab appKey={name} />}
+            {tab === "diff" && (
+              <DiffTab name={name} onAfterCommit={reloadStatus} />
+            )}
+            {tab === "commits" && <CommitsTab name={name} />}
+            {tab === "tasks" && <TasksTab name={name} />}
+          </main>
+
+          {/* Terminal: collapsed bar by default; drag the top edge to
+              resize when open; click the chevron to toggle. */}
+          <TerminalPanel
+            name={name}
+            open={terminalOpen}
+            height={terminalHeight}
+            minHeight={TERMINAL_MIN_HEIGHT}
+            barHeight={TERMINAL_BAR_HEIGHT}
+            onToggle={() => setTerminalOpen((v) => !v)}
+            onResize={setTerminalHeight}
+            onMaybeChangedRepo={() => {
+              // Most commands the operator runs (git pull, git checkout,
+              // pnpm install creating a lockfile diff…) plausibly mutate
+              // the working tree. Refresh the header status after every
+              // command so badges stay honest.
+              reloadStatus();
+            }}
+          />
+        </div>
       </div>
     </div>
   );
@@ -148,104 +176,102 @@ export function AppDetail({ name }: { name: string }) {
 
 /* ─────────────────────────── Page chrome ─────────────────────────── */
 
-function Breadcrumb() {
-  return (
-    <nav
-      aria-label="Breadcrumb"
-      className="shrink-0 h-7 flex items-center px-6 text-2xs text-fg-dim border-b border-border/60"
-    >
-      <Link
-        href="/apps"
-        className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
-      >
-        <ArrowLeft size={11} />
-        Apps
-      </Link>
-      <ChevronRight size={10} className="mx-1 opacity-50" />
-    </nav>
-  );
-}
-
-/**
- * Page header — establishes hierarchy. App name is the page title
- * (text-xl semibold). Subtitle row carries the git context: branch
- * pill + ahead/behind + change summary OR "clean". The cwd path moves
- * down here too instead of cramping the breadcrumb. Refresh + future
- * actions live on the right.
- */
-function PageHeader({
-  name,
+function AppDetailPageHeader({
+  title,
   status,
   error,
   onRefresh,
 }: {
-  name: string;
+  title: string;
   status: StatusPayload | null;
   error: string | null;
   onRefresh: () => void;
 }) {
   return (
-    <header className="shrink-0 px-6 pt-3.5 pb-3 border-b border-border bg-background">
-      <div className="flex items-start gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <Folder size={16} className="text-primary shrink-0" />
-            <h1 className="font-semibold text-md truncate leading-tight" title={name}>
-              {name}
-            </h1>
-          </div>
-          <div className="mt-1.5 flex items-center gap-3 flex-wrap text-xs text-fg-dim">
-            {status?.branch && (
-              <span
-                className="inline-flex items-center gap-1 font-mono"
-                title={status.upstream ?? "no upstream"}
+    <header className="shrink-0 border-b border-border bg-card/40">
+      <div className="px-4 sm:px-6 py-3 sm:py-4">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3 min-w-0">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+              <Link
+                href="/apps"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/80 bg-background/80 px-2 py-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:border-border hover:bg-accent hover:text-foreground"
               >
-                <GitBranch size={11} className="opacity-70" />
-                {status.branch}
-              </span>
-            )}
-            {status && (status.ahead > 0 || status.behind > 0) && (
-              <span className="inline-flex items-center gap-1" title="ahead / behind upstream">
-                {status.ahead > 0 && (
-                  <span className="text-success">↑{status.ahead}</span>
-                )}
-                {status.behind > 0 && (
-                  <span className="text-warning">↓{status.behind}</span>
-                )}
-              </span>
-            )}
-            {status && !status.clean && (
-              <ChangeSummary counts={status.counts} />
-            )}
-            {status && status.clean && (
-              <span className="inline-flex items-center gap-1 text-success">
-                <span className="size-1.5 rounded-full bg-success" />
-                clean
-              </span>
-            )}
-            {status && (
-              <span
-                className="ml-auto font-mono text-2xs text-fg-dim/80 truncate max-w-[480px]"
+                <ArrowLeft className="size-3.5 opacity-80" aria-hidden />
+                Apps
+              </Link>
+              <span className="hidden sm:block h-6 w-px shrink-0 bg-border" aria-hidden />
+              <h1
+                className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight text-foreground sm:text-lg md:text-xl"
+                title={title}
+              >
+                {title}
+              </h1>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onRefresh}
+              title="Refresh git status"
+              className="shrink-0 gap-1.5 h-8 sm:h-9 px-2.5 sm:px-3 text-xs font-medium shadow-sm"
+            >
+              <RefreshCw className="size-3.5" strokeWidth={2} />
+              <span className="hidden min-[380px]:inline">Refresh</span>
+            </Button>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted-foreground">
+              {status?.branch && (
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-0.5 font-mono text-[11px] sm:text-xs text-foreground/90"
+                  title={status.upstream ?? "no upstream"}
+                >
+                  <GitBranch className="size-3 shrink-0 text-primary/80" aria-hidden />
+                  {status.branch}
+                </span>
+              )}
+              {status && (status.ahead > 0 || status.behind > 0) && (
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border/80 px-1.5 py-0.5 font-mono text-[11px]"
+                  title="Ahead / behind upstream"
+                >
+                  {status.ahead > 0 && (
+                    <span className="text-success tabular-nums">↑{status.ahead}</span>
+                  )}
+                  {status.ahead > 0 && status.behind > 0 && (
+                    <span className="text-border">·</span>
+                  )}
+                  {status.behind > 0 && (
+                    <span className="text-warning tabular-nums">↓{status.behind}</span>
+                  )}
+                </span>
+              )}
+              {status && !status.clean && <ChangeSummary counts={status.counts} />}
+              {status && status.clean && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+                  <span className="size-1.5 rounded-full bg-success" aria-hidden />
+                  clean
+                </span>
+              )}
+            </div>
+            {status?.cwd && (
+              <p
+                className="font-mono text-[10px] sm:text-2xs text-muted-foreground/90 truncate sm:max-w-[55%] sm:text-right leading-relaxed"
                 title={status.cwd}
               >
                 {status.cwd}
-              </span>
+              </p>
             )}
           </div>
+
           {error && (
-            <p className="mt-1.5 text-2xs text-destructive font-mono">{error}</p>
+            <p className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-2xs text-destructive font-mono">
+              {error}
+            </p>
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onRefresh}
-          title="Refresh status"
-          className="shrink-0 h-7 text-xs"
-        >
-          <RefreshCw size={12} />
-          Refresh
-        </Button>
       </div>
     </header>
   );
@@ -310,7 +336,11 @@ function TabBar({
   diffCount: number;
 }) {
   return (
-    <nav className="shrink-0 h-9 px-6 flex items-center gap-0.5 border-b border-border bg-background">
+    <nav className="shrink-0 h-9 px-4 sm:px-6 flex items-center gap-0.5 border-b border-border bg-background">
+      <TabButton active={active === "source"} onClick={() => onChange("source")}>
+        <FolderTree size={12} />
+        Source code
+      </TabButton>
       <TabButton active={active === "diff"} onClick={() => onChange("diff")}>
         <GitBranch size={12} />
         Diff
@@ -752,8 +782,8 @@ function TerminalPanel({
   /**
    * Pointer-driven resize. Pointermove updates `height` directly via
    * onResize; the parent's setState is the only re-render path. Caps
-   * to [minHeight, viewportHeight - 200] so the terminal can't push
-   * the page header off-screen.
+   * to [minHeight, viewportHeight - 260] so the terminal can't swallow
+   * the global nav, app header, and tab bar.
    */
   const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!open) return;
@@ -766,7 +796,7 @@ function TerminalPanel({
       const d = dragRef.current;
       if (!d) return;
       const delta = d.startY - ev.clientY;
-      const max = window.innerHeight - 200;
+      const max = window.innerHeight - 260;
       const next = Math.max(minHeight, Math.min(max, d.startHeight + delta));
       onResize(next);
     };

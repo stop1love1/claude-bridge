@@ -9,7 +9,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
-import { DEFAULT_GIT_SETTINGS, getApp, isValidAppName } from "@/libs/apps";
+import { DEFAULT_GIT_SETTINGS, resolveAppFromRouteSegment } from "@/libs/apps";
 import { autoCommitAndPush } from "@/libs/gitOps";
 import { badRequest } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
@@ -26,8 +26,7 @@ interface CommitBody {
 const MAX_MESSAGE_BYTES = 4 * 1024;
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) return badRequest("invalid app name");
+  const { name: segment } = await ctx.params;
 
   let body: CommitBody;
   try {
@@ -42,7 +41,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
   const push = !!body.push;
 
-  const app = getApp(name);
+  const app = resolveAppFromRouteSegment(segment);
   if (!app) return NextResponse.json({ error: "app not found" }, { status: 404 });
   const cwd = app.path;
   if (!existsSync(cwd)) {

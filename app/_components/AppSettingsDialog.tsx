@@ -10,6 +10,7 @@ import type {
   GitIntegrationMode,
 } from "@/libs/client/types";
 import { api } from "@/libs/client/api";
+import { appDetailRouteSegment } from "@/libs/client/appRoutes";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -242,7 +243,7 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
         }
         patch.retry = next;
       }
-      const updated = await api.updateApp(app.name, patch);
+      const updated = await api.updateApp(appDetailRouteSegment(app), patch);
       const migrated = updated.migratedTasks ?? 0;
       const renameHint = nameDirty
         ? migrated > 0

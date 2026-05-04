@@ -64,8 +64,9 @@ interface LoginBody {
  * the cookie is short-lived (12h) and not server-revocable.
  *
  * On success returns `{ ok: true, user: { email }, trusted: bool }`.
- * On bad credentials returns 401 with a generic error (no "user not
- * found" leak).
+ * On bad credentials returns 401 with a specific `error` string: wrong
+ * operator email vs wrong password (single-user bridge — no tenant
+ * enumeration concern).
  */
 export async function POST(req: NextRequest) {
   // /api/auth/* is excluded from the proxy matcher (so the login form
@@ -142,7 +143,10 @@ export async function POST(req: NextRequest) {
   const emailOk = email.toLowerCase() === cfg.email.toLowerCase();
   const passOk = await verifyPassword(password, cfg.passwordHash);
   if (!emailOk || !passOk) {
-    return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
+    const error = !emailOk
+      ? "The email address does not match the operator account on this bridge."
+      : "The password is incorrect.";
+    return NextResponse.json({ error }, { status: 401 });
   }
 
   // Successful auth — wipe both buckets so a typo'd password earlier

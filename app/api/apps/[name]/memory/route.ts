@@ -9,7 +9,7 @@
  * boundary.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { getApp, isValidAppName } from "@/libs/apps";
+import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { appendMemory, topMemoryEntries } from "@/libs/memory";
 
 export const dynamic = "force-dynamic";
@@ -20,11 +20,8 @@ const READ_LIMIT = 50;
 type Ctx = { params: Promise<{ name: string }> };
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) {
-    return NextResponse.json({ error: "invalid app name" }, { status: 400 });
-  }
-  const app = getApp(name);
+  const { name: segment } = await ctx.params;
+  const app = resolveAppFromRouteSegment(segment);
   if (!app) {
     return NextResponse.json({ error: "app not found" }, { status: 404 });
   }
@@ -33,11 +30,8 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  const { name } = await ctx.params;
-  if (!isValidAppName(name)) {
-    return NextResponse.json({ error: "invalid app name" }, { status: 400 });
-  }
-  const app = getApp(name);
+  const { name: segment } = await ctx.params;
+  const app = resolveAppFromRouteSegment(segment);
   if (!app) {
     return NextResponse.json({ error: "app not found" }, { status: 404 });
   }
