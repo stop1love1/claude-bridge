@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronRight,
   Folder,
   GitBranch,
   GitCommit,
@@ -26,6 +28,8 @@ import {
 import { Button } from "./ui/button";
 import { useToast } from "./Toasts";
 import { relativeTime } from "@/libs/client/time";
+import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "@/libs/tasks";
+import type { Task } from "@/libs/client/types";
 
 interface StatusPayload {
   cwd: string;
@@ -47,21 +51,37 @@ interface CommitEntry {
   subject: string;
 }
 
-type Tab = "diff" | "commits";
+type Tab = "diff" | "commits" | "tasks";
 
 /**
  * App detail page — git management + uncommitted diff + an inline
  * terminal for one-shot shell commands.
  *
- * Layout: sticky header on top, two-tab body in the middle (Diff /
- * Commits), and a fixed-height terminal pane along the bottom. The
- * terminal stays visible while the user navigates tabs so they can
- * run a command without losing the diff context.
+ * Layout (Linear/Notion-style clean):
+ *   - Thin breadcrumb row (back link only, h-9)
+ *   - Page header block: app name as the page title (text-xl), subtitle
+ *     row with branch + change summary, actions on the right
+ *   - Tab bar (h-10, real navigation): Diff / Commits / Tasks
+ *   - Tab content fills the remaining space
+ *   - Terminal docks at the bottom: collapsed by default to a 36px bar,
+ *     drag-resizable when open, click the chevron to toggle
+ *
+ * The previous fixed `grid-rows-[1fr_320px]` ate a third of the screen
+ * for the terminal even when the operator was reading the diff. The new
+ * layout reclaims that space and only spends it when the user opts in.
  */
+const TERMINAL_DEFAULT_HEIGHT = 280;
+const TERMINAL_MIN_HEIGHT = 160;
+const TERMINAL_BAR_HEIGHT = 36;
+
 export function AppDetail({ name }: { name: string }) {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("diff");
+  // Terminal docking state. Collapsed by default so the diff/commits
+  // tab gets the full viewport on first paint.
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT);
 
   // Initial + manual refresh for the status header.
   const reloadStatus = useCallback(() => {
@@ -77,66 +97,234 @@ export function AppDetail({ name }: { name: string }) {
   useEffect(() => reloadStatus(), [reloadStatus]);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
-      <AppHeader
-        name={name}
-        status={status}
-        error={statusError}
-        onRefresh={reloadStatus}
+    <div className="flex flex-col h-screen overflow-hidden bg-background">
+      <Breadcrumb />
+      <PageHeader name={name} status={status} error={statusError} onRefresh={reloadStatus} />
+      <TabBar
+        active={tab}
+        onChange={setTab}
+        diffCount={
+          status && !status.clean
+            ? status.counts.modified +
+              status.counts.added +
+              status.counts.deleted +
+              status.counts.renamed +
+              status.counts.untracked
+            : 0
+        }
       />
 
-      <div className="flex-1 min-h-0 grid grid-rows-[1fr_320px]">
-        {/* Top half: tabs + active tab content. */}
-        <main className="min-h-0 flex flex-col overflow-hidden border-b border-border">
-          <nav className="flex items-center gap-1 px-3 py-1.5 border-b border-border bg-card/40">
-            <TabButton active={tab === "diff"} onClick={() => setTab("diff")}>
-              <GitBranch size={12} />
-              Diff
-              {status && !status.clean && (
-                <span className="inline-flex items-center justify-center min-w-[16px] h-[14px] px-1 rounded-full bg-primary/20 text-primary text-[9px] font-bold">
-                  {status.counts.modified +
-                    status.counts.added +
-                    status.counts.deleted +
-                    status.counts.renamed +
-                    status.counts.untracked}
-                </span>
-              )}
-            </TabButton>
-            <TabButton active={tab === "commits"} onClick={() => setTab("commits")}>
-              <GitCommit size={12} />
-              Commits
-            </TabButton>
-            <Link
-              href={`/tasks?app=${encodeURIComponent(name)}`}
-              className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-fg-dim hover:text-foreground hover:bg-accent transition-colors"
-              title="View related tasks"
-            >
-              <ListChecks size={12} />
-              Tasks
-            </Link>
-          </nav>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            {tab === "diff" && (
-              <DiffTab name={name} onAfterCommit={reloadStatus} />
-            )}
-            {tab === "commits" && (
-              <CommitsTab name={name} />
-            )}
-          </div>
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <main className="flex-1 min-h-0 overflow-hidden">
+          {tab === "diff" && (
+            <DiffTab name={name} onAfterCommit={reloadStatus} />
+          )}
+          {tab === "commits" && <CommitsTab name={name} />}
+          {tab === "tasks" && <TasksTab name={name} />}
         </main>
 
-        {/* Bottom: terminal. Fixed height so the operator always knows
-            where it lives and the diff above doesn't reflow when
-            output expands. */}
-        <TerminalPanel name={name} onMaybeChangedRepo={() => {
-          // Most commands the operator runs (git pull, git checkout,
-          // pnpm install creating a lockfile diff…) plausibly mutate
-          // the working tree. Refresh the header status after every
-          // command so badges stay honest.
-          reloadStatus();
-        }} />
+        {/* Terminal: collapsed bar by default; drag the top edge to
+            resize when open; click the chevron to toggle. */}
+        <TerminalPanel
+          name={name}
+          open={terminalOpen}
+          height={terminalHeight}
+          minHeight={TERMINAL_MIN_HEIGHT}
+          barHeight={TERMINAL_BAR_HEIGHT}
+          onToggle={() => setTerminalOpen((v) => !v)}
+          onResize={setTerminalHeight}
+          onMaybeChangedRepo={() => {
+            // Most commands the operator runs (git pull, git checkout,
+            // pnpm install creating a lockfile diff…) plausibly mutate
+            // the working tree. Refresh the header status after every
+            // command so badges stay honest.
+            reloadStatus();
+          }}
+        />
       </div>
     </div>
+  );
+}
+
+/* ─────────────────────────── Page chrome ─────────────────────────── */
+
+function Breadcrumb() {
+  return (
+    <nav
+      aria-label="Breadcrumb"
+      className="shrink-0 h-7 flex items-center px-6 text-2xs text-fg-dim border-b border-border/60"
+    >
+      <Link
+        href="/apps"
+        className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+      >
+        <ArrowLeft size={11} />
+        Apps
+      </Link>
+      <ChevronRight size={10} className="mx-1 opacity-50" />
+    </nav>
+  );
+}
+
+/**
+ * Page header — establishes hierarchy. App name is the page title
+ * (text-xl semibold). Subtitle row carries the git context: branch
+ * pill + ahead/behind + change summary OR "clean". The cwd path moves
+ * down here too instead of cramping the breadcrumb. Refresh + future
+ * actions live on the right.
+ */
+function PageHeader({
+  name,
+  status,
+  error,
+  onRefresh,
+}: {
+  name: string;
+  status: StatusPayload | null;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <header className="shrink-0 px-6 pt-3.5 pb-3 border-b border-border bg-background">
+      <div className="flex items-start gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <Folder size={16} className="text-primary shrink-0" />
+            <h1 className="font-semibold text-md truncate leading-tight" title={name}>
+              {name}
+            </h1>
+          </div>
+          <div className="mt-1.5 flex items-center gap-3 flex-wrap text-xs text-fg-dim">
+            {status?.branch && (
+              <span
+                className="inline-flex items-center gap-1 font-mono"
+                title={status.upstream ?? "no upstream"}
+              >
+                <GitBranch size={11} className="opacity-70" />
+                {status.branch}
+              </span>
+            )}
+            {status && (status.ahead > 0 || status.behind > 0) && (
+              <span className="inline-flex items-center gap-1" title="ahead / behind upstream">
+                {status.ahead > 0 && (
+                  <span className="text-success">↑{status.ahead}</span>
+                )}
+                {status.behind > 0 && (
+                  <span className="text-warning">↓{status.behind}</span>
+                )}
+              </span>
+            )}
+            {status && !status.clean && (
+              <ChangeSummary counts={status.counts} />
+            )}
+            {status && status.clean && (
+              <span className="inline-flex items-center gap-1 text-success">
+                <span className="size-1.5 rounded-full bg-success" />
+                clean
+              </span>
+            )}
+            {status && (
+              <span
+                className="ml-auto font-mono text-2xs text-fg-dim/80 truncate max-w-[480px]"
+                title={status.cwd}
+              >
+                {status.cwd}
+              </span>
+            )}
+          </div>
+          {error && (
+            <p className="mt-1.5 text-2xs text-destructive font-mono">{error}</p>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onRefresh}
+          title="Refresh status"
+          className="shrink-0 h-7 text-xs"
+        >
+          <RefreshCw size={12} />
+          Refresh
+        </Button>
+      </div>
+    </header>
+  );
+}
+
+/**
+ * Compact change-summary row. Each non-zero count gets a small dot in
+ * the canonical git color (M=warning, A=success, D=destructive, R=info,
+ * ?=fg-dim). Lower visual weight than the previous "M3 A1 D2" inline
+ * which competed with the branch label.
+ */
+function ChangeSummary({ counts }: { counts: StatusPayload["counts"] }) {
+  const total =
+    counts.modified +
+    counts.added +
+    counts.deleted +
+    counts.renamed +
+    counts.untracked;
+  if (total === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-2 text-2xs">
+      {counts.modified > 0 && <Pip color="warning" letter="M" n={counts.modified} />}
+      {counts.added > 0 && <Pip color="success" letter="A" n={counts.added} />}
+      {counts.deleted > 0 && <Pip color="destructive" letter="D" n={counts.deleted} />}
+      {counts.renamed > 0 && <Pip color="info" letter="R" n={counts.renamed} />}
+      {counts.untracked > 0 && <Pip color="fg-dim" letter="?" n={counts.untracked} />}
+    </span>
+  );
+}
+
+function Pip({
+  color,
+  letter,
+  n,
+}: {
+  color: "success" | "warning" | "destructive" | "info" | "fg-dim";
+  letter: string;
+  n: number;
+}) {
+  const colorMap: Record<typeof color, string> = {
+    success: "text-success",
+    warning: "text-warning",
+    destructive: "text-destructive",
+    info: "text-info",
+    "fg-dim": "text-fg-dim",
+  };
+  return (
+    <span className={`inline-flex items-center gap-0.5 font-mono ${colorMap[color]}`}>
+      <span className="opacity-70">{letter}</span>
+      <span>{n}</span>
+    </span>
+  );
+}
+
+function TabBar({
+  active,
+  onChange,
+  diffCount,
+}: {
+  active: Tab;
+  onChange: (t: Tab) => void;
+  diffCount: number;
+}) {
+  return (
+    <nav className="shrink-0 h-9 px-6 flex items-center gap-0.5 border-b border-border bg-background">
+      <TabButton active={active === "diff"} onClick={() => onChange("diff")}>
+        <GitBranch size={12} />
+        Diff
+        {diffCount > 0 && <CountBadge n={diffCount} active={active === "diff"} />}
+      </TabButton>
+      <TabButton active={active === "commits"} onClick={() => onChange("commits")}>
+        <GitCommit size={12} />
+        Commits
+      </TabButton>
+      <TabButton active={active === "tasks"} onClick={() => onChange("tasks")}>
+        <ListChecks size={12} />
+        Tasks
+      </TabButton>
+    </nav>
   );
 }
 
@@ -153,10 +341,11 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+      aria-pressed={active}
+      className={`relative inline-flex items-center gap-1.5 h-9 px-2.5 -mb-px text-xs transition-colors border-b-2 ${
         active
-          ? "bg-primary/10 text-primary"
-          : "text-fg-dim hover:text-foreground hover:bg-accent"
+          ? "text-foreground border-primary"
+          : "text-fg-dim border-transparent hover:text-foreground"
       }`}
     >
       {children}
@@ -164,85 +353,17 @@ function TabButton({
   );
 }
 
-function AppHeader({
-  name,
-  status,
-  error,
-  onRefresh,
-}: {
-  name: string;
-  status: StatusPayload | null;
-  error: string | null;
-  onRefresh: () => void;
-}) {
+function CountBadge({ n, active }: { n: number; active: boolean }) {
   return (
-    <header className="border-b border-border bg-card px-4 py-3">
-      <div className="flex items-center gap-3 flex-wrap">
-        <Link
-          href="/apps"
-          className="inline-flex items-center gap-1 text-fg-dim hover:text-foreground text-xs"
-          title="Back to Apps"
-        >
-          <ArrowLeft size={13} />
-          Apps
-        </Link>
-        <Folder size={16} className="text-primary shrink-0" />
-        <span className="font-mono text-sm font-semibold">{name}</span>
-        {status?.branch && (
-          <span
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-secondary border border-border text-[10px] font-mono"
-            title={status.upstream ?? "no upstream"}
-          >
-            <GitBranch size={9} className="opacity-70" />
-            {status.branch}
-          </span>
-        )}
-        {status && (status.ahead > 0 || status.behind > 0) && (
-          <span className="text-[10px] text-fg-dim font-mono" title="ahead / behind upstream">
-            {status.ahead > 0 && <span className="text-success">↑{status.ahead}</span>}
-            {status.behind > 0 && <span className="text-warning">↓{status.behind}</span>}
-          </span>
-        )}
-        {status && !status.clean && (
-          <span className="inline-flex items-center gap-2 text-[10px] font-mono">
-            {status.counts.modified > 0 && (
-              <span className="text-yellow-400">M{status.counts.modified}</span>
-            )}
-            {status.counts.added > 0 && (
-              <span className="text-success">A{status.counts.added}</span>
-            )}
-            {status.counts.deleted > 0 && (
-              <span className="text-destructive">D{status.counts.deleted}</span>
-            )}
-            {status.counts.renamed > 0 && (
-              <span className="text-info">R{status.counts.renamed}</span>
-            )}
-            {status.counts.untracked > 0 && (
-              <span className="text-fg-dim">?{status.counts.untracked}</span>
-            )}
-          </span>
-        )}
-        {status && status.clean && (
-          <span className="text-[10px] text-success font-mono">clean</span>
-        )}
-        <span className="ml-auto flex items-center gap-2">
-          {status && (
-            <span
-              className="text-[11px] text-fg-dim font-mono truncate max-w-[480px]"
-              title={status.cwd}
-            >
-              {status.cwd}
-            </span>
-          )}
-          <Button variant="ghost" size="iconSm" onClick={onRefresh} title="Refresh status">
-            <RefreshCw size={13} />
-          </Button>
-        </span>
-      </div>
-      {error && (
-        <p className="mt-2 text-[11px] text-destructive font-mono">{error}</p>
-      )}
-    </header>
+    <span
+      className={`inline-flex items-center justify-center min-w-[16px] h-[14px] px-1 rounded-full text-2xs font-medium ${
+        active
+          ? "bg-primary/15 text-primary"
+          : "bg-muted text-fg-dim"
+      }`}
+    >
+      {n}
+    </span>
   );
 }
 
@@ -479,6 +600,112 @@ function CommitsTab({ name }: { name: string }) {
   );
 }
 
+/* ─────────────────────────── Tasks tab ─────────────────────────── */
+
+/**
+ * Tasks scoped to this app. Replaces the previous "Tasks" link in the
+ * tab nav that took the operator off to /tasks?app=<name> — keeping it
+ * inline preserves the page context and lets the operator triage a
+ * task without losing their diff/terminal state.
+ *
+ * Rendering: same kanban-section discipline as the main /tasks page —
+ * "Doing" / "Todo" / "Done" / "Blocked" buckets with count badges.
+ * Each row links into the dedicated task detail page on click.
+ */
+function TasksTab({ name }: { name: string }) {
+  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .tasks()
+      .then((r) => {
+        if (cancelled) return;
+        setTasks(r.filter((t) => t.app === name));
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError((e as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  if (error) {
+    return <div className="p-6 text-sm text-destructive font-mono">{error}</div>;
+  }
+  if (!tasks) {
+    return (
+      <div className="p-6 space-y-2">
+        <div className="h-4 w-1/2 rounded bg-muted/60 animate-pulse" />
+        <div className="h-4 w-2/3 rounded bg-muted/60 animate-pulse" />
+        <div className="h-4 w-1/3 rounded bg-muted/60 animate-pulse" />
+      </div>
+    );
+  }
+  if (tasks.length === 0) {
+    return (
+      <div className="p-8 text-center">
+        <ListChecks size={32} className="mx-auto mb-3 text-fg-dim/40" />
+        <p className="text-sm text-fg-dim mb-1">No tasks pinned to this app yet.</p>
+        <Link
+          href="/tasks"
+          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          Create one →
+        </Link>
+      </div>
+    );
+  }
+  // Group by section and render in a fixed order. Newest first within
+  // each section (tasks already arrive in id-desc order from the API).
+  const sections: Array<{ key: string; label: string; items: Task[] }> = [
+    { key: SECTION_DOING, label: "In progress", items: tasks.filter((t) => t.section === SECTION_DOING) },
+    { key: SECTION_TODO, label: "Todo", items: tasks.filter((t) => t.section === SECTION_TODO) },
+    { key: SECTION_BLOCKED, label: "Blocked", items: tasks.filter((t) => t.section === SECTION_BLOCKED) },
+    { key: SECTION_DONE, label: "Done", items: tasks.filter((t) => t.section === SECTION_DONE) },
+  ];
+  return (
+    <div className="h-full overflow-auto px-6 py-4 space-y-6">
+      {sections.map((s) =>
+        s.items.length > 0 ? (
+          <section key={s.key}>
+            <h2 className="text-2xs font-semibold uppercase tracking-wider text-fg-dim mb-2">
+              {s.label}
+              <span className="ml-1.5 font-normal opacity-70">{s.items.length}</span>
+            </h2>
+            <ul className="divide-y divide-border/60 border border-border/60 rounded-lg overflow-hidden bg-card/30">
+              {s.items.map((t) => (
+                <li key={t.id}>
+                  <Link
+                    href={`/tasks/${t.id}`}
+                    className="block px-3 py-2.5 hover:bg-accent/50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="font-mono text-2xs text-fg-dim shrink-0">{t.id}</span>
+                      <span
+                        className={`flex-1 min-w-0 truncate ${
+                          t.checked
+                            ? "line-through text-fg-dim"
+                            : "text-foreground"
+                        }`}
+                      >
+                        {t.title}
+                      </span>
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null,
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────────────── Terminal panel ─────────────────────────── */
 
 interface TerminalEntry {
@@ -495,9 +722,21 @@ interface TerminalEntry {
 
 function TerminalPanel({
   name,
+  open,
+  height,
+  minHeight,
+  barHeight,
+  onToggle,
+  onResize,
   onMaybeChangedRepo,
 }: {
   name: string;
+  open: boolean;
+  height: number;
+  minHeight: number;
+  barHeight: number;
+  onToggle: () => void;
+  onResize: (next: number) => void;
   onMaybeChangedRepo: () => void;
 }) {
   const [history, setHistory] = useState<TerminalEntry[]>([]);
@@ -506,6 +745,40 @@ function TerminalPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const idCounter = useRef(0);
+  // Drag state for the resize handle. Tracked in a ref so the
+  // pointermove handler doesn't trigger React re-renders 60×/sec.
+  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  /**
+   * Pointer-driven resize. Pointermove updates `height` directly via
+   * onResize; the parent's setState is the only re-render path. Caps
+   * to [minHeight, viewportHeight - 200] so the terminal can't push
+   * the page header off-screen.
+   */
+  const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!open) return;
+    e.preventDefault();
+    const start = { startY: e.clientY, startHeight: height };
+    dragRef.current = start;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const delta = d.startY - ev.clientY;
+      const max = window.innerHeight - 200;
+      const next = Math.max(minHeight, Math.min(max, d.startHeight + delta));
+      onResize(next);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      target.releasePointerCapture(e.pointerId);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
   // Auto-scroll the output to the latest entry. We do this on
   // history mutations rather than per-keystroke so typing in the
@@ -600,28 +873,66 @@ function TerminalPanel({
     inputRef.current?.focus();
   };
 
+  // Compute the dock's outer height: when collapsed, just the bar;
+  // when open, bar + body. The relative wrapper hosts the absolute
+  // resize handle straddling the top edge.
+  const outerHeight = open ? barHeight + height : barHeight;
+
   return (
-    <section className="flex flex-col min-h-0 bg-background">
-      <header className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/40 text-[11px] text-fg-dim">
+    <section
+      className="relative shrink-0 flex flex-col bg-background border-t border-border"
+      style={{ height: outerHeight }}
+    >
+      {open && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize terminal"
+          onPointerDown={onHandlePointerDown}
+          className="absolute -mt-1 h-2 w-full cursor-ns-resize z-10 hover:bg-primary/20 transition-colors"
+          style={{ top: 0 }}
+        />
+      )}
+      <header
+        className="shrink-0 flex items-center gap-2 px-4 bg-card/40 text-2xs text-fg-dim cursor-pointer select-none hover:bg-card/60 transition-colors"
+        style={{ height: barHeight }}
+        onClick={onToggle}
+        role="button"
+        aria-expanded={open}
+        aria-label={open ? "Collapse terminal" : "Expand terminal"}
+      >
+        <ChevronDown
+          size={12}
+          className={`transition-transform ${open ? "rotate-0" : "-rotate-90"}`}
+        />
         <TerminalIcon size={12} />
         <span className="font-mono uppercase tracking-wider">Terminal</span>
-        <span className="ml-auto flex items-center gap-2">
-          <span className="text-[10px]">
-            {history.length} command{history.length === 1 ? "" : "s"}
+        {history.length > 0 && (
+          <span className="text-2xs opacity-70">
+            · {history.length} command{history.length === 1 ? "" : "s"}
           </span>
+        )}
+        {open && history.length > 0 && (
           <button
             type="button"
-            onClick={clear}
-            disabled={history.length === 0}
-            className="text-[10px] hover:text-foreground disabled:opacity-40"
+            onClick={(e) => {
+              e.stopPropagation();
+              clear();
+            }}
+            className="ml-auto text-2xs hover:text-foreground"
             title="Clear scrollback"
           >
             clear
           </button>
-        </span>
+        )}
+        {!open && history.length === 0 && (
+          <span className="ml-auto text-2xs opacity-60">click to expand</span>
+        )}
       </header>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-2 font-mono text-[11.5px] leading-snug space-y-2">
+      {open && (
+      <>
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-2 font-mono text-xs leading-snug space-y-2">
         {history.length === 0 ? (
           <p className="text-fg-dim italic px-1">
             Run shell commands inside this app&apos;s working tree. 30s timeout, 1 MB output cap, basic foot-gun blocklist.
@@ -681,7 +992,7 @@ function TerminalPanel({
           onChange={(e) => { setDraft(e.target.value); setRecall(null); }}
           onKeyDown={onKeyDown}
           placeholder="type a shell command (Enter to run, ↑↓ for history)"
-          className="flex-1 bg-transparent border-0 outline-none font-mono text-[12px] placeholder:text-muted-foreground/70"
+          className="flex-1 bg-transparent border-0 outline-none font-mono text-xs placeholder:text-muted-foreground/70"
           spellCheck={false}
           autoComplete="off"
         />
@@ -689,6 +1000,8 @@ function TerminalPanel({
           <Send size={13} />
         </Button>
       </form>
+      </>
+      )}
     </section>
   );
 }

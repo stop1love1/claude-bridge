@@ -4,7 +4,10 @@
       "Bash(*)",
       "PowerShell(*)",
       "Node(*)",
-      "Bun(*)"
+      "Bun(*)",
+      "mcp__plugin_playwright_playwright__browser_resize",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_close"
     ],
     "additionalDirectories": [
       "D:\\Edusoft\\claude-bridge\\.git"
