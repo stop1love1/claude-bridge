@@ -78,11 +78,11 @@ const TERMINAL_BAR_HEIGHT = 36;
 export function AppDetail({ name }: { name: string }) {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("diff");
+  const [tab, setTab] = useState<Tab>("source");
   /** Registry `name` for the header; `name` prop is often an encoded path segment. */
   const [displayTitle, setDisplayTitle] = useState(name);
-  // Terminal docking state. Collapsed by default so the diff/commits
-  // tab gets the full viewport on first paint.
+  // Terminal docking state. Collapsed by default so the main tab
+  // (default Source code) gets the full viewport on first paint.
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT);
 
@@ -142,7 +142,7 @@ export function AppDetail({ name }: { name: string }) {
 
         <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
           <main className="flex-1 min-h-0 overflow-hidden">
-            {tab === "source" && <AppSourceTreeTab appKey={name} />}
+            {tab === "source" && <AppSourceTreeTab appKey={name} appRootPath={status?.cwd ?? null} />}
             {tab === "diff" && (
               <DiffTab name={name} onAfterCommit={reloadStatus} />
             )}
@@ -189,52 +189,36 @@ function AppDetailPageHeader({
 }) {
   return (
     <header className="shrink-0 border-b border-border bg-card/40">
-      <div className="px-4 sm:px-6 py-3 sm:py-4">
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-3 min-w-0">
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-              <Link
-                href="/apps"
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/80 bg-background/80 px-2 py-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:border-border hover:bg-accent hover:text-foreground"
-              >
-                <ArrowLeft className="size-3.5 opacity-80" aria-hidden />
-                Apps
-              </Link>
-              <span className="hidden sm:block h-6 w-px shrink-0 bg-border" aria-hidden />
-              <h1
-                className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight text-foreground sm:text-lg md:text-xl"
-                title={title}
-              >
-                {title}
-              </h1>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onRefresh}
-              title="Refresh git status"
-              className="shrink-0 gap-1.5 h-8 sm:h-9 px-2.5 sm:px-3 text-xs font-medium shadow-sm"
+      <div className="px-4 sm:px-6 py-2 sm:py-2.5">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
+          <Link
+            href="/apps"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/80 bg-background/80 px-2 py-1.5 text-[11px] sm:text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:border-border hover:bg-accent hover:text-foreground"
+          >
+            <ArrowLeft className="size-3.5 opacity-80" aria-hidden />
+            Apps
+          </Link>
+          <span className="hidden sm:block h-6 w-px shrink-0 bg-border" aria-hidden />
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+            <h1
+              className="min-w-0 shrink truncate text-sm font-semibold tracking-tight text-foreground sm:text-base md:text-lg"
+              title={title}
             >
-              <RefreshCw className="size-3.5" strokeWidth={2} />
-              <span className="hidden min-[380px]:inline">Refresh</span>
-            </Button>
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted-foreground">
+              {title}
+            </h1>
+            <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground whitespace-nowrap">
               {status?.branch && (
                 <span
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-0.5 font-mono text-[11px] sm:text-xs text-foreground/90"
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[10px] sm:text-[11px] text-foreground/90"
                   title={status.upstream ?? "no upstream"}
                 >
-                  <GitBranch className="size-3 shrink-0 text-primary/80" aria-hidden />
+                  <GitBranch className="size-2.5 sm:size-3 shrink-0 text-primary/80" aria-hidden />
                   {status.branch}
                 </span>
               )}
               {status && (status.ahead > 0 || status.behind > 0) && (
                 <span
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border/80 px-1.5 py-0.5 font-mono text-[11px]"
+                  className="inline-flex items-center gap-1 rounded-md border border-border/80 px-1 py-0.5 font-mono text-[10px]"
                   title="Ahead / behind upstream"
                 >
                   {status.ahead > 0 && (
@@ -250,28 +234,38 @@ function AppDetailPageHeader({
               )}
               {status && !status.clean && <ChangeSummary counts={status.counts} />}
               {status && status.clean && (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-success/25 bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+                <span className="inline-flex items-center gap-1 rounded-full border border-success/25 bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
                   <span className="size-1.5 rounded-full bg-success" aria-hidden />
                   clean
                 </span>
               )}
             </div>
-            {status?.cwd && (
-              <p
-                className="font-mono text-[10px] sm:text-2xs text-muted-foreground/90 truncate sm:max-w-[55%] sm:text-right leading-relaxed"
-                title={status.cwd}
-              >
-                {status.cwd}
-              </p>
-            )}
           </div>
-
-          {error && (
-            <p className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-2xs text-destructive font-mono">
-              {error}
+          {status?.cwd && (
+            <p
+              className="hidden min-[640px]:block min-w-0 max-w-[min(280px,32vw)] shrink font-mono text-[10px] text-muted-foreground/90 truncate lg:max-w-[min(360px,28vw)]"
+              title={status.cwd}
+            >
+              {status.cwd}
             </p>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            size="iconSm"
+            onClick={onRefresh}
+            title="Refresh git status"
+            aria-label="Refresh git status"
+            className="shrink-0 h-8 w-8 border-border/80 shadow-sm"
+          >
+            <RefreshCw className="size-3.5" strokeWidth={2} />
+          </Button>
         </div>
+        {error && (
+          <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-2xs text-destructive font-mono">
+            {error}
+          </p>
+        )}
       </div>
     </header>
   );
