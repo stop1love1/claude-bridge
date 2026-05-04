@@ -36,7 +36,7 @@ import {
 } from "./meta";
 import { BRIDGE_ROOT, readBridgeMd } from "./paths";
 import { resolveRepoCwd } from "./repos";
-import { getApp } from "./apps";
+import { getApp, type App } from "./apps";
 import {
   autoCommitAndPush,
   mergeIntoTargetBranch,
@@ -44,6 +44,7 @@ import {
 } from "./gitOps";
 import { mergeAndRemoveWorktree } from "./worktrees";
 import { runDevopsAgent } from "./devops";
+import { logError, logInfo, logWarn } from "./log";
 // Type-only imports — runtime side resolves via lazy `require` inside
 // the post-exit flow to break the import cycle (verifyChain.ts,
 // verifier.ts, preflightCheck.ts, styleCritic.ts, and
@@ -110,23 +111,41 @@ async function attachGateResult<F extends GateField>(
 }
 
 /**
- * Async post-exit pipeline:
- *   1. Run verify chain (if app has any commands) — store result + flip
- *      run status to "done" in ONE combined updateRun call.
- *   2. If verify failed → spawn `<role>-vretry` and skip auto-commit.
- *   3. If verify passed (or didn't run) → honor `git.autoCommit` /
- *      `git.autoPush` per the app's settings, same as before P2.
+ * Shared context every post-exit gate operates on. Built once at the
+ * top of postExitFlow so each gate doesn't re-resolve the app or
+ * re-load the verifyChain module.
  */
-async function postExitFlow(args: {
-  sessionsDir: string;
-  taskId: string;
-  tag: string;
-  finishedRun: Run;
-  taskTitle: string;
-}): Promise<void> {
-  const { sessionsDir: dir, taskId: tid, tag: t, finishedRun: run, taskTitle: title } = args;
+interface PostExitContext {
+  /** Sessions dir for this task: `SESSIONS_DIR/<taskId>`. */
+  dir: string;
+  /** Task id (e.g. `t_20260101_001`). */
+  tid: string;
+  /** Pretty tag for log lines: `<role>:<sessionId-prefix>`. */
+  t: string;
+  /** Run that just exited. */
+  run: Run;
+  /** Task title (used by gates that prompt LLMs + by the commit message). */
+  title: string;
+  /** Resolved app, or null when the run targets an unregistered repo. */
+  app: App | null;
+}
 
-  const app = getApp(run.repo);
+/**
+ * Gate outcome semantics:
+ *   - "proceed" — gate passed (or didn't apply); continue down the pipe
+ *   - "blocked" — gate failed (or its retry was scheduled); stop the
+ *     pipeline so the failed run doesn't reach auto-commit
+ */
+type GateOutcome = "proceed" | "blocked";
+
+/**
+ * Verify-chain gate. Runs the app's configured `test`/`lint`/`build`/
+ * `typecheck`/`format` commands inside the run's worktree (or live
+ * tree). Failure schedules a `<role>-vretry` and blocks auto-commit;
+ * success records the result and proceeds.
+ */
+async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
+  const { dir, tid, t, run, app } = ctx;
   const vc = loadVerifyChain();
   const verifyCfg = vc.verifyConfigOf(app);
   const willRunVerify =
@@ -134,9 +153,11 @@ async function postExitFlow(args: {
     vc.hasAnyVerifyCommand(verifyCfg) &&
     !vc.isAlreadyRetryRun(run.role);
 
+  if (!willRunVerify || !verifyCfg || !app) return "proceed";
+
   let verifyResult: RunVerify | null = null;
   let verifyCrashed = false;
-  if (willRunVerify && verifyCfg && app) {
+  {
     try {
       verifyResult = await vc.runVerifyChain({
         // P4: run the verify chain inside the run's worktree when
@@ -146,7 +167,7 @@ async function postExitFlow(args: {
         verify: verifyCfg,
       });
     } catch (err) {
-      console.error(`verify chain crashed for ${t}`, err);
+      logError("verify", "chain crashed", err, { tag: t });
       verifyResult = null;
       verifyCrashed = true;
     }
@@ -186,16 +207,14 @@ async function postExitFlow(args: {
     // failure that blocks the commit. Still flip the run to done so
     // the UI doesn't hang on `running`.
     if (verifyCrashed) {
-      console.warn(
-        `[verify] ${t}: chain crashed — blocking auto-commit (operator must verify manually)`,
-      );
+      logWarn("verify", "chain crashed — blocking auto-commit (operator must verify manually)", { tag: t });
       await updateRun(
         dir,
         run.sessionId,
         { status: "done", endedAt: new Date().toISOString() },
         (r) => r.status === "running",
       );
-      return;
+      return "blocked";
     }
 
     if (verifyResult && !verifyResult.passed) {
@@ -205,316 +224,366 @@ async function postExitFlow(args: {
         // arrow — same contract as crash-retry path emits via
         // childRetry.maybeScheduleRetry → emitRetried.
         emitRetried(tid, scheduledRetry.run, run.sessionId);
-        console.log(
-          `[verify] ${t}: chain failed at \`${failedName}\` — spawned retry ${scheduledRetry.sessionId}`,
-        );
+        logInfo("verify", `chain failed at \`${failedName}\` — spawned retry`, {
+          tag: t,
+          retrySessionId: scheduledRetry.sessionId,
+        });
       } else {
-        console.log(
-          `[verify] ${t}: chain failed at \`${failedName}\` — retry ineligible / already attempted`,
-        );
+        logInfo("verify", `chain failed at \`${failedName}\` — retry ineligible / already attempted`, { tag: t });
       }
       // Verify failed → block the auto-commit. The retry (if any) will
       // re-trigger this whole flow when it exits.
-      return;
+      return "blocked";
     }
   }
+  return "proceed";
+}
 
-  // P3b/B1 — preflight check: did the agent actually read enough of
-  // the codebase before editing? Runs BEFORE the verifier (claim-vs-
-  // diff) because if the agent didn't follow process, there's no
-  // point comparing claims that come from process drift. Reuses the
-  // -cretry suffix and budget — a single follow-up per (parent, role)
-  // covers either preflight OR claim-vs-diff failures, since both
-  // signal "agent didn't follow process". The outer `!isAlreadyRetryRun`
-  // guard mirrors the verify-chain branch's gate; without it, future
-  // drift in `runPreflight`'s internal retry skip would open an
-  // infinite-retry footgun.
+/**
+ * Preflight gate. Did the agent actually read enough of the codebase
+ * before editing? Runs BEFORE the verifier (claim-vs-diff) because if
+ * the agent didn't follow process there's no point comparing claims
+ * that come from process drift. Reuses the `-cretry` suffix and budget
+ * — a single follow-up per (parent, role) covers either preflight OR
+ * claim-vs-diff failures, since both signal "agent didn't follow
+ * process". The `!isAlreadyRetryRun` guard mirrors the verify-chain
+ * branch's gate; without it, future drift in `runPreflight`'s internal
+ * retry skip would open an infinite-retry footgun.
+ */
+async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
+  const { dir, tid, t, run, app } = ctx;
   const vcGuard = loadVerifyChain();
-  if (app && !vcGuard.isAlreadyRetryRun(run.role)) {
-    const pf = loadPreflight();
-    // Resolve repoCwd the same way `agents/route.ts` did at spawn time.
-    // The child's `.jsonl` lives under `projectDirFor(repoCwd)` —
-    // using `app.path` instead can land us in a different slug if
-    // BRIDGE.md and `bridge.json` happen to spell the same dir
-    // differently (case, symlinks, trailing slash). Fall back to
-    // `app.path` when BRIDGE.md is missing — preflight will then
-    // skip silently if the slug differs.
-    // P4: when the run executed in a worktree, the transcript lives
-    // under `projectDirFor(worktreePath)` — preflight needs to read
-    // from that exact same cwd or the file lookup misses.
-    let preflightCwd = run.worktreePath ?? app.path;
-    if (!run.worktreePath) {
-      const md = readBridgeMd();
-      if (md) {
-        const resolved = resolveRepoCwd(md, BRIDGE_ROOT, run.repo);
-        if (resolved) preflightCwd = resolved;
-      }
-    }
-    let preflightResult: Preflight.PreflightResult | null = null;
-    try {
-      preflightResult = pf.runPreflight({
-        finishedRun: run,
-        appPath: preflightCwd,
-      });
-    } catch (err) {
-      console.error(`preflight crashed for ${t}`, err);
-    }
+  if (!app || vcGuard.isAlreadyRetryRun(run.role)) return "proceed";
 
-    if (preflightResult && preflightResult.verdict === "fail") {
-      const metaForCheck = readMeta(dir);
-      const eligible =
-        !!metaForCheck &&
-        pf.isEligibleForPreflightRetry({ finishedRun: run, meta: metaForCheck, retry: app?.retry });
-      let scheduledPreflightRetry: Awaited<
-        ReturnType<typeof pf.spawnPreflightRetry>
-      > = null;
-      if (eligible) {
-        scheduledPreflightRetry = await pf.spawnPreflightRetry({
-          taskId: tid,
-          finishedRun: run,
-          preflight: preflightResult,
-        });
-      }
-
-      // Combined patch: status:done + verifier (with preflight reason
-      // surfaced via the existing field — we don't add a new schema
-      // field for preflight, just piggyback on the verifier slot
-      // since the post-exit gate semantics are equivalent).
-      const finalVerifier: RunVerifier = {
-        verdict: "drift",
-        reason: `preflight: ${preflightResult.reason}`,
-        claimedFiles: [],
-        actualFiles: [],
-        unmatchedClaims: [],
-        unclaimedActual: [],
-        durationMs: 0,
-        retryScheduled: !!scheduledPreflightRetry,
-      };
-      await attachGateResult(dir, run.sessionId, "verifier", finalVerifier);
-
-      if (scheduledPreflightRetry) {
-        emitRetried(tid, scheduledPreflightRetry.run, run.sessionId);
-        console.log(
-          `[preflight] ${t}: ${preflightResult.reason} — spawned retry ${scheduledPreflightRetry.sessionId}`,
-        );
-      } else {
-        console.log(
-          `[preflight] ${t}: ${preflightResult.reason} — retry ineligible / already attempted`,
-        );
-      }
-      return;
+  const pf = loadPreflight();
+  // Resolve repoCwd the same way `agents/route.ts` did at spawn time.
+  // The child's `.jsonl` lives under `projectDirFor(repoCwd)` —
+  // using `app.path` instead can land us in a different slug if
+  // BRIDGE.md and `bridge.json` happen to spell the same dir
+  // differently (case, symlinks, trailing slash). Fall back to
+  // `app.path` when BRIDGE.md is missing — preflight will then skip
+  // silently if the slug differs.
+  // P4: when the run executed in a worktree, the transcript lives
+  // under `projectDirFor(worktreePath)` — preflight needs to read
+  // from that exact same cwd or the file lookup misses.
+  let preflightCwd = run.worktreePath ?? app.path;
+  if (!run.worktreePath) {
+    const md = readBridgeMd();
+    if (md) {
+      const resolved = resolveRepoCwd(md, BRIDGE_ROOT, run.repo);
+      if (resolved) preflightCwd = resolved;
     }
   }
+  let preflightResult: Preflight.PreflightResult | null = null;
+  try {
+    preflightResult = pf.runPreflight({
+      finishedRun: run,
+      appPath: preflightCwd,
+    });
+  } catch (err) {
+    logError("preflight", "crashed", err, { tag: t });
+  }
 
-  // P2b-1 — inline claim-vs-diff verifier. Runs only when the verify
-  // chain didn't write a failing result (we'd already have returned
-  // above) AND the run has an app to diff against. The verifier is
-  // cheap (parse markdown + git status + set diff) so it's always-on
-  // for app runs that aren't themselves retries.
-  if (app) {
-    const vfn = loadVerifier();
-    let verifierResult: RunVerifier | null = null;
-    try {
-      verifierResult = await vfn.runVerifier({
-        // P4: claim-vs-diff has to run where the diff exists.
-        appPath: run.worktreePath ?? app.path,
+  if (!preflightResult || preflightResult.verdict !== "fail") return "proceed";
+
+  const metaForCheck = readMeta(dir);
+  const eligible =
+    !!metaForCheck &&
+    pf.isEligibleForPreflightRetry({ finishedRun: run, meta: metaForCheck, retry: app?.retry });
+  let scheduledPreflightRetry: Awaited<
+    ReturnType<typeof pf.spawnPreflightRetry>
+  > = null;
+  if (eligible) {
+    scheduledPreflightRetry = await pf.spawnPreflightRetry({
+      taskId: tid,
+      finishedRun: run,
+      preflight: preflightResult,
+    });
+  }
+
+  // Combined patch: status:done + verifier (with preflight reason
+  // surfaced via the existing field — we don't add a new schema
+  // field for preflight, just piggyback on the verifier slot since
+  // the post-exit gate semantics are equivalent).
+  const finalVerifier: RunVerifier = {
+    verdict: "drift",
+    reason: `preflight: ${preflightResult.reason}`,
+    claimedFiles: [],
+    actualFiles: [],
+    unmatchedClaims: [],
+    unclaimedActual: [],
+    durationMs: 0,
+    retryScheduled: !!scheduledPreflightRetry,
+  };
+  await attachGateResult(dir, run.sessionId, "verifier", finalVerifier);
+
+  if (scheduledPreflightRetry) {
+    emitRetried(tid, scheduledPreflightRetry.run, run.sessionId);
+    logInfo("preflight", `${preflightResult.reason} — spawned retry`, {
+      tag: t,
+      retrySessionId: scheduledPreflightRetry.sessionId,
+    });
+  } else {
+    logInfo("preflight", `${preflightResult.reason} — retry ineligible / already attempted`, { tag: t });
+  }
+  return "blocked";
+}
+
+/**
+ * Claim-vs-diff verifier gate (P2b-1). Always runs for app runs that
+ * aren't themselves retries — the verifier itself is cheap (parse
+ * markdown + git status + set diff). Verdict `drift` / `broken`
+ * schedules a `-cretry` and blocks; `match` proceeds.
+ */
+async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
+  const { dir, tid, t, run, app } = ctx;
+  if (!app) return "proceed";
+
+  const vfn = loadVerifier();
+  let verifierResult: RunVerifier | null = null;
+  try {
+    verifierResult = await vfn.runVerifier({
+      // P4: claim-vs-diff has to run where the diff exists.
+      appPath: run.worktreePath ?? app.path,
+      taskId: tid,
+      finishedRun: run,
+    });
+  } catch (err) {
+    logError("verifier", "crashed", err, { tag: t });
+    verifierResult = null;
+  }
+
+  // Decide retry BEFORE writing meta — same combined-patch pattern
+  // as the verify-fail branch above so concurrent writes can't
+  // race the same record.
+  const needsClaimRetry =
+    !!verifierResult &&
+    (verifierResult.verdict === "drift" || verifierResult.verdict === "broken");
+  let scheduledClaimRetry: Awaited<ReturnType<typeof vfn.spawnClaimRetry>> = null;
+  if (needsClaimRetry && verifierResult) {
+    const metaForCheck = readMeta(dir);
+    const eligible =
+      !!metaForCheck &&
+      vfn.isEligibleForClaimRetry({ finishedRun: run, meta: metaForCheck, retry: app?.retry });
+    if (eligible) {
+      scheduledClaimRetry = await vfn.spawnClaimRetry({
         taskId: tid,
         finishedRun: run,
+        verifier: verifierResult,
       });
-    } catch (err) {
-      console.error(`verifier crashed for ${t}`, err);
-      verifierResult = null;
-    }
-
-    // Decide retry BEFORE writing meta — same combined-patch pattern
-    // as the verify-fail branch above so concurrent writes can't
-    // race the same record.
-    const needsClaimRetry =
-      !!verifierResult &&
-      (verifierResult.verdict === "drift" || verifierResult.verdict === "broken");
-    let scheduledClaimRetry: Awaited<ReturnType<typeof vfn.spawnClaimRetry>> = null;
-    if (needsClaimRetry && verifierResult) {
-      const metaForCheck = readMeta(dir);
-      const eligible =
-        !!metaForCheck &&
-        vfn.isEligibleForClaimRetry({ finishedRun: run, meta: metaForCheck, retry: app?.retry });
-      if (eligible) {
-        scheduledClaimRetry = await vfn.spawnClaimRetry({
-          taskId: tid,
-          finishedRun: run,
-          verifier: verifierResult,
-        });
-      }
-    }
-
-    const finalVerifier: RunVerifier | null = verifierResult
-      ? { ...verifierResult, retryScheduled: !!scheduledClaimRetry }
-      : null;
-
-    if (finalVerifier) {
-      await attachGateResult(dir, run.sessionId, "verifier", finalVerifier);
-    }
-
-    if (needsClaimRetry && verifierResult) {
-      if (scheduledClaimRetry) {
-        emitRetried(tid, scheduledClaimRetry.run, run.sessionId);
-        console.log(
-          `[verifier] ${t}: ${verifierResult.verdict} — ${verifierResult.reason} — spawned retry ${scheduledClaimRetry.sessionId}`,
-        );
-      } else {
-        console.log(
-          `[verifier] ${t}: ${verifierResult.verdict} — ${verifierResult.reason} — retry ineligible / already attempted`,
-        );
-      }
-      // Block the auto-commit; the retry (if any) re-enters this
-      // whole flow when it exits.
-      return;
     }
   }
 
-  // P2b-2 — agent-driven style critic. Opt-in per app via
-  // `bridge.json.apps[].quality.critic`. Runs only when the inline
-  // verifier didn't trigger a retry above, the run isn't already a
-  // retry, and the app exists. Blocking is gated on `alien` only —
-  // `match` and `drift` both ship.
-  if (
-    app &&
-    app.quality?.critic === true &&
-    !vcGuard.isAlreadyRetryRun(run.role)
-  ) {
-    const sc = loadStyleCritic();
-    let criticResult: RunStyleCritic | null = null;
-    try {
-      criticResult = await sc.runStyleCritic({
-        // P4: gate runs in the same worktree the coder did so it sees
-        // the agent's diff via `git diff HEAD`. Falls back to the
-        // live tree when worktree mode is off.
-        appPath: run.worktreePath ?? app.path,
+  const finalVerifier: RunVerifier | null = verifierResult
+    ? { ...verifierResult, retryScheduled: !!scheduledClaimRetry }
+    : null;
+
+  if (finalVerifier) {
+    await attachGateResult(dir, run.sessionId, "verifier", finalVerifier);
+  }
+
+  if (needsClaimRetry && verifierResult) {
+    if (scheduledClaimRetry) {
+      emitRetried(tid, scheduledClaimRetry.run, run.sessionId);
+      logInfo("verifier", `${verifierResult.verdict} — ${verifierResult.reason} — spawned retry`, {
+        tag: t,
+        retrySessionId: scheduledClaimRetry.sessionId,
+      });
+    } else {
+      logInfo("verifier", `${verifierResult.verdict} — ${verifierResult.reason} — retry ineligible / already attempted`, { tag: t });
+    }
+    return "blocked";
+  }
+  return "proceed";
+}
+
+/**
+ * Style-critic gate (P2b-2). Opt-in per app via
+ * `bridge.json.apps[].quality.critic`. Runs only when the prior gates
+ * didn't trigger a retry, the run isn't already a retry, and the app
+ * exists. Blocking is gated on `alien` only — `match` and `drift`
+ * both ship.
+ */
+async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
+  const { dir, tid, t, run, title, app } = ctx;
+  const vcGuard = loadVerifyChain();
+  if (!app || app.quality?.critic !== true || vcGuard.isAlreadyRetryRun(run.role)) {
+    return "proceed";
+  }
+
+  const sc = loadStyleCritic();
+  let criticResult: RunStyleCritic | null = null;
+  try {
+    criticResult = await sc.runStyleCritic({
+      // P4: gate runs in the same worktree the coder did so it sees
+      // the agent's diff via `git diff HEAD`. Falls back to the live
+      // tree when worktree mode is off.
+      appPath: run.worktreePath ?? app.path,
+      taskId: tid,
+      finishedRun: run,
+      taskTitle: title,
+      taskBody: readMeta(dir)?.taskBody ?? "",
+    });
+  } catch (err) {
+    logError("style-critic", "crashed", err, { tag: t });
+    criticResult = null;
+  }
+
+  const needsStyleRetry =
+    !!criticResult && criticResult.verdict === "alien";
+  let scheduledStyleRetry: Awaited<
+    ReturnType<typeof sc.spawnStyleCriticRetry>
+  > = null;
+  if (needsStyleRetry && criticResult) {
+    const metaForCheck = readMeta(dir);
+    const eligible =
+      !!metaForCheck &&
+      sc.isEligibleForStyleCriticRetry({
+        finishedRun: run,
+        meta: metaForCheck,
+        retry: app?.retry,
+      });
+    if (eligible) {
+      scheduledStyleRetry = await sc.spawnStyleCriticRetry({
         taskId: tid,
         finishedRun: run,
-        taskTitle: title,
-        taskBody: readMeta(dir)?.taskBody ?? "",
+        critic: criticResult,
       });
-    } catch (err) {
-      console.error(`style-critic crashed for ${t}`, err);
-      criticResult = null;
-    }
-
-    const needsStyleRetry =
-      !!criticResult && criticResult.verdict === "alien";
-    let scheduledStyleRetry: Awaited<
-      ReturnType<typeof sc.spawnStyleCriticRetry>
-    > = null;
-    if (needsStyleRetry && criticResult) {
-      const metaForCheck = readMeta(dir);
-      const eligible =
-        !!metaForCheck &&
-        sc.isEligibleForStyleCriticRetry({
-          finishedRun: run,
-          meta: metaForCheck,
-          retry: app?.retry,
-        });
-      if (eligible) {
-        scheduledStyleRetry = await sc.spawnStyleCriticRetry({
-          taskId: tid,
-          finishedRun: run,
-          critic: criticResult,
-        });
-      }
-    }
-
-    const finalCritic: RunStyleCritic | null = criticResult
-      ? { ...criticResult, retryScheduled: !!scheduledStyleRetry }
-      : null;
-
-    if (finalCritic) {
-      await attachGateResult(dir, run.sessionId, "styleCritic", finalCritic);
-    }
-
-    if (needsStyleRetry && criticResult) {
-      if (scheduledStyleRetry) {
-        emitRetried(tid, scheduledStyleRetry.run, run.sessionId);
-        console.log(
-          `[style-critic] ${t}: ${criticResult.verdict} — ${criticResult.reason} — spawned retry ${scheduledStyleRetry.sessionId}`,
-        );
-      } else {
-        console.log(
-          `[style-critic] ${t}: ${criticResult.verdict} — ${criticResult.reason} — retry ineligible / already attempted`,
-        );
-      }
-      // Block the auto-commit; the retry re-enters this whole flow.
-      return;
     }
   }
 
-  // P2b-2 — agent-driven semantic verifier. Opt-in per app via
-  // `bridge.json.apps[].quality.verifier`. Runs only when the prior
-  // gates didn't trigger a retry. Blocking is gated on `broken` only.
-  if (
-    app &&
-    app.quality?.verifier === true &&
-    !vcGuard.isAlreadyRetryRun(run.role)
-  ) {
-    const sv = loadSemanticVerifier();
-    let semanticResult: RunSemanticVerifier | null = null;
-    try {
-      semanticResult = await sv.runSemanticVerifier({
-        appPath: run.worktreePath ?? app.path,
+  const finalCritic: RunStyleCritic | null = criticResult
+    ? { ...criticResult, retryScheduled: !!scheduledStyleRetry }
+    : null;
+
+  if (finalCritic) {
+    await attachGateResult(dir, run.sessionId, "styleCritic", finalCritic);
+  }
+
+  if (needsStyleRetry && criticResult) {
+    if (scheduledStyleRetry) {
+      emitRetried(tid, scheduledStyleRetry.run, run.sessionId);
+      logInfo("style-critic", `${criticResult.verdict} — ${criticResult.reason} — spawned retry`, {
+        tag: t,
+        retrySessionId: scheduledStyleRetry.sessionId,
+      });
+    } else {
+      logInfo("style-critic", `${criticResult.verdict} — ${criticResult.reason} — retry ineligible / already attempted`, { tag: t });
+    }
+    return "blocked";
+  }
+  return "proceed";
+}
+
+/**
+ * Semantic-verifier gate (P2b-2). Opt-in per app via
+ * `bridge.json.apps[].quality.verifier`. Runs only when the prior
+ * gates didn't trigger a retry. Blocking is gated on `broken` only.
+ */
+async function runSemanticVerifierGate(
+  ctx: PostExitContext,
+): Promise<GateOutcome> {
+  const { dir, tid, t, run, title, app } = ctx;
+  const vcGuard = loadVerifyChain();
+  if (!app || app.quality?.verifier !== true || vcGuard.isAlreadyRetryRun(run.role)) {
+    return "proceed";
+  }
+
+  const sv = loadSemanticVerifier();
+  let semanticResult: RunSemanticVerifier | null = null;
+  try {
+    semanticResult = await sv.runSemanticVerifier({
+      appPath: run.worktreePath ?? app.path,
+      taskId: tid,
+      finishedRun: run,
+      taskTitle: title,
+      taskBody: readMeta(dir)?.taskBody ?? "",
+    });
+  } catch (err) {
+    logError("semantic-verifier", "crashed", err, { tag: t });
+    semanticResult = null;
+  }
+
+  const needsSemanticRetry =
+    !!semanticResult && semanticResult.verdict === "broken";
+  let scheduledSemanticRetry: Awaited<
+    ReturnType<typeof sv.spawnSemanticVerifierRetry>
+  > = null;
+  if (needsSemanticRetry && semanticResult) {
+    const metaForCheck = readMeta(dir);
+    const eligible =
+      !!metaForCheck &&
+      sv.isEligibleForSemanticVerifierRetry({
+        finishedRun: run,
+        meta: metaForCheck,
+        retry: app?.retry,
+      });
+    if (eligible) {
+      scheduledSemanticRetry = await sv.spawnSemanticVerifierRetry({
         taskId: tid,
         finishedRun: run,
-        taskTitle: title,
-        taskBody: readMeta(dir)?.taskBody ?? "",
+        verifier: semanticResult,
       });
-    } catch (err) {
-      console.error(`semantic-verifier crashed for ${t}`, err);
-      semanticResult = null;
-    }
-
-    const needsSemanticRetry =
-      !!semanticResult && semanticResult.verdict === "broken";
-    let scheduledSemanticRetry: Awaited<
-      ReturnType<typeof sv.spawnSemanticVerifierRetry>
-    > = null;
-    if (needsSemanticRetry && semanticResult) {
-      const metaForCheck = readMeta(dir);
-      const eligible =
-        !!metaForCheck &&
-        sv.isEligibleForSemanticVerifierRetry({
-          finishedRun: run,
-          meta: metaForCheck,
-          retry: app?.retry,
-        });
-      if (eligible) {
-        scheduledSemanticRetry = await sv.spawnSemanticVerifierRetry({
-          taskId: tid,
-          finishedRun: run,
-          verifier: semanticResult,
-        });
-      }
-    }
-
-    const finalSemantic: RunSemanticVerifier | null = semanticResult
-      ? { ...semanticResult, retryScheduled: !!scheduledSemanticRetry }
-      : null;
-
-    if (finalSemantic) {
-      await attachGateResult(dir, run.sessionId, "semanticVerifier", finalSemantic);
-    }
-
-    if (needsSemanticRetry && semanticResult) {
-      if (scheduledSemanticRetry) {
-        emitRetried(tid, scheduledSemanticRetry.run, run.sessionId);
-        console.log(
-          `[semantic-verifier] ${t}: ${semanticResult.verdict} — ${semanticResult.reason} — spawned retry ${scheduledSemanticRetry.sessionId}`,
-        );
-      } else {
-        console.log(
-          `[semantic-verifier] ${t}: ${semanticResult.verdict} — ${semanticResult.reason} — retry ineligible / already attempted`,
-        );
-      }
-      return;
     }
   }
+
+  const finalSemantic: RunSemanticVerifier | null = semanticResult
+    ? { ...semanticResult, retryScheduled: !!scheduledSemanticRetry }
+    : null;
+
+  if (finalSemantic) {
+    await attachGateResult(dir, run.sessionId, "semanticVerifier", finalSemantic);
+  }
+
+  if (needsSemanticRetry && semanticResult) {
+    if (scheduledSemanticRetry) {
+      emitRetried(tid, scheduledSemanticRetry.run, run.sessionId);
+      logInfo("semantic-verifier", `${semanticResult.verdict} — ${semanticResult.reason} — spawned retry`, {
+        tag: t,
+        retrySessionId: scheduledSemanticRetry.sessionId,
+      });
+    } else {
+      logInfo("semantic-verifier", `${semanticResult.verdict} — ${semanticResult.reason} — retry ineligible / already attempted`, { tag: t });
+    }
+    return "blocked";
+  }
+  return "proceed";
+}
+
+/**
+ * Async post-exit pipeline:
+ *   1. Run verify chain (if app has any commands) — store result + flip
+ *      run status to "done" in ONE combined updateRun call.
+ *   2. If verify failed → spawn `<role>-vretry` and skip auto-commit.
+ *   3. If verify passed (or didn't run) → honor `git.autoCommit` /
+ *      `git.autoPush` per the app's settings, same as before P2.
+ */
+async function postExitFlow(args: {
+  sessionsDir: string;
+  taskId: string;
+  tag: string;
+  finishedRun: Run;
+  taskTitle: string;
+}): Promise<void> {
+  const { sessionsDir: dir, taskId: tid, tag: t, finishedRun: run, taskTitle: title } = args;
+
+  const app = getApp(run.repo);
+  const ctx: PostExitContext = { dir, tid, t, run, title, app };
+
+  if ((await runVerifyChainGate(ctx)) === "blocked") return;
+
+  if ((await runPreflightGate(ctx)) === "blocked") return;
+
+  if ((await runClaimGate(ctx)) === "blocked") return;
+
+  if ((await runStyleCriticGate(ctx)) === "blocked") return;
+
+  if ((await runSemanticVerifierGate(ctx)) === "blocked") return;
+
+  // Used by the memory-distill block below to skip when this run is
+  // already a retry attempt — the lesson belongs to the original
+  // primary attempt, not the retry that fixed it.
+  const vcGuard = loadVerifyChain();
 
   // Final safety net: if no app exists for this run (e.g. an
   // unregistered repo), the run is still "running" because succeedRun
@@ -542,19 +611,17 @@ async function postExitFlow(args: {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { claimSpeculativeWinner } = require("./speculative") as typeof import("./speculative");
       const claim = await claimSpeculativeWinner({ taskId: tid, run });
-      console.log(
-        `[speculative] ${t}: ${claim.outcome} — ${claim.reason}` +
-          (claim.killed.length > 0
-            ? ` — killed ${claim.killed.length} sibling(s)`
-            : ""),
-      );
+      logInfo("speculative", `${claim.outcome} — ${claim.reason}`, {
+        tag: t,
+        killedSiblings: claim.killed.length,
+      });
       if (!claim.proceed) {
         // Lost the race. Skip auto-commit + worktree merge entirely.
         // Worktree was already removed by claim() above.
         return;
       }
     } catch (err) {
-      console.error(`[speculative] claim crashed for ${t}`, err);
+      logError("speculative", "claim crashed", err, { tag: t });
       // Fail-soft: if claim throws, fall through and let auto-commit
       // run normally. Worst case both winner and laggard sibling
       // commit; the operator can untangle in git. Better than
@@ -582,14 +649,15 @@ async function postExitFlow(args: {
         taskBody: readMeta(dir)?.taskBody ?? "",
       });
       if (distillResult.appended > 0) {
-        console.log(
-          `[memory-distill] ${t}: ${distillResult.reason} (sid ${distillResult.distillSessionId})`,
-        );
+        logInfo("memory-distill", distillResult.reason, {
+          tag: t,
+          distillSessionId: distillResult.distillSessionId,
+        });
       } else {
-        console.log(`[memory-distill] ${t}: ${distillResult.reason}`);
+        logInfo("memory-distill", distillResult.reason, { tag: t });
       }
     } catch (err) {
-      console.error(`memory-distill crashed for ${t}`, err);
+      logError("memory-distill", "crashed", err, { tag: t });
     }
   }
 
@@ -628,12 +696,12 @@ async function postExitFlow(args: {
     try {
       const r = await autoCommitAndPush(commitCwd, commitSettings, message);
       if (r.ok) {
-        console.log(`auto-git for ${t}: ${r.message}`);
+        logInfo("auto-git", r.message, { tag: t });
       } else {
-        console.warn(`auto-git for ${t}: ${r.message} — ${r.error ?? ""}`);
+        logWarn("auto-git", `${r.message} — ${r.error ?? ""}`, { tag: t });
       }
     } catch (err) {
-      console.error(`auto-git crashed for ${t}`, err);
+      logError("auto-git", "crashed", err, { tag: t });
     }
   }
 
@@ -652,9 +720,7 @@ async function postExitFlow(args: {
     try {
       const sourceBranch = await readCurrentBranch(commitCwd);
       if (!sourceBranch) {
-        console.warn(
-          `integration skipped for ${t}: detached HEAD or non-git tree at ${commitCwd}`,
-        );
+        logWarn("integration", "skipped: detached HEAD or non-git tree", { tag: t, cwd: commitCwd });
       } else if (app.git.integrationMode === "auto-merge") {
         const m = await mergeIntoTargetBranch({
           cwd: commitCwd,
@@ -664,11 +730,9 @@ async function postExitFlow(args: {
           push: app.git.autoPush,
         });
         if (m.ok) {
-          console.log(`auto-merge for ${t}: ${m.message}`);
+          logInfo("auto-merge", m.message, { tag: t });
         } else {
-          console.warn(
-            `auto-merge for ${t}: ${m.message} — ${m.error ?? ""}`,
-          );
+          logWarn("auto-merge", `${m.message} — ${m.error ?? ""}`, { tag: t });
         }
       } else if (app.git.integrationMode === "pull-request") {
         const d = await runDevopsAgent({
@@ -680,15 +744,14 @@ async function postExitFlow(args: {
           sourceBranch,
           targetBranch: app.git.mergeTargetBranch,
         });
-        const tag = `pull-request for ${t}`;
         if (d.status === "opened" || d.status === "exists") {
-          console.log(`${tag}: ${d.status} — ${d.url ?? "(no url)"} (${d.reason})`);
+          logInfo("pull-request", `${d.status} — ${d.reason}`, { tag: t, url: d.url ?? null });
         } else {
-          console.warn(`${tag}: ${d.status} — ${d.reason}`);
+          logWarn("pull-request", `${d.status} — ${d.reason}`, { tag: t });
         }
       }
     } catch (err) {
-      console.error(`integration crashed for ${t}`, err);
+      logError("integration", "crashed", err, { tag: t });
     }
   }
 
@@ -708,11 +771,9 @@ async function postExitFlow(args: {
         },
       });
       if (!wm.ok) {
-        console.warn(
-          `[worktree] cleanup for ${t}: ${wm.message} — ${wm.error ?? ""}`,
-        );
+        logWarn("worktree", `cleanup: ${wm.message} — ${wm.error ?? ""}`, { tag: t });
       } else {
-        console.log(`[worktree] cleanup for ${t}: ${wm.message}`);
+        logInfo("worktree", `cleanup: ${wm.message}`, { tag: t });
       }
       // Worktree integration: after the worktree branch merged into
       // `baseBranch`, branch on integrationMode. Auto-merge runs the
@@ -740,11 +801,9 @@ async function postExitFlow(args: {
             push: false,
           });
           if (m.ok) {
-            console.log(`auto-merge for ${t}: ${m.message}`);
+            logInfo("auto-merge", m.message, { tag: t });
           } else {
-            console.warn(
-              `auto-merge for ${t}: ${m.message} — ${m.error ?? ""}`,
-            );
+            logWarn("auto-merge", `${m.message} — ${m.error ?? ""}`, { tag: t });
           }
         } else if (app.git.integrationMode === "pull-request") {
           const d = await runDevopsAgent({
@@ -756,13 +815,10 @@ async function postExitFlow(args: {
             sourceBranch: baseBranch,
             targetBranch: app.git.mergeTargetBranch,
           });
-          const tag = `pull-request for ${t}`;
           if (d.status === "opened" || d.status === "exists") {
-            console.log(
-              `${tag}: ${d.status} — ${d.url ?? "(no url)"} (${d.reason})`,
-            );
+            logInfo("pull-request", `${d.status} — ${d.reason}`, { tag: t, url: d.url ?? null });
           } else {
-            console.warn(`${tag}: ${d.status} — ${d.reason}`);
+            logWarn("pull-request", `${d.status} — ${d.reason}`, { tag: t });
           }
         }
       }
@@ -779,15 +835,13 @@ async function postExitFlow(args: {
           message,
         );
         if (r.ok) {
-          console.log(`auto-push (live tree) for ${t}: ${r.message}`);
+          logInfo("auto-push", `live tree: ${r.message}`, { tag: t });
         } else {
-          console.warn(
-            `auto-push (live tree) for ${t}: ${r.message} — ${r.error ?? ""}`,
-          );
+          logWarn("auto-push", `live tree: ${r.message} — ${r.error ?? ""}`, { tag: t });
         }
       }
     } catch (err) {
-      console.error(`[worktree] cleanup crashed for ${t}`, err);
+      logError("worktree", "cleanup crashed", err, { tag: t });
     }
   }
 }
@@ -834,7 +888,7 @@ export function wireRunLifecycle(
       const { maybeScheduleRetry } = require("./childRetry") as typeof import("./childRetry");
       maybeScheduleRetry({ taskId, failedRun, exitCode });
     } catch (e) {
-      console.error("auto-retry hook crashed for", tag, e);
+      logError("auto-retry", "hook crashed", e, { tag });
     }
   };
 
@@ -852,9 +906,9 @@ export function wireRunLifecycle(
         (run) => run.status === "running",
       );
     } catch (e) {
-      console.error("failed to mark run failed for", tag, e);
+      logError("lifecycle", "failed to mark run failed", e, { tag });
     }
-    console.error("run failed for", tag, reason);
+    logError("lifecycle", `run failed: ${reason}`, undefined, { tag });
     tryAutoRetry(exitCode);
   };
 
@@ -894,7 +948,7 @@ export function wireRunLifecycle(
         taskTitle = meta.taskTitle;
       }
     } catch (e) {
-      console.error("failed to mark run done for", tag, e);
+      logError("lifecycle", "failed to mark run done", e, { tag });
     }
 
     // P2 — verify chain + commit gate. Wrapped in an async IIFE so the
@@ -916,7 +970,7 @@ export function wireRunLifecycle(
         finishedRun,
         taskTitle,
       }).catch(async (err) => {
-        console.error(`post-exit flow crashed for ${tag}`, err);
+        logError("post-exit", "flow crashed", err, { tag });
         try {
           await updateRun(
             sessionsDir,
@@ -925,13 +979,13 @@ export function wireRunLifecycle(
             (r) => r.status === "running",
           );
         } catch (e) {
-          console.error(`safety-net status:done flip failed for ${tag}`, e);
+          logError("post-exit", "safety-net status:done flip failed", e, { tag });
         }
       });
     }
   };
 
-  child.on("error", (err) => {
+  child.once("error", (err) => {
     void failRun(`spawn error: ${err.message}`, null);
     // Reap per-session settings dir on abnormal exit too — the
     // child never landed, so the settings file we wrote alongside
@@ -945,7 +999,12 @@ export function wireRunLifecycle(
       } catch { /* swallow */ }
     });
   });
-  child.on("exit", (code, signal) => {
+  // `once`, not `on`: an exit event must drive `succeedRun`/`failRun` —
+  // and therefore the gate chain in `postExitFlow` — exactly one time.
+  // If `wireRunLifecycle` were ever called twice for the same child,
+  // `on` would queue a duplicate retry spawn after the precondition
+  // guard inside `updateRun` short-circuited the second status flip.
+  child.once("exit", (code, signal) => {
     if (code === 0) {
       void succeedRun();
     } else if (code !== null) {

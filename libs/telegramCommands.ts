@@ -44,7 +44,14 @@ import { spawnCoordinatorForTask } from "./coordinator";
 import { resumeClaude } from "./spawn";
 import { killChild } from "./spawnRegistry";
 import { autoDetectApps, loadApps } from "./apps";
-import { isValidTaskId, type TaskSection } from "./tasks";
+import {
+  isValidTaskId,
+  SECTION_BLOCKED,
+  SECTION_DOING,
+  SECTION_DONE,
+  SECTION_TODO,
+  type TaskSection,
+} from "./tasks";
 import { getManifestTelegramSettings } from "./apps";
 import {
   answer as answerPermission,
@@ -257,7 +264,7 @@ export const COMMANDS: CommandDef[] = [
   {
     name: "review",
     description: "List tasks awaiting review (DONE — not yet archived)",
-    handler: async () => renderTasks(["DONE — not yet archived"]),
+    handler: async () => renderTasks([SECTION_DONE]),
   },
   {
     name: "active",
@@ -554,7 +561,7 @@ async function commandDone(idArg: string | undefined): Promise<string> {
   if (!idArg) return "Usage: `/done t_YYYYMMDD_NNN`";
   if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
   const t = await updateTask(idArg, {
-    section: "DONE — not yet archived",
+    section: SECTION_DONE,
     checked: true,
   });
   if (!t) return `Task not found: \`${idArg}\``;
@@ -605,7 +612,7 @@ async function commandKill(idArg: string | undefined): Promise<string> {
 async function commandDelete(idArg: string | undefined): Promise<string> {
   if (!idArg) return "Usage: `/delete t_YYYYMMDD_NNN`";
   if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
-  const r = deleteTask(idArg);
+  const r = await deleteTask(idArg);
   if (!r.ok) return `Task not found: \`${idArg}\``;
   return `🗑 Deleted \`${idArg}\` \\(${r.sessionsDeleted} session file\\(s\\) removed\\)`;
 }
@@ -971,10 +978,10 @@ async function publishCommandsToBotFather(token: string): Promise<void> {
 
 function sectionIcon(section: TaskSection): string {
   switch (section) {
-    case "TODO": return "⚪";
-    case "DOING": return "🟡";
-    case "BLOCKED": return "🔴";
-    case "DONE — not yet archived": return "✅";
+    case SECTION_TODO: return "⚪";
+    case SECTION_DOING: return "🟡";
+    case SECTION_BLOCKED: return "🔴";
+    case SECTION_DONE: return "✅";
   }
 }
 

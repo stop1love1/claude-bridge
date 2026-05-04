@@ -85,13 +85,40 @@ let listTasksCache: { value: Task[]; expires: number } | null = null;
 
 // Reverse index: sessionId → taskId. Used by `findTaskBySessionId`,
 // which previously did an O(N) linear scan + readMeta on every chat
-// message. The index is built lazily on first lookup, kept in sync
-// by the same meta-change subscription that drops `listTasksCache`.
+// message. Built lazily on first lookup, then kept in sync by
+// patching the index from the meta-change event payload itself —
+// avoiding the previous "invalidate on EVERY change → rebuild
+// O(N×readMeta) on next lookup" pattern that turned a burst spawn
+// of 5 children into 5 full-index rebuilds.
 let sessionIndex: Map<string, string> | null = null;
 
-subscribeMetaAll(() => {
+subscribeMetaAll((ev) => {
+  // `listTasksCache` is content-sensitive (status/section change the
+  // metaToTask projection), so any meta change still busts it.
   listTasksCache = null;
-  sessionIndex = null;
+  // `sessionIndex` only cares about the SET of sessionIds. Patch
+  // incrementally rather than invalidating, except when we genuinely
+  // can't reason locally about the change.
+  if (!sessionIndex) return; // not yet built — nothing to patch
+  switch (ev.kind) {
+    case "spawned":
+    case "retried":
+      // New run landed → add its sessionId.
+      if (ev.sessionId) sessionIndex.set(ev.sessionId, ev.taskId);
+      return;
+    case "transition":
+    case "updated":
+    case "task-section":
+      // Status/section toggles don't change the sessionId set.
+      return;
+    case "writeMeta":
+      // Wholesale meta rewrite (e.g. createMeta after delete-recreate
+      // races). Could in principle add/remove sessionIds, but the
+      // current call sites are title edits + initial create. Keep
+      // the cache; if a regression ever appears here, swap to
+      // `sessionIndex = null;` for the safe fallback.
+      return;
+  }
 });
 
 function buildSessionIndex(): Map<string, string> {
@@ -243,43 +270,60 @@ export interface DeleteTaskResult {
  * deletion — the user's intent is "make this task go away", and a stuck
  * .jsonl shouldn't trap the meta.json forever.
  */
-export function deleteTask(id: string): DeleteTaskResult {
+export async function deleteTask(id: string): Promise<DeleteTaskResult> {
   const dir = safeSessionDir(id);
   if (!dir || !existsSync(dir)) return { ok: false, sessionsDeleted: 0, sessionsFailed: 0 };
 
-  let sessionsDeleted = 0;
-  let sessionsFailed = 0;
+  // Serialize against any in-flight `appendRun` / `updateRun` /
+  // `updateTask` for this task. Without the lock, an `appendRun` queued
+  // before the rmSync wins the meta-write race and re-creates a stub
+  // meta.json after we delete the directory; subsequent reads then throw
+  // `meta.json missing`. The lock guarantees we observe a consistent
+  // run-list and that no further writes for this dir can land between
+  // the kills and the directory rmSync.
+  return withTaskLock(dir, () => {
+    let sessionsDeleted = 0;
+    let sessionsFailed = 0;
 
-  const meta = readMeta(dir);
-  if (meta && meta.runs.length > 0) {
-    const bridgeMd = readBridgeMd();
+    const meta = readMeta(dir);
+    if (meta && meta.runs.length > 0) {
+      const bridgeMd = readBridgeMd();
 
-    for (const run of meta.runs) {
-      try { killChild(run.sessionId); } catch { /* best-effort */ }
+      for (const run of meta.runs) {
+        try { killChild(run.sessionId); } catch { /* best-effort */ }
 
-      // Per-session settings dir (free-session shape — harmless if it
-      // doesn't exist for task-scoped runs).
-      const stateDir = join(BRIDGE_STATE_DIR, run.sessionId);
-      if (existsSync(stateDir)) {
-        try { rmSync(stateDir, { recursive: true, force: true }); }
-        catch { /* ignore */ }
-      }
+        // Per-session settings dir (free-session shape — harmless if it
+        // doesn't exist for task-scoped runs).
+        const stateDir = join(BRIDGE_STATE_DIR, run.sessionId);
+        if (existsSync(stateDir)) {
+          try { rmSync(stateDir, { recursive: true, force: true }); }
+          catch { /* ignore */ }
+        }
 
-      const cwd = bridgeMd ? resolveRepoCwd(bridgeMd, BRIDGE_ROOT, run.repo) : null;
-      if (!cwd) continue;
-      const file = join(projectDirFor(cwd), `${run.sessionId}.jsonl`);
-      if (!existsSync(file)) continue;
-      try {
-        rmSync(file, { force: true });
-        sessionsDeleted += 1;
-      } catch {
-        sessionsFailed += 1;
+        const cwd = bridgeMd ? resolveRepoCwd(bridgeMd, BRIDGE_ROOT, run.repo) : null;
+        if (!cwd) continue;
+        const file = join(projectDirFor(cwd), `${run.sessionId}.jsonl`);
+        if (!existsSync(file)) continue;
+        try {
+          rmSync(file, { force: true });
+          sessionsDeleted += 1;
+        } catch {
+          sessionsFailed += 1;
+        }
       }
     }
-  }
 
-  rmSync(dir, { recursive: true, force: true });
-  return { ok: true, sessionsDeleted, sessionsFailed };
+    rmSync(dir, { recursive: true, force: true });
+    // Drop this task's sessionIds from the reverse index. The
+    // meta-change subscription doesn't fire on directory removal, so
+    // without this the cache would resolve a deleted task's sessionIds
+    // to its old taskId until the next process restart. Benign (the
+    // follow-up `getTask` returns null anyway) but tidier to clean up.
+    if (sessionIndex && meta) {
+      for (const run of meta.runs) sessionIndex.delete(run.sessionId);
+    }
+    return { ok: true, sessionsDeleted, sessionsFailed };
+  });
 }
 
 export function isValidSection(section: string): section is TaskSection {

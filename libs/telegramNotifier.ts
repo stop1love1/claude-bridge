@@ -32,6 +32,7 @@ import {
   type TelegramNotificationLevel,
 } from "./apps";
 import { getPublicBridgeUrl } from "./paths";
+import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "./tasks";
 import {
   startTelegramCommandPoller,
   startTelegramUserCommandListener,
@@ -344,8 +345,8 @@ function shouldNotifySection(
   next: string,
 ): boolean {
   if (level === "verbose") return true;
-  if (next === "BLOCKED" || next === "DONE — not yet archived") return true;
-  if (level === "normal" && next === "DOING" && prev === "TODO") return true;
+  if (next === SECTION_BLOCKED || next === SECTION_DONE) return true;
+  if (level === "normal" && next === SECTION_DOING && prev === SECTION_TODO) return true;
   return false;
 }
 
@@ -413,10 +414,10 @@ function onMetaChange(ev: MetaChangeEvent): void {
 
 function sectionIcon(section: string): string {
   switch (section) {
-    case "TODO": return "⚪";
-    case "DOING": return "🟡";
-    case "BLOCKED": return "🔴";
-    case "DONE — not yet archived": return "🎉";
+    case SECTION_TODO: return "⚪";
+    case SECTION_DOING: return "🟡";
+    case SECTION_BLOCKED: return "🔴";
+    case SECTION_DONE: return "🎉";
     default: return "📌";
   }
 }
@@ -426,11 +427,11 @@ function sectionVerb(
   next: string,
   checked: boolean | undefined,
 ): string {
-  if (next === "DONE — not yet archived" && checked) return "Marked complete";
-  if (next === "DONE — not yet archived") return "Moved to done";
-  if (next === "BLOCKED") return "Blocked";
-  if (next === "DOING") return prev === "TODO" ? "Started" : "Resumed";
-  if (next === "TODO") return "Reset to TODO";
+  if (next === SECTION_DONE && checked) return "Marked complete";
+  if (next === SECTION_DONE) return "Moved to done";
+  if (next === SECTION_BLOCKED) return "Blocked";
+  if (next === SECTION_DOING) return prev === SECTION_TODO ? "Started" : "Resumed";
+  if (next === SECTION_TODO) return "Reset to TODO";
   return `Section: ${next}`;
 }
 
