@@ -293,7 +293,10 @@ function AgentNode({
           </span>
         </button>
         {(canKill || canDelete) && (
-          <div className="absolute -right-1 -top-1 hidden group-hover/node:flex">
+          // On touch devices (no hover) the actions stay visible at all
+          // times. From sm: up they hide and reveal on hover/focus —
+          // standard "spatial" desktop UX.
+          <div className="absolute -right-1 -top-1 flex sm:hidden sm:group-hover/node:flex sm:group-focus-within/node:flex">
             {canKill ? (
               <button
                 type="button"

@@ -361,21 +361,24 @@ function DiffViewerBody({
     setAttempt((a) => a + 1);
   }, []);
 
+  // Hoist data?.diff to a stable local so the React Compiler infers the
+  // narrowest dependency rather than the whole `data` object.
+  const dataDiff = data?.diff;
   const entries = useMemo(
-    () => (data?.diff ? parseUnifiedDiff(data.diff) : []),
-    [data?.diff],
+    () => (dataDiff ? parseUnifiedDiff(dataDiff) : []),
+    [dataDiff],
   );
   const tree = useMemo(
     () => (entries.length > 0 ? squashSingleDir(buildFileTree(entries)) : null),
     [entries],
   );
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  // First file selected by default once parsing settles.
-  useEffect(() => {
-    if (selectedPath) return;
-    if (entries.length > 0) setSelectedPath(entries[0].path);
-  }, [entries, selectedPath]);
-  const selected = entries.find((e) => e.path === selectedPath) ?? entries[0] ?? null;
+  // Derive default selection during render — avoids set-state-in-effect.
+  // When the user hasn't picked a file yet, fall back to entries[0].
+  const [pickedPath, setPickedPath] = useState<string | null>(null);
+  const selected =
+    entries.find((e) => e.path === pickedPath) ?? entries[0] ?? null;
+  const selectedPath = selected?.path ?? null;
+  const setSelectedPath = setPickedPath;
 
   const copyAll = async () => {
     if (!data?.diff) return;

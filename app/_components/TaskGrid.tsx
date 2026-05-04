@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { Meta, Task, TaskSection } from "@/libs/client/types";
 import { SECTION_ORDER, SECTION_LABEL } from "@/libs/client/types";
+import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "@/libs/tasks";
 import {
   Crown, Sparkles, Plus, Inbox, Trash2, LayoutGrid, Columns, Check,
 } from "lucide-react";
@@ -87,10 +88,23 @@ function GridCard({
   return (
     <div
       onClick={onOpen}
+      onKeyDown={(e) => {
+        // Card is the primary navigation target; mirror native button
+        // semantics so keyboard users can open it without tabbing past
+        // the inline Trash / checkbox affordances first.
+        if (e.key === "Enter" || e.key === " ") {
+          if (e.target !== e.currentTarget) return; // let inner buttons handle their own keys
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open task ${task.id}: ${task.title}`}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative rounded-lg border p-3 cursor-pointer transition-all bg-card ${
+      className={`group relative rounded-lg border p-3 cursor-pointer transition-all bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${
         draggable ? "active:cursor-grabbing" : ""
       } ${
         selected
@@ -109,7 +123,9 @@ function GridCard({
           className={`shrink-0 mt-0.5 h-4 w-4 rounded border flex items-center justify-center transition-colors ${
             selected
               ? "border-primary bg-primary text-primary-foreground"
-              : "border-border bg-background opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              // Always visible below sm: (touch devices without hover);
+              // hidden by default and revealed on hover/focus from sm: up.
+              : "border-border bg-background opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
           }`}
         >
           {selected && <Check size={11} strokeWidth={3} />}
@@ -177,20 +193,20 @@ function GridCard({
 }
 
 const SECTION_ACCENT: Record<TaskSection, string> = {
-  TODO:    "border-fg-dim/40",
-  DOING:   "border-warning/40",
-  BLOCKED: "border-destructive/40",
-  "DONE — not yet archived": "border-success/40",
+  [SECTION_TODO]:    "border-fg-dim/40",
+  [SECTION_DOING]:   "border-warning/40",
+  [SECTION_BLOCKED]: "border-destructive/40",
+  [SECTION_DONE]: "border-success/40",
 };
 
 // Per-section copy for empty Kanban columns. Generic "empty" reads the
 // same in all four states; tailored hints make TODO and BLOCKED feel
 // purposeful and tell the operator what dropping a card here means.
 const SECTION_EMPTY: Record<TaskSection, { title: string; hint: string }> = {
-  TODO:    { title: "Nothing queued",  hint: "Drag a card here, or quick-add above." },
-  DOING:   { title: "Idle",            hint: "Drag a card here to mark it in-progress." },
-  BLOCKED: { title: "Nothing blocked", hint: "Drag a card here when work can't proceed." },
-  "DONE — not yet archived": {
+  [SECTION_TODO]:    { title: "Nothing queued",  hint: "Drag a card here, or quick-add above." },
+  [SECTION_DOING]:   { title: "Idle",            hint: "Drag a card here to mark it in-progress." },
+  [SECTION_BLOCKED]: { title: "Nothing blocked", hint: "Drag a card here when work can't proceed." },
+  [SECTION_DONE]: {
     title: "Nothing shipped yet",
     hint: "Tick the checkbox on a card to land it here.",
   },
@@ -382,6 +398,7 @@ export function TaskGrid({
             }
           }}
           placeholder="Quick add — press Enter"
+          aria-label="Quick add task"
           className="flex-1 bg-transparent text-xs placeholder:text-fg-dim focus:outline-none"
         />
         <div className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5 shrink-0">

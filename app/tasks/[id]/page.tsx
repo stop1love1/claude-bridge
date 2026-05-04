@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Hash } from "lucide-react";
 import { api } from "@/libs/client/api";
 import type { Meta, Repo, Run, Task } from "@/libs/client/types";
+import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
 import { HeaderShell } from "@/app/_components/HeaderShell";
 import { TaskDetail } from "@/app/_components/TaskDetail";
 import { SessionLog } from "@/app/_components/SessionLog";
@@ -245,7 +246,7 @@ function TaskPageInner() {
       if (!id) return;
       await api.updateTask(id, {
         checked: next,
-        section: next ? "DONE — not yet archived" : "DOING",
+        section: next ? SECTION_DONE : SECTION_DOING,
       });
       await refreshTask();
     },

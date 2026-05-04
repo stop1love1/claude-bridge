@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Boxes, Folder, GitBranch, Settings, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/libs/client/api";
 import type { App, Meta, Task } from "@/libs/client/types";
+import { SECTION_DOING, SECTION_DONE, SECTION_TODO } from "@/libs/tasks";
 import { HeaderShell } from "../_components/HeaderShell";
 import { AddAppDialog } from "../_components/AddAppDialog";
 import { AppSettingsDialog } from "../_components/AppSettingsDialog";
@@ -112,10 +113,10 @@ function AppsPage() {
     for (const t of tasks) {
       if (!t.app) continue;
       const s = ensure(t.app);
-      if (t.section === "DONE — not yet archived") s.done += 1;
-      else if (t.section === "DOING") s.doing += 1;
-      else if (t.section === "TODO") s.idle += 1;
-      // BLOCKED is intentionally left out of the three task buckets.
+      if (t.section === SECTION_DONE) s.done += 1;
+      else if (t.section === SECTION_DOING) s.doing += 1;
+      else if (t.section === SECTION_TODO) s.idle += 1;
+      // SECTION_BLOCKED is intentionally left out of the three task buckets.
       const meta = metaByTask.get(t.id);
       if (meta) {
         for (const r of meta.runs) {

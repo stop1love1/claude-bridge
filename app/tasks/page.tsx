@@ -10,6 +10,7 @@ import {
   type SessionSummary,
   type Task,
 } from "@/libs/client/types";
+import { SECTION_DONE } from "@/libs/tasks";
 import { HeaderShell } from "../_components/HeaderShell";
 import { NewTaskDialog } from "../_components/NewTaskDialog";
 import { TaskGrid } from "../_components/TaskGrid";
@@ -237,7 +238,7 @@ function Dashboard() {
             ? {
                 ...t,
                 section,
-                checked: section === "DONE — not yet archived",
+                checked: section === SECTION_DONE,
               }
             : t,
         ),
@@ -245,7 +246,7 @@ function Dashboard() {
       try {
         await api.updateTask(id, {
           section,
-          checked: section === "DONE — not yet archived",
+          checked: section === SECTION_DONE,
         });
         await refreshTasks();
         await refreshAllMeta();
@@ -265,7 +266,7 @@ function Dashboard() {
       try {
         await api.updateTask(id, {
           section,
-          checked: section === "DONE — not yet archived",
+          checked: section === SECTION_DONE,
         });
         moved += 1;
       } catch {
@@ -333,6 +334,7 @@ function Dashboard() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search tasks"
+          aria-label="Search tasks"
           className="flex-1 min-w-[120px] max-w-sm h-7 text-xs"
         />
         <Select value={appFilter} onValueChange={setAppFilter}>

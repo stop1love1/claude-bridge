@@ -59,7 +59,6 @@ type Tab = "diff" | "commits";
  * run a command without losing the diff context.
  */
 export function AppDetail({ name }: { name: string }) {
-  const toast = useToast();
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("diff");
@@ -135,7 +134,6 @@ export function AppDetail({ name }: { name: string }) {
           // the working tree. Refresh the header status after every
           // command so badges stay honest.
           reloadStatus();
-          toast; // suppress unused
         }} />
       </div>
     </div>
@@ -259,8 +257,6 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
 
   useEffect(() => {
     const ac = new AbortController();
-    setLoading(true);
-    setError(null);
     api.appDiff(name, { signal: ac.signal })
       .then((r) => { setDiff(r.diff); setLoading(false); })
       .catch((e) => {
@@ -272,6 +268,10 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
   }, [name, attempt]);
 
   const refresh = () => {
+    // Reset transient state in the event handler so the effect body stays
+    // free of cascading setState calls (React 19 lint).
+    setLoading(true);
+    setError(null);
     setAttempt((a) => a + 1);
   };
 
@@ -283,12 +283,14 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
     () => (entries.length > 0 ? squashSingleDir(buildFileTree(entries)) : null),
     [entries],
   );
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  useEffect(() => {
-    if (selectedPath) return;
-    if (entries.length > 0) setSelectedPath(entries[0].path);
-  }, [entries, selectedPath]);
-  const selected = entries.find((e) => e.path === selectedPath) ?? entries[0] ?? null;
+  // Derive default selection instead of mirroring it in an effect: when the
+  // user hasn't picked a path yet, fall back to the first entry. Picking a
+  // path persists across diff refreshes if it still exists.
+  const [pickedPath, setPickedPath] = useState<string | null>(null);
+  const selected =
+    entries.find((e) => e.path === pickedPath) ?? entries[0] ?? null;
+  const selectedPath = selected?.path ?? null;
+  const setSelectedPath = setPickedPath;
 
   // Commit composer state — same shape as the per-run DiffViewer's,
   // pointed at the app-level endpoints instead of the run-scoped ones.
