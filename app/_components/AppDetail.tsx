@@ -24,6 +24,7 @@ import {
   FileDiffPane,
   type FileDiffEntry,
 } from "./DiffViewer";
+import { AppInteractiveTerminal } from "./AppInteractiveTerminal";
 import { AppSourceTreeTab } from "./AppSourceTreeTab";
 import { Button } from "./ui/button";
 import { HeaderShell } from "./HeaderShell";
@@ -55,8 +56,8 @@ interface CommitEntry {
 type Tab = "source" | "diff" | "commits" | "tasks";
 
 /**
- * App detail page — git management + uncommitted diff + an inline
- * terminal for one-shot shell commands.
+ * App detail page — git management + uncommitted diff + a docked
+ * terminal: interactive PTY (xterm + `node-pty`) or one-shot HTTP exec.
  *
  * Layout (Linear/Notion-style clean):
  *   - Global `HeaderShell` (same as other bridge pages) stays visible
@@ -71,16 +72,21 @@ type Tab = "source" | "diff" | "commits" | "tasks";
  * for the terminal even when the operator was reading the diff. The new
  * layout reclaims that space and only spends it when the user opts in.
  */
-const TERMINAL_DEFAULT_HEIGHT = 280;
-const TERMINAL_MIN_HEIGHT = 160;
-const TERMINAL_BAR_HEIGHT = 36;
+const TERMINAL_DEFAULT_HEIGHT = 240;
+const TERMINAL_MIN_HEIGHT = 120;
+const TERMINAL_BAR_HEIGHT = 32;
 
 export function AppDetail({ name }: { name: string }) {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("source");
-  /** Registry `name` for the header; `name` prop is often an encoded path segment. */
-  const [displayTitle, setDisplayTitle] = useState(name);
+  /**
+   * Resolved app label for the header (`name` is often a path segment).
+   * Only written from the apps fetch callback — avoids setState in the
+   * effect body (react-hooks/set-state-in-effect).
+   */
+  const [titleCache, setTitleCache] = useState<{ segment: string; display: string } | null>(null);
+  const displayTitle = titleCache?.segment === name ? titleCache.display : name;
   // Terminal docking state. Collapsed by default so the main tab
   // (default Source code) gets the full viewport on first paint.
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -88,14 +94,13 @@ export function AppDetail({ name }: { name: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    setDisplayTitle(name);
     void api.apps().then((apps) => {
       if (cancelled) return;
       const byPath = apps.find((a) => a.path === name);
       const bySlug = apps.find((a) => a.name === name);
       const hit = byPath ?? bySlug;
-      if (hit) setDisplayTitle(hit.name);
-    }).catch(() => { /* keep `name` as fallback */ });
+      setTitleCache({ segment: name, display: hit ? hit.name : name });
+    }).catch(() => { /* keep route `name` until a later refresh */ });
     return () => { cancelled = true; };
   }, [name]);
 
@@ -744,6 +749,8 @@ interface TerminalEntry {
   truncated?: boolean;
 }
 
+type TerminalDockMode = "shell" | "oneshot";
+
 function TerminalPanel({
   name,
   open,
@@ -763,6 +770,7 @@ function TerminalPanel({
   onResize: (next: number) => void;
   onMaybeChangedRepo: () => void;
 }) {
+  const [dockMode, setDockMode] = useState<TerminalDockMode>("shell");
   const [history, setHistory] = useState<TerminalEntry[]>([]);
   const [draft, setDraft] = useState("");
   const [recall, setRecall] = useState<{ index: number; backup: string } | null>(null);
@@ -918,7 +926,7 @@ function TerminalPanel({
         />
       )}
       <header
-        className="shrink-0 flex items-center gap-2 px-4 bg-card/40 text-2xs text-fg-dim cursor-pointer select-none hover:bg-card/60 transition-colors"
+        className="shrink-0 flex items-center gap-1.5 px-2 sm:px-3 bg-card/40 text-2xs text-fg-dim cursor-pointer select-none hover:bg-card/60 transition-colors"
         style={{ height: barHeight }}
         onClick={onToggle}
         role="button"
@@ -936,18 +944,50 @@ function TerminalPanel({
             · {history.length} command{history.length === 1 ? "" : "s"}
           </span>
         )}
-        {open && history.length > 0 && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              clear();
-            }}
-            className="ml-auto text-2xs hover:text-foreground"
-            title="Clear scrollback"
+        {open && (
+          <div
+            className="ml-auto flex items-center gap-1 rounded-md bg-muted/35 p-0.5"
+            onClick={(e) => e.stopPropagation()}
+            role="tablist"
+            aria-label="Terminal mode"
           >
-            clear
-          </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dockMode === "shell"}
+              className={`rounded px-2 py-0.5 text-2xs font-medium transition-colors ${
+                dockMode === "shell"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-fg-dim hover:text-foreground"
+              }`}
+              onClick={() => setDockMode("shell")}
+            >
+              Shell
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dockMode === "oneshot"}
+              className={`rounded px-2 py-0.5 text-2xs font-medium transition-colors ${
+                dockMode === "oneshot"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-fg-dim hover:text-foreground"
+              }`}
+              onClick={() => setDockMode("oneshot")}
+            >
+              One-shot
+            </button>
+            {dockMode === "oneshot" && history.length > 0 && (
+              <button
+                type="button"
+                onClick={clear}
+                className="text-2xs hover:text-foreground ml-1"
+                title="Clear scrollback"
+              >
+                clear
+              </button>
+            )}
+          </div>
         )}
         {!open && history.length === 0 && (
           <span className="ml-auto text-2xs opacity-60">click to expand</span>
@@ -956,74 +996,84 @@ function TerminalPanel({
 
       {open && (
       <>
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-2 font-mono text-xs leading-snug space-y-2">
-        {history.length === 0 ? (
-          <p className="text-fg-dim italic px-1">
-            Run shell commands inside this app&apos;s working tree. 30s timeout, 1 MB output cap, basic foot-gun blocklist.
-          </p>
-        ) : (
-          history.map((entry) => (
-            <div key={entry.id} className="space-y-0.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-success shrink-0">$</span>
-                <span className="text-foreground truncate">{entry.command}</span>
-                {entry.pending ? (
-                  <Loader2 size={11} className="text-primary animate-spin shrink-0 ml-auto" />
-                ) : (
-                  <span className="ml-auto flex items-center gap-1.5 text-[10px] text-fg-dim shrink-0">
-                    {entry.timedOut && <span className="text-warning">timeout</span>}
-                    {entry.truncated && <span className="text-warning">trunc</span>}
-                    <span
-                      className={
-                        entry.exitCode === 0
-                          ? "text-success"
-                          : entry.exitCode === null
-                            ? "text-warning"
-                            : "text-destructive"
-                      }
-                    >
-                      exit {entry.exitCode ?? "?"}
-                    </span>
-                    {entry.durationMs !== undefined && (
-                      <span>{entry.durationMs}ms</span>
+      {dockMode === "shell" ? (
+        <div className="flex flex-1 min-h-0 flex-col gap-0.5 px-1.5 pb-1 pt-0.5">
+          <AppInteractiveTerminal appSegment={name} active={open && dockMode === "shell"} />
+        </div>
+      ) : (
+        <>
+          <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-1.5 font-mono text-xs leading-snug space-y-1.5">
+            {history.length === 0 ? (
+              <p className="text-fg-dim px-0.5 text-[10px] leading-snug" title="One-shot: 30s timeout, 1 MB output cap, command blocklist">
+                One-shot · 30s · 1 MB · blocklist applies
+              </p>
+            ) : (
+              history.map((entry) => (
+                <div key={entry.id} className="space-y-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-success shrink-0">$</span>
+                    <span className="text-foreground truncate">{entry.command}</span>
+                    {entry.pending ? (
+                      <Loader2 size={11} className="text-primary animate-spin shrink-0 ml-auto" />
+                    ) : (
+                      <span className="ml-auto flex items-center gap-1.5 text-[10px] text-fg-dim shrink-0">
+                        {entry.timedOut && <span className="text-warning">timeout</span>}
+                        {entry.truncated && <span className="text-warning">trunc</span>}
+                        <span
+                          className={
+                            entry.exitCode === 0
+                              ? "text-success"
+                              : entry.exitCode === null
+                                ? "text-warning"
+                                : "text-destructive"
+                          }
+                        >
+                          exit {entry.exitCode ?? "?"}
+                        </span>
+                        {entry.durationMs !== undefined && (
+                          <span>{entry.durationMs}ms</span>
+                        )}
+                      </span>
                     )}
-                  </span>
-                )}
-              </div>
-              {entry.stdout && (
-                <pre className="whitespace-pre-wrap wrap-break-word text-foreground/85 pl-3">
-                  {entry.stdout}
-                </pre>
-              )}
-              {entry.stderr && (
-                <pre className="whitespace-pre-wrap wrap-break-word text-destructive/85 pl-3">
-                  {entry.stderr}
-                </pre>
-              )}
-            </div>
-          ))
-        )}
-      </div>
+                  </div>
+                  {entry.stdout && (
+                    <pre className="whitespace-pre-wrap wrap-break-word text-foreground/85 pl-3">
+                      {entry.stdout}
+                    </pre>
+                  )}
+                  {entry.stderr && (
+                    <pre className="whitespace-pre-wrap wrap-break-word text-destructive/85 pl-3">
+                      {entry.stderr}
+                    </pre>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
 
-      <form
-        onSubmit={(e) => { e.preventDefault(); void submit(); }}
-        className="flex items-center gap-1.5 px-2 py-1.5 border-t border-border"
-      >
-        <span className="text-success font-mono text-xs shrink-0">$</span>
-        <input
-          ref={inputRef}
-          value={draft}
-          onChange={(e) => { setDraft(e.target.value); setRecall(null); }}
-          onKeyDown={onKeyDown}
-          placeholder="type a shell command (Enter to run, ↑↓ for history)"
-          className="flex-1 bg-transparent border-0 outline-none font-mono text-xs placeholder:text-muted-foreground/70"
-          spellCheck={false}
-          autoComplete="off"
-        />
-        <Button type="submit" size="iconSm" disabled={!draft.trim()} title="Run (Enter)">
-          <Send size={13} />
-        </Button>
-      </form>
+          <form
+            onSubmit={(e) => { e.preventDefault(); void submit(); }}
+            className="mx-1.5 mb-1.5 flex items-center gap-1.5 rounded-md border border-border/80 bg-muted/25 px-1.5 py-1 shadow-sm"
+          >
+            <span className="font-mono text-xs text-success shrink-0" aria-hidden>
+              $
+            </span>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => { setDraft(e.target.value); setRecall(null); }}
+              onKeyDown={onKeyDown}
+              placeholder="Command… Enter run · ↑↓ history"
+              className="min-w-0 flex-1 bg-transparent border-0 py-0.5 font-mono text-xs outline-none placeholder:text-muted-foreground/65"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <Button type="submit" size="iconSm" disabled={!draft.trim()} title="Run (Enter)">
+              <Send size={13} />
+            </Button>
+          </form>
+        </>
+      )}
       </>
       )}
     </section>

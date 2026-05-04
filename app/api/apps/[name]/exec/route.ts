@@ -20,15 +20,16 @@
  *   - 30s wall-clock timeout per command
  *   - 1 MB stdout / 1 MB stderr cap (truncated marker appended)
  *   - 16 KB command-line cap
- *   - basic blocklist for the most-likely-foot-gun shell forms
- *     (rm -rf /, fork bombs, force-pushing to a protected branch).
- *     Operators who really mean to run those bypass via their own
- *     terminal; the blocklist is a "did you mean it" guard not a
- *     security boundary.
+ *   - basic blocklist (shared with `libs/appExecGuard.ts`) for the
+ *     most-likely-foot-gun shell forms (rm -rf /, fork bombs,
+ *     force-pushing to a protected branch). Operators who really mean
+ *     to run those bypass via their own terminal; the blocklist is a
+ *     "did you mean it" guard not a security boundary.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { execLocked, checkBlocklist } from "@/libs/appExecGuard";
 import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { badRequest } from "@/libs/validate";
 
@@ -44,40 +45,6 @@ interface ExecBody {
 const TIMEOUT_MS = 30_000;
 const OUTPUT_CAP_BYTES = 1024 * 1024;
 const COMMAND_CAP_BYTES = 16 * 1024;
-
-/**
- * Hard kill switch for public deployments. Set `BRIDGE_LOCK_EXEC=1` to
- * disable the terminal endpoint entirely — the route returns 403 without
- * spawning anything. Recommended whenever the bridge is reachable beyond
- * localhost (tunnels, public host) since the blocklist below is a
- * "did-you-mean-it" guard, not a security boundary.
- */
-function execLocked(): boolean {
-  return process.env.BRIDGE_LOCK_EXEC === "1";
-}
-
-const BLOCKLIST: Array<{ pattern: RegExp; reason: string }> = [
-  // The classic. Block both `/` and `~/` since the bridge process
-  // typically has write access to the user's home dir.
-  { pattern: /\brm\s+(-[rRfF]+|--recursive|--force)\b.*\s(?:\/|~\/?)\s*$/m, reason: "rm -rf / blocked" },
-  { pattern: /\brm\s+(-[rRfF]+|--recursive|--force)\b.*\s\*\s*$/m, reason: "rm -rf * blocked" },
-  // Force-push to a protected branch. The blocklist is best-effort —
-  // someone determined can bypass with quoting tricks, but the
-  // common shapes catch typos.
-  { pattern: /\bgit\s+push\s+.*--force(?:-with-lease)?\b.*\b(main|master|develop|production|trunk|release)\b/i, reason: "force-push to protected branch blocked" },
-  // Fork-bomb-shaped one-liners.
-  { pattern: /:\s*\(\s*\)\s*\{[^}]*\|[^}]*&[^}]*\}\s*;\s*:/, reason: "fork-bomb pattern blocked" },
-  // Pipe-from-curl into a shell. Asks for trouble.
-  { pattern: /\bcurl\s.+\|\s*(?:bash|sh|zsh|fish)\b/, reason: "curl | shell blocked" },
-  { pattern: /\bwget\s.+\|\s*(?:bash|sh|zsh|fish)\b/, reason: "wget | shell blocked" },
-];
-
-function checkBlocklist(command: string): { ok: true } | { ok: false; reason: string } {
-  for (const { pattern, reason } of BLOCKLIST) {
-    if (pattern.test(command)) return { ok: false, reason };
-  }
-  return { ok: true };
-}
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   if (execLocked()) {

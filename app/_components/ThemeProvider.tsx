@@ -8,6 +8,7 @@ import {
   useMemo,
   useSyncExternalStore,
 } from "react";
+import { THEME_STORAGE_KEY } from "@/libs/themeBootstrap";
 
 /**
  * Three-state theme preference:
@@ -22,7 +23,8 @@ import {
 export type ThemePref = "dark" | "light" | "system";
 export type ThemeResolved = "dark" | "light";
 
-export const STORAGE_KEY = "bridge.theme";
+/** LocalStorage key for theme pref — same string as `NO_FLASH_SCRIPT` in `libs/themeBootstrap`. */
+export const STORAGE_KEY = THEME_STORAGE_KEY;
 
 interface ThemeCtx {
   pref: ThemePref;
@@ -43,19 +45,6 @@ function applyDom(t: ThemeResolved) {
   document.documentElement.setAttribute("data-theme", t);
   document.documentElement.style.colorScheme = t;
 }
-
-/**
- * No-flash bootstrap script. Runs synchronously in the document <head>
- * before React mounts so the painted markup matches the user's saved
- * preference (or system default), avoiding a dark-to-light flash on
- * navigation. Self-contained IIFE — see ThemeProvider for how it's
- * loaded from app/layout.tsx.
- */
-// JSON.stringify the storage key rather than dropping it into a single-
-// quoted string literal raw — a future change that put a quote, a
-// newline, or `</script>` into STORAGE_KEY would otherwise break or
-// open a script-injection in the inlined boot script.
-export const NO_FLASH_SCRIPT = `(function(){try{var k=${JSON.stringify(STORAGE_KEY)};var s=localStorage.getItem(k);var t;if(s==='dark'||s==='light'){t=s;}else{t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}var d=document.documentElement;d.setAttribute('data-theme',t);d.style.colorScheme=t;}catch(e){}})();`;
 
 // External-store adapters — let `useSyncExternalStore` handle SSR
 // hydration without a `useState` + `useEffect(setX)` ladder, which

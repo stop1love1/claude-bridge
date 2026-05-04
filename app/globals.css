@@ -227,3 +227,12 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(4px); 
  * intruding on the 40px-tall header. */
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* App detail — xterm host: keep viewport scrollbars subtle inside the dock */
+.bridge-xterm-host .xterm .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.bridge-xterm-host .xterm.focus .xterm-screen {
+  outline: none;
+}

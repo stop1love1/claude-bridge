@@ -1,7 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import "./globals.css";
 import { Providers } from "./_components/Providers";
-import { NO_FLASH_SCRIPT } from "./_components/ThemeProvider";
+import { NO_FLASH_SCRIPT } from "@/libs/themeBootstrap";
 
 // Resolves relative `openGraph.images` / `twitter.images` URLs. The bridge is
 // a localhost dashboard, so we fall back to the dev port; deploys can override
@@ -29,14 +30,14 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className="h-full antialiased" suppressHydrationWarning>
-      <head>
-        {/* Bootstraps `data-theme` on <html> before paint so the saved
-            preference (or system default) takes effect without a
-            dark-to-light flash on every navigation. The script is a
-            small self-contained IIFE — see ThemeProvider for the source. */}
-        <script dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }} />
-      </head>
       <body className="min-h-full flex flex-col bg-background text-foreground">
+        {/* First in body + `beforeInteractive` — runs before hydration, avoids
+            raw <script> in React tree warnings; theme matches storage before paint. */}
+        <Script
+          id="bridge-theme-no-flash"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }}
+        />
         <Providers>{children}</Providers>
       </body>
     </html>
