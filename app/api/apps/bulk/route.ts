@@ -21,7 +21,18 @@ interface BulkResultItemAdded {
 interface BulkResultItemFailed {
   ok: false;
   name: string;
-  reason: "invalid-name" | "missing-path" | "duplicate-name" | "invalid-input";
+  reason:
+    | "invalid-name"
+    | "missing-path"
+    | "duplicate-name"
+    | "invalid-input"
+    | "empty"
+    | "control-char"
+    | "not-absolute"
+    | "missing"
+    | "not-directory"
+    | "outside-allowed-roots";
+  detail?: string;
 }
 
 type BulkResultItem = BulkResultItemAdded | BulkResultItemFailed;
@@ -66,7 +77,11 @@ export async function POST(req: NextRequest) {
     }
     const result = addApp({ name, path, description });
     if (result.ok) added.push(result.app);
-    else failed.push({ ok: false, name, reason: result.reason });
+    else {
+      const item: BulkResultItemFailed = { ok: false, name, reason: result.reason };
+      if (result.detail) item.detail = result.detail;
+      failed.push(item);
+    }
   }
 
   return NextResponse.json({ added, failed }, { status: 201 });

@@ -8,8 +8,9 @@ import { projectDirFor } from "@/libs/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
 import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
 import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
+import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
 import { isValidAppName } from "@/libs/apps";
-import { serverError } from "@/libs/errorResponse";
+import { scrubPaths, serverError } from "@/libs/errorResponse";
 import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
@@ -90,8 +91,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // delaying normal sends.
     const failure = await waitEarlyFailure(child, 1500);
     if (failure) {
+      // Scrub absolute paths + cap to keep the response body bounded.
+      const safeStderr = failure.stderr
+        ? scrubPaths(failure.stderr).slice(0, 4096)
+        : null;
       return NextResponse.json(
-        { error: `claude exited ${failure.code}`, stderr: failure.stderr || null },
+        { error: `claude exited ${failure.code}`, stderr: safeStderr },
         { status: 502 },
       );
     }
@@ -102,8 +107,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // the message itself (the spawn already succeeded).
     try {
       const owningTask = findTaskBySessionId(sessionId);
-      if (owningTask && (owningTask.checked || owningTask.section === "DONE — not yet archived")) {
-        await updateTask(owningTask.id, { section: "DOING", checked: false });
+      if (owningTask && (owningTask.checked || owningTask.section === SECTION_DONE)) {
+        await updateTask(owningTask.id, { section: SECTION_DOING, checked: false });
       }
     } catch (err) {
       console.warn("re-open task on chat failed", err);

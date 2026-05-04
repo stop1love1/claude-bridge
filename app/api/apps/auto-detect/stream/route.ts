@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { detectAppCandidates, type DetectEvent } from "@/libs/apps";
+import { acquireSseSlot } from "@/libs/sseLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,10 @@ export const dynamic = "force-dynamic";
  * and lets them cancel via the `Stop` button (request abort).
  */
 export async function GET(req: NextRequest) {
+  const releaseSlot = acquireSseSlot(req);
+  if (!releaseSlot) {
+    return new Response("too many concurrent streams", { status: 429 });
+  }
   const url = new URL(req.url);
   const rootsParam = url.searchParams.get("roots") ?? "";
   const depthParam = Number(url.searchParams.get("depth") ?? "1");
@@ -67,11 +72,13 @@ export async function GET(req: NextRequest) {
         if (!closed) {
           try { controller.close(); } catch { /* already closed */ }
         }
+        try { releaseSlot(); } catch { /* idempotent */ }
       }
     },
     cancel() {
       // Browser closed the EventSource — `req.signal` will already be
       // aborted, so the scan loop exits naturally on its next iteration.
+      try { releaseSlot(); } catch { /* idempotent */ }
     },
   });
 

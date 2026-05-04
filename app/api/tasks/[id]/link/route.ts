@@ -78,6 +78,23 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const meta = readMeta(dir);
   if (!meta) return NextResponse.json({ error: "task not found" }, { status: 404 });
 
+  // Cross-task guard: if the child supplied a parentSessionId, that
+  // parent MUST already be registered as a run on THIS task. Without
+  // this, a compromised child running for task A could call
+  // POST /api/tasks/<task-B>/link and inject itself (or pollute the
+  // agent tree of) any other task whose id it can guess.
+  if (body.parentSessionId) {
+    const parentInTask = meta.runs.some(
+      (r) => r.sessionId === body.parentSessionId,
+    );
+    if (!parentInTask) {
+      return NextResponse.json(
+        { error: "parentSessionId does not belong to this task" },
+        { status: 403 },
+      );
+    }
+  }
+
   const existing = meta.runs.find((r) => r.sessionId === body.sessionId);
   if (existing) {
     // Existing-row branch: ONLY patch the fields the child supplied.

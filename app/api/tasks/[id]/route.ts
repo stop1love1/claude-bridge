@@ -1,14 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateTask, deleteTask, isValidSection } from "@/libs/tasksStore";
-import { isValidTaskId, type Task, type TaskSection } from "@/libs/tasks";
-import { SECTION_STATUS } from "@/libs/tasks";
+import { isValidTaskId, SECTION_DONE, SECTION_STATUS, type Task, type TaskSection } from "@/libs/tasks";
 import { badRequest } from "@/libs/validate";
 import { verifyRequestAuth } from "@/libs/auth";
 
 export const dynamic = "force-dynamic";
 
 const VALID_SECTIONS = Object.keys(SECTION_STATUS) as TaskSection[];
-const DONE_SECTION: TaskSection = "DONE — not yet archived";
+const DONE_SECTION = SECTION_DONE;
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -64,7 +63,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   }
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
-  const result = deleteTask(id);
+  const result = await deleteTask(id);
   if (!result.ok) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(result);
 }

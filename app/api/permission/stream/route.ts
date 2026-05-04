@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { listAllPending, subscribeAll } from "@/libs/permissionStore";
+import { acquireSseSlot } from "@/libs/sseLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,10 @@ export const dynamic = "force-dynamic";
  * the per-session permission stream.
  */
 export async function GET(req: NextRequest) {
+  const releaseSlot = acquireSseSlot(req);
+  if (!releaseSlot) {
+    return new Response("too many concurrent streams", { status: 429 });
+  }
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -80,6 +85,7 @@ export async function GET(req: NextRequest) {
         } catch {
           /* already closed */
         }
+        try { releaseSlot(); } catch { /* idempotent */ }
         // Remove the abort listener so a Next.js framework that retains
         // the request object beyond the stream's lifetime doesn't keep
         // a dangling reference to this closure.

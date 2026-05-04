@@ -29,7 +29,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { getApp } from "@/libs/apps";
+import { getApp, isValidAppName } from "@/libs/apps";
 import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +44,17 @@ interface ExecBody {
 const TIMEOUT_MS = 30_000;
 const OUTPUT_CAP_BYTES = 1024 * 1024;
 const COMMAND_CAP_BYTES = 16 * 1024;
+
+/**
+ * Hard kill switch for public deployments. Set `BRIDGE_LOCK_EXEC=1` to
+ * disable the terminal endpoint entirely — the route returns 403 without
+ * spawning anything. Recommended whenever the bridge is reachable beyond
+ * localhost (tunnels, public host) since the blocklist below is a
+ * "did-you-mean-it" guard, not a security boundary.
+ */
+function execLocked(): boolean {
+  return process.env.BRIDGE_LOCK_EXEC === "1";
+}
 
 const BLOCKLIST: Array<{ pattern: RegExp; reason: string }> = [
   // The classic. Block both `/` and `~/` since the bridge process
@@ -69,8 +80,14 @@ function checkBlocklist(command: string): { ok: true } | { ok: false; reason: st
 }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
+  if (execLocked()) {
+    return NextResponse.json(
+      { error: "exec endpoint is disabled (BRIDGE_LOCK_EXEC=1)" },
+      { status: 403 },
+    );
+  }
   const { name } = await ctx.params;
-  if (!name || name.length > 200) return badRequest("invalid app name");
+  if (!isValidAppName(name)) return badRequest("invalid app name");
 
   let body: ExecBody;
   try {

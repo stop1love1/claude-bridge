@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { resolveSessionFile, tailJsonl } from "@/libs/sessions";
 import { isAlive, subscribeSession, type PartialEvent, type StatusEvent } from "@/libs/sessionEvents";
+import { isRegisteredRepoPath } from "@/libs/sessionAccess";
+import { acquireSseSlot } from "@/libs/sseLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -138,9 +140,21 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const repoPath = searchParams.get("repo");
   const since = Number(searchParams.get("since") ?? 0) || 0;
 
+  // Whitelist repo against registered apps (and the bridge root) before
+  // hitting resolveSessionFile. Otherwise an authed cookie could tail
+  // JSONL files for unrelated Claude Code projects under ~/.claude/projects/.
+  if (!isRegisteredRepoPath(repoPath)) {
+    return new Response("invalid session repo", { status: 400 });
+  }
   const file = resolveSessionFile(repoPath, sessionId);
   if (!file) {
     return new Response("invalid session repo", { status: 400 });
+  }
+  // Concurrent-SSE cap. A buggy / hostile script can otherwise spawn
+  // thousands of EventSource handles and exhaust file descriptors.
+  const releaseSlot = acquireSseSlot(req);
+  if (!releaseSlot) {
+    return new Response("too many concurrent streams", { status: 429 });
   }
   const bufferKey = `${repoPath}::${sessionId}`;
   const buffer = getBuffer(bufferKey);
@@ -302,6 +316,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         try { unsub(); } catch { /* ignore */ }
         try { watcher?.close(); } catch { /* ignore */ }
         try { controller.close(); } catch { /* already closed */ }
+        try { releaseSlot(); } catch { /* idempotent */ }
         // Idempotent listener removal so repeated aborts (defensive
         // double-call from req.signal + controller.close upstream)
         // don't accumulate stale listeners on the AbortSignal.

@@ -8,7 +8,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { getApp } from "@/libs/apps";
+import { getApp, isValidAppName } from "@/libs/apps";
 import { badRequest } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
 
@@ -119,7 +119,7 @@ function buildMessage(rows: NameStatusLine[]): string {
 
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { name } = await ctx.params;
-  if (!name || name.length > 200) return badRequest("invalid app name");
+  if (!isValidAppName(name)) return badRequest("invalid app name");
   const app = getApp(name);
   if (!app) return NextResponse.json({ error: "app not found" }, { status: 404 });
   const cwd = app.path;

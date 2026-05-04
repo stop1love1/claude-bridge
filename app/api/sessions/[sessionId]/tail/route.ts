@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { resolveSessionFile, tailJsonl, tailJsonlBefore } from "@/libs/sessions";
+import { isRegisteredRepoPath } from "@/libs/sessionAccess";
 import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,8 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const sinceParam = searchParams.get("since");
   const beforeParam = searchParams.get("before");
 
+  // Whitelist repo against registered apps before hitting the file resolver.
+  if (!isRegisteredRepoPath(repoPath)) return badRequest("invalid session repo");
   const file = resolveSessionFile(repoPath, sessionId);
   if (!file) return badRequest("invalid session repo");
 

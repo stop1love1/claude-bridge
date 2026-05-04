@@ -6,7 +6,7 @@ import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/sp
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
 import { isValidAppName } from "@/libs/apps";
 import { badRequest, isValidUserPermissionMode } from "@/libs/validate";
-import { serverError } from "@/libs/errorResponse";
+import { scrubPaths, serverError } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -98,8 +98,15 @@ export async function POST(req: NextRequest) {
     const { child } = spawnFreeSession(cwd, body.prompt.trim(), effectiveSettings, settingsPath, sessionId);
     const failure = await waitEarlyFailure(child, 1500);
     if (failure) {
+      // Scrub absolute paths from claude's startup error messages — they
+      // can otherwise echo `D:\Edusoft\…` to the client and reveal the
+      // bridge install layout. Also cap the surface so a hostile child
+      // can't smuggle multi-MB of text into the response body.
+      const safeStderr = failure.stderr
+        ? scrubPaths(failure.stderr).slice(0, 4096)
+        : null;
       return NextResponse.json(
-        { error: `claude exited ${failure.code}`, stderr: failure.stderr || null },
+        { error: `claude exited ${failure.code}`, stderr: safeStderr },
         { status: 502 },
       );
     }

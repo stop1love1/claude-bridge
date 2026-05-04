@@ -37,6 +37,7 @@ import {
   readBridgeManifest,
   updateBridgeManifest,
 } from "./bridgeManifest";
+import { validateAppPath, type PathGuardFail } from "./pathGuard";
 
 /**
  * Per-app git workflow settings, persisted alongside the app entry in
@@ -783,13 +784,24 @@ export interface AddAppResult {
 
 export interface AddAppFailure {
   ok: false;
-  reason: "invalid-name" | "missing-path" | "duplicate-name";
+  reason:
+    | "invalid-name"
+    | "missing-path"
+    | "duplicate-name"
+    | PathGuardFail["reason"];
+  detail?: string;
 }
 
 export function addApp(input: AppInput): AddAppResult | AddAppFailure {
   if (!isValidAppName(input.name)) return { ok: false, reason: "invalid-name" };
   const rawPath = (input.path ?? "").trim();
   if (rawPath.length === 0) return { ok: false, reason: "missing-path" };
+  // Path-guard: rejects control chars, missing dirs, and (when
+  // BRIDGE_ALLOWED_ROOTS is set) anything outside the operator's
+  // declared roots. Prevents a compromised cookie from registering
+  // arbitrary system directories as "apps".
+  const guard = validateAppPath(rawPath);
+  if (!guard.ok) return { ok: false, reason: guard.reason, detail: guard.detail };
   const apps = loadApps();
   if (apps.some((a) => a.name === input.name)) {
     return { ok: false, reason: "duplicate-name" };
@@ -797,7 +809,7 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
   const app: App = {
     name: input.name,
     rawPath,
-    path: resolveAppPath(rawPath),
+    path: guard.resolvedPath,
     description: (input.description ?? "").trim(),
     git: { ...DEFAULT_GIT_SETTINGS },
     verify: { ...DEFAULT_VERIFY },

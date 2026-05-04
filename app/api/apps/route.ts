@@ -49,7 +49,9 @@ export async function POST(req: NextRequest) {
   const result = addApp({ name, path, description });
   if (!result.ok) {
     const status = result.reason === "duplicate-name" ? 409 : 400;
-    return NextResponse.json({ error: result.reason }, { status });
+    const body: { error: string; detail?: string } = { error: result.reason };
+    if (result.detail) body.detail = result.detail;
+    return NextResponse.json(body, { status });
   }
   return NextResponse.json(result.app, { status: 201 });
 }

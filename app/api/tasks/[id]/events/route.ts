@@ -5,6 +5,7 @@ import { SESSIONS_DIR } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest } from "@/libs/validate";
 import { subscribeSession, type StatusEvent } from "@/libs/sessionEvents";
+import { acquireSseSlot } from "@/libs/sseLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,10 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
+  const releaseSlot = acquireSseSlot(req);
+  if (!releaseSlot) {
+    return new Response("too many concurrent streams", { status: 429 });
+  }
   const sessionsDir = join(SESSIONS_DIR, id);
   const encoder = new TextEncoder();
 
@@ -72,6 +77,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         } catch {
           /* already closed */
         }
+        try { releaseSlot(); } catch { /* idempotent */ }
       };
 
       const send = (event: string, data: unknown) => {

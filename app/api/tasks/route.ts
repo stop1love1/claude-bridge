@@ -18,6 +18,9 @@ import {
 import { detectWithLLM } from "@/libs/detect/llm";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { safeErrorMessage } from "@/libs/errorResponse";
+import { checkRateLimit } from "@/libs/rateLimit";
+import { verifyRequestAuth } from "@/libs/auth";
+import { getClientIp } from "@/libs/clientIp";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +58,19 @@ function deriveTitle(body: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  // Per-user rate limit. Each task POST spawns a coordinator + an LLM
+  // detect job — both have real cost. Bucket on the authed `sub` (or
+  // device id) so a script that drives the cookie can't fire thousands
+  // of concurrent task creations; fall back to client IP for the
+  // unauthed edge case (proxy gate would normally 401 first).
+  const payload = verifyRequestAuth(req);
+  const rlKey =
+    payload?.did ?? payload?.sub ?? `ip:${getClientIp(req.headers)}`;
+  const denied = checkRateLimit("tasks:create", rlKey, 30, 60_000);
+  if (denied) {
+    return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
+  }
+
   const { title: givenTitle, body, app } = (await req.json()) as {
     title?: string;
     body?: string;

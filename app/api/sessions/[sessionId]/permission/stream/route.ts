@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { listPending, subscribe } from "@/libs/permissionStore";
 import { isValidSessionId } from "@/libs/validate";
+import { acquireSseSlot } from "@/libs/sseLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
   if (!isValidSessionId(sessionId)) {
     return NextResponse.json({ error: "invalid sessionId" }, { status: 400 });
+  }
+  const releaseSlot = acquireSseSlot(req);
+  if (!releaseSlot) {
+    return new Response("too many concurrent streams", { status: 429 });
   }
   const encoder = new TextEncoder();
 
@@ -57,6 +62,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         unsub();
         clearInterval(ka);
         try { controller.close(); } catch { /* already closed */ }
+        try { releaseSlot(); } catch { /* idempotent */ }
       };
 
       req.signal.addEventListener("abort", close);
