@@ -180,7 +180,14 @@ function attachPty(ws: InstanceType<typeof WebSocket>, cwd: string) {
 
 async function main() {
   const dev = process.env.NODE_ENV !== "production";
-  const hostname = process.env.HOSTNAME || "0.0.0.0";
+  // Never use `process.env.HOSTNAME` for HTTP bind: on Windows (Git Bash,
+  // cmd, PowerShell) it is always the computer name. Node then listens on
+  // that host's resolved address, not loopback — `http://localhost:PORT`
+  // connection-refuses while `http://<PC-NAME>:PORT` works.
+  const hostname =
+    process.env.BRIDGE_HOST?.trim() ||
+    process.env.HOST?.trim() ||
+    "0.0.0.0";
   const port = parseInt(process.env.PORT ?? "3000", 10);
 
   const app = next({ dev, hostname, port, dir: process.cwd() });
