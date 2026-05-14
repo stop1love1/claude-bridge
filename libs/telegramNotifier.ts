@@ -25,13 +25,15 @@
  * so a flood of identical events from a flapping session can't bypass
  * the volume control.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { subscribeMetaAll, type MetaChangeEvent } from "./meta";
 import { subscribeAllPermissions, type PendingRequest } from "./permissionStore";
 import {
   getManifestTelegramSettings,
   type TelegramNotificationLevel,
 } from "./apps";
-import { getPublicBridgeUrl } from "./paths";
+import { getPublicBridgeUrl, SESSIONS_DIR } from "./paths";
 import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "./tasks";
 import {
   startTelegramCommandPoller,
@@ -379,6 +381,36 @@ function onMetaChange(ev: MetaChangeEvent): void {
     if (!shouldNotifyTransition(level, ev.run.role, next)) return;
     const dedupeKey = `meta:${ev.taskId}:${ev.sessionId}:${next}`;
     if (!shouldSend(dedupeKey)) return;
+
+    // Coordinator completion gets the rich summary treatment — instead
+    // of "✅ coordinator completed" + a separate stream of chat
+    // fragments, send ONE consolidated message containing the verdict
+    // and summary.md body. Falls back to the bland message only when
+    // summary.md is missing AND status is `failed` (the coordinator
+    // crashed before writing). Missing summary on `done` is suppressed
+    // entirely because the deferred-flip + nudge path
+    // (`coordinatorNudge` + `runLifecycle.succeedRun`) is mid-flight —
+    // a second turn will resume the coordinator and a real summary
+    // will land soon. Pinging "completed" now would mislead the
+    // operator into thinking the task is shippable when it isn't.
+    if (ev.run.role === "coordinator") {
+      const summary = readSummaryMd(ev.taskId);
+      if (summary) {
+        void sendTelegram(renderCoordinatorSummaryMessage({
+          taskId: ev.taskId,
+          summary,
+          status: next,
+        }));
+        return;
+      }
+      if (next === "done") {
+        // Premature exit — let the nudge cycle bring it back.
+        return;
+      }
+      // Fall through to bland "⚠️ coordinator failed" for failures
+      // with no summary on disk — the operator needs to know.
+    }
+
     const role = escapeMarkdownV2(ev.run.role);
     const repo = escapeMarkdownV2(ev.run.repo);
     const taskId = escapeMarkdownV2(ev.taskId);
@@ -410,6 +442,88 @@ function onMetaChange(ev: MetaChangeEvent): void {
     void sendTelegram(text);
     return;
   }
+}
+
+/**
+ * Read `sessions/<taskId>/summary.md` and return its trimmed content,
+ * or `null` if the file is missing / empty / unreadable. The coordinator
+ * is contracted to write this file on completion (per
+ * `prompts/coordinator-playbook.md` §5); when it lands we use it as the
+ * canonical Telegram message body so the operator gets the actual
+ * shipping summary instead of an opaque "✅ completed" ping.
+ */
+export function readSummaryMd(taskId: string): string | null {
+  const path = join(SESSIONS_DIR, taskId, "summary.md");
+  if (!existsSync(path)) return null;
+  try {
+    const content = readFileSync(path, "utf8").trim();
+    return content.length > 0 ? content : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Classify the verdict from the first line of summary.md. The four
+ * verdicts coordinators are contracted to emit are the canonical set
+ * (per coordinator-playbook §5 / `forwardChatImportantPatterns`); anything
+ * else falls back to a neutral icon so an off-script summary still gets
+ * delivered. Returns the icon + a human label for the header.
+ */
+export function classifyVerdict(firstLine: string): { icon: string; label: string } {
+  const upper = firstLine.toUpperCase();
+  if (upper.includes("READY FOR REVIEW")) {
+    return { icon: "🎉", label: "Ready for review" };
+  }
+  if (upper.includes("AWAITING DECISION")) {
+    return { icon: "❓", label: "Awaiting decision" };
+  }
+  if (upper.includes("BLOCKED")) {
+    return { icon: "🔴", label: "Blocked" };
+  }
+  if (upper.includes("PARTIAL")) {
+    return { icon: "🟠", label: "Partial" };
+  }
+  return { icon: "📌", label: "Summary" };
+}
+
+/**
+ * Compose the consolidated coordinator-done Telegram message: header
+ * with verdict icon + label + task id, then the summary body (escaped
+ * for MarkdownV2), capped at `MAX_TEXT - reserved` so the trailing
+ * "Open in bridge" link always lands cleanly. Failure-status `failed`
+ * with a summary present is rare (the coordinator usually doesn't get
+ * to write summary on a crash), but if it happens we honor the file —
+ * the operator gets the model's best-effort context.
+ */
+export function renderCoordinatorSummaryMessage(args: {
+  taskId: string;
+  summary: string;
+  status: "done" | "failed";
+}): string {
+  const lines = args.summary.split(/\r?\n/);
+  const firstLine = (lines[0] ?? "").trim();
+  const { icon, label } =
+    args.status === "failed"
+      ? { icon: "⚠️", label: "Coordinator failed" }
+      : classifyVerdict(firstLine);
+
+  const taskId = escapeMarkdownV2(args.taskId);
+  const headerLine = `${icon} *${escapeMarkdownV2(label)}* — task \`${taskId}\``;
+  const link = renderTaskLink(args.taskId);
+
+  // Reserve enough room for header + link + ellipsis so a long
+  // summary doesn't push the link off the truncation cliff in
+  // `sendViaBot`. 600 chars is a generous upper bound covering the
+  // worst-case escaped link URL + header.
+  const reserved = headerLine.length + link.length + 600;
+  const bodyCap = Math.max(500, MAX_TEXT - reserved);
+  const body = args.summary.length > bodyCap
+    ? args.summary.slice(0, bodyCap) + "\n…"
+    : args.summary;
+  const escapedBody = escapeMarkdownV2(body);
+
+  return `${headerLine}\n\n${escapedBody}${link}`;
 }
 
 function sectionIcon(section: string): string {

@@ -81,10 +81,25 @@ function escapeMarkdownV2(s: string): string {
 
 /**
  * Decide whether the role / repo combo is in scope for forwarding given
- * the current policy. Coordinator-only is the recommended default; "all"
- * fires for every spawned child. Quality-gate spawns (style-critic,
- * semantic-verifier) are filtered out under both policies because they're
- * rule-based judges, not human-readable narration.
+ * the current policy.
+ *
+ * Coordinator chat is filtered out of mid-stream forwarding at every
+ * policy level. Operators previously got one Telegram message per
+ * coordinator assistant turn — "I'll dispatch a planner", "Now I'll
+ * dispatch the coder", "Reading the playbook", etc. — which scrolled
+ * past the actually-useful final summary and left them confused about
+ * which message was the answer. The lifecycle notifier
+ * (`libs/telegramNotifier.onMetaChange`) now sends a single consolidated
+ * Telegram message containing the full `summary.md` body when the
+ * coordinator completes, so mid-stream coordinator narration is pure
+ * noise. `coordinator-only` therefore means "summary only, no chatter"
+ * in practice — every channel for coordinator output funnels through
+ * the lifecycle message.
+ *
+ * Children still forward under "all" (operator wants to see worker
+ * narration in real time). Quality-gate spawns (style-critic,
+ * semantic-verifier) are filtered out under every policy because
+ * they're rule-based judges, not human-readable narration.
  */
 function isInScope(
   role: string,
@@ -93,7 +108,11 @@ function isInScope(
   if (policy === "off") return false;
   // Quality gate spawns are noisy verdict-only LLMs; never forward.
   if (role === "style-critic" || role === "semantic-verifier") return false;
-  if (policy === "coordinator-only") return role === "coordinator";
+  // Coordinator goes through the consolidated summary path instead.
+  if (role === "coordinator") return false;
+  // `coordinator-only` mode now means "summary only" — children are
+  // suppressed too. Operators who want child narration should pick "all".
+  if (policy === "coordinator-only") return false;
   return true;
 }
 

@@ -956,7 +956,43 @@ export function wireRunLifecycle(
               (r.status === "queued" || r.status === "running"),
           );
 
-        if (!willRunPostExitGate && !isCoordWithActiveChildren) {
+        // Coordinator deferral #2 — summary.md missing. Even when no
+        // children are active at exit time, a coordinator that exited
+        // WITHOUT writing the contracted summary should not silently
+        // flip to `done` — the operator's Telegram + UI would say
+        // "completed" while the actual record is empty. Defer the
+        // flip; the nudge scheduled below resumes the coordinator so
+        // it gets a second turn to write the summary. Bounded by
+        // `SUMMARY_NUDGE_MAX_ATTEMPTS` inside `coordinatorNudge` so a
+        // model that genuinely can't comply still settles eventually.
+        //
+        // The lazy require is wrapped in its own try-catch so a failure
+        // loading `coordinatorNudge` (e.g. test environments that
+        // partial-mock the module graph) never blocks the legacy flip
+        // path — fall back to "summary is present" so the rest of the
+        // logic flips status normally.
+        const coordHadChildren =
+          run.role === "coordinator" &&
+          !!meta &&
+          meta.runs.some(
+            (r) => r.parentSessionId === sessionId && r.sessionId !== sessionId,
+          );
+        let isCoordPendingSummary = false;
+        if (run.role === "coordinator" && coordHadChildren) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const cn = require("./coordinatorNudge") as typeof import("./coordinatorNudge");
+            isCoordPendingSummary = cn.isSummaryMissing(taskId);
+          } catch (e) {
+            logWarn("lifecycle", "coordinatorNudge.isSummaryMissing unavailable; flipping coordinator without summary check", { tag, error: (e as Error).message });
+          }
+        }
+
+        if (
+          !willRunPostExitGate &&
+          !isCoordWithActiveChildren &&
+          !isCoordPendingSummary
+        ) {
           await updateRun(
             sessionsDir,
             sessionId,
@@ -971,6 +1007,25 @@ export function wireRunLifecycle(
       }
     } catch (e) {
       logError("lifecycle", "failed to mark run done", e, { tag });
+    }
+
+    // Belt-and-suspenders: schedule a nudge evaluation for the
+    // coordinator's own exit. The meta-event subscription in
+    // `coordinatorNudge.onMetaChange` already fires on a child terminal
+    // transition, but if every child already settled BEFORE the
+    // coordinator exited (common pattern: dispatch → wait → exit),
+    // no further transition arrives to drive a re-evaluation. Calling
+    // through the public scheduler here closes that gap. The scheduler
+    // is debounced + summary-aware, so re-firing is safe (no-op when
+    // summary already on disk).
+    if (finishedRun && finishedRun.role === "coordinator") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const cn = require("./coordinatorNudge") as typeof import("./coordinatorNudge");
+        cn.scheduleCoordinatorEvaluation(taskId, sessionId, "lifecycle-exit");
+      } catch (e) {
+        logError("lifecycle", "coordinator nudge scheduling failed", e, { tag });
+      }
     }
 
     // P2 — verify chain + commit gate. Wrapped in an async IIFE so the

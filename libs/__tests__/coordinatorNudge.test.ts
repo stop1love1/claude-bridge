@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   decideNudge,
   shouldFinalizeDeferredCoordinator,
@@ -151,6 +154,127 @@ describe("decideNudge", () => {
     if (decision.kind === "nudge") {
       expect(decision.children.map((c) => c.sessionId)).toEqual([CHILD_A_SID]);
     }
+  });
+});
+
+describe("decideNudge — summary-aware branches", () => {
+  it("skips when summary.md is already present (avoids burning a turn on a no-op nudge)", () => {
+    const decision = decideNudge({
+      parentSessionId: COORD_SID,
+      runs: [coordinator(), child(CHILD_A_SID, "done")],
+      isAlive: NEVER_ALIVE,
+      lastNudgeAt: null,
+      now: 1_000_000,
+      summaryMissing: false,
+    });
+    expect(decision).toEqual({ kind: "skip", reason: "summary already written" });
+  });
+
+  it("nudges when summaryMissing=true and all other conditions met", () => {
+    const decision = decideNudge({
+      parentSessionId: COORD_SID,
+      runs: [coordinator(), child(CHILD_A_SID, "done")],
+      isAlive: NEVER_ALIVE,
+      lastNudgeAt: null,
+      now: 1_000_000,
+      summaryMissing: true,
+      summaryNudgeAttempts: 0,
+    });
+    expect(decision.kind).toBe("nudge");
+  });
+
+  it("skips after SUMMARY_NUDGE_MAX_ATTEMPTS reached (prevents infinite resume loops)", () => {
+    const decision = decideNudge({
+      parentSessionId: COORD_SID,
+      runs: [coordinator(), child(CHILD_A_SID, "done")],
+      isAlive: NEVER_ALIVE,
+      lastNudgeAt: null,
+      now: 1_000_000,
+      summaryMissing: true,
+      summaryNudgeAttempts: 3, // == SUMMARY_NUDGE_MAX_ATTEMPTS
+    });
+    expect(decision).toEqual({
+      kind: "skip",
+      reason: "summary nudge attempts exhausted",
+    });
+  });
+
+  it("treats absent summaryMissing as `true` for back-compat with legacy callers", () => {
+    // Older tests / callers that don't thread the flag through must
+    // keep the original "always try to nudge once conditions are met"
+    // behavior so we don't silently regress a working bridge.
+    const decision = decideNudge({
+      parentSessionId: COORD_SID,
+      runs: [coordinator(), child(CHILD_A_SID, "done")],
+      isAlive: NEVER_ALIVE,
+      lastNudgeAt: null,
+      now: 1_000_000,
+    });
+    expect(decision.kind).toBe("nudge");
+  });
+});
+
+describe("isSummaryMissing", () => {
+  let tempSessionsRoot: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    // `isSummaryMissing` resolves the path through `SESSIONS_DIR`, which
+    // is evaluated at module load from `process.cwd()`. Chdir into a
+    // fresh temp dir THEN `vi.resetModules()` so the re-import re-runs
+    // `paths.ts` against the new cwd. Without the reset the module
+    // would stay pinned to the workspace root and the writes below
+    // would land in a path the function never looks at.
+    originalCwd = process.cwd();
+    tempSessionsRoot = mkdtempSync(join(tmpdir(), "bridge-summary-"));
+    process.chdir(tempSessionsRoot);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    vi.resetModules();
+    try {
+      rmSync(tempSessionsRoot, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  it("returns true when the file is missing", async () => {
+    const { isSummaryMissing } = await import("../coordinatorNudge");
+    expect(isSummaryMissing("t_99990101_001")).toBe(true);
+  });
+
+  it("returns true when the file exists but is empty", async () => {
+    const taskId = "t_99990101_002";
+    const dir = join(tempSessionsRoot, "sessions", taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "summary.md"), "", "utf8");
+    const { isSummaryMissing } = await import("../coordinatorNudge");
+    expect(isSummaryMissing(taskId)).toBe(true);
+  });
+
+  it("returns true when the file contains only whitespace", async () => {
+    const taskId = "t_99990101_003";
+    const dir = join(tempSessionsRoot, "sessions", taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "summary.md"), "   \n\t\n  ", "utf8");
+    const { isSummaryMissing } = await import("../coordinatorNudge");
+    expect(isSummaryMissing(taskId)).toBe(true);
+  });
+
+  it("returns false when the file has real content", async () => {
+    const taskId = "t_99990101_004";
+    const dir = join(tempSessionsRoot, "sessions", taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "summary.md"),
+      "READY FOR REVIEW — shipped foo",
+      "utf8",
+    );
+    const { isSummaryMissing } = await import("../coordinatorNudge");
+    expect(isSummaryMissing(taskId)).toBe(false);
   });
 });
 

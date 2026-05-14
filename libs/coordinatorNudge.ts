@@ -33,6 +33,7 @@
  *     fires from the same lifecycle exit handler can land its `queued`
  *     row before we see "all terminal"
  */
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   readMeta,
@@ -49,12 +50,52 @@ import { logError, logInfo } from "./log";
 
 const NUDGE_DEBOUNCE_MS = 5_000;
 const EVAL_DELAY_MS = 250;
+/**
+ * Cap how many times we'll re-nudge a coordinator that keeps exiting
+ * without writing summary.md. Without a cap, a model that genuinely
+ * can't write the file (e.g. context limit, persistent error) would
+ * loop forever every time the user's wake handler ticks. After this
+ * many failed nudges we let the coordinator's `running → done` flip
+ * land so the row stops looking stuck — the operator can re-dispatch
+ * by hand from the UI.
+ */
+const SUMMARY_NUDGE_MAX_ATTEMPTS = 3;
+
+/**
+ * Returns true iff `sessions/<taskId>/summary.md` is missing, empty,
+ * or contains only whitespace. The coordinator is contracted to write
+ * a final report into that file before exiting cleanly (see
+ * `prompts/coordinator-playbook.md` §5); when it's absent we treat the
+ * exit as "premature" and let the nudge path resume the session so the
+ * model gets a second chance to write the summary instead of the row
+ * silently flipping to `done` with no user-visible output.
+ */
+export function isSummaryMissing(taskId: string): boolean {
+  const path = join(SESSIONS_DIR, taskId, "summary.md");
+  if (!existsSync(path)) return true;
+  try {
+    return readFileSync(path, "utf8").trim().length === 0;
+  } catch {
+    // Read errors (permission, transient FS hiccup) — be conservative
+    // and treat as missing so we don't silently swallow the case where
+    // the file genuinely failed to write.
+    return true;
+  }
+}
 
 interface NudgeState {
   installed: boolean;
   unsubscribe: (() => void) | null;
   /** coordinator sessionId → epoch-ms of the last nudge we sent. */
   lastNudge: Map<string, number>;
+  /**
+   * coordinator sessionId → count of consecutive nudges that fired
+   * because `summary.md` was missing. Reset to 0 once a nudge lands on
+   * a coordinator that DID write the summary; bounded by
+   * `SUMMARY_NUDGE_MAX_ATTEMPTS` so a model that genuinely can't
+   * comply doesn't get hammered forever.
+   */
+  summaryNudgeAttempts: Map<string, number>;
 }
 
 const G = globalThis as unknown as { __bridgeCoordinatorNudge?: NudgeState };
@@ -62,6 +103,7 @@ const state: NudgeState = G.__bridgeCoordinatorNudge ?? {
   installed: false,
   unsubscribe: null,
   lastNudge: new Map(),
+  summaryNudgeAttempts: new Map(),
 };
 G.__bridgeCoordinatorNudge = state;
 
@@ -114,6 +156,22 @@ export function decideNudge(args: {
   lastNudgeAt: number | null;
   /** Now. Tests pass a fixed value for deterministic debounce assertions. */
   now: number;
+  /**
+   * Whether `summary.md` is currently missing/empty for this task.
+   * Optional for back-compat with existing callers; defaults to `true`
+   * (the legacy "always nudge once conditions are met" behavior). When
+   * the caller knows the file is present, pass `false` to skip the
+   * resume — re-nudging a coordinator that already shipped its summary
+   * just burns tokens producing noise the operator will discard.
+   */
+  summaryMissing?: boolean;
+  /**
+   * How many times we've already nudged THIS coordinator specifically
+   * because of a missing summary. Caps the resume loop so a model that
+   * genuinely can't write the file doesn't get hammered forever.
+   * Optional / defaults to 0.
+   */
+  summaryNudgeAttempts?: number;
 }): NudgeDecision {
   const coordinator = args.runs.find(
     (r) => r.sessionId === args.parentSessionId && r.role === "coordinator",
@@ -130,6 +188,20 @@ export function decideNudge(args: {
 
   if (args.isAlive(args.parentSessionId)) {
     return { kind: "skip", reason: "coordinator alive" };
+  }
+
+  // Default behavior preserved for tests + callers that don't yet
+  // thread the summary state through — treat absence as "missing"
+  // because the legacy nudge always fired when the rest of the gates
+  // passed. Callers (notably `evaluateAndNudge` below) read the file
+  // and pass the real value.
+  const summaryMissing = args.summaryMissing ?? true;
+  if (!summaryMissing) {
+    return { kind: "skip", reason: "summary already written" };
+  }
+  const attempts = args.summaryNudgeAttempts ?? 0;
+  if (attempts >= SUMMARY_NUDGE_MAX_ATTEMPTS) {
+    return { kind: "skip", reason: "summary nudge attempts exhausted" };
   }
 
   if (args.lastNudgeAt && args.now - args.lastNudgeAt < NUDGE_DEBOUNCE_MS) {
@@ -182,7 +254,11 @@ function buildNudgeMessage(args: {
   ].join("\n");
 }
 
-async function evaluateAndNudge(taskId: string, parentSessionId: string): Promise<void> {
+async function evaluateAndNudge(
+  taskId: string,
+  parentSessionId: string,
+  trigger = "child-exit",
+): Promise<void> {
   const sessionsDir = join(SESSIONS_DIR, taskId);
   const meta = readMeta(sessionsDir);
   if (!meta) return;
@@ -231,16 +307,30 @@ async function evaluateAndNudge(taskId: string, parentSessionId: string): Promis
   const metaAfter = readMeta(sessionsDir) ?? meta;
 
   const now = Date.now();
+  const summaryMissing = isSummaryMissing(taskId);
   const decision = decideNudge({
     parentSessionId,
     runs: metaAfter.runs,
     isAlive,
     lastNudgeAt: state.lastNudge.get(parentSessionId) ?? null,
     now,
+    summaryMissing,
+    summaryNudgeAttempts: state.summaryNudgeAttempts.get(parentSessionId) ?? 0,
   });
-  if (decision.kind !== "nudge") return;
+  if (decision.kind !== "nudge") {
+    // Coordinator finished cleanly with summary on disk — clear any
+    // counted attempts so a future task with the same coordinator
+    // sessionId (won't happen in practice, but the map is keyed by
+    // sessionId so it's safe to be tidy) starts fresh.
+    if (!summaryMissing) state.summaryNudgeAttempts.delete(parentSessionId);
+    return;
+  }
 
   state.lastNudge.set(parentSessionId, now);
+  state.summaryNudgeAttempts.set(
+    parentSessionId,
+    (state.summaryNudgeAttempts.get(parentSessionId) ?? 0) + 1,
+  );
 
   // Bound the debounce map so a long-running bridge with many
   // coordinators doesn't accumulate entries forever.
@@ -248,6 +338,16 @@ async function evaluateAndNudge(taskId: string, parentSessionId: string): Promis
     const cutoff = now - NUDGE_DEBOUNCE_MS * 4;
     for (const [k, t] of state.lastNudge) {
       if (t < cutoff) state.lastNudge.delete(k);
+    }
+  }
+  if (state.summaryNudgeAttempts.size > 256) {
+    // No timestamp on this counter — just drop the bottom half of
+    // entries when we're over cap. Eviction order doesn't matter:
+    // the counter is consulted on the next nudge and missing entries
+    // default to 0.
+    const keys = Array.from(state.summaryNudgeAttempts.keys());
+    for (const k of keys.slice(0, keys.length / 2)) {
+      state.summaryNudgeAttempts.delete(k);
     }
   }
 
@@ -263,10 +363,11 @@ async function evaluateAndNudge(taskId: string, parentSessionId: string): Promis
     });
     logInfo(
       "coordinator-nudge",
-      `nudged coordinator after ${decision.children.length} child(ren) settled`,
+      `nudged coordinator (${trigger}) — ${decision.children.length} child(ren) settled, summaryMissing=${summaryMissing}`,
       {
         taskId,
         coordinator: parentSessionId.slice(0, 8),
+        attempt: state.summaryNudgeAttempts.get(parentSessionId) ?? 0,
       },
     );
   } catch (e) {
@@ -278,9 +379,34 @@ async function evaluateAndNudge(taskId: string, parentSessionId: string): Promis
 }
 
 function onMetaChange(ev: MetaChangeEvent): void {
-  if (!isChildTerminalTransition(ev)) return;
-  const parentId = ev.run.parentSessionId;
-  if (!parentId) return;
+  // Two trigger sources:
+  //   (a) a child of THIS coordinator just hit a terminal state
+  //   (b) the coordinator itself just exited (transition to done/failed/stale)
+  //
+  // Without (b), a coordinator that exits AFTER every child has already
+  // settled would never get another transition to react to — no child
+  // would fire again, and the coordinator's own exit is filtered out of
+  // the child-terminal predicate. Fix: also schedule an evaluation when
+  // the coordinator's own row transitions to a terminal state. The
+  // evaluation logic itself (`evaluateAndNudge`) re-reads meta and
+  // makes the right call (resume vs. skip) based on summary.md
+  // presence + nudge-attempt budget.
+  if (ev.kind !== "transition" || !ev.run || !ev.sessionId) return;
+  if (!isTerminal(ev.run.status)) return;
+
+  let parentId: string | null = null;
+  let label: string;
+  if (ev.run.role === "coordinator") {
+    // Self-exit trigger — the coordinator IS the parent for this eval.
+    parentId = ev.sessionId;
+    label = "self-exit";
+  } else if (ev.run.parentSessionId) {
+    parentId = ev.run.parentSessionId;
+    label = "child-exit";
+  } else {
+    return;
+  }
+
   const taskId = ev.taskId;
   // Defer briefly so any synchronous retry-spawn fired from the same
   // lifecycle exit handler can land its `queued` row first. Without
@@ -289,7 +415,31 @@ function onMetaChange(ev: MetaChangeEvent): void {
   // then the retry would actually start running — coordinator gets
   // pinged for nothing.
   const t = setTimeout(() => {
-    void evaluateAndNudge(taskId, parentId);
+    void evaluateAndNudge(taskId, parentId, label);
+  }, EVAL_DELAY_MS);
+  if (typeof t === "object" && t !== null && "unref" in t) {
+    (t as { unref: () => void }).unref();
+  }
+}
+
+/**
+ * Public entry point for callers OUTSIDE the meta-event stream that
+ * want to re-evaluate a coordinator. Same shape as the internal
+ * scheduling — `EVAL_DELAY_MS` deferral preserved so an in-flight
+ * retry/spawn can land its row first.
+ *
+ * Used by `runLifecycle.succeedRun` to guarantee a nudge fires when
+ * the coordinator's own process exits, even in the edge case where no
+ * child transition will follow (all children already settled before
+ * the coordinator exited).
+ */
+export function scheduleCoordinatorEvaluation(
+  taskId: string,
+  parentSessionId: string,
+  label = "external",
+): void {
+  const t = setTimeout(() => {
+    void evaluateAndNudge(taskId, parentSessionId, label);
   }, EVAL_DELAY_MS);
   if (typeof t === "object" && t !== null && "unref" in t) {
     (t as { unref: () => void }).unref();
@@ -319,4 +469,5 @@ export function _resetCoordinatorNudgeForTest(): void {
   state.installed = false;
   state.unsubscribe = null;
   state.lastNudge.clear();
+  state.summaryNudgeAttempts.clear();
 }
