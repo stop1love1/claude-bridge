@@ -23,6 +23,7 @@ import {
   buildSystemPromptAppend,
   buildUserMessage,
 } from "@/libs/childPrompt";
+import { findNearDuplicateRole } from "@/libs/nearDuplicateRole";
 import { buildResumePrompt } from "@/libs/resumePrompt";
 import { loadHouseRules } from "@/libs/houseRules";
 import { topMemoryEntries } from "@/libs/memory";
@@ -411,6 +412,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   }
 
+  // Near-duplicate role detection (1b). When the coordinator POSTs
+  // `fixer-cashier` and a finished `fixer` already exists for the same
+  // (parent, repo), surface a warning in the response so the model sees
+  // it on its next turn and learns to use `mode:"resume"` instead. The
+  // spawn still proceeds — we can't know whether the variant role is
+  // genuinely a different area; we only flag the likely waste.
+  const nearDuplicate = !allowDuplicate
+    ? findNearDuplicateRole({
+        runs: meta.runs,
+        parentSessionId: parentSessionId ?? null,
+        repo,
+        role,
+      })
+    : null;
+
   // Decide whether to fan out N speculative siblings. Requires:
   //   - app.dispatch.speculative.enabled === true
   //   - role is in the configured roles set (default ["coder"])
@@ -754,21 +770,46 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   });
   } // end speculative for-loop
 
+  // Build the optional `warning` block once — same shape on both the
+  // single-spawn and speculative paths so the coordinator's parser
+  // doesn't have to care which path it hit.
+  const warningPayload = nearDuplicate
+    ? {
+        warning: {
+          kind: "near-duplicate-role",
+          existingSessionId: nearDuplicate.existing.sessionId,
+          existingRole: nearDuplicate.existing.role,
+          suggestedResume: {
+            mode: "resume",
+            role: nearDuplicate.existing.role,
+            repo,
+            priorSessionId: nearDuplicate.existing.sessionId,
+          },
+          message: nearDuplicate.reason,
+        },
+      }
+    : {};
+
+  if (warningPayload.warning) {
+    console.warn(
+      `[agents] near-duplicate role for task ${id}: spawned \`${role}\` while \`${nearDuplicate?.existing.role}\` (sid ${nearDuplicate?.existing.sessionId.slice(0, 8)}) was already a finished sibling on the same parent+repo`,
+    );
+  }
+
   // Single-spawn path: preserve the legacy response shape so existing
   // callers (coordinator playbook curl, scripts, tests) keep working.
   if (!speculative.enabled) {
     const only = spawned[0];
     return NextResponse.json(
-      autoDetected
-        ? {
-            sessionId: only.sessionId,
-            action: "spawned",
-            repo,
-            autoDetected: true,
-            reason: autoDetectReason,
-            score: autoDetectScore,
-          }
-        : { sessionId: only.sessionId, action: "spawned", repo },
+      {
+        sessionId: only.sessionId,
+        action: "spawned",
+        repo,
+        ...(autoDetected
+          ? { autoDetected: true, reason: autoDetectReason, score: autoDetectScore }
+          : {}),
+        ...warningPayload,
+      },
       { status: 201 },
     );
   }
@@ -790,6 +831,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       ...(autoDetected
         ? { autoDetected: true, reason: autoDetectReason, score: autoDetectScore }
         : {}),
+      ...warningPayload,
     },
     { status: 201 },
   );

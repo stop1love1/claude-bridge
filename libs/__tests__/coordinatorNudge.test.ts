@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { decideNudge } from "../coordinatorNudge";
+import {
+  decideNudge,
+  shouldFinalizeDeferredCoordinator,
+} from "../coordinatorNudge";
 import type { Run } from "../meta";
 
 const COORD_SID = "11111111-2222-3333-4444-555555555555";
@@ -150,3 +153,66 @@ describe("decideNudge", () => {
     }
   });
 });
+
+describe("shouldFinalizeDeferredCoordinator (2b deferred-DONE finalizer)", () => {
+  it("returns true when coordinator is `running`, process gone, all children terminal (deferred-DONE case)", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "done"),
+          child(CHILD_B_SID, "failed"),
+        ],
+        isAlive: NEVER_ALIVE,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when coordinator status is already `done` (no deferral happened)", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [coordinator({ status: "done" }), child(CHILD_A_SID, "done")],
+        isAlive: NEVER_ALIVE,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when coordinator process is still alive (running for real, not deferred)", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "done"),
+        ],
+        isAlive: ALWAYS_ALIVE,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when at least one child is still queued/running", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "running"),
+        ],
+        isAlive: NEVER_ALIVE,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when no coordinator row exists for the given parentSessionId", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [child(CHILD_A_SID, "done")],
+        isAlive: NEVER_ALIVE,
+      }),
+    ).toBe(false);
+  });
+});
+

@@ -934,7 +934,29 @@ export function wireRunLifecycle(
           app !== null &&
           run.role !== "coordinator" &&
           !vc.isAlreadyRetryRun(run.role);
-        if (!willRunPostExitGate) {
+
+        // 2b — coordinator orchestration deferral. When the coordinator's
+        // process exits cleanly but it has spawned children that are still
+        // queued/running, we DON'T flip status:done immediately. Without
+        // this, the badge flashes DONE while a child is visibly mid-task,
+        // confusing operators ("task is finished, but fixer-cashier is
+        // still running?"). The auto-nudge subscriber
+        // (`libs/coordinatorNudge.ts`) finalizes the flip when children
+        // settle — same trigger that resumes the coordinator on the next
+        // turn. Failure path (`failRun`) is intentionally NOT deferred:
+        // a crashed/killed coordinator is a real terminal state regardless
+        // of whether children are alive.
+        const isCoordWithActiveChildren =
+          run.role === "coordinator" &&
+          !!meta &&
+          meta.runs.some(
+            (r) =>
+              r.parentSessionId === sessionId &&
+              r.sessionId !== sessionId &&
+              (r.status === "queued" || r.status === "running"),
+          );
+
+        if (!willRunPostExitGate && !isCoordWithActiveChildren) {
           await updateRun(
             sessionsDir,
             sessionId,

@@ -85,7 +85,17 @@ When you DON'T dispatch a planner, the `## Shared plan` section is simply absent
 
 For `ui-tester`: the agent probes the dev URL first; on dead server it returns `NEEDS-DECISION` asking the user whether the bridge should auto-start the dev server. **Only authorize auto-start in the brief** when the user has explicitly picked that option (e.g. "the user authorized auto-start; spin up `<dev-cmd>`, run the test, then `KillShell` it before exiting").
 
-### Reusing an existing child (resume mode)
+### Reusing an existing child (resume mode) — **DEFAULT FOR FOLLOW-UPS**
+
+**Hard rule:** when this task already has a finished child for the same `(role, repo)` and you need ANY follow-up touching the same area, you MUST resume that child — not spawn a fresh one, not spawn one with a near-duplicate role label.
+
+> Anti-pattern caught in prod: coordinator finished a `fixer @ edusoft-lms` run, then for a follow-up dispatched `fixer-cashier @ edusoft-lms` as a fresh spawn. The new agent had to re-read every file, re-derive the codebase mental model, and burned 5× the tokens — all to do work the original `fixer` already had context for. The bridge's spawn API DOES NOT auto-redirect role-suffix variants to resume mode; the coordinator has to make the right call.
+>
+> The right call in that case was either:
+> - `mode:"resume"` with the SAME role `fixer` (the cashier work is just another fix in the same area), OR
+> - `mode:"resume"` with `priorSessionId:<original fixer's sid>` and the new role label `fixer-cashier` (if the relabel matters for the AgentTree visualization).
+>
+> Spawning fresh is only correct when (a) it's a different functional area the original child has zero context on, OR (b) you need parallel attempts (use `allowDuplicate: true`).
 
 When a child has already finished for the same `(role, repo)` in this task and you need a follow-up turn (small fix, address review feedback, refresh after upstream change), prefer **resume** over a fresh spawn:
 
@@ -104,6 +114,18 @@ Resume rules:
 - The child's transcript is preserved, so your follow-up brief should be **short** — 1-3 sentences referencing the prior turn ("the reviewer flagged X — fix it"). Don't restate the original task.
 - The bridge skips repo pre-warm and prepareBranch on resume (the worktree / branch is already set up from the original spawn).
 - If you want a fresh agent on the same role+repo (different angle, parallel attempt), use `allowDuplicate: true` instead of resume.
+
+**Decision matrix — fresh spawn vs resume:**
+
+| Situation                                                            | Action                                                                 |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Reviewer flagged issues in code from `coder @ X`                      | Resume `coder @ X` with the review findings — NOT spawn `fixer @ X`.   |
+| Adjacent fix in the SAME repo a prior `fixer` already touched         | Resume the prior `fixer` (same role) — NOT spawn `fixer-<area> @ X`.   |
+| Phased build / scope expansion                                        | Resume with `priorSessionId` + new role suffix (e.g. `coder-phase24`). |
+| Genuinely different functional area, no overlap with prior child      | Fresh spawn with a clearly distinct role.                              |
+| Parallel exploration (different angles on same role+repo)             | Fresh spawn with `allowDuplicate: true`.                               |
+
+**Bridge will warn you.** Starting a fresh spawn whose role looks like a near-duplicate (`fixer` already exists, you POST `fixer-cashier` / `fixer2` / `fixer-v2`) returns `201` with a `"warning"` field telling you which existing session you should have resumed. The spawn still proceeds (the bridge can't know if you genuinely meant a different area), but the warning means you should re-read this section before the next dispatch.
 
 **Resume across role relabels (`priorSessionId`).** If you want to continue the same child but show a different label in the AgentTree (e.g. iterate the original `coder` as `coder-phase24` for a phased build), pass the prior session id explicitly. The bridge resumes that exact session and rewrites the row's role to whatever you sent — no new agent, no fresh transcript:
 

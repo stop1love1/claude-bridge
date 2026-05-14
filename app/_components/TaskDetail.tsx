@@ -18,6 +18,7 @@ import {
 import { exportTaskMarkdown, downloadFile } from "@/libs/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
 import { StatusDot } from "./StatusDot";
+import { isCoordinatorOrchestrating } from "@/libs/client/coordinatorStatus";
 import { relativeTime, duration } from "@/libs/client/time";
 import { useToast } from "./Toasts";
 import { useConfirm } from "./ConfirmProvider";
@@ -331,6 +332,15 @@ function TaskDetailInner({
 
         {owner && (() => {
           const ownerBranch = branchByRepo[owner.repo] ?? null;
+          // Derived "orchestrating" state: coordinator's process exited
+          // but at least one child it spawned is still queued/running.
+          // Reads better than a literal "DONE" badge while children are
+          // visibly mid-task in the AgentTree below — see
+          // libs/client/coordinatorStatus.ts for the full rationale.
+          const orchestrating = isCoordinatorOrchestrating({
+            coordinator: owner,
+            runs,
+          });
           return (
             <>
               <h3 className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Owner</h3>
@@ -343,7 +353,7 @@ function TaskDetailInner({
                 }`}
               >
                 <Crown size={13} className="text-warning shrink-0" />
-                <StatusDot status={owner.status} />
+                <StatusDot status={owner.status} orchestrating={orchestrating} />
                 <span className="text-foreground font-semibold">coordinator</span>
                 <span className="text-fg-dim truncate">@ {owner.repo}</span>
                 {ownerBranch && (
@@ -361,7 +371,20 @@ function TaskDetailInner({
                 {duration(owner.startedAt, owner.endedAt) && (
                   <span className="text-fg-dim">· {duration(owner.startedAt, owner.endedAt)}</span>
                 )}
-                <span className="ml-auto text-fg-dim uppercase text-[10px]">{owner.status}</span>
+                {orchestrating ? (
+                  <span
+                    className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-warning/20 text-warning uppercase text-[9px] font-semibold tracking-wide"
+                    title={`coordinator process is ${owner.status}, but a spawned child is still active — auto-nudge will re-attach the coordinator when children settle`}
+                  >
+                    <span className="relative inline-flex h-1.5 w-1.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-60" />
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-current" />
+                    </span>
+                    Orchestrating
+                  </span>
+                ) : (
+                  <span className="ml-auto text-fg-dim uppercase text-[10px]">{owner.status}</span>
+                )}
               </Button>
             </>
           );

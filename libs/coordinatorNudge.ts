@@ -37,6 +37,7 @@ import { join } from "node:path";
 import {
   readMeta,
   subscribeMetaAll,
+  updateRun,
   type MetaChangeEvent,
   type Run,
   type RunStatus,
@@ -66,6 +67,31 @@ G.__bridgeCoordinatorNudge = state;
 
 function isTerminal(s: RunStatus): boolean {
   return s === "done" || s === "failed" || s === "stale";
+}
+
+/**
+ * Pure decision: should the deferred coordinator DONE flip happen now?
+ *
+ * Returns true iff the coordinator is in the deferred-`running`
+ * state from `runLifecycle.succeedRun` AND the conditions to finalize
+ * have been reached: process is gone, every child terminal.
+ */
+export function shouldFinalizeDeferredCoordinator(args: {
+  parentSessionId: string;
+  runs: Run[];
+  isAlive: (sessionId: string) => boolean;
+}): boolean {
+  const coord = args.runs.find(
+    (r) => r.sessionId === args.parentSessionId && r.role === "coordinator",
+  );
+  if (!coord || coord.status !== "running") return false;
+  if (args.isAlive(args.parentSessionId)) return false;
+  return args.runs.every(
+    (r) =>
+      r.sessionId === args.parentSessionId ||
+      r.parentSessionId !== args.parentSessionId ||
+      isTerminal(r.status),
+  );
 }
 
 /**
@@ -161,10 +187,53 @@ async function evaluateAndNudge(taskId: string, parentSessionId: string): Promis
   const meta = readMeta(sessionsDir);
   if (!meta) return;
 
+  // 2b — finalize the deferred coordinator status flip. When the
+  // coordinator's process exited cleanly but `wireRunLifecycle` left it
+  // as `running` because children were still active (see the
+  // `isCoordWithActiveChildren` branch in `runLifecycle.succeedRun`),
+  // this is the moment to honor the deferred flip: process is gone
+  // (`!isAlive`) AND every child has now reached a terminal state.
+  // Without this, the coordinator row would stay "running" forever
+  // when no further nudge / resume happens (e.g. all children finished
+  // before the coordinator exited its turn).
+  if (
+    shouldFinalizeDeferredCoordinator({
+      parentSessionId,
+      runs: meta.runs,
+      isAlive,
+    })
+  ) {
+    try {
+      await updateRun(
+        sessionsDir,
+        parentSessionId,
+        { status: "done", endedAt: new Date().toISOString() },
+        (r) => r.status === "running",
+      );
+      logInfo(
+        "coordinator-nudge",
+        "finalized deferred coordinator DONE flip (process exited, children settled)",
+        { taskId, coordinator: parentSessionId.slice(0, 8) },
+      );
+    } catch (e) {
+      logError("coordinator-nudge", "deferred-DONE flip failed", e, {
+        taskId,
+        coordinator: parentSessionId.slice(0, 8),
+      });
+    }
+  }
+
+  // Re-read meta after the potential flip so the nudge decision sees
+  // the latest coordinator status (otherwise decideNudge would still
+  // observe `running` and skip via the "coordinator alive" guard —
+  // wait, the guard checks `isAlive`, not status. But re-reading is
+  // cheap and keeps the next decision consistent if more flips land.)
+  const metaAfter = readMeta(sessionsDir) ?? meta;
+
   const now = Date.now();
   const decision = decideNudge({
     parentSessionId,
-    runs: meta.runs,
+    runs: metaAfter.runs,
     isAlive,
     lastNudgeAt: state.lastNudge.get(parentSessionId) ?? null,
     now,
