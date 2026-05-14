@@ -33,6 +33,14 @@ export async function register(): Promise<void> {
   const { ensureTelegramNotifier } = await import("./libs/telegramNotifier");
   ensureTelegramNotifier();
 
+  // Auto-nudge an idle coordinator when its children settle. Without
+  // this the coordinator has to poll meta.json on its own (or wait for
+  // its self-scheduled wakeup) — which is why "child finished, but
+  // coordinator never picks up unless I ping" was the recurring UX
+  // complaint pre-fix. Idempotent + HMR-safe (state lives on globalThis).
+  const { ensureCoordinatorNudge } = await import("./libs/coordinatorNudge");
+  ensureCoordinatorNudge();
+
   // Tunnel shutdown handlers live behind a dynamic import so the Node-
   // only `process.once` / `process.exit` calls stay invisible to the
   // Edge runtime static analyzer.

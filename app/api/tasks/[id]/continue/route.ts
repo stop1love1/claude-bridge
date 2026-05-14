@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
 import { getTask } from "@/libs/tasksStore";
 import { readMeta } from "@/libs/meta";
-import { resumeClaude } from "@/libs/spawn";
+import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
 import { spawnCoordinatorForTask } from "@/libs/coordinator";
 import { BRIDGE_ROOT, SESSIONS_DIR } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
@@ -40,7 +40,17 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         const message = `Continue from where you left off for bridge task ${id}. Read sessions/${id}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per prompts/coordinator-playbook.md §5. Otherwise re-orchestrate as needed.`;
         // Resumed coordinator runs unattended too — without bypass, the
         // first tool call hangs on a non-existent permission TTY.
-        resumeClaude(BRIDGE_ROOT, coordinatorRun.sessionId, message, { mode: "bypassPermissions" });
+        // resumeSessionWithLifecycle (vs raw resumeClaude) flips the run
+        // row done → running and wires the new process's exit so the UI
+        // doesn't show stale "DONE" while the coordinator is actively
+        // streaming a reply.
+        resumeSessionWithLifecycle({
+          cwd: BRIDGE_ROOT,
+          sessionId: coordinatorRun.sessionId,
+          message,
+          settings: { mode: "bypassPermissions" },
+          context: `coordinator-continue ${id}`,
+        });
         return NextResponse.json({ action: "resumed", sessionId: coordinatorRun.sessionId });
       }
 

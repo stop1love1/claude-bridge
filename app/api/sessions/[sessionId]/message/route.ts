@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRepoCwd } from "@/libs/repos";
 import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
-import { resumeClaude, spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/spawn";
+import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/spawn";
+import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
 import { projectDirFor } from "@/libs/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
 import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
@@ -81,8 +82,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // Treat that as a fresh session start instead of a resume — same
     // session id, but `claude --session-id <uuid>` initialises the file.
     const file = join(projectDirFor(cwd), `${sessionId}.jsonl`);
+    // resumeSessionWithLifecycle flips the owning task's run row
+    // done|failed → running and wires the new process's exit; for free
+    // chats with no owning task it falls through to a plain resumeClaude.
+    // The task re-open block further down (DONE → DOING) covers section
+    // state, but the run-row badge fix is what this helper buys us.
     const child = existsSync(file)
-      ? resumeClaude(cwd, sessionId, message, effectiveSettings, settingsPath)
+      ? resumeSessionWithLifecycle({
+          cwd,
+          sessionId,
+          message,
+          settings: effectiveSettings,
+          settingsPath,
+          context: `chat-resume ${sessionId.slice(0, 8)}`,
+        })
       : spawnFreeSession(cwd, message, effectiveSettings, settingsPath, sessionId).child;
     // Wait briefly so we can surface "binary not found / bad args /
     // immediate crash" cases as a real error instead of a silent 200.
