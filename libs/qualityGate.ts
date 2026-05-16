@@ -39,7 +39,6 @@ import {
   freeSessionSettingsPath,
   writeSessionSettings,
 } from "./permissionSettings";
-import { isAlreadyRetryRun } from "./verifyChain";
 import { SESSIONS_DIR } from "./paths";
 
 /** Cap how long any quality gate may run. 10 min matches the verify
@@ -137,13 +136,12 @@ export async function runAgentGate(
 ): Promise<AgentGateOutcome> {
   const sessionsDir = join(SESSIONS_DIR, opts.taskId);
 
-  // Skip retries / coordinator runs — gating a `-vretry` would
-  // re-fire the whole loop, and a coordinator never produces a diff
-  // we can judge.
-  if (
-    isAlreadyRetryRun(opts.finishedRun.role) ||
-    opts.finishedRun.role === "coordinator"
-  ) {
+  // Coordinator never produces a diff we can judge — skip.
+  // Retry runs are NOT skipped here; the whole point of letting the
+  // gates re-run is to confirm the fix actually addresses the issue.
+  // Runaway loop prevention lives in `checkEligibility` (per-gate
+  // budget + per-task ceiling) inside each gate's retry spawner.
+  if (opts.finishedRun.role === "coordinator") {
     return {
       kind: "skipped",
       reason: `role \`${opts.finishedRun.role}\` is exempt from agent quality gates`,

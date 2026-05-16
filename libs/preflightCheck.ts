@@ -21,7 +21,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Run } from "./meta";
 import { projectDirFor } from "./sessions";
-import { isAlreadyRetryRun } from "./verifyChain";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
 
@@ -120,7 +119,11 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
   const { finishedRun, appPath } = opts;
   const required = opts.minReadsBeforeEdit ?? DEFAULT_MIN_READS_BEFORE_EDIT;
 
-  if (isAlreadyRetryRun(finishedRun.role) || finishedRun.role === "coordinator") {
+  // Coordinator never edits source — skip. Retry runs are no longer
+  // skipped here; checking the agent re-read what it needed on the fix
+  // is exactly what preflight is for. Runaway loop prevention lives in
+  // `checkEligibility` inside `spawnPreflightRetry`.
+  if (finishedRun.role === "coordinator") {
     return {
       verdict: "skipped",
       reason: `role \`${finishedRun.role}\` is exempt from preflight`,

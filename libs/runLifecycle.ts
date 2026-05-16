@@ -148,10 +148,11 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, app } = ctx;
   const vc = loadVerifyChain();
   const verifyCfg = vc.verifyConfigOf(app);
+  // Retry runs are NOT skipped here — we want to re-verify the fix
+  // actually landed. Runaway loop prevention lives in `checkEligibility`
+  // (per-gate budget + per-task ceiling) inside `spawnVerifyRetry`.
   const willRunVerify =
-    app !== null &&
-    vc.hasAnyVerifyCommand(verifyCfg) &&
-    !vc.isAlreadyRetryRun(run.role);
+    app !== null && vc.hasAnyVerifyCommand(verifyCfg);
 
   if (!willRunVerify || !verifyCfg || !app) return "proceed";
 
@@ -252,8 +253,10 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
  */
 async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, app } = ctx;
-  const vcGuard = loadVerifyChain();
-  if (!app || vcGuard.isAlreadyRetryRun(run.role)) return "proceed";
+  if (!app) return "proceed";
+  // Retry runs are intentionally NOT skipped here — confirming the
+  // agent re-read what it needed on the fix is exactly what preflight is
+  // for. Runaway loop prevention lives in `checkEligibility`.
 
   const pf = loadPreflight();
   // Resolve repoCwd the same way `agents/route.ts` did at spawn time.
@@ -406,10 +409,12 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
  */
 async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, title, app } = ctx;
-  const vcGuard = loadVerifyChain();
-  if (!app || app.quality?.critic !== true || vcGuard.isAlreadyRetryRun(run.role)) {
+  if (!app || app.quality?.critic !== true) {
     return "proceed";
   }
+  // Retry runs intentionally NOT skipped — checking whether the fix
+  // matches house style is exactly the point. Runaway loop prevention
+  // lives in `checkEligibility` (per-gate + per-task ceiling).
 
   const sc = loadStyleCritic();
   let criticResult: RunStyleCritic | null = null;
@@ -484,10 +489,12 @@ async function runSemanticVerifierGate(
   ctx: PostExitContext,
 ): Promise<GateOutcome> {
   const { dir, tid, t, run, title, app } = ctx;
-  const vcGuard = loadVerifyChain();
-  if (!app || app.quality?.verifier !== true || vcGuard.isAlreadyRetryRun(run.role)) {
+  if (!app || app.quality?.verifier !== true) {
     return "proceed";
   }
+  // Retry runs intentionally NOT skipped — checking whether the fix
+  // actually satisfies the task body is exactly what semantic verifier
+  // is for. Runaway loop prevention lives in `checkEligibility`.
 
   const sv = loadSemanticVerifier();
   let semanticResult: RunSemanticVerifier | null = null;
@@ -924,16 +931,12 @@ export function wireRunLifecycle(
         // those branches can write status:done + their result in ONE
         // combined updateRun patch — avoids a read-modify-write race
         // and keeps the UI from flashing "done" while a -vretry /
-        // -cretry is still being decided. The verifier runs whenever
-        // we have an app entry and the role isn't already a retry, so
-        // that's the broader gate (a strict superset of "verify chain
-        // will run").
+        // -cretry is still being decided. Gates now run on retry runs
+        // too (budget-controlled re-verification), so defer for any
+        // non-coordinator child with a registered app.
         const app = getApp(run.repo);
-        const vc = loadVerifyChain();
         const willRunPostExitGate =
-          app !== null &&
-          run.role !== "coordinator" &&
-          !vc.isAlreadyRetryRun(run.role);
+          app !== null && run.role !== "coordinator";
 
         // 2b — coordinator orchestration deferral. When the coordinator's
         // process exits cleanly but it has spawned children that are still

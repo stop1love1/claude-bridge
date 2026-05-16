@@ -25,7 +25,6 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Run, type RunVerifier } from "./meta";
-import { isAlreadyRetryRun } from "./verifyChain";
 import { SESSIONS_DIR } from "./paths";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
@@ -236,10 +235,11 @@ function normPath(p: string): string {
 export async function runVerifier(opts: RunVerifierOptions): Promise<RunVerifier> {
   const start = Date.now();
 
-  // Skip retries / coordinator runs entirely — verifying a -vretry
-  // would re-fire the whole loop, and the coordinator never produces a
-  // child report at the same path.
-  if (isAlreadyRetryRun(opts.finishedRun.role) || opts.finishedRun.role === "coordinator") {
+  // Coordinator never produces a child report at the same path — skip.
+  // Retry runs are no longer skipped here; we want to verify the fix
+  // landed. Runaway loop prevention lives in `checkEligibility`
+  // (per-gate budget + per-task ceiling) inside `spawnClaimRetry`.
+  if (opts.finishedRun.role === "coordinator") {
     return {
       verdict: "skipped",
       reason: `role \`${opts.finishedRun.role}\` is exempt from claim-vs-diff verification`,
