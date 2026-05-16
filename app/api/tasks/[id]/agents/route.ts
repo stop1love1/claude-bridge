@@ -29,6 +29,7 @@ import { loadHouseRules } from "@/libs/houseRules";
 import { topMemoryEntries } from "@/libs/memory";
 import { loadPlaybook } from "@/libs/playbooks";
 import { loadSharedPlan } from "@/libs/sharedPlan";
+import { loadPeerNotes } from "@/libs/peerNotes";
 import { loadPinnedFiles } from "@/libs/pinnedFiles";
 import { ensureFreshSymbolIndex } from "@/libs/symbolStore";
 import { ensureFreshStyleFingerprint } from "@/libs/styleStore";
@@ -523,6 +524,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // instead of starting from scratch. Coordinator decides when to spawn
   // the planner; the bridge only flows the artifact downstream.
   const sharedPlan = loadSharedPlan(id);
+  // Cross-cutting observations earlier siblings appended to
+  // `sessions/<task>/notes.md`. Injected as `## Peer notes` so a
+  // later-spawning sibling sees what the earlier ones already
+  // discovered (contracts they chose, footguns they hit). Append-only;
+  // children are told in the report contract to add their own bullet.
+  const peerNotes = loadPeerNotes(id);
 
   // P3a — symbol index + style fingerprint + pinned files. All gated
   // on `app !== null` because they need the registered app's path. The
@@ -599,6 +606,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     memoryEntries,
     detectedScope,
     sharedPlan,
+    peerNotes,
   };
 
   // Prompt-cache split (opt-in via `BRIDGE_PROMPT_CACHE=1`). When on,

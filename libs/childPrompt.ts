@@ -133,6 +133,15 @@ export interface BuildChildPromptOpts {
    * re-dispatch, which lets it refine instead of starting over.
    */
   sharedPlan?: string | null;
+  /**
+   * Cross-cutting observations earlier siblings left for later ones on
+   * the same task — the contents of `sessions/<task-id>/notes.md`.
+   * Rendered as `## Peer notes` near the top of the wrapped prompt so
+   * a child reads them BEFORE diving into its own work, gets context
+   * from siblings already in flight, and can append its own
+   * observations for the next sibling. Null/empty = no notes yet.
+   */
+  peerNotes?: string | null;
 }
 
 const COORDINATOR_BODY_CAP = 16 * 1024;
@@ -351,6 +360,18 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     );
   }
 
+  const peerNotesTrimmed = (opts.peerNotes ?? "").trim();
+  if (peerNotesTrimmed.length > 0) {
+    lines.push(
+      "## Peer notes (from sibling agents)",
+      "",
+      "Other agents on this task have already left cross-cutting observations in `sessions/" + taskId + "/notes.md`. Read them before diving in — they may answer a question you're about to ask the codebase, flag a contract another sibling already chose, or warn you about a footgun. Append your OWN observations (one bullet per entry, prefixed with your role label) when you discover something a later sibling would benefit from. Don't edit or delete prior entries — append-only.",
+      "",
+      peerNotesTrimmed,
+      "",
+    );
+  }
+
   lines.push(
     "## Your role",
     "",
@@ -481,7 +502,9 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "Cross-repo deps (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks. If NEEDS-DECISION, flag the most blocking question.",
     "```",
     "",
-    "**End-of-turn:** (1) write the report file; (2) chat reply mirrors `## Summary`; (3) stop — no tool calls, no link re-POST, no status PATCH. Trailing tool calls render as noise; the lifecycle hook closes the run.",
+    "**Peer notes (cross-cutting observations for siblings):** if during your work you discover something a SIBLING agent on the same task would benefit from — a contract you chose, a footgun you hit, a file the task body didn't mention — append ONE bullet to `sessions/<task-id>/notes.md` (create the file if absent, never edit prior entries). Format: `- [<your-role>] <observation>`. Examples worth recording: \"API uses field `userId` not `user_id`, plan said the latter\", \"refunds page is in `apps/center/finance/refunds/` not `apps/lms/`\". Skip this when there's nothing genuinely cross-cutting — noise hurts later siblings more than silence does.",
+    "",
+    "**End-of-turn:** (1) write the report file; (2) optionally append a peer note; (3) chat reply mirrors `## Summary`; (4) stop — no tool calls, no link re-POST, no status PATCH. Trailing tool calls render as noise; the lifecycle hook closes the run.",
     "",
     "**Git is bridge-managed.** Do NOT run `git checkout` / `commit` / `push`. The bridge prepped the branch and will auto-commit/push on clean exit per app config. Duplicating races the lifecycle hook.",
     "",
@@ -709,6 +732,18 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     );
   }
 
+  const peerNotesTrimmed = (opts.peerNotes ?? "").trim();
+  if (peerNotesTrimmed.length > 0) {
+    lines.push(
+      "## Peer notes (from sibling agents)",
+      "",
+      "Other agents on this task have already left cross-cutting observations in `sessions/" + taskId + "/notes.md`. Read them before diving in — they may answer a question you're about to ask the codebase, flag a contract another sibling already chose, or warn you about a footgun. Append your OWN observations (one bullet per entry, prefixed with your role label) when you discover something a later sibling would benefit from. Don't edit or delete prior entries — append-only.",
+      "",
+      peerNotesTrimmed,
+      "",
+    );
+  }
+
   lines.push(
     "## Your role",
     "",
@@ -808,7 +843,9 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     "Cross-repo deps (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks. If NEEDS-DECISION, flag the most blocking question.",
     "```",
     "",
-    "**End-of-turn:** (1) write the report file; (2) chat reply mirrors `## Summary`; (3) stop — no tool calls, no link re-POST, no status PATCH. Trailing tool calls render as noise; the lifecycle hook closes the run.",
+    "**Peer notes (cross-cutting observations for siblings):** if during your work you discover something a SIBLING agent on the same task would benefit from — a contract you chose, a footgun you hit, a file the task body didn't mention — append ONE bullet to `sessions/<task-id>/notes.md` (create the file if absent, never edit prior entries). Format: `- [<your-role>] <observation>`. Examples worth recording: \"API uses field `userId` not `user_id`, plan said the latter\", \"refunds page is in `apps/center/finance/refunds/` not `apps/lms/`\". Skip this when there's nothing genuinely cross-cutting — noise hurts later siblings more than silence does.",
+    "",
+    "**End-of-turn:** (1) write the report file; (2) optionally append a peer note; (3) chat reply mirrors `## Summary`; (4) stop — no tool calls, no link re-POST, no status PATCH. Trailing tool calls render as noise; the lifecycle hook closes the run.",
     "",
     "**Git is bridge-managed.** Do NOT run `git checkout` / `commit` / `push`. The bridge prepped the branch and will auto-commit/push on clean exit per app config. Duplicating races the lifecycle hook.",
     "",

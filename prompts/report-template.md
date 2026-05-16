@@ -40,6 +40,8 @@ Concrete steps a human can run to confirm the work: a curl, a test command, a sc
 Anything the coordinator should know when aggregating: cross-repo dependencies surfaced (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks worth filing. If the verdict is `NEEDS-DECISION`, also note which question(s) are blocking the most work so the coordinator can prioritize.
 ```
 
-After writing the report, the child does NOT call any more tools. The last assistant message mirrors the report's `## Summary` section so the user sees it in the chat too.
+After writing the report, the child does NOT call any more tools (with ONE exception below).
+
+**Peer notes** — optional, append-only: if you discovered something a SIBLING agent on the same task would benefit from (a contract you chose, a footgun you hit, a file the task body didn't mention), append ONE bullet to `sessions/<task-id>/notes.md`. Format: `- [<your-role>] <observation>`. Create the file if missing; never edit or delete prior entries. Skip when there's nothing genuinely cross-cutting. Then the last assistant message mirrors the report's `## Summary` section so the user sees it in the chat too.
 
 **Git is bridge-managed.** Do NOT run `git checkout`, `git commit`, or `git push` yourself — the bridge's lifecycle hook handles branch setup before your spawn and (if the app is configured for it) auto-commit + auto-push after a clean exit. Just write the code and exit; the bridge moves the bytes. The `## Changed files` section above is enough audit trail.
