@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRepoCwd } from "@/libs/repos";
@@ -13,6 +14,51 @@ import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
 import { isValidAppName } from "@/libs/apps";
 import { scrubPaths, serverError } from "@/libs/errorResponse";
 import { ok } from "@/libs/apiResponse";
+import { isAlive } from "@/libs/sessionEvents";
+import {
+  dequeueMessage,
+  enqueueMessage,
+  queueLength,
+  type QueuedMessage,
+} from "@/libs/messageQueue";
+import { logError, logInfo } from "@/libs/log";
+
+/**
+ * Attach a one-shot exit listener that drains the next queued message
+ * (if any) by re-entering `resumeSessionWithLifecycle`. Recursive: the
+ * spawned child also gets a drain hook so a queue of N messages
+ * cleanly walks itself empty without per-step user action.
+ *
+ * Lives outside the request handler because it must outlive the HTTP
+ * response — the child is held by the spawnRegistry and survives long
+ * after we return 200 to the browser.
+ */
+function attachQueueDrain(child: ChildProcess, sessionId: string): void {
+  child.once("exit", () => {
+    const next = dequeueMessage(sessionId);
+    if (!next) return;
+    try {
+      const drained = resumeSessionWithLifecycle({
+        cwd: next.cwd,
+        sessionId,
+        message: next.message,
+        settings: next.settings,
+        settingsPath: next.settingsPath,
+        context: next.context ?? `chat-queued ${sessionId.slice(0, 8)}`,
+      });
+      // Chain the next drain — keeps the FIFO walking until empty.
+      attachQueueDrain(drained, sessionId);
+      logInfo(
+        "msg-queue",
+        `drained queued message for ${sessionId.slice(0, 8)} (${queueLength(sessionId)} still pending)`,
+      );
+    } catch (e) {
+      logError("msg-queue", "drain spawn failed", e, {
+        sessionId: sessionId.slice(0, 8),
+      });
+    }
+  });
+}
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +128,41 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // Treat that as a fresh session start instead of a resume — same
     // session id, but `claude --session-id <uuid>` initialises the file.
     const file = join(projectDirFor(cwd), `${sessionId}.jsonl`);
+
+    // ─── Queue path ────────────────────────────────────────────────
+    // If a claude process is currently alive for this sessionId, a
+    // second `--resume` would race the first — both write to the same
+    // .jsonl, the in-flight turn ends with a stop_sequence cut-off,
+    // and the user's previous request is silently dropped. Queue the
+    // payload instead; the active child's exit hook (attached below)
+    // will drain it via resumeSessionWithLifecycle. Free chats and
+    // tasks both go through this path — `isAlive` is the source of
+    // truth for "process exists right now".
+    if (existsSync(file) && isAlive(sessionId)) {
+      const queued: QueuedMessage = {
+        message,
+        cwd,
+        settings: effectiveSettings,
+        settingsPath,
+        context: `chat-queued ${sessionId.slice(0, 8)}`,
+        enqueuedAt: Date.now(),
+      };
+      const position = enqueueMessage(sessionId, queued);
+      logInfo(
+        "msg-queue",
+        `queued message for ${sessionId.slice(0, 8)} (position ${position})`,
+      );
+      return NextResponse.json(
+        {
+          sessionId,
+          queued: true,
+          position,
+        },
+        { status: 202 },
+      );
+    }
+
+    // ─── Spawn path ────────────────────────────────────────────────
     // resumeSessionWithLifecycle flips the owning task's run row
     // done|failed → running and wires the new process's exit; for free
     // chats with no owning task it falls through to a plain resumeClaude.
@@ -97,6 +178,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           context: `chat-resume ${sessionId.slice(0, 8)}`,
         })
       : spawnFreeSession(cwd, message, effectiveSettings, settingsPath, sessionId).child;
+
+    // Drain hook lives on the spawned child — when it exits, the next
+    // queued message (if any) re-enters resumeSessionWithLifecycle.
+    // Idempotent: nothing happens when the queue is empty at exit time.
+    attachQueueDrain(child, sessionId);
+
     // Wait briefly so we can surface "binary not found / bad args /
     // immediate crash" cases as a real error instead of a silent 200.
     // A healthy `claude -p --resume` runs for many seconds, so a 1.5s

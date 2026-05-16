@@ -67,7 +67,13 @@ export const api = {
     sessionId: string,
     body: { message: string; repo: string; settings?: ChatSettings },
   ) =>
-    req<{ sessionId: string }>(`/sessions/${sessionId}/message`, {
+    req<{
+      sessionId: string;
+      /** True when the message was queued behind an in-flight turn instead of spawned immediately. */
+      queued?: boolean;
+      /** 1-based position in the FIFO when `queued` is true. */
+      position?: number;
+    }>(`/sessions/${sessionId}/message`, {
       method: "POST",
       body: JSON.stringify(body),
     }),

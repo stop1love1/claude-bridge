@@ -100,6 +100,15 @@ function MessageComposerInner({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
+  /**
+   * Local mirror of the server-side message queue length. Bumped each
+   * time `api.sendMessage` returns `queued: true`, decremented when
+   * the in-flight turn flips idle (assumes the server drained one,
+   * which it does — first-in-first-out). Also reset to 0 on Stop
+   * because the kill route clears the queue server-side. Pure UX
+   * surface; doesn't affect submit behavior.
+   */
+  const [queuedCount, setQueuedCount] = useState(0);
   // Settings come from localStorage via `useSyncExternalStore` so the
   // SSR snapshot ({}) and the client snapshot (real prefs) align
   // through React's external-store machinery — no `useState +
@@ -157,11 +166,14 @@ function MessageComposerInner({
   // Stop the in-flight claude subprocess for this session. 404 ("no
   // live process") is benign — the run finished a moment ago and the
   // registry already cleaned up. Anything else is surfaced as a toast.
+  // Always reset the local queued counter — the kill route clears the
+  // server-side queue, so the badge would otherwise lie.
   const handleStop = useCallback(async () => {
     if (stopping) return;
     setStopping(true);
     try {
       await api.killSession(sessionId);
+      setQueuedCount(0);
     } catch (err) {
       const msg = (err as Error).message;
       if (!msg.includes("404")) toast("error", msg);
@@ -169,6 +181,21 @@ function MessageComposerInner({
       setStopping(false);
     }
   }, [sessionId, stopping, toast]);
+
+  // Decrement the queue badge when the in-flight turn flips idle: the
+  // server drains one queued message per exit, so each `isResponding`
+  // edge from true→false consumes exactly one slot. We can't observe
+  // the drain directly (it's a server-side child exit + spawn) but
+  // FIFO discipline + this edge detector keeps the badge in sync
+  // without any extra round trip. Hard floor at 0 — the counter is a
+  // hint, never authoritative.
+  const prevRespondingRef = useRef(isResponding);
+  useEffect(() => {
+    if (prevRespondingRef.current && !isResponding) {
+      setQueuedCount((n) => Math.max(0, n - 1));
+    }
+    prevRespondingRef.current = isResponding;
+  }, [isResponding]);
 
   const resize = useCallback(() => {
     const el = taRef.current;
@@ -296,11 +323,23 @@ function MessageComposerInner({
       const finalMsg = attachLines
         ? `${attachLines}\n\n${live}`.trim()
         : live;
-      await api.sendMessage(sessionId, { message: finalMsg, repo, settings });
+      const res = await api.sendMessage(sessionId, { message: finalMsg, repo, settings });
       lastSentRef.current = live;
       setDraft("");
       setAttachments([]);
       setInterim("");
+      if (res.queued) {
+        // Server queued behind an in-flight turn — surface the
+        // position so the user understands their message hasn't been
+        // dropped, just held until the current turn finishes.
+        setQueuedCount(res.position ?? (queuedCount + 1));
+        toast(
+          "info",
+          res.position && res.position > 1
+            ? `Queued (#${res.position}) — will send when current turn finishes`
+            : "Queued — will send when current turn finishes",
+        );
+      }
       onSent?.();
     } catch (err) {
       toast("error", (err as Error).message);
@@ -540,6 +579,14 @@ function MessageComposerInner({
               draft is empty AND something is in flight, which is the
               only time the user genuinely has no other action. */}
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {queuedCount > 0 && (
+              <span
+                className="inline-flex items-center h-5 px-1.5 rounded-md bg-secondary text-[10px] text-muted-foreground tabular-nums border border-border"
+                title={`${queuedCount} message${queuedCount === 1 ? "" : "s"} queued — will send when current turn finishes`}
+              >
+                {queuedCount} queued
+              </span>
+            )}
             <ChatSettingsMenu value={settings} onChange={setSettings} />
             {canSend || !isResponding ? (
               <button

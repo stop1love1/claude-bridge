@@ -6,6 +6,8 @@ import { SESSIONS_DIR } from "@/libs/paths";
 import { killChild } from "@/libs/spawnRegistry";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { ok } from "@/libs/apiResponse";
+import { clearQueue } from "@/libs/messageQueue";
+import { logInfo } from "@/libs/log";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,20 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
 
   const killed = killChild(sessionId);
+  // Stop = "abort everything I had pending here". Drop any messages
+  // the user queued behind the in-flight turn — keeping them would
+  // surprise the user (they hit Stop expecting silence; instead the
+  // queued message would fire moments later under a fresh resume).
+  // Always run, even if `killed` is false — the queue can hold
+  // entries while the session has just transitioned idle but the
+  // operator's intent is still "cancel pending work for this id".
+  const dropped = clearQueue(sessionId);
+  if (dropped > 0) {
+    logInfo(
+      "msg-queue",
+      `cleared ${dropped} queued message(s) on kill for ${sessionId.slice(0, 8)}`,
+    );
+  }
   if (!killed) {
     return NextResponse.json(
       { error: "no live process for this session" },
