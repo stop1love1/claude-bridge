@@ -323,7 +323,23 @@ const FILE = "meta.json";
  */
 export interface MetaChangeEvent {
   taskId: string;
-  kind: "spawned" | "transition" | "updated" | "writeMeta" | "retried" | "task-section";
+  kind:
+    | "spawned"
+    | "transition"
+    | "updated"
+    | "writeMeta"
+    | "retried"
+    | "task-section"
+    /**
+     * Coordinator wake-up scheduled: emitted by `coordinatorNudge`
+     * BEFORE the (potentially slow) `claude --resume` spawn so the UI
+     * can immediately show "resuming coordinator…" instead of waiting
+     * 30-60s for claude's first message to land. `sessionId` is the
+     * coordinator's session id; `run` is the coordinator row at the
+     * moment the nudge fired (status may still be `running` from the
+     * deferred flip).
+     */
+    | "coordinator-nudge";
   sessionId?: string;
   run?: Run;
   prevStatus?: RunStatus;
@@ -332,6 +348,12 @@ export interface MetaChangeEvent {
   nextSection?: TaskSection;
   taskTitle?: string;
   taskChecked?: boolean;
+  /**
+   * Free-form reason for `coordinator-nudge` events — e.g. "child-exit",
+   * "self-exit", "external". Lets the UI label the spinner ("Resuming
+   * coordinator (child-exit)…").
+   */
+  reason?: string;
 }
 
 interface MetaEvents {
@@ -487,6 +509,28 @@ export function emitRetried(taskId: string, retryRun: Run, retryOf: string): voi
  * Skip the call when `prevSection === nextSection` — no-op writes
  * (e.g. just renaming the title) shouldn't ping the notifier.
  */
+/**
+ * Fire a `coordinator-nudge` event when `coordinatorNudge.ts` is about
+ * to call `resumeSessionWithLifecycle`. Surfaces the wake-up
+ * immediately on the per-task SSE stream so the UI shows "resuming
+ * coordinator…" before claude --resume finishes its cold-start.
+ */
+export function emitCoordinatorNudge(args: {
+  taskId: string;
+  parentSessionId: string;
+  coordinatorRun: Run;
+  reason: string;
+}): void {
+  const dir = join(SESSIONS_DIR, args.taskId);
+  emit(dir, {
+    taskId: args.taskId,
+    kind: "coordinator-nudge",
+    sessionId: args.parentSessionId,
+    run: args.coordinatorRun,
+    reason: args.reason,
+  });
+}
+
 export function emitTaskSection(args: {
   taskId: string;
   prevSection: TaskSection;

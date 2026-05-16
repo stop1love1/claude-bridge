@@ -36,6 +36,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  emitCoordinatorNudge,
   readMeta,
   subscribeMetaAll,
   updateRun,
@@ -49,7 +50,15 @@ import { BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
 import { logError, logInfo, logWarn } from "./log";
 
 const NUDGE_DEBOUNCE_MS = 5_000;
-const EVAL_DELAY_MS = 250;
+/**
+ * Delay before evaluating after a child-terminal event. Originally 250
+ * ms — chosen to let a synchronous retry-spawn's `appendRun` land its
+ * `queued` row first (so `decideNudge` sees "still running" instead of
+ * "all terminal" and false-fires). 100 ms is plenty for that since
+ * `appendRun` is a single locked write, and the shorter delay makes
+ * coordinator wake-up feel snappier from the operator's perspective.
+ */
+const EVAL_DELAY_MS = 100;
 /**
  * Cap how many times we'll re-nudge a coordinator that keeps exiting
  * without writing summary.md. Without a cap, a model that genuinely
@@ -538,6 +547,24 @@ async function evaluateAndNudge(
     for (const k of keys.slice(0, keys.length / 2)) {
       state.summaryNudgeAttempts.delete(k);
     }
+  }
+
+  // Emit BEFORE the slow `claude --resume` so the UI surfaces a
+  // "resuming coordinator…" indicator immediately. Without this, the
+  // operator stares at a screen with no visible change for the
+  // 10-60s of claude's cold-start before the first assistant message
+  // lands. The coordinator row's existing `running` state alone is
+  // not enough — it was already `running` from the deferred flip.
+  const coordRun = metaAfter.runs.find(
+    (r) => r.sessionId === parentSessionId,
+  );
+  if (coordRun) {
+    emitCoordinatorNudge({
+      taskId,
+      parentSessionId,
+      coordinatorRun: coordRun,
+      reason: trigger,
+    });
   }
 
   try {
