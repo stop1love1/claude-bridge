@@ -569,6 +569,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         index: variantIndex,
         total: speculative.n,
         groupId: speculative.groupId ?? "",
+        // Per-app custom angles, falling back to the built-in defaults
+        // inside the renderer. Empty / undefined → built-ins are used,
+        // preserving back-compat for apps without an `angles` override.
+        angles: app?.dispatch?.speculative?.angles,
       }) + "\n\n" + prompt
     : prompt;
 
@@ -890,32 +894,42 @@ function decideSpeculative(args: {
  * each sibling toward a different angle so the bridge gets divergent
  * attempts to pick from instead of N near-identical clones.
  */
-function renderSpeculativeVariantPrefix(args: {
+/** Built-in default angles used when the app didn't supply its own. */
+const DEFAULT_SPECULATIVE_ANGLES: ReadonlyArray<{ label: string; nudge: string }> = [
+  {
+    label: "Conservative",
+    nudge: "Prefer the smallest, most surgical change that satisfies the brief. Touch the fewest files. Reuse existing helpers without refactoring them.",
+  },
+  {
+    label: "Refactor-friendly",
+    nudge: "If the brief reveals a pattern that's already off in this codebase, fix it as part of the work — within the scope of the task. Extracting a helper or renaming a misleading symbol is in-scope here.",
+  },
+  {
+    label: "Defensive",
+    nudge: "Treat every input boundary as untrusted. Add explicit validation + error paths even when the immediate caller looks safe. Lean toward fewer assumptions about pre-conditions.",
+  },
+  {
+    label: "Idiomatic",
+    nudge: "Match this codebase's existing patterns even when there's a textbook 'cleaner' approach. The team's conventions outrank generic best-practices for this task.",
+  },
+];
+
+export function renderSpeculativeVariantPrefix(args: {
   index: number;
   total: number;
   groupId: string;
+  /**
+   * Per-app angles override. Empty / undefined → built-in defaults.
+   * The renderer rotates through whichever list is in use by
+   * `index % len`, so providing < total angles is fine (siblings
+   * past `len` cycle back to the start, mirroring built-in behavior).
+   */
+  angles?: ReadonlyArray<{ label: string; nudge: string }>;
 }): string {
-  // Variant angles. We rotate through these by `index % len`. Adding
-  // more here is a no-op — only the first `total` are visible per
-  // dispatch and each sibling still sees the same full brief.
-  const angles: ReadonlyArray<{ label: string; nudge: string }> = [
-    {
-      label: "Conservative",
-      nudge: "Prefer the smallest, most surgical change that satisfies the brief. Touch the fewest files. Reuse existing helpers without refactoring them.",
-    },
-    {
-      label: "Refactor-friendly",
-      nudge: "If the brief reveals a pattern that's already off in this codebase, fix it as part of the work — within the scope of the task. Extracting a helper or renaming a misleading symbol is in-scope here.",
-    },
-    {
-      label: "Defensive",
-      nudge: "Treat every input boundary as untrusted. Add explicit validation + error paths even when the immediate caller looks safe. Lean toward fewer assumptions about pre-conditions.",
-    },
-    {
-      label: "Idiomatic",
-      nudge: "Match this codebase's existing patterns even when there's a textbook 'cleaner' approach. The team's conventions outrank generic best-practices for this task.",
-    },
-  ];
+  const angles =
+    args.angles && args.angles.length > 0
+      ? args.angles
+      : DEFAULT_SPECULATIVE_ANGLES;
   const angle = angles[args.index % angles.length];
   return [
     "## Speculative variant",
