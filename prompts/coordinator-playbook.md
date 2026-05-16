@@ -1,14 +1,14 @@
 # Coordinator playbook (static reference)
 
-This file is the verbose manual for the bridge coordinator. The coordinator's *kernel* prompt (`prompts/coordinator.md`) is short and substitutes the per-task variables (task id, session id, bridge URL, bridge folder); this playbook is static and shared across every task.
+Verbose manual for the bridge coordinator. The kernel prompt (`prompts/coordinator.md`) is short and substitutes per-task variables; this file is shared across every task.
 
-**Variable convention:** wherever you see `{{TASK_ID}}`, `{{SESSION_ID}}`, `{{BRIDGE_URL}}`, `{{BRIDGE_FOLDER}}`, `{{EXAMPLE_REPO}}` in the snippets below, substitute the literal values shown at the top of the kernel prompt — they are NOT auto-substituted in this file.
+**Variables:** wherever you see `{{TASK_ID}}`, `{{SESSION_ID}}`, `{{BRIDGE_URL}}`, `{{BRIDGE_FOLDER}}`, `{{EXAMPLE_REPO}}` in snippets, substitute the literal values shown at the top of the kernel prompt — they are NOT auto-substituted here.
 
-When to read this playbook:
-- Before your first spawn — to pick the right team shape from §2 (recipe table, rubric).
-- When you hit a 4xx / 5xx from the spawn API — §3 explains every error code.
-- When a child returns `NEEDS-DECISION`, `NEEDS-OTHER-SIDE`, or `BLOCKED` — §4 has the procedure.
-- When you're aggregating reports and deciding the task's final state — §5.
+**When to read:**
+- §2 before your first spawn — team-shape rubric.
+- §3 when you hit a 4xx / 5xx from `/agents` — error codes.
+- §4 when a child returns `NEEDS-DECISION`, `NEEDS-OTHER-SIDE`, or `BLOCKED`.
+- §5 when aggregating reports + deciding the final state.
 
 ---
 
@@ -16,88 +16,70 @@ When to read this playbook:
 
 Before deciding which repo to dispatch to:
 
-- The bridge prepends a `## Repo profiles` (or `## Detected scope`) block to your kernel prompt — auto-derived stack / features / entrypoints for every declared sibling. Read it first. If profiles look wrong or stale, force a refresh via `POST {{BRIDGE_URL}}/api/repos/profiles/refresh` (optional body `{ "repo": "<name>" }` for a single repo).
-- The apps roster lives in `~/.claude/bridge.json` (per-machine, edited via the bridge UI's `/apps` page). The repo-profiles block already lists every sibling — you don't need to read `bridge.json` directly. There's no hardcoded FE/BE distinction; pick by the repo's auto-derived stack/features.
-- `sessions/{{TASK_ID}}/meta.json` → the canonical task record, including `taskBody` and the running list of agent runs. Read with `cat sessions/{{TASK_ID}}/meta.json` (or `GET {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/meta`). Extract a single field with `jq -r .taskBody sessions/{{TASK_ID}}/meta.json` when you only need the body. Do NOT read or write `prompts/tasks.md` — it's stale documentation, not data.
-- `prompts/decisions.md` / `prompts/questions.md` / `prompts/bugs.md` → whatever the task body references.
+- The bridge prepends `## Detected scope` (auto-derived stack / features / entrypoints) to your kernel prompt — read it first. When the task matches a known pattern, a `## Suggested team` block follows it (e.g. UX work on an FE-stack repo suggests `coder → ui-tester`). Both are HINTS, not directives — overrule when the task body genuinely calls for a different shape.
+- If profiles look stale, refresh via `POST {{BRIDGE_URL}}/api/repos/profiles/refresh` (optional body `{ "repo": "<name>" }`).
+- `sessions/{{TASK_ID}}/meta.json` is the canonical task record. Read with `cat sessions/{{TASK_ID}}/meta.json` or `jq -r .taskBody sessions/{{TASK_ID}}/meta.json` for one field. **Don't read or write `prompts/tasks.md`** — it's stale documentation.
+- `prompts/decisions.md` / `prompts/questions.md` / `prompts/bugs.md` — whatever the task body references.
 
 ---
 
-## §2 · Plan the team (rubric + recipes)
+## §2 · Plan the team
 
-Three questions in order. The kernel has the compact recipe table; this section is the rubric for filling it in.
+Three questions, in order.
 
-### Which repo(s) is this touching?
+### Which repo(s)?
 
-Pick from `## Repo profiles` — exactly 1 in the simple case, multiple when the work genuinely spans them.
+Pick from `## Repo profiles` (1 in the simple case, multiple when work genuinely spans them).
 
-- Verb-only keywords ("review", "fix", "refactor", "build", "add", "update") tell you NOTHING about the repo — look at the **noun** the verb operates on.
-- User-facing terms (UI, screen, page, form, modal, button) → a frontend-stack repo (`next` / `react` / `vue` / `tailwindcss`).
-- Server-shaped terms (endpoint, controller, route, migration, entity, schema, JWT, DB, Prisma) → a backend-stack repo (`nestjs` / `express` / `prisma` / `typeorm`).
-- Cross-cutting (schema change, feature spanning UI + API) → both, dispatch in dependency order (producer first, consumer second).
-- Bridge-internal (orchestrator behaviour, bridge UI, `meta.json`, the prompts in `prompts/`) → spawn a child in `cwd=../{{BRIDGE_FOLDER}}`. You still don't edit source.
+- Verb-only keywords ("review", "fix", "refactor", "build", "add") tell you NOTHING — look at the **noun**.
+- User-facing terms (UI, screen, page, form, modal, button) → frontend-stack repo.
+- Server-shaped terms (endpoint, controller, route, migration, JWT, Prisma) → backend-stack repo.
+- Cross-cutting (schema change spanning UI + API) → both, dispatch producer first.
+- Bridge-internal (orchestrator, bridge UI, `meta.json`, `prompts/`) → child with `cwd=../{{BRIDGE_FOLDER}}`.
 
-### How big is the work?
+### How big?
 
-- **XS** — config tweak, typo, single-line fix.
-- **S** — single endpoint, single component, isolated bug.
-- **M** — feature touching a handful of files, no design ambiguity.
-- **L** — multi-file change requiring design thought; surveyor → coder.
-- **XL** — split into multiple tasks. Stop and tell the user to split via the UI; do not dispatch.
+XS (config tweak) · S (single endpoint/component) · M (handful of files, no design ambiguity) · L (multi-file, design thought required) · XL (split — stop and tell the user, don't dispatch).
 
 ### What team shape?
 
-No fixed pipeline. Pick from the table; combine when the task genuinely needs it. Role names are free-form noun-phrases — two agents on one task shouldn't share a role name if their jobs differ.
+| Verb / shape | Team | Notes |
+|---|---|---|
+| review module X | 1 `reviewer` (read-only) | Verdict + issues with file:line |
+| add endpoint Y | `coder` (→ optional `reviewer`) | Reviewer only when diff is non-trivial |
+| fix bug Z | 1 `fixer` | Auto-retry covers one follow-up |
+| refactor / migrate | `surveyor` → `coder` | Sequential, never combined |
+| feature spanning UI + API | `planner` → `api-builder` → `ui-builder` (→ optional cross-repo `reviewer`) | Bridge auto-injects planner's `plan.md` into every later child's prompt |
+| L-size feature in one repo | `planner` → `coder` (→ optional `reviewer`) | Planner is cheap insurance against contract drift |
+| **UX/UI work on FE repo** | **`coder` → `ui-tester`** | **Default when `## Suggested team` block is present.** Tester drives the rendered UI in Playwright MCP — catches "button is dead" / "modal never opens" that typecheck won't. If tester finds bugs, follow with a `fixer` whose brief embeds the tester's findings. Never combine test + fix. |
+| research / audit | 1 `researcher` (read-only) | |
+| XL | none — split the task | Stop and tell the user |
 
-| Verb / shape                      | Team                                                              | Notes |
-| --------------------------------- | ----------------------------------------------------------------- | --- |
-| review module X                   | 1 `reviewer` (read-only)                                          | `## Verdict` (ship / needs-rework / blocked) + issues w/ file:line |
-| add / build endpoint Y            | `coder` → optional `reviewer`                                      | reviewer only when diff is non-trivial |
-| fix bug Z                         | 1 `fixer`                                                         | auto-retry covers one follow-up |
-| refactor / migrate                | `surveyor` (plan) → `coder` (execute)                             | sequential, never combine in one prompt |
-| feature spanning UI + API         | `planner` → `api-builder` → `ui-builder` → optional cross-repo `reviewer` | dispatch planner first; the bridge auto-injects its `plan.md` into every later child's prompt |
-| L-size feature in one repo        | `planner` → `coder` (→ optional `reviewer`)                       | planner is cheap insurance against contract drift mid-implementation |
-| research / audit                  | 1 `researcher` (read-only)                                        | |
-| test the UI / verify in browser   | 1 `ui-tester`                                                     | playbook `prompts/playbooks/ui-tester.md` — Playwright MCP, no code edits, `NEEDS-DECISION` on dead dev server. If bugs found, follow with a `fixer` whose brief embeds the tester's findings. Never combine test + fix. |
-| XL                                | none — split the task                                             | stop and tell the user |
+`devops` is reserved — bridge auto-spawns it post-success when `git.integrationMode === "pull-request"`. Don't include it in your team plan; don't call `gh` / `glab`.
 
-The **`devops`** role is reserved — bridge auto-spawns it post-success when the app's `git.integrationMode === "pull-request"`. **Do not include `devops` in your team plan**, do not call `gh` / `glab` yourself.
+### Planner-first decision rubric
 
-### When to spawn a `planner` first
+| Task shape | Planner first? |
+|---|---|
+| XS / S (single-line fix, single endpoint, isolated bug, single component) | **No** — overhead. Just dispatch the worker. |
+| M, single repo, no cross-repo contract | **No** by default. Add a planner only if the task body itself contains design ambiguity. |
+| M, multi-repo OR introduces a new shared contract | **Yes** — pins the contract once so BE and FE agree before they code. |
+| L (multi-file, design thought) — single or multi-repo | **Yes** — alignment cost amortized by the multi-file follow-up. |
+| Refactor / migrate | `surveyor` for in-repo, `planner` when crossing repos or shared contracts. |
+| `research` / `audit` / `ui-tester` | **No** — those roles ARE the analysis. |
+| `fix bug Z` triggered by a `ui-tester` finding | **No** — the tester's report IS the plan. |
 
-The `planner` role is your alignment lever for tasks where multiple agents would otherwise invent inconsistent contracts in parallel. It is **read-only** — it produces `sessions/<task-id>/plan.md` (a shared cross-repo breakdown + contract list) and a standard report; it does NOT write production code. Once the planner finishes, the bridge auto-injects `plan.md` into the prompt of every subsequent child as `## Shared plan (from planner)`, so the next coders all read the same source of truth — no need for you to copy-paste it into briefs.
+When you DO spawn a planner: spawn it alone, wait for exit, read its report, then dispatch the rest in dependency order. If planner returns `NEEDS-DECISION`, follow §4 — do NOT spawn downstream coders before the user answers.
 
-Use this rubric (in order — first match wins):
+### Reuse existing child (resume) — DEFAULT FOR FOLLOW-UPS
 
-| Task shape                                                                                  | Planner first? |
-| ------------------------------------------------------------------------------------------- | -------------- |
-| **XS / S** (single-line fix, single endpoint, isolated bug, single component)               | **No** — planner is overhead for trivial work, just dispatch the `coder`/`fixer`. |
-| **M, single repo, no cross-repo contract**                                                  | **No** by default; the playbook + repo profile are enough. Add a planner only if the task body itself contains design ambiguity ("we should figure out how to…"). |
-| **M, multi-repo OR introduces a new shared contract** (new endpoint UI consumes, new schema field FE reads, new event emitted)  | **Yes** — planner pins the contract once so BE and FE agree before they code. |
-| **L** (multi-file change, design thought required) — single OR multi repo                   | **Yes** — alignment cost is amortized by the multi-file follow-up. |
-| **Refactor / migrate**                                                                       | Use `surveyor` (existing recipe) for in-repo refactors. Use `planner` when the refactor crosses repos OR changes a shared contract. |
-| **`research` / `audit` / `ui-tester`**                                                       | **No** — those roles ARE the analysis; a planner before them is recursion. |
-| **`fix bug Z` triggered by a `ui-tester` finding**                                           | **No** — the tester's report is the plan. Spawn the `fixer` directly with the tester's findings in the brief. |
+**Hard rule:** when this task already has a finished child for the same `(role, repo)` and you need ANY follow-up touching the same area, you MUST resume — not spawn fresh, not spawn a near-duplicate role label. (Real-world miss: coordinator finished `fixer @ X` then spawned `fixer-cashier @ X` fresh — burned 5× tokens to re-derive context the original already had.)
 
-When you DO dispatch a planner: spawn it alone, wait for it to exit, read its report, then dispatch the rest of the team in dependency order (typically backend / contract producer first). If the planner returns `NEEDS-DECISION`, follow §4 — escalate to the user, do NOT try to answer the questions yourself, do NOT spawn the downstream coders before the user answers.
+The right calls in that situation:
+- `mode:"resume"` with the SAME role (cashier work is just another fix in the same area), OR
+- `mode:"resume"` + `priorSessionId:<original sid>` + new role label `fixer-cashier` (if the relabel matters for AgentTree).
 
-When you DON'T dispatch a planner, the `## Shared plan` section is simply absent from each child's prompt — the existing flow is unchanged. Backward-compatible by default; opt-in by team-shape.
-
-For `ui-tester`: the agent probes the dev URL first; on dead server it returns `NEEDS-DECISION` asking the user whether the bridge should auto-start the dev server. **Only authorize auto-start in the brief** when the user has explicitly picked that option (e.g. "the user authorized auto-start; spin up `<dev-cmd>`, run the test, then `KillShell` it before exiting").
-
-### Reusing an existing child (resume mode) — **DEFAULT FOR FOLLOW-UPS**
-
-**Hard rule:** when this task already has a finished child for the same `(role, repo)` and you need ANY follow-up touching the same area, you MUST resume that child — not spawn a fresh one, not spawn one with a near-duplicate role label.
-
-> Anti-pattern caught in prod: coordinator finished a `fixer @ edusoft-lms` run, then for a follow-up dispatched `fixer-cashier @ edusoft-lms` as a fresh spawn. The new agent had to re-read every file, re-derive the codebase mental model, and burned 5× the tokens — all to do work the original `fixer` already had context for. The bridge's spawn API DOES NOT auto-redirect role-suffix variants to resume mode; the coordinator has to make the right call.
->
-> The right call in that case was either:
-> - `mode:"resume"` with the SAME role `fixer` (the cashier work is just another fix in the same area), OR
-> - `mode:"resume"` with `priorSessionId:<original fixer's sid>` and the new role label `fixer-cashier` (if the relabel matters for the AgentTree visualization).
->
-> Spawning fresh is only correct when (a) it's a different functional area the original child has zero context on, OR (b) you need parallel attempts (use `allowDuplicate: true`).
-
-When a child has already finished for the same `(role, repo)` in this task and you need a follow-up turn (small fix, address review feedback, refresh after upstream change), prefer **resume** over a fresh spawn:
+Fresh spawn is only correct when (a) different functional area with zero context overlap, OR (b) parallel attempts via `allowDuplicate: true`.
 
 ```bash
 curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
@@ -106,45 +88,29 @@ curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
               --arg prompt "<short follow-up brief — context is preserved>" \
               --arg parent '{{SESSION_ID}}' \
               '{role:$role, repo:$repo, prompt:$prompt, parentSessionId:$parent, mode:"resume"}')"
-# → {"sessionId":"<same uuid as before>","action":"resumed"}
 ```
 
-Resume rules:
-- Default lookup is by `(parentSessionId, role, repo)` — only valid when one completed run (`status: "done"` or `"failed"`) matches that triple.
-- The child's transcript is preserved, so your follow-up brief should be **short** — 1-3 sentences referencing the prior turn ("the reviewer flagged X — fix it"). Don't restate the original task.
-- The bridge skips repo pre-warm and prepareBranch on resume (the worktree / branch is already set up from the original spawn).
-- If you want a fresh agent on the same role+repo (different angle, parallel attempt), use `allowDuplicate: true` instead of resume.
+**Resume rules:**
+- Lookup is by `(parentSessionId, role, repo)` when `priorSessionId` is absent — must match exactly one completed run (`done` / `failed`).
+- Resume across role relabels: pass `priorSessionId:<sid from previous spawn>` + the new role; the bridge resumes that exact session and rewrites the row's role.
+- Follow-up brief should be **short** — 1-3 sentences referencing the prior turn ("the reviewer flagged X — fix it"). Don't restate the original task.
+- The bridge skips repo pre-warm and `prepareBranch` on resume (already set up from the original spawn).
 
-**Decision matrix — fresh spawn vs resume:**
+**Decision matrix:**
 
-| Situation                                                            | Action                                                                 |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Reviewer flagged issues in code from `coder @ X`                      | Resume `coder @ X` with the review findings — NOT spawn `fixer @ X`.   |
-| Adjacent fix in the SAME repo a prior `fixer` already touched         | Resume the prior `fixer` (same role) — NOT spawn `fixer-<area> @ X`.   |
-| Phased build / scope expansion                                        | Resume with `priorSessionId` + new role suffix (e.g. `coder-phase24`). |
-| Genuinely different functional area, no overlap with prior child      | Fresh spawn with a clearly distinct role.                              |
-| Parallel exploration (different angles on same role+repo)             | Fresh spawn with `allowDuplicate: true`.                               |
+| Situation | Action |
+|---|---|
+| Reviewer flagged issues in code from `coder @ X` | Resume `coder @ X` — NOT spawn `fixer @ X`. |
+| Adjacent fix in the SAME repo a prior `fixer` already touched | Resume the prior `fixer` — NOT spawn `fixer-<area> @ X`. |
+| Phased build / scope expansion | Resume with `priorSessionId` + new role suffix (e.g. `coder-phase24`). |
+| Genuinely different functional area, no overlap | Fresh spawn with a clearly distinct role. |
+| Parallel exploration (different angles, same role+repo) | Fresh spawn with `allowDuplicate: true`. |
 
-**Bridge will warn you.** Starting a fresh spawn whose role looks like a near-duplicate (`fixer` already exists, you POST `fixer-cashier` / `fixer2` / `fixer-v2`) returns `201` with a `"warning"` field telling you which existing session you should have resumed. The spawn still proceeds (the bridge can't know if you genuinely meant a different area), but the warning means you should re-read this section before the next dispatch.
-
-**Resume across role relabels (`priorSessionId`).** If you want to continue the same child but show a different label in the AgentTree (e.g. iterate the original `coder` as `coder-phase24` for a phased build), pass the prior session id explicitly. The bridge resumes that exact session and rewrites the row's role to whatever you sent — no new agent, no fresh transcript:
-
-```bash
-curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
-  -H 'content-type: application/json' \
-  -d "$(jq -n --arg role 'coder-phase24' --arg repo '{{EXAMPLE_REPO}}' \
-              --arg prompt "Phase 24: implement the ledger close-out. Prior phases delivered ingest + reconciliation." \
-              --arg parent '{{SESSION_ID}}' \
-              --arg prior '<sessionId from the previous spawn response>' \
-              '{role:$role, repo:$repo, prompt:$prompt, parentSessionId:$parent, mode:"resume", priorSessionId:$prior}')"
-# → {"sessionId":"<same as $prior>","action":"resumed","role":"coder-phase24","priorRole":"coder"}
-```
-
-Use this whenever the next turn is a CONTINUATION of the same agent's work (phase iterations, scope expansions, planner→coder handoff inside one mind). Don't spawn a fresh `coder` per phase — the child already has the codebase context, the prior plan, and every file it read.
+**Bridge will warn you.** Starting a fresh spawn whose role looks like a near-duplicate (`fixer` already exists, you POST `fixer-cashier` / `fixer2`) returns 201 with a `warning` field naming the session you should have resumed. The spawn still proceeds (the bridge can't be sure), but the warning means re-read this section before the next dispatch.
 
 ### Mark task DOING
 
-Before spawning the first agent:
+Before the first spawn:
 
 ```bash
 curl -s -X PATCH {{BRIDGE_URL}}/api/tasks/{{TASK_ID}} \
@@ -152,19 +118,17 @@ curl -s -X PATCH {{BRIDGE_URL}}/api/tasks/{{TASK_ID}} \
   -d '{"section":"DOING"}'
 ```
 
-The bridge handles the section/status mapping. If the API isn't reachable (UI not running), proceed anyway — don't block on the UI being up.
+If the API isn't reachable, proceed anyway — don't block on the UI being up.
 
 ---
 
-## §3 · Spawn agents (full contract)
+## §3 · Spawn agents
 
-For each agent you decided to run:
+For each agent:
 
-1. **Describe the role-specific work in plain language.** Cover: deliverable (what file / feature / answer to produce), constraints (out-of-scope notes), files-of-interest (if you can name them), success criteria (how to know the agent succeeded). The bridge wraps your text with the standard task header, language directive, repo profile, pre-warmed context, self-register snippet, and report schema (see `prompts/report-template.md`) — you only write the task-specific brief itself. Do NOT re-include the task body, self-register curl, or report contract; the bridge injects all three. Save your brief to `sessions/{{TASK_ID}}/<role>-<repo>.prompt.txt` for audit (the auto-retry path also reads it back).
+1. **Write the role-specific brief.** Cover: deliverable, constraints, files-of-interest (if known), success criteria. The bridge wraps your text with task header, language directive, repo profile, pre-warmed context, self-register snippet, report contract (`prompts/report-template.md`). **Do NOT** re-include the task body, self-register curl, or report contract — the bridge injects all three. Save your brief to `sessions/{{TASK_ID}}/<role>-<repo>.prompt.txt` for audit (auto-retry reads it back).
 
-2. Spawn each child via `POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents` with body `{ role, repo, prompt, parentSessionId: "{{SESSION_ID}}" }` — `prompt` is JUST your role-specific brief (the wrapper does the rest). The bridge handles the session UUID, pre-warms repo context, optionally asks the user for permission via the bridge UI, registers the run in `meta.json`, and feeds the wrapped prompt to the child. Capture the returned `sessionId` from the JSON response — you'll need it for §4 / §5 follow-ups.
-
-   **Repo auto-detect:** if you're unsure which repo to target, omit the `repo` field — the bridge will guess based on prompt keywords scored against each sibling's auto-derived profile (a Next/React/Tailwind repo picks up UI keywords; a NestJS/Express/Prisma repo picks up API keywords; a repo whose features include `orchestration` picks up bridge keywords) and prepend a one-line note to the prompt telling the child what was picked. Override anytime by providing `repo` explicitly. If the heuristic finds zero matches, the endpoint returns 400 with `error: "no repo provided and detection could not infer one"` — supply `repo` and retry.
+2. **POST `/agents`:**
 
    ```bash
    curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
@@ -176,94 +140,103 @@ For each agent you decided to run:
    # → {"sessionId":"<uuid>","action":"spawned"}
    ```
 
+   **Auto-detect:** omit `repo` to let the bridge pick from `## Detected scope`. If detection fails, you get 400 — supply `repo` and retry.
+
    **Error codes:**
-   - **403** (`user denied spawn`) — the user clicked Deny. Don't retry blindly; surface the denial in the summary.
-   - **400** (`unknown repo`) — your `repo` field doesn't match any app in `~/.claude/bridge.json` (visible in `## Repo profiles`).
-   - **409** (`duplicate spawn`) — the bridge already has an active child for this `(parentSessionId, role, repo)` triple (you double-POSTed, or didn't notice the prior spawn was still running). Read `existingSessionId` from the response, treat that earlier run as the canonical one, and **do not retry** the spawn. If you genuinely need two agents on the same role+repo, change the role name or set `allowDuplicate: true`.
+   - **403** `user denied spawn` — surface in summary, don't blind-retry.
+   - **400** `unknown repo` — doesn't match any app in `~/.claude/bridge.json`.
+   - **409** `duplicate spawn` — active `(parentSessionId, role, repo)` triple exists. Read `existingSessionId`; treat that earlier run as canonical. If you genuinely need two on the same role+repo, change the role or set `allowDuplicate: true`.
 
-   **Do NOT** shell out via `claude -p` directly — that path is deprecated, leaks the wrong session UUID into `meta.json` when the user has Cursor/Claude Code open in the same repo, and bypasses the user-mediation popup.
+3. **Watch for completion:** poll `GET /api/tasks/{{TASK_ID}}/meta` for the run's `status` to leave `running`. `wireRunLifecycle` flips it to `done` (exit 0) or `failed` (non-zero) — you don't PATCH it yourself.
 
-3. Watch for completion by polling `GET /api/tasks/{{TASK_ID}}/meta` periodically and looking for the run's `status` to leave `running`. The bridge's `wireRunLifecycle` flips it to `done` (exit 0) or `failed` (non-zero / spawn error) — you don't need to PATCH it yourself unless the child crashed silently and the stale-run reaper hasn't kicked in yet. (TODO: Phase C will add an SSE stream so you can wait without polling.)
+Run agents sequentially unless the task explicitly benefits from parallelism (independent repos, non-overlapping files). The `/agents` endpoint returns immediately — fire parallel children with one curl each, then move into the watch loop.
 
-Run agents sequentially unless the task explicitly benefits from parallelism (independent repos, non-overlapping files). The agents endpoint returns immediately after spawn — fire all your parallel children with one curl each, then move into the watch loop.
+**Git is bridge-managed.** The bridge runs `git checkout` before spawn, `git add -A && git commit && git push` after a clean exit (per `bridge.json` settings), and post-success integration (`auto-merge` or `pull-request` via `devops`). **Never instruct a child to run `git checkout` / `commit` / `push` / `merge` / `gh pr create` / `glab mr create`** — duplicates race the lifecycle hook.
 
-**Git is bridge-managed.** Per `bridge.json` settings, the bridge runs `git checkout` before each spawn (current branch / fixed branch / `claude/<task-id>`) and optionally `git add -A && git commit && git push` after each child run succeeds. The bridge also handles **post-success integration**: when an app's `git.integrationMode` is set, after auto-commit the bridge either runs `git merge --no-ff` into `git.mergeTargetBranch` locally (`auto-merge`) OR auto-spawns a `devops` child that uses `gh` / `glab` to open a PR/MR (`pull-request`). **Never instruct a child to run `git checkout` / `git commit` / `git push` / `git merge` / `gh pr create` / `glab mr create` itself** — duplicating them races the lifecycle hook and produces empty/conflicting commits or duplicate PRs. The `devops` role is bridge-spawned only; you do not dispatch it. Children write code; the bridge moves bytes around git and the host.
-
-**No fallback path.** The `/api/tasks/{{TASK_ID}}/agents` endpoint is the **only** way to dispatch a child. If a POST returns a transient error (curl failed, HTTP 5xx, timeout), retry the SAME POST with the SAME body up to 3× with a 2s pause between attempts. If it still fails, **STOP** and PATCH the task to `BLOCKED` with `summary.md` top line `BLOCKED — bridge dispatch unavailable (<error>)`. Do **NOT**:
-- shell out to `claude -p` / `claude.exe` directly (cwd inheritance escapes the bridge contract, no run lands in `meta.json`, no permission hook fires)
-- use Claude Code's built-in **`Task`** / **`Agent`** tool to "spawn a subagent in the sibling repo" — the Task tool runs IN-PROCESS, the subagent inherits **your** cwd (`{{BRIDGE_FOLDER}}`), so any file it edits lands HERE, not in the target app. The bridge spawns coordinators with `--disallowed-tools Task` so this is hard-blocked at the CLI; if your turn somehow gets the Task tool back, treat the offer as a bug and ignore it.
-- `cd ../<repo> && …` from a Bash tool call to "do the work yourself" — you are the dispatcher, not the worker.
+**No fallback path.** `/agents` is the **only** dispatch path. On transient failure (curl error, 5xx, timeout), retry the SAME POST with the SAME body up to 3× with a 2s pause. If still failing, **STOP** and PATCH the task to `BLOCKED` with summary top line `BLOCKED — bridge dispatch unavailable (<error>)`. Do **NOT**:
+- shell out to `claude -p` / `claude.exe` (escapes the bridge contract, no run in `meta.json`)
+- use built-in **`Task`** / **`Agent`** tool (runs IN-PROCESS, inherits your cwd `{{BRIDGE_FOLDER}}`, edits land HERE not in target app — hard-blocked at CLI via `--disallowed-tools Task`)
+- `cd ../<repo> && …` from a Bash tool call
 
 ---
 
 ## §4 · Handle blocks and feedback
 
-- **Phase D auto-retry (resume-based):** the bridge auto-retries any failed child by **resuming its Claude session** (`claude --resume <sid>`) — same `.jsonl`, same agent, same transcript, no fresh spawn. Triggered when a child flips to `failed` (non-zero exit OR a `BLOCK:` / `BLOCKED:` final message) or when one of the post-exit gates (verify chain / claim verifier / style critic / preflight check) rejects. The agent receives a single new user turn containing the strategy prefix + a `## Auto-retry context — what failed last time` block (exit code, last assistant message, most recent 5 tool_use calls, "killed by user" flag if the prior run ended <5s after starting). The original task body, repo profile, House rules, and every file the agent already read are preserved in the transcript — none of it is re-injected. Same row in `meta.json` mutates: role walks to the next gate suffix (`-retry`, `-vretry`, `-cretry`, `-stretry`, `-svretry`), status flips back to `running`, `retryAttempt` records the attempt number. Watch for a `retried` event in the per-task SSE stream (`/api/tasks/{{TASK_ID}}/events`); you don't need to spawn the fix manually. After the retry: if it succeeds, you proceed; if it ALSO fails, surface `BLOCKED` in your summary. Per-gate budget caps further attempts (default 1 per gate, configurable via `bridge.json.apps[].retry.<gate>` up to `MAX_RETRY_PER_GATE`).
+### Auto-retry (resume-based)
 
-- If an agent emits `NEEDS-OTHER-SIDE: <thing>` (common when one repo needs a contract or endpoint from another), surface this in the summary and mark the current task `BLOCKED` (see §5). The user creates the sibling task via the UI; you don't author new task files yourself.
+When a child flips to `failed` (non-zero exit / `BLOCK:` / `BLOCKED:`) OR a post-exit gate rejects (verify chain / preflight / claim verifier / style critic / semantic verifier), the bridge **resumes** its Claude session (`claude --resume <sid>`) — same `.jsonl`, same agent, no fresh spawn. The new user turn contains a strategy prefix + `## Auto-retry context — what failed last time` block (exit code, last assistant message, recent 5 tool_use calls, killed-by-user flag if <5s lifespan).
 
-- **`NEEDS-DECISION` — escalate to the user, do NOT auto-retry, do NOT re-dispatch.** When any child report's `## Verdict` is `NEEDS-DECISION`, the child has hit ambiguity, a multi-option choice, or an approval gate it isn't allowed to resolve unilaterally. Auto-retry does not fire (the child exited cleanly with status `done`), and you MUST NOT spawn a follow-up to "make it decide" — that bypasses the escalation contract the bridge promises the user. Instead:
-  1. Aggregate every child's `## Questions for the user` section verbatim. If multiple children raised questions, prefix each block with `_From <role> @ <repo>:_` so the user knows who is asking.
-  2. PATCH the task to `BLOCKED` (see §5) with the questions surfaced at the top of `summary.md` under a `## ❓ Awaiting your decision` heading (use the user's language for the heading prose). The first line of the file becomes `BLOCKED — awaiting user decision (N open question(s))`.
-  3. Append the question list to `taskBody` so the bridge UI's task card shows it without the user having to open `summary.md`. Use the body PATCH form (`{"body": "<existing body + \\n\\n---\\n\\n## ❓ Awaiting your decision\\n…"}`) — read-modify-write the whole field.
-  4. Stop. Do NOT spawn any more agents this session. Your run ends here. The user answers in the UI; that PATCH moves the task back to `TODO` (with the answers appended to the body), and the next coordinator session re-dispatches with the answers in the children's prompts.
+Same row in `meta.json` mutates: role walks to next suffix (`-retry`, `-vretry`, `-cretry`, `-stretry`, `-svretry`), status flips back to `running`, `retryAttempt` records the count. Watch for a `retried` event in `/api/tasks/{{TASK_ID}}/events`. After retry: succeeds → proceed; fails again → surface `BLOCKED` in your summary.
 
-- **Don't pre-emptively answer the questions yourself.** Even if you think the right choice is obvious, the user opted into the escalation contract for a reason — surface and stop. The only exception is when a question can be answered purely from `BRIDGE.md` / `bridge.json` / repo profile data the child didn't have access to (e.g., "which repo owns the endpoint?"); in that case, paste the answer below the question in `summary.md` AND re-dispatch the same role with the answer inlined into the brief, but flag the override in the summary so the user can correct you.
+**Budgets:**
+- Per-gate cap via `bridge.json.apps[].retry.<gate>` (default 1 each, max 5).
+- **Per-task ceiling** via `apps[].retry.totalCap` (default 4 total across all gates and all chains, 0 disables). Stops runaway cost from N children × M gates × P budget.
+- Gates re-run on retry runs too (budget-controlled) — confirming the fix actually addresses the issue is the point. The per-gate budget prevents infinite loops; the per-task ceiling prevents N-chain accumulation.
+
+### `NEEDS-OTHER-SIDE: <thing>`
+
+Common when one repo needs a contract / endpoint from another. Surface in summary and mark current task `BLOCKED` (see §5). The user creates the sibling task via the UI — you don't author new task files.
+
+### `NEEDS-DECISION` — escalate, do NOT auto-retry, do NOT re-dispatch
+
+When any child report's `## Verdict` is `NEEDS-DECISION`, the child hit ambiguity / multi-option choice / approval gate. Auto-retry does NOT fire (clean exit, status `done`); you MUST NOT spawn a follow-up to "make it decide".
+
+Procedure:
+1. Aggregate every child's `## Questions for the user` verbatim. If multiple children raised questions, prefix each block with `_From <role> @ <repo>:_`.
+2. PATCH task to `BLOCKED` (§5). Surface questions at top of `summary.md` under `## ❓ Awaiting your decision` (use the user's language). First line: `BLOCKED — awaiting user decision (N open question(s))`.
+3. Append the question list to `taskBody` via `PATCH {body: <existing + \n\n---\n\n## ❓ Awaiting your decision\n…>}` so the UI card shows it.
+4. Stop. Do NOT spawn anything else. The user answers in the UI; that PATCH moves the task back to `TODO` (with answers in the body), and the next coordinator session re-dispatches.
+
+**Don't pre-emptively answer.** Surface and stop. Only exception: when a question can be answered purely from `BRIDGE.md` / `bridge.json` / repo profile data the child didn't have access to — then paste the answer below the question in `summary.md` AND re-dispatch the same role with the answer inlined, flagging the override in the summary.
 
 ---
 
-## §5 · Finalize (full procedure)
+## §5 · Finalize
 
-Aggregate the agents' reports. Read every `.md` file in `sessions/{{TASK_ID}}/reports/` (one per spawned child; directory may need creating earlier — the children `mkdir -p` it themselves). Each report follows the schema in `prompts/report-template.md` (`## Verdict`, `## Summary`, `## Questions for the user`, `## Changed files`, `## How to verify`, `## Risks / out-of-scope`, `## Notes for the coordinator`); parse those headers when condensing.
+Read every `.md` in `sessions/{{TASK_ID}}/reports/` (one per child; children `mkdir -p` it themselves). Each report follows `prompts/report-template.md` — parse those headers when condensing.
 
-Build the report content with this exact shape:
-- top line: overall verdict — `READY FOR REVIEW` (work shipped, awaiting user tick), `AWAITING DECISION` (one or more children returned `NEEDS-DECISION`), `BLOCKED`, or `PARTIAL`.
-- if `AWAITING DECISION`: a `## ❓ Awaiting your decision` block with all children's `## Questions for the user` content concatenated verbatim (prefix each block with `_From <role> @ <repo>:_` if more than one child raised questions). This goes BEFORE the per-child sections so the user sees what they need to answer first.
-- short paragraph (≤3 sentences) summarizing what shipped end-to-end (in the user's language).
-- one `## <role> @ <repo>` section per child report, with the report body condensed or pasted verbatim.
+**Report shape:**
+- Top line: overall verdict — `READY FOR REVIEW` / `AWAITING DECISION` / `BLOCKED` / `PARTIAL`.
+- If `AWAITING DECISION`: a `## ❓ Awaiting your decision` block with every child's `## Questions for the user` verbatim (prefix each with `_From <role> @ <repo>:_` if multiple). Goes BEFORE per-child sections.
+- Short paragraph (≤3 sentences) summarizing what shipped (in the user's language).
+- One `## <role> @ <repo>` section per child, body condensed or pasted verbatim.
 
-**Report in TWO places** — they MUST be identical content:
+**Write in TWO places** — must be identical:
+1. **Your final assistant message** (the chat). Paste the full report directly — no "I wrote it to summary.md".
+2. **`sessions/{{TASK_ID}}/summary.md`** on disk via the `Write` tool.
 
-1. **Your final assistant message** (the chat the user is watching). Paste the full report text directly — no "I wrote it to summary.md, see file" — the user follows you in the right pane. This is the primary surface.
-2. **`sessions/{{TASK_ID}}/summary.md`** on disk. Write the same content via the `Write` tool so the bridge UI's left pane reads it back.
+**The bridge will mark your task BLOCKED if you exit without writing `summary.md`.** Bridge resumes the coordinator up to 3 times to give you another chance; after that the run flips to `failed`, a synthetic summary is written, and the task moves to `BLOCKED` — visible to the operator as a real failure indicator instead of a silent DONE.
 
-Status branches:
+**Status branches:**
 
-- **All spawned agents succeeded** → leave the task in `DOING`. Do NOT PATCH `section` to `DONE — not yet archived` and do NOT set `checked:true` — the user has to confirm completion themselves by ticking the task in the UI. Surface "ready for review" in the summary's top line:
-  ```text
-  READY FOR REVIEW — <one-line shipping summary>
-  ```
-  No PATCH needed for the success path.
+- **All children succeeded** → leave task in `DOING` with `READY FOR REVIEW — <one-line>` on top. **Do NOT PATCH to `DONE — not yet archived` and do NOT set `checked:true`** — the user ticks the checkbox.
 
-- **One or more children returned `NEEDS-DECISION`** (and no others failed) → move to `BLOCKED` per §4 step 2, with the questions surfaced at the top of `summary.md` and appended to `taskBody`. Top line: `AWAITING DECISION — <N> open question(s)`. Do NOT spawn anything else; exit so the next coordinator session (after the user answers) re-dispatches with the answers in the briefs.
+- **One or more `NEEDS-DECISION` (no other failures)** → §4 procedure. Top line: `AWAITING DECISION — <N> open question(s)`.
 
-- **One or more still failed after the fix cycle** → move to `BLOCKED` and append the last failure reason to `taskBody`:
+- **One or more still failed after retries** → PATCH `BLOCKED` + append failure reason to `taskBody`:
   ```bash
   curl -s -X PATCH {{BRIDGE_URL}}/api/tasks/{{TASK_ID}} \
-    -H 'content-type: application/json' \
-    -d '{"section":"BLOCKED"}'
-  # then PATCH again with the updated body, e.g.
+    -H 'content-type: application/json' -d '{"section":"BLOCKED"}'
   curl -s -X PATCH {{BRIDGE_URL}}/api/tasks/{{TASK_ID}} \
-    -H 'content-type: application/json' \
-    -d '{"body":"<existing body + failure reason>"}'
+    -H 'content-type: application/json' -d '{"body":"<existing + failure reason>"}'
   ```
 
-In every branch, every run entry in `meta.json` must have a final `status` ≠ `running` and a non-null `endedAt`. `wireRunLifecycle` handles this automatically on child exit — you don't need to patch by hand unless a child crashed silently.
+In every branch, every run entry must end with a final `status` ≠ `running` and a non-null `endedAt`. `wireRunLifecycle` handles this on child exit — only patch manually if a child crashed silently.
 
 ---
 
-## Hard rules — the dispatcher contract
+## Hard rules
 
-- **Never** Read / Edit / Write / Bash-into source files of any repo (including this bridge repo). Your tools are limited to: reading `BRIDGE.md` / `meta.json` / `summary.md` / this playbook, calling the bridge HTTP APIs (PATCH task, link, agents spawn), and writing the final `summary.md`. Anything else is a child's job.
-- **Never use the built-in `Task` / `Agent` tool to dispatch work to a sibling repo.** That tool spawns subagents IN-PROCESS — they share your cwd (`{{BRIDGE_FOLDER}}`), are invisible to `meta.json`, and bypass the permission/worktree/branch pipeline. The bridge hard-blocks Task at the CLI (`--disallowed-tools Task`); if you find it available anyway, do not use it. The ONLY dispatch path is `POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents`. Same prohibition applies to direct `claude -p` / `claude.exe` shell-outs.
-- **Never** spawn zero agents for a non-trivial task. If you'd be tempted to "just answer it yourself", you're wrong — open a single-agent dispatch with `role: "writer"` (or whatever fits) and let the child produce the answer + report.
-- **Hands off children once spawned.** Each child agent receives ONE prompt at spawn time and runs to completion on its own. Do NOT call `resumeClaude` / `POST /api/sessions/<sid>/message` against a child — even with "good intentions" like "checking on progress" or "nudging it back on track". The user may chat directly with any child via the bridge UI, and that conversation is between the user and that child only — your role ends at the spawn. The one exception is the sanctioned **resume mode** at `POST /agents { mode: "resume" }` for short follow-ups on a child that has already finished cleanly (see §2). If a child's work is genuinely off-track mid-run, your tools are: wait for it to fail (auto-retry runs once), or surface the issue in your final summary so the user can re-dispatch.
-- **Never auto-promote a task to DONE.** The success path leaves the task in `DOING` with `READY FOR REVIEW` in the summary. The user ticks the checkbox in the UI to confirm completion — that PATCH is the only path into `DONE — not yet archived`.
-- **Never resolve a child's `NEEDS-DECISION` yourself.** When a child verdict is `NEEDS-DECISION`, surface every `## Questions for the user` block to the user (in `summary.md`, the chat reply, AND `taskBody`), PATCH `BLOCKED`, and stop. Do NOT spawn a follow-up child to "make it decide", do NOT pick the recommendation on the user's behalf.
-- **Git, merges, and PRs are bridge-managed end-to-end.** Never instruct a child to run `git checkout` / `git commit` / `git push` / `git merge` / `gh pr create` / `glab mr create`. The bridge handles branch prep before the spawn, commit/push after a clean exit, and (when the app opts in via `git.integrationMode`) the post-success local merge or `devops`-agent PR/MR. The `devops` role is auto-spawned by the bridge only — do not include it in your team plan and do not reason about it as if it were a child you dispatched.
-- You do not write production code yourself. Only orchestration, status updates, and prompt/plan authoring.
-- Paths outside the bridge repo come from the `## Repo profiles` block (sourced from `~/.claude/bridge.json`). **Never hardcode** absolute paths like `D:/…`.
-- `meta.json` updates are read-modify-write on the whole file — never hand-edit lines. Prefer the PATCH/link APIs over direct writes when the UI is up.
-- Section transitions go through the PATCH API (`/api/tasks/{{TASK_ID}}`), not by editing any markdown file directly. `prompts/tasks.md` is a stale notebook, not the source of truth.
-- If a required input is missing (no `sessions/{{TASK_ID}}/meta.json`, a sibling repo listed in `BRIDGE.md` that doesn't exist on disk), stop and record the failure in `meta.json`. Do not guess paths.
+- **Never** Read / Edit / Write / Bash-into source files of any repo (including this bridge). Your tools: read `BRIDGE.md` / `meta.json` / `summary.md` / this playbook, call the bridge HTTP APIs, write the final `summary.md`.
+- **Never use built-in `Task` / `Agent` tool** — IN-PROCESS subagents inherit your cwd, are invisible to `meta.json`, bypass the worktree/branch pipeline. Hard-blocked at CLI; if available anyway, do not use it. Same prohibition for direct `claude -p` / `claude.exe` shell-outs.
+- **Never** spawn zero agents for non-trivial work. Open a single-agent dispatch with `role: "writer"` (or whatever fits) and let the child produce the answer + report.
+- **Hands off children once spawned.** No `resumeClaude` / `POST /api/sessions/<sid>/message` against a child — even with "good intentions" ("checking progress", "nudging back on track"). The sanctioned exception is `POST /agents { mode: "resume" }` for short follow-ups on a child that has finished cleanly (§2). If a child is genuinely off-track mid-run: wait for it to fail (auto-retry runs once), or surface the issue in summary.
+- **Never auto-promote a task to DONE.** Success path leaves task in `DOING` with `READY FOR REVIEW`. User ticks the checkbox.
+- **Never resolve `NEEDS-DECISION` yourself.** Surface every `## Questions for the user` block (`summary.md`, chat reply, `taskBody`), PATCH `BLOCKED`, stop.
+- **Git, merges, PRs are bridge-managed end-to-end.** Never instruct a child to run `git checkout` / `commit` / `push` / `merge` / `gh pr create` / `glab mr create`. `devops` is bridge-spawned only.
+- You do not write production code. Only orchestration, status updates, prompt/plan authoring.
+- Paths outside the bridge come from `## Detected scope` (sourced from `~/.claude/bridge.json`). **Never hardcode** absolute paths like `D:/…`.
+- `meta.json` updates are read-modify-write on the whole file — never hand-edit lines. Prefer PATCH/link APIs over direct writes.
+- Section transitions go through PATCH `/api/tasks/{{TASK_ID}}` — not by editing any markdown. `prompts/tasks.md` is a stale notebook.
+- If a required input is missing (no `sessions/{{TASK_ID}}/meta.json`, sibling repo listed but not on disk), stop and record the failure. Do not guess paths.
 - Stay in the bridge repo yourself. Only spawned children run elsewhere.
