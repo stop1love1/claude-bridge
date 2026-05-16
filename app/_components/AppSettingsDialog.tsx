@@ -432,6 +432,11 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
                     ? "Bridge runs git checkout <target> + git merge --no-ff. Conflict aborts cleanly; work branch preserved."
                     : "Bridge spawns the devops agent which uses gh / glab to open a PR/MR. Requires git remote + the matching CLI installed; otherwise skipped with a warning."}
                 </p>
+                {git.integrationMode === "pull-request" && app && (
+                  <DevopsConnectionCheck
+                    appSegment={appDetailRouteSegment(app)}
+                  />
+                )}
               </div>
             )}
           </fieldset>
@@ -521,5 +526,101 @@ function ToggleRow({
         <span className="block text-[11px] text-muted-foreground">{hint}</span>
       </span>
     </label>
+  );
+}
+
+interface DevopsCheckResult {
+  ok: boolean;
+  stage: string;
+  reason: string;
+  cli: string | null;
+  host: string | null;
+  remote: string | null;
+}
+
+/**
+ * "Test connection" button + verdict line for the pull-request mode.
+ * Saves the operator from discovering at task-execution time that
+ * `gh` isn't installed or they aren't logged in.
+ */
+function DevopsConnectionCheck({ appSegment }: { appSegment: string }) {
+  const [state, setState] = useState<
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "done"; result: DevopsCheckResult }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
+  const run = async () => {
+    setState({ kind: "checking" });
+    try {
+      const r = await fetch(`/api/apps/${appSegment}/devops-check`, {
+        cache: "no-store",
+      });
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        setState({
+          kind: "error",
+          message: body.error ?? `HTTP ${r.status}`,
+        });
+        return;
+      }
+      const result = (await r.json()) as DevopsCheckResult;
+      setState({ kind: "done", result });
+    } catch (e) {
+      setState({ kind: "error", message: (e as Error).message });
+    }
+  };
+
+  return (
+    <div className="mt-2 grid gap-1.5 rounded-md border border-border bg-muted/30 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium">Connection check</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={run}
+          disabled={state.kind === "checking"}
+          className="h-7 text-[11px]"
+        >
+          {state.kind === "checking" ? "Checking…" : "Test connection"}
+        </Button>
+      </div>
+      {state.kind === "idle" && (
+        <p className="text-[11px] text-muted-foreground">
+          Verifies `gh` / `glab` is installed and authenticated for this
+          app's `origin` remote. Run before saving to avoid runtime
+          surprises.
+        </p>
+      )}
+      {state.kind === "done" && (
+        <div
+          className={`text-[11px] font-mono ${
+            state.result.ok ? "text-emerald-700" : "text-amber-700"
+          }`}
+        >
+          <div>{state.result.ok ? "✓" : "⚠"} {state.result.reason}</div>
+          {state.result.cli && (
+            <div className="mt-0.5 text-muted-foreground">
+              cli=<span className="font-semibold">{state.result.cli}</span>{" "}
+              host=<span className="font-semibold">{state.result.host}</span>
+              {state.result.remote && (
+                <>
+                  {" "}
+                  remote=
+                  <span className="font-semibold break-all">{state.result.remote}</span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {state.kind === "error" && (
+        <div className="text-[11px] text-destructive font-mono">
+          ✗ Error: {state.message}
+        </div>
+      )}
+    </div>
   );
 }
