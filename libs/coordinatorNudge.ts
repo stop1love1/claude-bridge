@@ -33,7 +33,7 @@
  *     fires from the same lifecycle exit handler can land its `queued`
  *     row before we see "all terminal"
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   readMeta,
@@ -46,7 +46,7 @@ import {
 import { isAlive } from "./sessionEvents";
 import { resumeSessionWithLifecycle } from "./resumeSession";
 import { BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
-import { logError, logInfo } from "./log";
+import { logError, logInfo, logWarn } from "./log";
 
 const NUDGE_DEBOUNCE_MS = 5_000;
 const EVAL_DELAY_MS = 250;
@@ -116,18 +116,67 @@ function isTerminal(s: RunStatus): boolean {
  *
  * Returns true iff the coordinator is in the deferred-`running`
  * state from `runLifecycle.succeedRun` AND the conditions to finalize
- * have been reached: process is gone, every child terminal.
+ * have been reached: process is gone, every child terminal, AND
+ * summary.md was actually written. The summary check is required
+ * because succeedRun defers the flip specifically when summary is
+ * missing — finalizing as DONE without checking would silently
+ * accept the coordinator's failure to write its contract output.
+ *
+ * The `summaryMissing` arg is optional for back-compat. When omitted,
+ * treats summary as present (legacy "always finalize" behavior).
+ * Production callers should always pass the real value from
+ * `isSummaryMissing(taskId)`.
  */
 export function shouldFinalizeDeferredCoordinator(args: {
   parentSessionId: string;
   runs: Run[];
   isAlive: (sessionId: string) => boolean;
+  summaryMissing?: boolean;
 }): boolean {
   const coord = args.runs.find(
     (r) => r.sessionId === args.parentSessionId && r.role === "coordinator",
   );
   if (!coord || coord.status !== "running") return false;
   if (args.isAlive(args.parentSessionId)) return false;
+  if (args.summaryMissing === true) return false;
+  return args.runs.every(
+    (r) =>
+      r.sessionId === args.parentSessionId ||
+      r.parentSessionId !== args.parentSessionId ||
+      isTerminal(r.status),
+  );
+}
+
+/**
+ * Pure decision: should we mark the coordinator as a hard failure
+ * because it exhausted its summary-write nudge budget?
+ *
+ * Returns true iff:
+ *   - the coordinator is still in deferred-`running` state
+ *   - its process is gone (no live claude subprocess attached)
+ *   - every child has reached a terminal state
+ *   - summary.md is still missing/empty
+ *   - the nudge counter has hit `SUMMARY_NUDGE_MAX_ATTEMPTS`
+ *
+ * Once this returns true, `evaluateAndNudge` flips the coordinator run
+ * to `failed`, writes a synthetic summary describing the failure, and
+ * PATCHes the task section to `BLOCKED` so the operator sees a real
+ * failure indicator instead of a silent DONE.
+ */
+export function shouldMarkCoordinatorSummaryBlocked(args: {
+  parentSessionId: string;
+  runs: Run[];
+  isAlive: (sessionId: string) => boolean;
+  summaryMissing: boolean;
+  summaryNudgeAttempts: number;
+}): boolean {
+  const coord = args.runs.find(
+    (r) => r.sessionId === args.parentSessionId && r.role === "coordinator",
+  );
+  if (!coord || coord.status !== "running") return false;
+  if (args.isAlive(args.parentSessionId)) return false;
+  if (!args.summaryMissing) return false;
+  if (args.summaryNudgeAttempts < SUMMARY_NUDGE_MAX_ATTEMPTS) return false;
   return args.runs.every(
     (r) =>
       r.sessionId === args.parentSessionId ||
@@ -254,6 +303,115 @@ function buildNudgeMessage(args: {
   ].join("\n");
 }
 
+/**
+ * Synthesize a `summary.md` describing the BLOCKED state so the operator
+ * sees real content in the UI's left pane instead of "(file missing)".
+ * Kept short and explicit — the operator's recourse is to re-dispatch
+ * the task from the UI after investigating why the coordinator couldn't
+ * produce a summary (rate-limited model, context-window, etc.).
+ */
+function buildBlockedSummary(args: {
+  taskId: string;
+  attempts: number;
+  children: Run[];
+}): string {
+  const childLines = args.children.map(
+    (r) => `- \`${r.role}\` @ \`${r.repo}\` — ${r.status}`,
+  );
+  return [
+    `BLOCKED — coordinator failed to write summary after ${args.attempts} nudge attempt(s)`,
+    "",
+    "The bridge resumed this coordinator multiple times and it still exited without writing the contracted `summary.md`. The task has been moved to BLOCKED so it shows up as needing your attention instead of silently flipping to DONE with no user-visible output.",
+    "",
+    "## Children that ran",
+    ...(childLines.length > 0 ? childLines : ["- (no children spawned)"]),
+    "",
+    "## What to do",
+    "1. Open the per-child reports under `sessions/" + args.taskId + "/reports/` to see what actually shipped.",
+    "2. If the work is good, write your own summary here and tick the task complete in the UI.",
+    "3. If something is wrong, re-dispatch from the UI (it will move the task back to TODO and spawn a fresh coordinator).",
+    "",
+    "_Auto-generated by `libs/coordinatorNudge.ts` when SUMMARY_NUDGE_MAX_ATTEMPTS was reached._",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Flip the coordinator run to `failed`, drop a synthetic summary.md,
+ * and PATCH the task section to BLOCKED so the operator notices.
+ * Called once per coordinator from `evaluateAndNudge` when
+ * `shouldMarkCoordinatorSummaryBlocked` returns true.
+ *
+ * `updateTask` is required via lazy `require` to break the import
+ * cycle (tasksStore → meta → coordinatorNudge subscriber).
+ */
+async function markCoordinatorSummaryBlocked(args: {
+  sessionsDir: string;
+  taskId: string;
+  parentSessionId: string;
+  attempts: number;
+}): Promise<void> {
+  const { sessionsDir, taskId, parentSessionId, attempts } = args;
+  try {
+    const meta = readMeta(sessionsDir);
+    const children = meta?.runs.filter(
+      (r) => r.parentSessionId === parentSessionId,
+    ) ?? [];
+
+    // 1. Flip the run to failed (precondition: still running).
+    await updateRun(
+      sessionsDir,
+      parentSessionId,
+      { status: "failed", endedAt: new Date().toISOString() },
+      (r) => r.status === "running",
+    );
+
+    // 2. Write the synthetic summary so the left pane shows real text
+    //    instead of "(file missing)".
+    try {
+      const summaryPath = join(sessionsDir, "summary.md");
+      writeFileSync(
+        summaryPath,
+        buildBlockedSummary({ taskId, attempts, children }),
+        "utf8",
+      );
+    } catch (e) {
+      logWarn("coordinator-nudge", "could not write synthetic summary.md", {
+        taskId,
+        error: (e as Error).message,
+      });
+    }
+
+    // 3. PATCH the task section to BLOCKED. Lazy require breaks the
+    //    tasksStore → meta → coordinatorNudge import cycle.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const ts = require("./tasksStore") as typeof import("./tasksStore");
+      await ts.updateTask(taskId, { section: "BLOCKED" });
+    } catch (e) {
+      logWarn("coordinator-nudge", "could not PATCH task section to BLOCKED", {
+        taskId,
+        error: (e as Error).message,
+      });
+    }
+
+    logInfo(
+      "coordinator-nudge",
+      `marked coordinator BLOCKED — summary missing after ${attempts} nudge attempts`,
+      { taskId, coordinator: parentSessionId.slice(0, 8) },
+    );
+
+    // Drop the counter so the same coordinator id (won't happen in
+    // practice, but tidy) doesn't carry stale state.
+    state.summaryNudgeAttempts.delete(parentSessionId);
+  } catch (e) {
+    logError("coordinator-nudge", "failed to mark coordinator BLOCKED", e, {
+      taskId,
+      coordinator: parentSessionId.slice(0, 8),
+    });
+  }
+}
+
 async function evaluateAndNudge(
   taskId: string,
   parentSessionId: string,
@@ -263,20 +421,52 @@ async function evaluateAndNudge(
   const meta = readMeta(sessionsDir);
   if (!meta) return;
 
-  // 2b — finalize the deferred coordinator status flip. When the
-  // coordinator's process exited cleanly but `wireRunLifecycle` left it
-  // as `running` because children were still active (see the
+  const summaryMissing = isSummaryMissing(taskId);
+  const attemptsSoFar = state.summaryNudgeAttempts.get(parentSessionId) ?? 0;
+
+  // ─── Summary nudge exhausted → mark coordinator BLOCKED ────────────
+  // When the coordinator has exited, every child settled, summary is
+  // still missing AND the nudge counter has hit the cap, the prior
+  // behavior was to silently let `shouldFinalizeDeferredCoordinator`
+  // flip the row to DONE — operator sees a green checkmark on a task
+  // whose actual record is empty. Replace that with a real failure
+  // indicator: flip the run to `failed`, write a synthetic
+  // summary.md so the operator knows WHAT failed (not just that
+  // something did), and PATCH the task section to BLOCKED.
+  if (
+    shouldMarkCoordinatorSummaryBlocked({
+      parentSessionId,
+      runs: meta.runs,
+      isAlive,
+      summaryMissing,
+      summaryNudgeAttempts: attemptsSoFar,
+    })
+  ) {
+    await markCoordinatorSummaryBlocked({
+      sessionsDir,
+      taskId,
+      parentSessionId,
+      attempts: attemptsSoFar,
+    });
+    // Don't fall through — once BLOCKED, no further nudge attempts.
+    return;
+  }
+
+  // ─── Normal deferred DONE flip (summary present) ──────────────────
+  // When the coordinator's process exited cleanly but `wireRunLifecycle`
+  // left it as `running` because children were still active (see the
   // `isCoordWithActiveChildren` branch in `runLifecycle.succeedRun`),
   // this is the moment to honor the deferred flip: process is gone
-  // (`!isAlive`) AND every child has now reached a terminal state.
-  // Without this, the coordinator row would stay "running" forever
-  // when no further nudge / resume happens (e.g. all children finished
-  // before the coordinator exited its turn).
+  // (`!isAlive`) AND every child has now reached a terminal state AND
+  // summary.md is present. The summary guard prevents silently flipping
+  // to DONE when the coordinator exited without writing its contract
+  // output — the BLOCKED path above handles the exhausted-attempts case.
   if (
     shouldFinalizeDeferredCoordinator({
       parentSessionId,
       runs: meta.runs,
       isAlive,
+      summaryMissing,
     })
   ) {
     try {
@@ -288,7 +478,7 @@ async function evaluateAndNudge(
       );
       logInfo(
         "coordinator-nudge",
-        "finalized deferred coordinator DONE flip (process exited, children settled)",
+        "finalized deferred coordinator DONE flip (process exited, children settled, summary present)",
         { taskId, coordinator: parentSessionId.slice(0, 8) },
       );
     } catch (e) {
@@ -307,7 +497,6 @@ async function evaluateAndNudge(
   const metaAfter = readMeta(sessionsDir) ?? meta;
 
   const now = Date.now();
-  const summaryMissing = isSummaryMissing(taskId);
   const decision = decideNudge({
     parentSessionId,
     runs: metaAfter.runs,

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   decideNudge,
   shouldFinalizeDeferredCoordinator,
+  shouldMarkCoordinatorSummaryBlocked,
 } from "../coordinatorNudge";
 import type { Run } from "../meta";
 
@@ -335,6 +336,120 @@ describe("shouldFinalizeDeferredCoordinator (2b deferred-DONE finalizer)", () =>
         parentSessionId: COORD_SID,
         runs: [child(CHILD_A_SID, "done")],
         isAlive: NEVER_ALIVE,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when summary is missing (don't silently flip to DONE)", () => {
+    // This is the regression guard for the silent-DONE bug: the legacy
+    // finalizer flipped the row regardless of summary presence, so a
+    // coordinator that exited without writing its contract output got
+    // a green checkmark anyway.
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "done"),
+        ],
+        isAlive: NEVER_ALIVE,
+        summaryMissing: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when summary is explicitly present", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "done"),
+        ],
+        isAlive: NEVER_ALIVE,
+        summaryMissing: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("shouldMarkCoordinatorSummaryBlocked", () => {
+  const baseRuns = [
+    coordinator({ status: "running", endedAt: null }),
+    child(CHILD_A_SID, "done"),
+  ];
+
+  it("returns true when summary missing AND attempts at cap AND all conditions hold", () => {
+    expect(
+      shouldMarkCoordinatorSummaryBlocked({
+        parentSessionId: COORD_SID,
+        runs: baseRuns,
+        isAlive: NEVER_ALIVE,
+        summaryMissing: true,
+        summaryNudgeAttempts: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when attempts below cap (let nudge keep trying)", () => {
+    expect(
+      shouldMarkCoordinatorSummaryBlocked({
+        parentSessionId: COORD_SID,
+        runs: baseRuns,
+        isAlive: NEVER_ALIVE,
+        summaryMissing: true,
+        summaryNudgeAttempts: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when summary is present (no failure to mark)", () => {
+    expect(
+      shouldMarkCoordinatorSummaryBlocked({
+        parentSessionId: COORD_SID,
+        runs: baseRuns,
+        isAlive: NEVER_ALIVE,
+        summaryMissing: false,
+        summaryNudgeAttempts: 5,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when coordinator process is still alive", () => {
+    expect(
+      shouldMarkCoordinatorSummaryBlocked({
+        parentSessionId: COORD_SID,
+        runs: baseRuns,
+        isAlive: ALWAYS_ALIVE,
+        summaryMissing: true,
+        summaryNudgeAttempts: 5,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when at least one child is still running", () => {
+    expect(
+      shouldMarkCoordinatorSummaryBlocked({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "running"),
+        ],
+        isAlive: NEVER_ALIVE,
+        summaryMissing: true,
+        summaryNudgeAttempts: 5,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when coordinator status is no longer `running` (already settled)", () => {
+    expect(
+      shouldMarkCoordinatorSummaryBlocked({
+        parentSessionId: COORD_SID,
+        runs: [coordinator({ status: "done" }), child(CHILD_A_SID, "done")],
+        isAlive: NEVER_ALIVE,
+        summaryMissing: true,
+        summaryNudgeAttempts: 5,
       }),
     ).toBe(false);
   });
