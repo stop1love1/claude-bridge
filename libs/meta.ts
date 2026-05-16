@@ -131,6 +131,22 @@ export interface Run {
    * which path the bridge committed.
    */
   speculativeOutcome?: "won" | "lost" | null;
+  /**
+   * Set by the post-exit integration step when the local merge LANDED
+   * but the push to the remote failed. The work is shipped locally and
+   * the operator needs to push by hand (or troubleshoot connectivity /
+   * auth / fast-forward conflicts on the remote). Surfaced in the UI
+   * so the run reads as DONE-but-needs-attention rather than silently
+   * "succeeded".
+   */
+  mergeNotPushed?: {
+    /** Operator-facing message (already starts with `MERGE-NO-PUSH:`). */
+    message: string;
+    /** Raw git stderr from the failed push, or null. */
+    error: string | null;
+    /** ISO timestamp when the failure was recorded. */
+    at: string;
+  } | null;
 }
 
 /**

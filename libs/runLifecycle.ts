@@ -111,6 +111,36 @@ async function attachGateResult<F extends GateField>(
 }
 
 /**
+ * Stamp `mergeNotPushed` onto a run row when the local merge landed
+ * but the push to the remote failed. Surfaces in meta.json so the UI
+ * can render a "needs manual push" indicator — the gate flow itself
+ * already succeeded (work is shipped locally), but the operator
+ * needs to know the remote hasn't caught up yet.
+ *
+ * Defensive against missing fields and write failures — if the patch
+ * can't land for any reason, we just log; the work is still on disk
+ * and the operator can recover by hand.
+ */
+async function markMergeNotPushed(
+  dir: string,
+  runSessionId: string,
+  message: string,
+  error?: string,
+): Promise<void> {
+  try {
+    await updateRun(dir, runSessionId, {
+      mergeNotPushed: {
+        message,
+        error: error ?? null,
+        at: new Date().toISOString(),
+      },
+    });
+  } catch (e) {
+    console.error("markMergeNotPushed failed", e);
+  }
+}
+
+/**
  * Shared context every post-exit gate operates on. Built once at the
  * top of postExitFlow so each gate doesn't re-resolve the app or
  * re-load the verifyChain module.
@@ -735,11 +765,18 @@ async function postExitFlow(args: {
           targetBranch: app.git.mergeTargetBranch,
           message: `merge ${sourceBranch} → ${app.git.mergeTargetBranch} (${tid})`,
           push: app.git.autoPush,
+          pushTimeoutMs: app.git.pushTimeoutMs,
         });
         if (m.ok) {
           logInfo("auto-merge", m.message, { tag: t });
         } else {
           logWarn("auto-merge", `${m.message} — ${m.error ?? ""}`, { tag: t });
+          // MERGE-NO-PUSH marker: the merge landed locally but push
+          // failed. Stamp the run so the UI can show it as needing
+          // operator attention even though the gate flow succeeded.
+          if (m.message.startsWith("MERGE-NO-PUSH:")) {
+            await markMergeNotPushed(dir, run.sessionId, m.message, m.error);
+          }
         }
       } else if (app.git.integrationMode === "pull-request") {
         const d = await runDevopsAgent({
@@ -845,6 +882,16 @@ async function postExitFlow(args: {
           logInfo("auto-push", `live tree: ${r.message}`, { tag: t });
         } else {
           logWarn("auto-push", `live tree: ${r.message} — ${r.error ?? ""}`, { tag: t });
+          // Worktree-mode MERGE-NO-PUSH: the worktree branch merged
+          // into base locally (wm.ok) but the push to remote failed.
+          // Stamp the run so the UI surfaces it the same way as the
+          // live-tree path's MERGE-NO-PUSH.
+          await markMergeNotPushed(
+            dir,
+            run.sessionId,
+            `MERGE-NO-PUSH: worktree merge landed locally but push failed: ${r.message}`,
+            r.error,
+          );
         }
       }
     } catch (err) {

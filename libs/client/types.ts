@@ -30,6 +30,18 @@ export interface Run {
    * by a pre-Phase-B path. Phase C uses this to draw the agent tree.
    */
   parentSessionId?: string | null;
+  /**
+   * Set when the post-success integration merged locally but the
+   * push to the remote failed. UI renders this as a yellow
+   * "needs-push" badge so the operator notices the work hasn't
+   * reached the remote yet. See server-side `Run.mergeNotPushed`
+   * in libs/meta.ts for the authoritative shape.
+   */
+  mergeNotPushed?: {
+    message: string;
+    error: string | null;
+    at: string;
+  } | null;
 }
 
 export interface Meta {
@@ -79,6 +91,8 @@ export interface AppGitSettings {
    * `none` | `auto-merge` (local) | `pull-request` (gh/glab via devops).
    */
   integrationMode: GitIntegrationMode;
+  /** Per-app override for the `git push` timeout (5_000–600_000 ms). */
+  pushTimeoutMs?: number;
 }
 
 /**
