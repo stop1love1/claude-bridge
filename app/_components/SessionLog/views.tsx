@@ -16,6 +16,7 @@
  */
 
 import { memo, useEffect, useRef, useState } from "react";
+import { Highlight, themes, type Language } from "prism-react-renderer";
 import {
   AlertCircle,
   Asterisk,
@@ -48,6 +49,78 @@ import {
  * strikethrough, task lists. Tailwind classes are scoped per-element so
  * the output matches the dark chrome of the rest of the chat.
  */
+/**
+ * Recursively flatten a React children tree into a plain string.
+ * react-markdown hands the `<code>` renderer a children prop that
+ * is already pre-tokenized — sometimes a string, sometimes nested
+ * `<span>`s for highlight injection from upstream plugins. Prism
+ * needs the raw text, so we walk the tree and concatenate every
+ * leaf string node.
+ */
+function childrenToText(node: React.ReactNode): string {
+  if (node == null || node === false || node === true) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(childrenToText).join("");
+  if (typeof node === "object" && "props" in node) {
+    const props = (node as React.ReactElement<{ children?: React.ReactNode }>).props;
+    return childrenToText(props.children);
+  }
+  return "";
+}
+
+/**
+ * Prism-coloured code block. We map a small whitelist of language
+ * tags to prism-react-renderer's supported languages — anything
+ * unrecognised falls back to `tsx` (the common case in our reports),
+ * which still renders cleanly because Prism tokenisers are lenient.
+ *
+ * Theme `vsDark` matches the bridge's dark surface; for light mode
+ * we'd swap to `github`, but the bridge UI is dark-first so a single
+ * theme keeps the bundle smaller.
+ */
+const LANG_ALIAS: Record<string, Language> = {
+  ts: "tsx", typescript: "tsx", tsx: "tsx",
+  js: "jsx", javascript: "jsx", jsx: "jsx",
+  json: "json", json5: "json",
+  py: "python", python: "python",
+  sh: "bash", bash: "bash", shell: "bash", zsh: "bash",
+  yml: "yaml", yaml: "yaml",
+  md: "markdown", markdown: "markdown",
+  html: "markup", xml: "markup", svg: "markup",
+  css: "css", scss: "css",
+  sql: "sql",
+  go: "go", rust: "rust", java: "java",
+};
+
+const HighlightedCode: React.FC<{ lang: string; text: string }> = ({ lang, text }) => {
+  const prismLang = LANG_ALIAS[lang.toLowerCase()] ?? ("tsx" as Language);
+  return (
+    <Highlight code={text} language={prismLang} theme={themes.vsDark}>
+      {({ tokens, getLineProps, getTokenProps }) => (
+        <pre
+          className="my-1.5 rounded bg-[#1e1e1e] border border-border px-2.5 py-2 overflow-x-auto text-[11.5px] leading-relaxed"
+          style={{ margin: 0 }}
+        >
+          <span className="block text-[9px] uppercase tracking-wider text-fg-dim mb-1 select-none">
+            {lang}
+          </span>
+          {tokens.map((line, i) => {
+            const lineProps = getLineProps({ line });
+            return (
+              <div key={i} {...lineProps}>
+                {line.map((token, key) => (
+                  <span key={key} {...getTokenProps({ token })} />
+                ))}
+              </div>
+            );
+          })}
+        </pre>
+      )}
+    </Highlight>
+  );
+};
+HighlightedCode.displayName = "HighlightedCode";
+
 const MD_COMPONENTS = {
   p: (p: React.HTMLAttributes<HTMLParagraphElement>) => (
     <p className="my-1 wrap-break-word whitespace-pre-wrap" {...p} />
@@ -122,21 +195,29 @@ const MD_COMPONENTS = {
         </code>
       );
     }
+    // Fenced block: hand off to <HighlightedCode> for prism token
+    // colouring. Keep the language label header so the user still
+    // sees the language at a glance.
+    const text = childrenToText(children).replace(/\n$/, "");
+    return <HighlightedCode lang={lang} text={text} />;
+  },
+  pre: (p: React.HTMLAttributes<HTMLPreElement>) => {
+    // When the child is our <HighlightedCode>, it brings its own
+    // <pre>; render a passthrough fragment so we don't end up with
+    // nested <pre> elements (invalid HTML, breaks layout). Detect by
+    // peeking at the child's type.
+    const child = (p.children as React.ReactElement | undefined);
+    const isHighlighted =
+      child && typeof child === "object" && "type" in child &&
+      (child.type as { displayName?: string }).displayName === "HighlightedCode";
+    if (isHighlighted) return <>{p.children}</>;
     return (
-      <code className={`font-mono text-[11.5px] ${className ?? ""}`} {...rest}>
-        <span className="block text-[9px] uppercase tracking-wider text-fg-dim mb-1 select-none">
-          {lang}
-        </span>
-        {children}
-      </code>
+      <pre
+        className="my-1.5 rounded bg-background border border-border px-2.5 py-2 overflow-x-auto"
+        {...p}
+      />
     );
   },
-  pre: (p: React.HTMLAttributes<HTMLPreElement>) => (
-    <pre
-      className="my-1.5 rounded bg-background border border-border px-2.5 py-2 overflow-x-auto"
-      {...p}
-    />
-  ),
   // Task list checkboxes from remark-gfm.
   input: (p: React.InputHTMLAttributes<HTMLInputElement>) =>
     p.type === "checkbox"
