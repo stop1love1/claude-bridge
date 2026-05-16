@@ -47,6 +47,25 @@ export type RetryGate =
  *  the ladder caps silently — runaway retries cost both tokens and time. */
 export const MAX_RETRY_PER_GATE = 5;
 
+/**
+ * Per-task global ceiling — caps the **total** number of retry attempts
+ * a task may consume across ALL gates and ALL (parent, baseRole) chains.
+ *
+ * Without this, a task with multiple children + per-gate budgets ≥ 2 can
+ * legally spawn 5 (gates) × 2 (budget) × N (children) retries before
+ * anyone notices the runaway cost. The per-gate budget protects ONE
+ * chain; this ceiling protects the whole task.
+ *
+ * Counted by summing `retryAttempt` across runs[] — each retry mutates
+ * the row in place and bumps the field, so `retryAttempt=3` means 3
+ * retries fired on that chain. Base runs (no retry yet) contribute 0.
+ *
+ * Default 4: leaves room for verify→fix→re-verify on one child plus a
+ * fix on a second child, without opening the door to runaway cascades.
+ * Override per-app via `bridge.json.apps[].retry.totalCap`.
+ */
+export const DEFAULT_MAX_RETRIES_PER_TASK = 4;
+
 /** Default budget per gate when the operator hasn't configured `retry`. */
 export const DEFAULT_RETRY: Required<AppRetry> = {
   crash: 1,
@@ -55,6 +74,7 @@ export const DEFAULT_RETRY: Required<AppRetry> = {
   preflight: 1,
   style: 1,
   semantic: 1,
+  totalCap: DEFAULT_MAX_RETRIES_PER_TASK,
 };
 
 interface GateMeta {
@@ -166,6 +186,22 @@ export function isAnyRetryRole(role: string): boolean {
  * sibling counts toward the budget, otherwise concurrent triggers
  * could exceed the cap.
  */
+/**
+ * Sum retry attempts across the entire task — `retryAttempt` field on
+ * every run, treated as 0 when absent. This is the number compared
+ * against the per-task ceiling (`DEFAULT_MAX_RETRIES_PER_TASK` /
+ * `app.retry.totalCap`). Coordinator and unregistered-repo runs
+ * contribute 0 too (they never carry retryAttempt).
+ */
+export function totalRetriesInTask(meta: { runs: Run[] }): number {
+  let total = 0;
+  for (const r of meta.runs) {
+    const n = r.retryAttempt;
+    if (typeof n === "number" && Number.isFinite(n) && n > 0) total += n;
+  }
+  return total;
+}
+
 export function countRetryAttempts(
   meta: { runs: Run[] },
   parentSessionId: string | null | undefined,
@@ -230,6 +266,19 @@ export interface EligibilityArgs {
   retry: AppRetry | undefined;
 }
 
+/**
+ * Read the per-task ceiling for this app, clamped non-negative. 0 = the
+ * operator turned the global cap off (per-gate budgets still apply).
+ * Absent / invalid → `DEFAULT_MAX_RETRIES_PER_TASK`.
+ */
+export function totalCapFor(retry: AppRetry | undefined): number {
+  const cfg = retry?.totalCap;
+  if (typeof cfg === "number" && Number.isFinite(cfg) && cfg >= 0) {
+    return Math.floor(cfg);
+  }
+  return DEFAULT_MAX_RETRIES_PER_TASK;
+}
+
 export interface EligibilityResult {
   /** True iff a retry of `gate` can be spawned for `finishedRun`. */
   eligible: boolean;
@@ -276,6 +325,21 @@ export function checkEligibility(args: EligibilityArgs): EligibilityResult {
   const max = maxAttemptsFor(retry, gate);
   if (max === 0) {
     return { eligible: false, nextAttempt: 0, reason: `gate=${gate} disabled (max=0)` };
+  }
+
+  // Per-task ceiling: stops runaway cost from N children × M gates ×
+  // P budget. Counted across the WHOLE task so multiple chains share
+  // one global pool. 0 = operator disabled the cap (per-gate still gates).
+  const totalCap = totalCapFor(retry);
+  if (totalCap > 0) {
+    const usedTotal = totalRetriesInTask(meta);
+    if (usedTotal >= totalCap) {
+      return {
+        eligible: false,
+        nextAttempt: 0,
+        reason: `per-task ceiling reached: ${usedTotal}/${totalCap} retries already fired across all gates and chains`,
+      };
+    }
   }
 
   const fromMeta = countRetryAttempts(

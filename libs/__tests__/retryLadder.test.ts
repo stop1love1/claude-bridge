@@ -9,6 +9,9 @@ import {
   parseRole,
   renderStrategyPrefix,
   strategyForAttempt,
+  totalCapFor,
+  totalRetriesInTask,
+  DEFAULT_MAX_RETRIES_PER_TASK,
   MAX_RETRY_PER_GATE,
 } from "../retryLadder";
 import type { Run } from "../meta";
@@ -405,5 +408,111 @@ describe("describeRetry", () => {
   it("formats the gate label with attempt fraction", () => {
     expect(describeRetry("verify", 2, 3)).toBe("verify retry 2/3");
     expect(describeRetry("crash", 1, 1)).toBe("crash retry 1/1");
+  });
+});
+
+describe("totalCapFor", () => {
+  it("returns default when retry config is undefined", () => {
+    expect(totalCapFor(undefined)).toBe(DEFAULT_MAX_RETRIES_PER_TASK);
+  });
+  it("returns default when totalCap field is absent", () => {
+    expect(totalCapFor({ verify: 2 })).toBe(DEFAULT_MAX_RETRIES_PER_TASK);
+  });
+  it("respects an explicit totalCap override", () => {
+    expect(totalCapFor({ totalCap: 6 })).toBe(6);
+    expect(totalCapFor({ totalCap: 0 })).toBe(0); // 0 disables cap
+  });
+  it("ignores invalid totalCap (negative, NaN)", () => {
+    expect(totalCapFor({ totalCap: -3 })).toBe(DEFAULT_MAX_RETRIES_PER_TASK);
+    expect(totalCapFor({ totalCap: Number.NaN })).toBe(DEFAULT_MAX_RETRIES_PER_TASK);
+  });
+});
+
+describe("totalRetriesInTask", () => {
+  it("returns 0 for a task with no retries fired", () => {
+    expect(totalRetriesInTask({ runs: [baseRun(), baseRun({ sessionId: "x" })] })).toBe(0);
+  });
+  it("sums retryAttempt across runs", () => {
+    const runs: Run[] = [
+      baseRun({ role: "coder-vretry", retryAttempt: 1 }),
+      baseRun({ sessionId: "b", role: "fixer-cretry2", retryAttempt: 2 }),
+      baseRun({ sessionId: "c" }), // base run, no retryAttempt
+    ];
+    expect(totalRetriesInTask({ runs })).toBe(3);
+  });
+  it("ignores invalid retryAttempt values", () => {
+    const runs: Run[] = [
+      baseRun({ retryAttempt: -1 }),
+      baseRun({ sessionId: "b", retryAttempt: Number.NaN }),
+      baseRun({ sessionId: "c", retryAttempt: 2 }),
+    ];
+    expect(totalRetriesInTask({ runs })).toBe(2);
+  });
+});
+
+describe("checkEligibility — per-task ceiling", () => {
+  it("blocks retry when total cap already reached", () => {
+    // 4 retries already fired across siblings → at the default cap.
+    const runs: Run[] = [
+      baseRun({ sessionId: "a", role: "coder-vretry2", retryAttempt: 2 }),
+      baseRun({ sessionId: "b", role: "fixer-cretry2", retryAttempt: 2 }),
+    ];
+    const finishedRun = baseRun({
+      sessionId: "c",
+      role: "reviewer",
+    });
+    const res = checkEligibility({
+      finishedRun,
+      meta: { runs: [...runs, finishedRun] },
+      gate: "crash",
+      retry: undefined, // default cap = 4
+    });
+    expect(res.eligible).toBe(false);
+    expect(res.reason).toContain("per-task ceiling");
+    expect(res.reason).toContain("4/4");
+  });
+
+  it("allows retry when total is below cap", () => {
+    const runs: Run[] = [
+      baseRun({ sessionId: "a", role: "coder-vretry", retryAttempt: 1 }),
+    ];
+    const finishedRun = baseRun({ sessionId: "b", role: "fixer" });
+    const res = checkEligibility({
+      finishedRun,
+      meta: { runs: [...runs, finishedRun] },
+      gate: "crash",
+      retry: undefined,
+    });
+    expect(res.eligible).toBe(true);
+  });
+
+  it("respects totalCap=0 (cap disabled)", () => {
+    // 100 retries fired but cap disabled → eligibility falls through to
+    // per-gate budget.
+    const runs: Run[] = Array.from({ length: 50 }, (_, i) =>
+      baseRun({ sessionId: `s${i}`, role: "coder-vretry2", retryAttempt: 2 }),
+    );
+    const finishedRun = baseRun({ sessionId: "z", role: "fixer" });
+    const res = checkEligibility({
+      finishedRun,
+      meta: { runs: [...runs, finishedRun] },
+      gate: "crash",
+      retry: { totalCap: 0 },
+    });
+    expect(res.eligible).toBe(true);
+  });
+
+  it("respects an explicit higher totalCap", () => {
+    const runs: Run[] = Array.from({ length: 5 }, (_, i) =>
+      baseRun({ sessionId: `s${i}`, role: "coder-vretry", retryAttempt: 1 }),
+    );
+    const finishedRun = baseRun({ sessionId: "z", role: "fixer" });
+    const res = checkEligibility({
+      finishedRun,
+      meta: { runs: [...runs, finishedRun] },
+      gate: "crash",
+      retry: { totalCap: 8 }, // 5 < 8 → eligible
+    });
+    expect(res.eligible).toBe(true);
   });
 });

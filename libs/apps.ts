@@ -195,6 +195,18 @@ export interface AppRetry {
   preflight?: number;
   style?: number;
   semantic?: number;
+  /**
+   * Per-task global ceiling — caps the **total** number of retry
+   * attempts a task may consume across ALL gates and ALL
+   * (parent, baseRole) chains. Without this, a task with multiple
+   * children + per-gate budgets ≥ 2 can legally fire 5 gates × 2
+   * budget × N children retries before anyone notices the runaway.
+   *
+   * Counted by summing `Run.retryAttempt` across runs. Absent /
+   * undefined → `DEFAULT_MAX_RETRIES_PER_TASK` (4). 0 disables the
+   * cap entirely (per-gate budgets still apply).
+   */
+  totalCap?: number;
 }
 
 export const DEFAULT_APP_RETRY: AppRetry = {};
@@ -240,7 +252,31 @@ export interface AppDispatch {
     enabled?: boolean;
     n?: number;
     roles?: string[];
+    /**
+     * Per-app variant angles for speculative dispatch. Each entry is one
+     * angle the bridge rotates through (`index % len`) when prepending
+     * the `## Speculative variant` block to a sibling's brief. Empty /
+     * missing → use the built-in defaults (Conservative,
+     * Refactor-friendly, Defensive, Idiomatic).
+     *
+     * Use this to tune divergence for app-specific work shapes — e.g.
+     * a UI-heavy app might define angles like "Mobile-first" /
+     * "Desktop-first" / "Accessibility-first", an API app might use
+     * "Idempotent" / "Strict validation" / "Backward-compatible".
+     */
+    angles?: SpeculativeAngle[];
   };
+}
+
+/**
+ * One speculative-dispatch variant angle. `label` is the short title
+ * surfaced in the prompt header; `nudge` is the 1–3-sentence
+ * instruction that biases the agent toward that angle without
+ * over-constraining it.
+ */
+export interface SpeculativeAngle {
+  label: string;
+  nudge: string;
 }
 
 export const DEFAULT_APP_DISPATCH: AppDispatch = {};
@@ -459,7 +495,7 @@ function normalizeRetry(raw: unknown): AppRetry {
   const r = raw as Partial<Record<keyof AppRetry, unknown>>;
   const out: AppRetry = {};
   for (const key of [
-    "crash", "verify", "claim", "preflight", "style", "semantic",
+    "crash", "verify", "claim", "preflight", "style", "semantic", "totalCap",
   ] as const) {
     const v = r[key];
     if (typeof v !== "number" || !Number.isFinite(v) || v < 0) continue;
@@ -476,7 +512,7 @@ function serializeRetry(r: AppRetry | undefined): AppRetry | undefined {
   if (!r) return undefined;
   const out: AppRetry = {};
   for (const key of [
-    "crash", "verify", "claim", "preflight", "style", "semantic",
+    "crash", "verify", "claim", "preflight", "style", "semantic", "totalCap",
   ] as const) {
     const v = r[key];
     if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
@@ -523,7 +559,12 @@ function normalizeDispatch(raw: unknown): AppDispatch {
   const r = raw as { speculative?: unknown };
   const sRaw = r.speculative;
   if (!sRaw || typeof sRaw !== "object") return {};
-  const s = sRaw as { enabled?: unknown; n?: unknown; roles?: unknown };
+  const s = sRaw as {
+    enabled?: unknown;
+    n?: unknown;
+    roles?: unknown;
+    angles?: unknown;
+  };
   const enabled = s.enabled === true;
   if (!enabled) return {};
   let n = SPECULATIVE_DEFAULT_N;
@@ -540,18 +581,53 @@ function normalizeDispatch(raw: unknown): AppDispatch {
   } else {
     roles = [...SPECULATIVE_DEFAULT_ROLES];
   }
-  return { speculative: { enabled: true, n, roles } };
+  const angles = normalizeSpeculativeAngles(s.angles);
+  const speculative: NonNullable<AppDispatch["speculative"]> = {
+    enabled: true,
+    n,
+    roles,
+  };
+  if (angles.length > 0) speculative.angles = angles;
+  return { speculative };
+}
+
+/**
+ * Coerce an arbitrary `angles` value into a clean SpeculativeAngle[].
+ * Drops entries with empty label or nudge; truncates labels to 40 chars
+ * and nudges to 600 chars (the prompt block stays compact). Empty list
+ * → caller falls back to the built-in default angles.
+ */
+function normalizeSpeculativeAngles(raw: unknown): SpeculativeAngle[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SpeculativeAngle[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as { label?: unknown; nudge?: unknown };
+    if (typeof e.label !== "string" || typeof e.nudge !== "string") continue;
+    const label = e.label.trim().slice(0, 40);
+    const nudge = e.nudge.trim().slice(0, 600);
+    if (label.length === 0 || nudge.length === 0) continue;
+    out.push({ label, nudge });
+  }
+  // Cap at SPECULATIVE_MAX_N since you never need more angles than the
+  // max fan-out width; extras would never be reached at index % len.
+  return out.slice(0, SPECULATIVE_MAX_N);
 }
 
 function serializeDispatch(d: AppDispatch | undefined): AppDispatch | undefined {
   if (!d || !d.speculative || !d.speculative.enabled) return undefined;
-  return {
-    speculative: {
-      enabled: true,
-      n: d.speculative.n ?? SPECULATIVE_DEFAULT_N,
-      roles: d.speculative.roles ?? [...SPECULATIVE_DEFAULT_ROLES],
-    },
+  const speculative: NonNullable<AppDispatch["speculative"]> = {
+    enabled: true,
+    n: d.speculative.n ?? SPECULATIVE_DEFAULT_N,
+    roles: d.speculative.roles ?? [...SPECULATIVE_DEFAULT_ROLES],
   };
+  if (d.speculative.angles && d.speculative.angles.length > 0) {
+    speculative.angles = d.speculative.angles.map((a) => ({
+      label: a.label,
+      nudge: a.nudge,
+    }));
+  }
+  return { speculative };
 }
 
 /**
