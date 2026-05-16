@@ -1,7 +1,11 @@
 /**
- * Heuristic commit-message suggester for an app's live tree.
- * App-scoped sibling of the per-run suggester — same parsing /
- * heuristic logic, just runs against `app.path` directly.
+ * Commit-message suggester for an app's live tree. Tries the LLM
+ * generator first (claude reads the actual diff and writes a
+ * Conventional Commits message with body); falls back to the
+ * heuristic in this file when the LLM is disabled / times out / fails.
+ *
+ * The `?heuristic=1` query param forces the heuristic path (used by
+ * a future UI toggle and by tests that don't want to spawn claude).
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
@@ -10,6 +14,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { safeErrorMessage } from "@/libs/errorResponse";
+import { generateCommitMessageWithLLM } from "@/libs/commitMessage";
 
 export const dynamic = "force-dynamic";
 const execFileP = promisify(execFile);
@@ -116,7 +121,7 @@ function buildMessage(rows: NameStatusLine[]): string {
   return `${title}\n\n${bullets.join("\n")}`;
 }
 
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
   const { name: segment } = await ctx.params;
   const app = resolveAppFromRouteSegment(segment);
   if (!app) return NextResponse.json({ error: "app not found" }, { status: 404 });
@@ -125,7 +130,12 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "not a git repo", cwd }, { status: 404 });
   }
 
+  // `?heuristic=1` → skip the LLM entirely (UI toggle / tests).
+  const wantHeuristic = req.nextUrl.searchParams.get("heuristic") === "1";
+
   try {
+    // Collect file-status rows up front so we can (a) feed them into
+    // the heuristic, and (b) skip both paths when nothing changed.
     const headRes = await execFileP("git", ["diff", "--name-status", "-M", "HEAD"], {
       cwd, timeout: TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024,
     });
@@ -151,7 +161,38 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       seen.add(p);
       rows.push({ status: "A", path: p });
     }
-    return NextResponse.json({ message: buildMessage(rows), fileCount: rows.length, cwd });
+
+    // No changes? Both generators agree on `chore: no changes` — skip
+    // the claude spawn entirely.
+    if (rows.length === 0) {
+      return NextResponse.json({
+        message: "chore: no changes",
+        fileCount: 0,
+        cwd,
+        source: "heuristic",
+      });
+    }
+
+    // Try LLM first (unless explicitly disabled). The bridge reads the
+    // diff itself via Bash inside the spawned claude session.
+    if (!wantHeuristic) {
+      const llm = await generateCommitMessageWithLLM({ cwd });
+      if (llm) {
+        return NextResponse.json({
+          message: llm.message,
+          fileCount: rows.length,
+          cwd,
+          source: "llm",
+        });
+      }
+    }
+
+    return NextResponse.json({
+      message: buildMessage(rows),
+      fileCount: rows.length,
+      cwd,
+      source: "heuristic",
+    });
   } catch (err) {
     return NextResponse.json(
       { error: "git diff failed", detail: safeErrorMessage(err, "unknown"), cwd },

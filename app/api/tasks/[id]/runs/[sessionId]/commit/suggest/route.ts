@@ -33,6 +33,7 @@ import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
+import { generateCommitMessageWithLLM } from "@/libs/commitMessage";
 
 export const dynamic = "force-dynamic";
 const execFileP = promisify(execFile);
@@ -179,7 +180,7 @@ function buildMessage(rows: NameStatusLine[]): string {
   return `${title}\n\n${bullets.join("\n")}`;
 }
 
-export async function POST(_req: NextRequest, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: Ctx) {
   const { id, sessionId } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
@@ -219,6 +220,9 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     );
   }
 
+  // `?heuristic=1` → skip the LLM entirely (UI toggle / tests).
+  const wantHeuristic = req.nextUrl.searchParams.get("heuristic") === "1";
+
   try {
     // `--name-status -M` so renames are detected as `R`. Combine
     // HEAD diff (committed-since-HEAD changes) with the working-
@@ -255,8 +259,41 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       seen.add(p);
       rows.push({ status: "A", path: p });
     }
-    const message = buildMessage(rows);
-    return NextResponse.json({ message, fileCount: rows.length, cwd });
+
+    if (rows.length === 0) {
+      return NextResponse.json({
+        message: "chore: no changes",
+        fileCount: 0,
+        cwd,
+        source: "heuristic",
+      });
+    }
+
+    // Try LLM first (unless explicitly disabled). Pass the task title
+    // so the model has the "what was supposed to ship" context — it
+    // still grounds the subject in the actual diff, but the title
+    // helps disambiguate when the diff alone is genuinely ambiguous.
+    if (!wantHeuristic) {
+      const llm = await generateCommitMessageWithLLM({
+        cwd,
+        taskTitle: meta.taskTitle,
+      });
+      if (llm) {
+        return NextResponse.json({
+          message: llm.message,
+          fileCount: rows.length,
+          cwd,
+          source: "llm",
+        });
+      }
+    }
+
+    return NextResponse.json({
+      message: buildMessage(rows),
+      fileCount: rows.length,
+      cwd,
+      source: "heuristic",
+    });
   } catch (err) {
     return NextResponse.json(
       { error: "git diff failed", detail: safeErrorMessage(err, "unknown") },

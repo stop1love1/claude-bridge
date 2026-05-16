@@ -220,9 +220,19 @@ export const api = {
       `/tasks/${taskId}/runs/${sessionId}/commit`,
       { method: "POST", body: JSON.stringify(body) },
     ),
-  suggestCommit: (taskId: string, sessionId: string, opts?: ReqOpts) =>
-    req<{ message: string; fileCount: number; cwd: string }>(
-      `/tasks/${taskId}/runs/${sessionId}/commit/suggest`,
+  suggestCommit: (
+    taskId: string,
+    sessionId: string,
+    opts?: ReqOpts & { heuristic?: boolean },
+  ) =>
+    req<{
+      message: string;
+      fileCount: number;
+      cwd: string;
+      /** `"llm"` when Claude wrote it; `"heuristic"` for the local fallback. */
+      source: "llm" | "heuristic";
+    }>(
+      `/tasks/${taskId}/runs/${sessionId}/commit/suggest${opts?.heuristic ? "?heuristic=1" : ""}`,
       { method: "POST", signal: opts?.signal },
     ),
 
@@ -256,9 +266,18 @@ export const api = {
       `/apps/${encodeURIComponent(name)}/commit`,
       { method: "POST", body: JSON.stringify(body) },
     ),
-  appSuggestCommit: (name: string, opts?: ReqOpts) =>
-    req<{ message: string; fileCount: number; cwd: string }>(
-      `/apps/${encodeURIComponent(name)}/commit/suggest`,
+  appSuggestCommit: (
+    name: string,
+    opts?: ReqOpts & { heuristic?: boolean },
+  ) =>
+    req<{
+      message: string;
+      fileCount: number;
+      cwd: string;
+      /** `"llm"` when Claude wrote it; `"heuristic"` for the local fallback. */
+      source: "llm" | "heuristic";
+    }>(
+      `/apps/${encodeURIComponent(name)}/commit/suggest${opts?.heuristic ? "?heuristic=1" : ""}`,
       { method: "POST", signal: opts?.signal },
     ),
   appExec: (name: string, command: string) =>
