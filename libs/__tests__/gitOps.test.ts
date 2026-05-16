@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { mergeIntoTargetBranch, readCurrentBranch, withGitLock } from "../gitOps";
+import { autoCommitAndPush, mergeIntoTargetBranch, prepareBranch, readCurrentBranch, withGitLock } from "../gitOps";
 import { git, gitInit } from "./helpers/git";
 import { mktmp } from "./helpers/fs";
 
@@ -132,6 +132,113 @@ integration("mergeIntoTargetBranch (real git)", () => {
     });
     expect(r.ok).toBe(true);
     expect(r.message).toMatch(/no merge target/i);
+  });
+
+  it("MERGE-NO-PUSH: surfaces a stable marker when merge lands locally but push fails", async () => {
+    // Repo has no remote configured → push will fail with "no upstream".
+    git(repo, "checkout", "-b", "claude/t1");
+    writeFileSync(join(repo, "feature.txt"), "hi\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "feat");
+
+    const r = await mergeIntoTargetBranch({
+      cwd: repo,
+      sourceBranch: "claude/t1",
+      targetBranch: "main",
+      message: "merge claude/t1",
+      push: true, // force push attempt
+    });
+    // Merge landed locally (verify with git log), but push failed.
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/^MERGE-NO-PUSH:/);
+    const log = git(repo, "log", "--oneline", "main");
+    expect(log).toMatch(/merge claude\/t1/);
+  });
+});
+
+integration("prepareBranch — current mode dirty warning", () => {
+  let repo: string;
+
+  beforeEach(() => {
+    repo = mktmp("prep-current");
+    gitInit(repo, { email: "prep@test.local", name: "prep-test" });
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true, maxRetries: 3 });
+  });
+
+  it("returns ok with no warning when current-mode tree is clean", async () => {
+    const r = await prepareBranch(
+      repo,
+      {
+        branchMode: "current",
+        fixedBranch: "",
+        autoCommit: false,
+        autoPush: false,
+        worktreeMode: "disabled",
+        mergeTargetBranch: "",
+        integrationMode: "none",
+      },
+      "t_test",
+    );
+    expect(r.ok).toBe(true);
+    expect(r.message).not.toMatch(/WARNING/);
+    expect(r.message).toMatch(/no change/);
+  });
+
+  it("returns ok WITH WARNING string when current-mode tree is dirty", async () => {
+    writeFileSync(join(repo, "wip.txt"), "operator's uncommitted work\n");
+    const r = await prepareBranch(
+      repo,
+      {
+        branchMode: "current",
+        fixedBranch: "",
+        autoCommit: false,
+        autoPush: false,
+        worktreeMode: "disabled",
+        mergeTargetBranch: "",
+        integrationMode: "none",
+      },
+      "t_test",
+    );
+    // Non-fatal: ok stays true, but message warns.
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/WARNING/);
+    expect(r.message).toMatch(/uncommitted/);
+    expect(r.message).toMatch(/wip\.txt/);
+  });
+});
+
+integration("autoCommitAndPush — co-author email", () => {
+  let repo: string;
+
+  beforeEach(() => {
+    repo = mktmp("commit");
+    gitInit(repo, { email: "commit@test.local", name: "commit-test" });
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true, maxRetries: 3 });
+  });
+
+  it("uses noreply@anthropic.com (not the dead noreply@claude-bridge.local) in the co-author trailer", async () => {
+    writeFileSync(join(repo, "new.txt"), "hello\n");
+    const r = await autoCommitAndPush(
+      repo,
+      {
+        branchMode: "current",
+        fixedBranch: "",
+        autoCommit: true,
+        autoPush: false,
+        worktreeMode: "disabled",
+        mergeTargetBranch: "",
+        integrationMode: "none",
+      },
+      "[t_test] hello",
+    );
+    expect(r.ok).toBe(true);
+    const body = git(repo, "log", "-1", "--format=%B");
+    expect(body).toMatch(/Co-Authored-By:.*<noreply@anthropic\.com>/);
+    expect(body).not.toMatch(/noreply@claude-bridge\.local/);
   });
 });
 

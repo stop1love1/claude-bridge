@@ -54,10 +54,30 @@ const AUTO_BRANCH_PREFIX = "claude/";
  */
 const GW = globalThis as unknown as {
   __bridgeGitQueues?: Map<string, Promise<unknown>>;
+  __bridgeRemotePushQueues?: Map<string, Promise<unknown>>;
 };
 const gitQueues: Map<string, Promise<unknown>> =
   GW.__bridgeGitQueues ?? new Map<string, Promise<unknown>>();
 GW.__bridgeGitQueues = gitQueues;
+
+/**
+ * Per-REMOTE push serialization. The per-cwd `gitQueues` above
+ * only serializes ops within the same working tree — two worktrees of
+ * the same repo (different cwds) finishing within seconds of each
+ * other would happily call `git push` in parallel, racing the remote.
+ * On the remote side `git push` is not atomic across refs; the loser
+ * can come back with `non-fast-forward` after the winner advanced the
+ * branch tip.
+ *
+ * This second queue is keyed by `git remote get-url origin` so every
+ * push that targets the same upstream is serialized regardless of
+ * which cwd issued it. Cross-process locking isn't necessary here —
+ * the remote itself enforces fast-forward checks, and the bridge dev
+ * server is the only in-process git pusher in practice.
+ */
+const remotePushQueues: Map<string, Promise<unknown>> =
+  GW.__bridgeRemotePushQueues ?? new Map<string, Promise<unknown>>();
+GW.__bridgeRemotePushQueues = remotePushQueues;
 
 const LOCK_DIRNAME = ".bridge-git-lock";
 const LOCK_STALE_MS = 5 * 60 * 1000;
@@ -261,6 +281,22 @@ async function prepareBranchLocked(
   taskId: string,
 ): Promise<GitOpResult> {
   if (settings.branchMode === "current") {
+    // Dirty-tree check is non-fatal in `current` mode (it's the
+    // "use whatever the operator left here" policy, so they accept
+    // the responsibility). But surface a warning so the operator
+    // notices when a child agent is about to land changes on top of
+    // their uncommitted WIP — they may want to commit or stash first.
+    if (isGitRepo(cwd)) {
+      const dirty = await runGit(cwd, ["status", "--porcelain"]);
+      if (dirty.ok && dirty.stdout.trim().length > 0) {
+        const filesPreview = dirty.stdout.trim().split(/\r?\n/).slice(0, 5).join(", ");
+        return {
+          ok: true,
+          message:
+            `branch policy: use current — WARNING tree has uncommitted changes (${filesPreview}${dirty.stdout.split(/\r?\n/).length > 5 ? ", …" : ""}); child agent will see / potentially commit them`,
+        };
+      }
+    }
     return { ok: true, message: "branch policy: use current — no change" };
   }
   if (!isGitRepo(cwd)) {
@@ -383,18 +419,22 @@ async function autoCommitAndPushLocked(
     if (settings.autoPush) {
       // No new local commits, but there may be unpushed ones from a
       // previous run — try the push anyway. Fail-soft.
-      return tryPush(cwd);
+      return tryPush(cwd, settings.pushTimeoutMs);
     }
     return { ok: true, message: "no changes to commit" };
   }
 
   // 3. commit
+  // The Co-Authored-By line uses Anthropic's noreply address so the
+  // commit shows up under the Claude bot account on GitHub/GitLab
+  // (the previous `noreply@claude-bridge.local` resolved to nothing
+  // and lost the audit-trail value of the line).
   const commit = await runGit(cwd, [
     "commit",
     "-m",
     message,
     "-m",
-    "Co-Authored-By: claude-bridge <noreply@claude-bridge.local>",
+    "Co-Authored-By: claude-bridge <noreply@anthropic.com>",
   ]);
   if (!commit.ok) {
     return { ok: false, message: "git commit failed", error: commit.stderr };
@@ -403,7 +443,7 @@ async function autoCommitAndPushLocked(
   if (!settings.autoPush) {
     return { ok: true, message: "committed (auto-push disabled)" };
   }
-  return tryPush(cwd);
+  return tryPush(cwd, settings.pushTimeoutMs);
 }
 
 /**
@@ -426,7 +466,10 @@ const PROTECTED_BRANCHES = new Set([
   "release",
 ]);
 
-async function tryPush(cwd: string): Promise<GitOpResult> {
+async function tryPush(
+  cwd: string,
+  pushTimeoutMs: number = PUSH_TIMEOUT_MS,
+): Promise<GitOpResult> {
   const branch = await currentBranch(cwd);
   if (branch && PROTECTED_BRANCHES.has(branch.toLowerCase())) {
     return {
@@ -435,20 +478,65 @@ async function tryPush(cwd: string): Promise<GitOpResult> {
       error: `change branchMode to "fixed" or "auto-create" to land work on a non-protected branch`,
     };
   }
-  const r = await runGit(cwd, ["push"], { timeoutMs: PUSH_TIMEOUT_MS });
-  if (!r.ok) {
-    // Distinguish "no upstream" from real push failures.
-    const msg = r.stderr.toLowerCase();
-    if (msg.includes("no upstream") || msg.includes("set-upstream") || msg.includes("has no upstream branch")) {
-      return {
-        ok: false,
-        message: "auto-push skipped: no upstream branch configured",
-        error: r.stderr,
-      };
+  // Serialize across cwds that share the same remote. Resolve the
+  // remote URL up front; a missing/un-resolvable remote means we just
+  // queue under the cwd key (degrades to per-cwd serialization, which
+  // is no worse than before this queue existed).
+  const remoteKey = (await resolveRemoteKey(cwd)) ?? `cwd:${cwd}`;
+  return withRemotePushLock(remoteKey, async () => {
+    const r = await runGit(cwd, ["push"], { timeoutMs: pushTimeoutMs });
+    if (!r.ok) {
+      // Distinguish "no upstream" from real push failures.
+      const msg = r.stderr.toLowerCase();
+      if (msg.includes("no upstream") || msg.includes("set-upstream") || msg.includes("has no upstream branch")) {
+        return {
+          ok: false,
+          message: "auto-push skipped: no upstream branch configured",
+          error: r.stderr,
+        };
+      }
+      return { ok: false, message: "git push failed", error: r.stderr };
     }
-    return { ok: false, message: "git push failed", error: r.stderr };
+    return { ok: true, message: "committed + pushed" };
+  });
+}
+
+/**
+ * Resolve a stable key identifying the remote this cwd would push to.
+ * Uses `git remote get-url origin`; returns null when no origin
+ * exists or git failed. Caller falls back to a cwd-scoped key when
+ * resolution failed.
+ */
+async function resolveRemoteKey(cwd: string): Promise<string | null> {
+  const r = await runGit(cwd, ["remote", "get-url", "origin"]);
+  if (!r.ok) return null;
+  const url = r.stdout.trim();
+  return url.length > 0 ? `remote:${url}` : null;
+}
+
+/**
+ * In-process serialization keyed by remote URL. Same shape as
+ * `withGitLock` but without the cross-process file lock — the remote
+ * itself enforces fast-forward semantics, so an out-of-bridge pusher
+ * racing us just gets a `non-fast-forward` and we return ok:false
+ * with the actual git stderr. The in-process queue only fixes the
+ * common case (the bridge being its own enemy).
+ */
+async function withRemotePushLock<T>(
+  remoteKey: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = remotePushQueues.get(remoteKey) ?? Promise.resolve();
+  const next: Promise<T> = prev.then(fn, fn);
+  const tail = next.catch(() => {});
+  remotePushQueues.set(remoteKey, tail);
+  try {
+    return await next;
+  } finally {
+    if (remotePushQueues.get(remoteKey) === tail) {
+      remotePushQueues.delete(remoteKey);
+    }
   }
-  return { ok: true, message: "committed + pushed" };
 }
 
 /**
@@ -478,6 +566,8 @@ export async function mergeIntoTargetBranch(args: {
   targetBranch: string;
   message: string;
   push: boolean;
+  /** Per-app `pushTimeoutMs` override, forwarded to tryPush. */
+  pushTimeoutMs?: number;
 }): Promise<GitOpResult> {
   return withGitLock(args.cwd, () => mergeIntoTargetBranchLocked(args));
 }
@@ -488,8 +578,9 @@ async function mergeIntoTargetBranchLocked(args: {
   targetBranch: string;
   message: string;
   push: boolean;
+  pushTimeoutMs?: number;
 }): Promise<GitOpResult> {
-  const { cwd, sourceBranch, targetBranch, message, push } = args;
+  const { cwd, sourceBranch, targetBranch, message, push, pushTimeoutMs } = args;
   if (!isGitRepo(cwd)) {
     return { ok: false, message: `not a git repo: ${cwd}`, error: "missing .git" };
   }
@@ -537,7 +628,7 @@ async function mergeIntoTargetBranchLocked(args: {
   // nothing to merge — they point at the same commit. Push if asked.
   if (!targetExists) {
     if (push) {
-      const p = await tryPush(cwd);
+      const p = await tryPush(cwd, pushTimeoutMs);
       return {
         ok: p.ok,
         message: `created ${target} from ${source}; ${p.message}`,
@@ -569,11 +660,16 @@ async function mergeIntoTargetBranchLocked(args: {
   if (!push) {
     return { ok: true, message: `merged ${source} → ${target}` };
   }
-  const p = await tryPush(cwd);
+  const p = await tryPush(cwd, pushTimeoutMs);
   if (!p.ok) {
     return {
       ok: false,
-      message: `merged ${source} → ${target}, but push failed: ${p.message}`,
+      // CRIT: this branch means the merge commit LANDED LOCALLY but
+      // the push didn't reach the remote. The operator needs to know
+      // so they can push by hand (or troubleshoot). The "MERGE-NO-PUSH"
+      // tag in the message is a stable marker the UI and log greps
+      // can latch onto.
+      message: `MERGE-NO-PUSH: merged ${source} → ${target} locally, but push failed: ${p.message}`,
       error: p.error,
     };
   }

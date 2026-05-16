@@ -38,7 +38,7 @@ import {
 import { isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { AppGitSettings } from "./apps";
-import { sanitizeBranchSegment } from "./gitOps";
+import { sanitizeBranchSegment, withGitLock } from "./gitOps";
 import { readMeta } from "./meta";
 import { SESSIONS_DIR } from "./paths";
 
@@ -325,6 +325,19 @@ export async function removeWorktree(args: {
  * surfaces the error to the operator) but never throws.
  */
 export async function mergeAndRemoveWorktree(args: {
+  appPath: string;
+  handle: WorktreeHandle;
+}): Promise<WorktreeOpResult> {
+  // Serialize against any other git op on appPath (autoCommit on the
+  // live tree, mergeIntoTargetBranch, prepareBranch for the next spawn,
+  // a developer's manual `git commit`). The merge step here does
+  // `git checkout baseBranch` + `git merge --no-ff branch` on appPath
+  // — without the lock, a concurrent writer can flip HEAD between
+  // those two commands and the merge lands on the wrong branch.
+  return withGitLock(args.appPath, () => mergeAndRemoveWorktreeLocked(args));
+}
+
+async function mergeAndRemoveWorktreeLocked(args: {
   appPath: string;
   handle: WorktreeHandle;
 }): Promise<WorktreeOpResult> {

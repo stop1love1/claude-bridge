@@ -121,6 +121,14 @@ export interface AppGitSettings {
    * CLI tries to open the PR/MR.
    */
   integrationMode: GitIntegrationMode;
+  /**
+   * Override the default `git push` timeout (60s). Repos with LFS,
+   * very large diffs, or slow upstreams routinely need more time;
+   * the 60s default is generous for normal commits but too tight for
+   * a few real-world setups. Clamped to [5s, 600s]; absent / invalid
+   * → use the default.
+   */
+  pushTimeoutMs?: number;
 }
 
 export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
@@ -417,6 +425,7 @@ function normalizeGitSettings(raw: unknown): AppGitSettings {
   const autoPush = r.autoPush === true || integrationMode === "pull-request";
   const worktreeMode: GitWorktreeMode =
     r.worktreeMode === "enabled" ? "enabled" : "disabled";
+  const pushTimeoutMs = normalizePushTimeout(r.pushTimeoutMs);
   return {
     branchMode,
     fixedBranch,
@@ -425,7 +434,16 @@ function normalizeGitSettings(raw: unknown): AppGitSettings {
     worktreeMode,
     mergeTargetBranch,
     integrationMode,
+    ...(pushTimeoutMs !== undefined ? { pushTimeoutMs } : {}),
   };
+}
+
+/** Clamp the optional push timeout into [5s, 600s]; invalid → undefined. */
+function normalizePushTimeout(raw: unknown): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  const n = Math.floor(raw);
+  if (n < 5_000 || n > 600_000) return undefined;
+  return n;
 }
 
 /**
@@ -678,6 +696,9 @@ function serializeGitSettings(g: AppGitSettings | undefined): Partial<AppGitSett
   }
   if (g.integrationMode && g.integrationMode !== "none") {
     out.integrationMode = g.integrationMode;
+  }
+  if (typeof g.pushTimeoutMs === "number" && g.pushTimeoutMs > 0) {
+    out.pushTimeoutMs = g.pushTimeoutMs;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
