@@ -13,6 +13,7 @@ import {
   loadDetectInput,
   renderDetectedScope,
 } from "./detect";
+import { buildTeamHint } from "./teamHints";
 
 // Run-lifecycle wiring (succeed/fail flip + post-exit gate cascade)
 // lives in `runLifecycle.ts` so the cycle-breaking lazy-require pattern
@@ -46,7 +47,20 @@ async function buildDetectedScopeBlock(
         pinnedRepo: task.app ?? null,
       }),
     );
-    return renderDetectedScope(scope, { profiles, forCoordinator: true });
+    const scopeBlock = renderDetectedScope(scope, {
+      profiles,
+      forCoordinator: true,
+    });
+    // Append the team-hint block when the task matches a known pattern
+    // (currently: UX work on an FE-stack repo → coder → ui-tester).
+    // Returns null when no pattern matches → coordinator sees only the
+    // scope block, same as before this feature shipped.
+    const hint = buildTeamHint({
+      taskBody: task.body,
+      detectedScope: scope,
+      profiles,
+    });
+    return hint ? `${scopeBlock}\n${hint.block}` : scopeBlock;
   } catch (err) {
     console.error("buildDetectedScopeBlock failed (non-fatal)", err);
     return [
