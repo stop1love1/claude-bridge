@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Run, type RunVerifier } from "./meta";
 import { SESSIONS_DIR } from "./paths";
+import { parseRole } from "./retryLadder";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
 
@@ -97,24 +98,39 @@ export function parseChangedFiles(report: string): string[] {
 }
 
 /**
- * Locate the child's report at the canonical path written by the
- * `## Report contract` section of `buildChildPrompt`. Returns "" when
- * the file is missing — which itself becomes a `skipped` verdict
- * upstream (no claims to compare against).
+ * Locate the child's report. The agent writes its report under
+ * `<role>-<repo>.md` based on whatever role label was active when it
+ * exited. When the run is a retry, the role mutated mid-flight (e.g.
+ * `planner` → `planner-cretry`); the agent had already written its
+ * report under the OLD role name on the prior attempt, and a resumed
+ * turn may or may not re-write it under the new name.
+ *
+ * Strategy: try `<role>-<repo>.md` first (the current canonical path).
+ * On miss, fall back to `<baseRole>-<repo>.md` (the role stripped of
+ * its retry suffix + attempt digits) — that's where the original
+ * planner / coder / fixer wrote its report before the retry rename.
+ *
+ * Returns "" when neither file exists — caller maps that to a
+ * `skipped` verdict.
  */
 function readChildReport(taskId: string, run: Run): string {
-  const path = join(
-    SESSIONS_DIR,
-    taskId,
-    "reports",
-    `${run.role}-${run.repo}.md`,
-  );
-  if (!existsSync(path)) return "";
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return "";
+  const reportsDir = join(SESSIONS_DIR, taskId, "reports");
+  const primary = join(reportsDir, `${run.role}-${run.repo}.md`);
+  if (existsSync(primary)) {
+    try { return readFileSync(primary, "utf8"); } catch { /* fall through */ }
   }
+  // Retry fallback: try the base role (stripped of `-vretry` / `-cretry`
+  // / etc. + trailing digits). Only meaningful when the run is actually
+  // a retry — for base runs `parsed.baseRole === run.role` and the
+  // fallback path equals the primary path we just checked.
+  const parsed = parseRole(run.role);
+  if (parsed.gate !== null && parsed.baseRole !== run.role) {
+    const baseFile = join(reportsDir, `${parsed.baseRole}-${run.repo}.md`);
+    if (existsSync(baseFile)) {
+      try { return readFileSync(baseFile, "utf8"); } catch { /* fall through */ }
+    }
+  }
+  return "";
 }
 
 /**
