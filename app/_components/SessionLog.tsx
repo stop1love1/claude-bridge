@@ -511,8 +511,20 @@ function SessionLogInner({
         }
         dropOnArrival(run.sessionId, arrivedIds);
       }
+      // Drop optimistic user rows the moment any real user entry
+      // lands via tail: the canonical `.jsonl`-backed row supersedes
+      // the synthetic one onSent inserted. Conservative — we only
+      // strip optimistic rows when the incoming batch actually
+      // contains a user line; an assistant-only tail shouldn't clear
+      // a still-pending user optimistic (e.g. when the prior turn
+      // emits a late tool_result and the next user message hasn't
+      // been written yet).
+      const arrivedUser = lines.some((l) => l?.type === "user");
       startTransition(() => {
         setEntries((prev) => {
+          const baseline = arrivedUser
+            ? prev.filter((e) => !(e.uuid && e.uuid.startsWith("optimistic:")))
+            : prev;
           // Dedup by JSONL `uuid` against entries we already have. Belt-
           // and-braces against any path that re-delivers a line we've
           // already merged: SSE auto-reconnect racing the offset advance,
@@ -522,7 +534,7 @@ function SessionLogInner({
           // with the same key" warning at the entry-render site (the
           // `<div key={key}>` derived from `e.uuid`).
           const seen = new Set<string>();
-          for (const e of prev) {
+          for (const e of baseline) {
             if (e.uuid) seen.add(e.uuid);
           }
           const dedupLines: LogEntry[] = [];
@@ -535,9 +547,11 @@ function SessionLogInner({
             dedupLines.push(l);
             dedupOffsets.push(newLineOffsets[i] ?? 0);
           }
-          if (dedupLines.length === 0) return prev;
+          // No new lines AND no optimistic rows were stripped — keep
+          // the prior reference to avoid a needless re-render.
+          if (dedupLines.length === 0 && baseline.length === prev.length) return prev;
 
-          const merged = [...prev, ...dedupLines];
+          const merged = [...baseline, ...dedupLines];
           const mergedOffsets = [
             ...entryOffsetsRef.current,
             ...dedupOffsets,
@@ -1152,7 +1166,31 @@ function SessionLogInner({
     } catch { toast("error", "Clipboard blocked"); }
   }, [run, toast]);
 
-  const onSent = useCallback(() => setAutoScroll(true), []);
+  const onSent = useCallback(
+    (text: string) => {
+      setAutoScroll(true);
+      // Optimistic user-message render: append a synthetic entry
+      // immediately so the user sees their message in the log instead
+      // of staring at an unchanged transcript while the server spins
+      // up. `uuid` is prefixed `optimistic:` so the dedup pass in
+      // applyTail can recognize + drop these the moment the real
+      // .jsonl-backed entry arrives via tail (see "drop optimistic
+      // rows" branch above). Skip when the user only sent attachments
+      // (live text empty) — the file chip flow already gives feedback.
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const synthetic: LogEntry = {
+        type: "user",
+        uuid: `optimistic:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: trimmed },
+      };
+      startTransition(() => {
+        setEntries((prev) => [...prev, synthetic]);
+      });
+    },
+    [],
+  );
 
   const handleRewind = useCallback(async (uuid: string) => {
     if (!run) return;
@@ -1446,8 +1484,21 @@ function SessionLogInner({
                   e.uuid ||
                   e.message?.id ||
                   (e.timestamp ? `${e.timestamp}:${e.type ?? ""}` : `pos-${trimmed + i}`);
+                // Optimistic rows (synthetic user messages added by
+                // onSent before the .jsonl echoes back) read at 70%
+                // opacity so the user sees their message instantly
+                // but knows it's not yet persisted. Once the tail
+                // event arrives, the optimistic row is dropped and
+                // the canonical entry takes over at full opacity.
+                const isOptimistic = e.uuid?.startsWith("optimistic:") ?? false;
                 return (
-                  <div key={key} data-entry-key={key} className="rounded-md transition-shadow">
+                  <div
+                    key={key}
+                    data-entry-key={key}
+                    className={`rounded-md transition-shadow${
+                      isOptimistic ? " opacity-60 animate-pulse" : ""
+                    }`}
+                  >
                     <LogRow
                       entry={e}
                       sessionId={run.sessionId}

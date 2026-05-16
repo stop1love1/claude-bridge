@@ -93,7 +93,14 @@ function MessageComposerInner({
    *  seconds). When true, the Send button is replaced with a Stop
    *  button that SIGTERMs the underlying claude subprocess. */
   isResponding?: boolean;
-  onSent?: () => void;
+  /**
+   * Fired after a successful POST /message. Receives the user-visible
+   * text that was sent so the parent can optimistically append a user
+   * row to the chat log without waiting for the tail event to echo it
+   * back from the .jsonl. Empty string when only attachments were
+   * sent (no text). Not invoked on send failure or queue clear.
+   */
+  onSent?: (text: string) => void;
   onClearConversation?: () => void;
   onRewindRequest?: () => void;
 }) {
@@ -388,7 +395,10 @@ function MessageComposerInner({
             : "Queued — will send when current turn finishes",
         );
       }
-      onSent?.();
+      // Pass the user-visible text (not the finalMsg with attachment
+      // prelude) so the optimistic row reads exactly as the user typed.
+      // Empty string is fine — parent will skip the optimistic append.
+      onSent?.(live);
     } catch (err) {
       toast("error", (err as Error).message);
     } finally {
