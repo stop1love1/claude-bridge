@@ -262,10 +262,12 @@ function MessageComposerInner({
   // -- File attach --
   const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
   const onPickFile = () => fileRef.current?.click();
-  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = "";
-    if (!f) return;
+
+  // Upload a single File (from picker, paste, or future drag-drop) and
+  // append the resulting attachment chip. Centralized so the picker
+  // and paste paths can't drift — both need identical size-cap, image-
+  // dimension, progress, and toast behavior.
+  const uploadOneFile = useCallback(async (f: File) => {
     if (f.size > MAX_UPLOAD_BYTES) {
       toast("error", `File too large (${(f.size / 1024 / 1024).toFixed(1)} MB) — max 25 MB`);
       return;
@@ -297,7 +299,53 @@ function MessageComposerInner({
       setUploading(false);
       setUploadProgress(null);
     }
+  }, [sessionId, toast]);
+
+  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    await uploadOneFile(f);
   };
+
+  // Clipboard paste handler. Browsers expose pasted images as
+  // ClipboardItem files (PNG screenshot blob has no `name`, just type
+  // `image/png`); we synthesize a stable filename from the mime type
+  // and a timestamp so the attachment chip + server-side path stay
+  // unique. Pasted text falls through to the textarea's default
+  // behavior — only intercept when there's at least one image in the
+  // clipboard, otherwise plain copy/paste of code or URLs would lose
+  // its native handler. Uploads run in parallel for multi-image pastes
+  // (rare but cheap to support).
+  const onPaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.kind !== "file") continue;
+      if (!item.type.startsWith("image/")) continue;
+      const blob = item.getAsFile();
+      if (!blob) continue;
+      // Pasted PNG screenshots come through as `image.png` with a
+      // generic name. Stamp the filename with the current time +
+      // mime-derived extension so concurrent pastes don't collide
+      // on the server's content-addressed upload path.
+      const ext = item.type.split("/")[1]?.split("+")[0] ?? "bin";
+      const stamped = blob.name && blob.name !== "image.png"
+        ? blob
+        : new File([blob], `pasted-${Date.now()}.${ext}`, { type: item.type });
+      imageFiles.push(stamped);
+    }
+    if (imageFiles.length === 0) return;
+    e.preventDefault();
+    // Sequential to keep the upload-progress strip readable (parallel
+    // would race the single uploadProgress slot and you'd see flicker
+    // between filenames). Multi-image paste is rare; one-at-a-time is
+    // fine UX.
+    for (const f of imageFiles) {
+      await uploadOneFile(f);
+    }
+  }, [uploadOneFile]);
 
   const removeAttachment = (path: string) => {
     setAttachments((prev) => prev.filter((a) => a.path !== path));
@@ -521,6 +569,7 @@ function MessageComposerInner({
               setDraft((e.target as HTMLTextAreaElement).value);
             }}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             onSelect={detectMention}
             onClick={detectMention}
             onFocus={() => setFocused(true)}
