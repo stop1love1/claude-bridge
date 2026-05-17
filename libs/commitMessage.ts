@@ -90,49 +90,99 @@ export async function generateCommitMessageWithLLM(
 }
 
 /**
- * Build the prompt the model gets. Keep it tight — every extra
- * sentence is +tokens on every commit. The model reads the diff
- * itself via the Bash tool (claude -p has Bash enabled by default).
+ * Build the prompt the model gets. Tuned for **semantic** commits —
+ * the recurring failure mode in this repo was the model emitting
+ * file-list-shaped messages like `chore: update 5 files` or
+ * paraphrasing the task title without ever reading the implementation.
+ * The instructions push hard in three directions:
+ *
+ *   1. Read the actual code that changed (not just the filenames),
+ *      so the subject reflects the BEHAVIOR delta, not the noun list.
+ *   2. Pick `<type>` from what the change DOES at runtime, not from
+ *      surface heuristics like "I see new files therefore feat".
+ *   3. Body explains WHY + observable effect — what users / callers
+ *      experience differently — instead of restating the diff.
+ *
+ * Few-shot examples anchor "good" vs "bad" so the model has a target
+ * shape, not just rules. Keep the prompt long enough to hit the
+ * semantic bar but short enough that it doesn't bloat per-commit
+ * latency / cost — the model reads the diff itself via Bash; we
+ * shouldn't pre-quote it here.
  */
 export function buildPrompt(opts: GenerateCommitMessageOptions): string {
   const lines: string[] = [];
   lines.push(
-    "Write a single git commit message for the current uncommitted changes in this working tree.",
+    "Write ONE git commit message for the current uncommitted changes in this working tree.",
     "",
-    "Steps:",
-    "1. Run `git diff HEAD` to see committed-vs-working diffs. If empty, run `git diff --cached` and `git status --porcelain` to find staged + untracked changes.",
-    "2. Run `git diff HEAD -- <path>` (or `cat <path>` for untracked files) to inspect the actual content for the most important changes — don't guess from filenames alone.",
-    "3. Optionally run `git log -5 --oneline` to match the repo's existing commit style.",
+    "Your job: describe the SEMANTIC change — what behavior, contract, or invariant shifted — not the file mechanics. A commit message that reads like `git status --short` is a failure.",
+    "",
+    "Investigation steps (do all that apply):",
+    "1. `git diff HEAD` to see committed-vs-working diffs. If empty, `git diff --cached` then `git status --porcelain` for staged + untracked.",
+    "2. For each meaningfully changed file, run `git diff HEAD -- <path>` (or `cat <path>` for untracked) and READ the actual hunks. Filenames + line counts are not enough — the message must reflect what the code now does differently.",
+    "3. `git log -8 --oneline` to match the repo's existing commit style (scope vocabulary, subject phrasing).",
+    "4. If multiple files changed for the SAME reason, treat it as one semantic change. If they changed for unrelated reasons, the subject should name the dominant one and the body lists the rest as sub-bullets.",
     "",
   );
 
   if (opts.taskTitle && opts.taskTitle.trim().length > 0) {
     lines.push(
-      `Context: this commit closes the task "${opts.taskTitle.trim().slice(0, 200)}".`,
-      "Use the task title as ONE input — but ground the subject in what the diff actually shows, not in what the task body said it would do.",
+      `Context: this commit is part of the task "${opts.taskTitle.trim().slice(0, 200)}".`,
+      "The task title is ONE input, never the whole truth — ground the subject in what the diff actually shows. If the diff diverged from the task title (scope grew / shrank / pivoted), describe the diff, not the title.",
       "",
     );
   }
 
   lines.push(
-    "Output format (REQUIRED — the parser is strict):",
+    "Output format (REQUIRED — Conventional Commits, parser is strict):",
     "",
-    "- A single Conventional Commits header line: `<type>(<scope>): <subject>`",
-    `  - <type> ∈ feat | fix | refactor | docs | test | chore | perf | style | build | ci`,
-    "  - <scope> is the most specific shared directory or module name (omit + the parens if changes span unrelated areas).",
-    `  - <subject> ≤ ${SUBJECT_TARGET_CHARS} chars when possible, hard cap ${SUBJECT_CAP_CHARS}. Imperative mood ("add", "fix", "refactor" — not "added" / "adds"). No trailing period.`,
-    "- ONE blank line.",
-    "- 1-5 lines of body explaining WHAT changed and WHY (the diff already shows the what — bias toward why / context that's not obvious from the lines themselves). Wrap at ~72 chars per line. Bullet points OK if there are several distinct concerns.",
+    "Header line: `<type>(<scope>): <subject>`",
+    `- <type> ∈ feat | fix | refactor | docs | test | chore | perf | style | build | ci`,
+    "  - feat = user-visible NEW capability or API surface added",
+    "  - fix = corrects a bug — code now produces the right output where it didn't before",
+    "  - refactor = same external behavior, internal restructure",
+    "  - perf = same behavior, measurably faster / lighter",
+    "  - test / docs / chore / build / ci / style = obvious from name. Pick chore only when nothing else fits.",
+    "  - WRONG type is the most common failure: adding a file does NOT make it `feat`. If the new file is internal plumbing for an existing feature, that's `refactor`. If the change makes wrong behavior right, that's `fix` even if lines were added.",
+    "- <scope> = the most specific shared module / feature / package the diff touches (e.g. `finance`, `auth`, `coordinator-nudge`). Skip generic top-levels like `src`, `app`, `lib`. Omit `(<scope>)` entirely when changes span unrelated areas.",
+    `- <subject>: imperative mood ("add", "fix", "remove" — NOT "added" / "adds" / "adding"), ≤ ${SUBJECT_TARGET_CHARS} chars when possible (hard cap ${SUBJECT_CAP_CHARS}). No trailing period. No vague verbs ("update", "change", "improve") unless paired with a specific noun ("update auth retry budget", not "update auth").`,
+    "",
+    "Blank line.",
+    "",
+    "Body: 1–6 lines explaining WHY + the observable effect.",
+    "- Lead with the why: what was wrong / missing / suboptimal before this change.",
+    "- Then the effect: what callers / users / the system now experience.",
+    "- Skip what the diff already shows (which lines moved, which files touched).",
+    "- Bullets are fine when there are 2–4 distinct concerns; prose is fine for a single concern. Wrap at ~72 chars per line.",
+    "- Skip the body entirely for genuinely trivial changes (typo fix, one-line config tweak) — header alone is acceptable.",
     "",
     "Language: ENGLISH only.",
     "",
+    "Examples of GOOD vs BAD:",
+    "",
+    "BAD:  `chore: update 5 files`",
+    "GOOD: `fix(payments): acquire fund lock before opening transaction`",
+    "",
+    "BAD:  `feat: add new things`",
+    "GOOD: `feat(finance): expose batch invoice export with truncation flag`",
+    "",
+    "BAD:  `refactor: refactor auth code`  (verb echoing type, no noun)",
+    "GOOD: `refactor(auth): split token-refresh out of session middleware`",
+    "",
+    "BAD body: `Updated payments.service.ts, expenses.service.ts, and 3 other files.`",
+    "GOOD body:",
+    "  `Fund lock was acquired inside the Mongo transaction, so a busy Redis`",
+    "  `lock held the session open past its 3s deadline and broke the next`",
+    "  `write attempt. Move acquisition before transaction start so the`",
+    "  `session is only opened once the lock is held.`",
+    "",
     "Hard rules:",
     "- Do NOT include code fences (```), markdown headings (#), or any prose outside the message itself.",
-    '- Do NOT add a "Generated by" / "Co-Authored-By" trailer — the bridge appends that on commit.',
-    "- Do NOT describe files mechanically (\"updated 5 files\"). Describe behavior.",
-    "- If the diff is genuinely empty, output exactly: `chore: no changes`",
+    '- Do NOT add a "Generated by" / "Co-Authored-By" / "Signed-off-by" trailer — the bridge appends its own.',
+    '- Do NOT describe files mechanically ("updated 5 files", "modified config.ts"). Describe runtime behavior.',
+    '- Do NOT pad with filler ("This commit ...", "The purpose of this change is ..."). Get to the point.',
+    "- If the diff is genuinely empty after investigation, output exactly: `chore: no changes`",
     "",
-    "Output ONLY the commit message itself. No explanation, no preamble.",
+    "Output ONLY the commit message itself. No explanation, no preamble, no closing remarks.",
   );
 
   return lines.join("\n");

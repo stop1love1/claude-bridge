@@ -154,7 +154,7 @@ describe("buildPrompt", () => {
 
   it("omits the task-title section when no title", () => {
     const p = buildPrompt({ cwd: "/x" });
-    expect(p).not.toContain("Context: this commit closes the task");
+    expect(p).not.toMatch(/Context: this commit/i);
   });
 
   it("truncates a very long task title to 200 chars", () => {
@@ -175,5 +175,45 @@ describe("buildPrompt", () => {
     const p = buildPrompt({ cwd: "/x" });
     expect(p).toContain("code fences");
     expect(p).toContain("Co-Authored-By");
+  });
+
+  it("pushes hard against file-list-shaped messages (the actual failure mode)", () => {
+    // The reason this prompt was rewritten: the model kept emitting
+    // `chore: update N files` because the rules section didn't spell
+    // out that file-mechanics descriptions are forbidden. Lock it in.
+    const p = buildPrompt({ cwd: "/x" });
+    expect(p).toMatch(/SEMANTIC/i);
+    // Mechanical-description ban appears verbatim in the rules and in
+    // the BAD example — both should survive prompt edits.
+    expect(p.toLowerCase()).toContain("updated 5 files");
+  });
+
+  it("anchors quality with few-shot GOOD vs BAD examples", () => {
+    // Few-shots are the single most reliable lever for shifting LLM
+    // output shape. If someone deletes them, this test catches it.
+    const p = buildPrompt({ cwd: "/x" });
+    expect(p).toMatch(/\bGOOD\b/);
+    expect(p).toMatch(/\bBAD\b/);
+    // At least one canonical good example present.
+    expect(p).toContain("fix(payments):");
+  });
+
+  it("requires the body to lead with the why, not restate the diff", () => {
+    const p = buildPrompt({ cwd: "/x" });
+    expect(p).toMatch(/WHY/);
+    // Body must be allowed to drop entirely on trivial changes —
+    // important so the model doesn't pad header-only commits with
+    // boilerplate prose.
+    expect(p.toLowerCase()).toMatch(/header alone is acceptable/);
+  });
+
+  it("disambiguates feat vs refactor vs fix so the model doesn't default to chore", () => {
+    // The other recurring failure: `feat: …` slapped on every commit
+    // that added a file, even refactors and bugfixes. The type-by-type
+    // guidance prevents that.
+    const p = buildPrompt({ cwd: "/x" });
+    expect(p).toMatch(/feat = user-visible/);
+    expect(p).toMatch(/fix = corrects a bug/);
+    expect(p).toMatch(/refactor = same external behavior/);
   });
 });

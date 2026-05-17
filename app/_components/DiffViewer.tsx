@@ -334,6 +334,14 @@ function DiffViewerBody({
   // message on mount: the operator should always confirm wording
   // before a commit lands.
   const [commitMsg, setCommitMsg] = useState("");
+  /**
+   * Tracks whether the last auto-generate result came from the LLM
+   * (high-quality) or the heuristic fallback (file-list stub). Used
+   * to render the inline "needs edit" badge next to the textarea so
+   * the operator knows the suggestion is not commit-ready.
+   * `null` = no auto-generate run yet, or the user manually typed.
+   */
+  const [msgSource, setMsgSource] = useState<"llm" | "heuristic" | null>(null);
   const [committing, setCommitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [pushAfter, setPushAfter] = useState(false);
@@ -397,6 +405,18 @@ function DiffViewerBody({
     try {
       const r = await api.suggestCommit(taskId, sessionId);
       setCommitMsg(r.message);
+      setMsgSource(r.source);
+      // The heuristic fallback ships a file-list-shaped message
+      // (e.g. `feat(scope): add 3 files`) — useful as a starting
+      // point but not commit-quality. Surface that with both a toast
+      // and a persistent inline badge below the textarea so the
+      // operator doesn't ship it as-is thinking it came from the LLM.
+      if (r.source === "heuristic") {
+        toast(
+          "info",
+          "⚠ Claude unavailable — generated a file-list stub. Please edit before committing.",
+        );
+      }
     } catch (e) {
       toast("error", `Suggest failed: ${(e as Error).message}`);
     } finally {
@@ -416,6 +436,7 @@ function DiffViewerBody({
       }
       toast("success", r.message);
       setCommitMsg("");
+      setMsgSource(null);
       // Refresh the diff so the just-committed changes drop out of
       // the working-tree view immediately.
       setLoading(true);
@@ -469,7 +490,13 @@ function DiffViewerBody({
         <div className="relative">
           <textarea
             value={commitMsg}
-            onChange={(e) => setCommitMsg(e.target.value)}
+            onChange={(e) => {
+              setCommitMsg(e.target.value);
+              // Any manual edit invalidates the "this came from
+              // heuristic" badge — once the operator has touched it,
+              // the message is theirs regardless of how it started.
+              if (msgSource !== null) setMsgSource(null);
+            }}
             placeholder={
               entries.length === 0
                 ? "Nothing to commit"
@@ -506,6 +533,18 @@ function DiffViewerBody({
             />
             Push after commit
           </label>
+          {msgSource === "heuristic" && (
+            // Persistent inline marker — toast fades, badge doesn't. Keeps
+            // pressure on the operator to edit the file-list stub before
+            // shipping. Cleared by the textarea's onChange (manual edit
+            // = ownership) and by a successful commit (msgSource reset).
+            <span
+              className="inline-flex items-center gap-1 text-[10.5px] text-amber-600 dark:text-amber-400 leading-none"
+              title="Claude was unavailable — this is a file-list stub from the heuristic fallback. Please edit before committing."
+            >
+              ⚠ heuristic fallback — please edit
+            </span>
+          )}
           <Button
             size="sm"
             onClick={commit}
