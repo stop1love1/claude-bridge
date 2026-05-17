@@ -33,7 +33,7 @@
  *     fires from the same lifecycle exit handler can land its `queued`
  *     row before we see "all terminal"
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   emitCoordinatorNudge,
@@ -90,6 +90,64 @@ export function isSummaryMissing(taskId: string): boolean {
     // the file genuinely failed to write.
     return true;
   }
+}
+
+/**
+ * Returns true when `summary.md` exists but is older than the latest
+ * child's `endedAt`. Distinct from `isSummaryMissing` so the nudge
+ * decision can differentiate three states:
+ *   - missing  → coordinator hasn't shipped yet (round 1)
+ *   - present + fresh → round done, no nudge needed
+ *   - present + stale → coordinator wrote a summary in an earlier
+ *                       round, then new children finished in a later
+ *                       round → must re-nudge or the coordinator goes
+ *                       silent and the user has to chat "ping" to
+ *                       restart the turn. This is the "im lặng round 2"
+ *                       bug: the summary on disk is from round 1 but
+ *                       round 2's children just settled.
+ *
+ * Comparison is mtime (summary.md) vs max(endedAt) across runs whose
+ * `parentSessionId === parentSessionId` AND `status` is terminal. We
+ * only consider children of THIS coordinator so an unrelated child
+ * for another task (impossible in the per-task SESSIONS_DIR layout,
+ * but defensive) doesn't trigger staleness.
+ *
+ * Returns false when:
+ *   - summary.md doesn't exist (caller should ask `isSummaryMissing`)
+ *   - no terminal children yet (nothing to compare against)
+ *   - mtime ≥ latest child endedAt (summary covers the most recent
+ *     child)
+ *   - any error reading mtime / endedAt (be conservative — better to
+ *     skip a nudge than fire a spurious one)
+ */
+export function isSummaryStale(args: {
+  taskId: string;
+  parentSessionId: string;
+  runs: Run[];
+}): boolean {
+  const path = join(SESSIONS_DIR, args.taskId, "summary.md");
+  if (!existsSync(path)) return false;
+  let summaryMtime: number;
+  try {
+    summaryMtime = statSync(path).mtimeMs;
+  } catch {
+    return false;
+  }
+  let latestChildEnd = 0;
+  for (const r of args.runs) {
+    if (r.parentSessionId !== args.parentSessionId) continue;
+    if (!isTerminal(r.status)) continue;
+    if (!r.endedAt) continue;
+    const t = Date.parse(r.endedAt);
+    if (Number.isNaN(t)) continue;
+    if (t > latestChildEnd) latestChildEnd = t;
+  }
+  if (latestChildEnd === 0) return false;
+  // 1s tolerance — mtime has sub-second precision but `endedAt` is ISO
+  // and the order between "child writes report" and "coordinator writes
+  // summary" is bridge-internal. Without the tolerance, a fresh summary
+  // written immediately after the last child's exit can read as stale.
+  return latestChildEnd > summaryMtime + 1000;
 }
 
 interface NudgeState {
@@ -224,6 +282,17 @@ export function decideNudge(args: {
    */
   summaryMissing?: boolean;
   /**
+   * Whether `summary.md` exists but is OLDER than the most recent
+   * child's `endedAt` (i.e. coordinator wrote a round-1 summary, then
+   * round-2 children just settled — the on-disk summary doesn't cover
+   * them). When true, we override the "summary already written" skip
+   * and nudge anyway, because the coordinator genuinely needs to react
+   * to the new work. Counts against the summary-nudge attempt budget
+   * the same way a missing summary does (caps runaway loops if the
+   * coordinator keeps producing stale summaries).
+   */
+  summaryStale?: boolean;
+  /**
    * How many times we've already nudged THIS coordinator specifically
    * because of a missing summary. Caps the resume loop so a model that
    * genuinely can't write the file doesn't get hammered forever.
@@ -254,7 +323,12 @@ export function decideNudge(args: {
   // passed. Callers (notably `evaluateAndNudge` below) read the file
   // and pass the real value.
   const summaryMissing = args.summaryMissing ?? true;
-  if (!summaryMissing) {
+  const summaryStale = args.summaryStale ?? false;
+  // Stale overrides "already written": coordinator did ship a summary
+  // for round 1, but new children just finished in round 2 and need
+  // a fresh aggregation. Without this branch the round-2 work goes
+  // unread and the user has to manually re-ping.
+  if (!summaryMissing && !summaryStale) {
     return { kind: "skip", reason: "summary already written" };
   }
   const attempts = args.summaryNudgeAttempts ?? 0;
@@ -431,6 +505,8 @@ async function evaluateAndNudge(
   if (!meta) return;
 
   const summaryMissing = isSummaryMissing(taskId);
+  const summaryStale = !summaryMissing
+    && isSummaryStale({ taskId, parentSessionId, runs: meta.runs });
   const attemptsSoFar = state.summaryNudgeAttempts.get(parentSessionId) ?? 0;
 
   // ─── Summary nudge exhausted → mark coordinator BLOCKED ────────────
@@ -513,14 +589,19 @@ async function evaluateAndNudge(
     lastNudgeAt: state.lastNudge.get(parentSessionId) ?? null,
     now,
     summaryMissing,
+    summaryStale,
     summaryNudgeAttempts: state.summaryNudgeAttempts.get(parentSessionId) ?? 0,
   });
   if (decision.kind !== "nudge") {
-    // Coordinator finished cleanly with summary on disk — clear any
-    // counted attempts so a future task with the same coordinator
-    // sessionId (won't happen in practice, but the map is keyed by
-    // sessionId so it's safe to be tidy) starts fresh.
-    if (!summaryMissing) state.summaryNudgeAttempts.delete(parentSessionId);
+    // Coordinator finished cleanly with summary on disk AND the
+    // summary is current — clear any counted attempts so a future task
+    // with the same coordinator sessionId (won't happen in practice,
+    // but the map is keyed by sessionId so it's safe to be tidy)
+    // starts fresh. A stale summary leaves the counter alone so a
+    // coordinator that keeps producing stale summaries hits the cap.
+    if (!summaryMissing && !summaryStale) {
+      state.summaryNudgeAttempts.delete(parentSessionId);
+    }
     return;
   }
 
@@ -663,15 +744,105 @@ export function scheduleCoordinatorEvaluation(
 }
 
 /**
+ * One-shot startup sweep: walk every task dir, and for each one whose
+ * coordinator might be stuck (children all terminal, coordinator process
+ * gone, summary missing or stale), schedule an evaluation through the
+ * normal `decideNudge` path. This catches tasks that got wedged between
+ * bridge restarts — the meta-change subscription only sees LIVE
+ * transitions, so if children settled while the bridge was down (or
+ * before the fix was deployed), no event ever fires and the coordinator
+ * stays mute forever until the operator manually pings.
+ *
+ * Cheap: we read each `meta.json` once (already-cached by `readMeta`),
+ * run pure decision logic, and only spawn timers for the rare stuck
+ * cases. `decideNudge` itself filters out anything that's actually
+ * fine (alive coordinator, children still running, summary current,
+ * nudge attempts exhausted) — this sweep just exercises the same
+ * gates with a synthetic trigger label so logs distinguish them.
+ *
+ * Errors per task are swallowed and logged so one bad meta.json
+ * doesn't sink the rest of the sweep.
+ */
+function runStartupSweep(): void {
+  if (!existsSync(SESSIONS_DIR)) return;
+  let ids: string[];
+  try {
+    ids = readdirSync(SESSIONS_DIR);
+  } catch (e) {
+    logWarn("coordinator-nudge", "startup sweep: could not list SESSIONS_DIR", {
+      error: (e as Error).message,
+    });
+    return;
+  }
+
+  let scheduled = 0;
+  for (const taskId of ids) {
+    try {
+      const dir = join(SESSIONS_DIR, taskId);
+      const meta = readMeta(dir);
+      if (!meta) continue;
+      const coord = meta.runs.find((r) => r.role === "coordinator");
+      if (!coord) continue;
+      const children = meta.runs.filter(
+        (r) => r.parentSessionId === coord.sessionId,
+      );
+      if (children.length === 0) continue;
+      if (children.some((r) => !isTerminal(r.status))) continue;
+      // `isAlive` here is a coarse skip — the real check happens
+      // inside `decideNudge`. Re-checked there because the alive
+      // table could change between this sweep and the eval timer.
+      if (isAlive(coord.sessionId)) continue;
+      // Same gate `decideNudge` will apply: only schedule when the
+      // current on-disk summary is missing OR stale. Avoids waking
+      // every healthy coordinator on boot just to have it skip.
+      const summaryMissing = isSummaryMissing(taskId);
+      const summaryStale = !summaryMissing
+        && isSummaryStale({
+          taskId,
+          parentSessionId: coord.sessionId,
+          runs: meta.runs,
+        });
+      if (!summaryMissing && !summaryStale) continue;
+
+      scheduleCoordinatorEvaluation(taskId, coord.sessionId, "startup-sweep");
+      scheduled++;
+    } catch (e) {
+      logWarn("coordinator-nudge", `startup sweep: skipped ${taskId}`, {
+        error: (e as Error).message,
+      });
+    }
+  }
+  if (scheduled > 0) {
+    logInfo("coordinator-nudge", `startup sweep scheduled ${scheduled} stuck coordinator(s)`);
+  }
+}
+
+/**
  * Idempotent installer. Wired from `instrumentation.ts` at server boot
  * (and re-run on Next.js HMR — the `installed` flag stashed on
  * globalThis prevents double-subscription).
+ *
+ * Also kicks off a one-shot startup sweep (`runStartupSweep`) so any
+ * tasks wedged from before the bridge restarted (or from before the
+ * stale-summary fix was deployed) get re-evaluated through the normal
+ * nudge gates. Deferred behind a microtask so install completes first
+ * — keeps the sync path of the boot sequence fast.
  */
 export function ensureCoordinatorNudge(): void {
   if (state.installed) return;
   state.installed = true;
   state.unsubscribe = subscribeMetaAll(onMetaChange);
   logInfo("coordinator-nudge", "installed");
+  // Microtask defer — instrumentation.ts is awaited synchronously
+  // during boot, and we don't want a slow disk scan blocking the
+  // notifier / shutdown handler installs that follow.
+  queueMicrotask(() => {
+    try {
+      runStartupSweep();
+    } catch (e) {
+      logError("coordinator-nudge", "startup sweep failed", e);
+    }
+  });
 }
 
 /**

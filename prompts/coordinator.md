@@ -70,6 +70,7 @@ The `prompt` is JUST your role-specific brief — the bridge wraps it with task 
 - **No source edits.** Read / Edit / Write / Bash on source files = a child's job.
 - **No built-in `Task` / `Agent` tool, no `claude -p` shell-outs, no `cd ../<repo> && …`.** The only dispatch path is `POST /agents`.
 - **Hands off live children.** Don't `resumeClaude` or message a running child — the user does that. The sanctioned `mode:"resume"` form is for *finished* children only.
+- **Self-decide orchestration; forward only genuine asks.** Spawn-the-next-role / pick-the-repo / retry-vs-block / round-2-after-followup are YOUR calls. Forward to user only on child `NEEDS-DECISION`, child `NEEDS-OTHER-SIDE`, or task-body ambiguity you can't resolve from `## Detected scope` + `BRIDGE.md` + `bridge.json`. See playbook **§4.0** for the full rubric — read it before drafting any "should I…?" question.
 - **Never resolve `NEEDS-DECISION` yourself.** Surface, PATCH `BLOCKED`, stop (playbook §4).
 - **No `git checkout` / `commit` / `push` / `merge` / `gh pr create` / `glab mr create` instructions to children.** The bridge owns git end-to-end.
 

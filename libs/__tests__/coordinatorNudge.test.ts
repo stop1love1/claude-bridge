@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   decideNudge,
+  isSummaryStale,
   shouldFinalizeDeferredCoordinator,
   shouldMarkCoordinatorSummaryBlocked,
 } from "../coordinatorNudge";
@@ -213,6 +214,60 @@ describe("decideNudge — summary-aware branches", () => {
     });
     expect(decision.kind).toBe("nudge");
   });
+
+  it("nudges when summary is present but STALE (round-2 children finished after round-1 summary)", () => {
+    // The bug this guards: coordinator finishes round 1, writes
+    // summary.md, exits. User asks for more work via chat, coordinator
+    // resumes, spawns round-2 children. They finish — but the old skip
+    // ("summary already written") would suppress the nudge and the
+    // coordinator stays silent until the user pings manually.
+    const decision = decideNudge({
+      parentSessionId: COORD_SID,
+      runs: [coordinator(), child(CHILD_A_SID, "done")],
+      isAlive: NEVER_ALIVE,
+      lastNudgeAt: null,
+      now: 1_000_000,
+      summaryMissing: false,
+      summaryStale: true,
+      summaryNudgeAttempts: 0,
+    });
+    expect(decision.kind).toBe("nudge");
+  });
+
+  it("still skips when summary is fresh (NOT stale) — round 1 close path", () => {
+    // Counterpart to the stale test: when summary covers the latest
+    // child exit, no nudge fires. Keeps the round-1 finalize path
+    // working and prevents spurious wake-ups.
+    const decision = decideNudge({
+      parentSessionId: COORD_SID,
+      runs: [coordinator(), child(CHILD_A_SID, "done")],
+      isAlive: NEVER_ALIVE,
+      lastNudgeAt: null,
+      now: 1_000_000,
+      summaryMissing: false,
+      summaryStale: false,
+    });
+    expect(decision).toEqual({ kind: "skip", reason: "summary already written" });
+  });
+
+  it("stale summary still respects the SUMMARY_NUDGE_MAX_ATTEMPTS cap", () => {
+    // A coordinator that keeps producing stale summaries would loop
+    // forever without this guard. Same cap as the missing-summary case.
+    const decision = decideNudge({
+      parentSessionId: COORD_SID,
+      runs: [coordinator(), child(CHILD_A_SID, "done")],
+      isAlive: NEVER_ALIVE,
+      lastNudgeAt: null,
+      now: 1_000_000,
+      summaryMissing: false,
+      summaryStale: true,
+      summaryNudgeAttempts: 3,
+    });
+    expect(decision).toEqual({
+      kind: "skip",
+      reason: "summary nudge attempts exhausted",
+    });
+  });
 });
 
 describe("isSummaryMissing", () => {
@@ -276,6 +331,121 @@ describe("isSummaryMissing", () => {
     );
     const { isSummaryMissing } = await import("../coordinatorNudge");
     expect(isSummaryMissing(taskId)).toBe(false);
+  });
+});
+
+describe("isSummaryStale (round-2 freshness check)", () => {
+  let tempSessionsRoot: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    // Same chdir-then-resetModules dance as the `isSummaryMissing`
+    // suite — `SESSIONS_DIR` snapshots `process.cwd()` at module load.
+    originalCwd = process.cwd();
+    tempSessionsRoot = mkdtempSync(join(tmpdir(), "bridge-stale-"));
+    process.chdir(tempSessionsRoot);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    vi.resetModules();
+    try {
+      rmSync(tempSessionsRoot, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  it("returns false when summary.md doesn't exist (no comparison possible)", async () => {
+    const { isSummaryStale } = await import("../coordinatorNudge");
+    expect(
+      isSummaryStale({
+        taskId: "t_99990101_010",
+        parentSessionId: COORD_SID,
+        runs: [coordinator(), child(CHILD_A_SID, "done")],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when no terminal children of this parent exist", async () => {
+    const taskId = "t_99990101_011";
+    const dir = join(tempSessionsRoot, "sessions", taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "summary.md"), "READY FOR REVIEW", "utf8");
+    const { isSummaryStale } = await import("../coordinatorNudge");
+    expect(
+      isSummaryStale({
+        taskId,
+        parentSessionId: COORD_SID,
+        runs: [coordinator(), child(CHILD_A_SID, "running")],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when summary mtime is older than the latest child's endedAt", async () => {
+    const taskId = "t_99990101_012";
+    const dir = join(tempSessionsRoot, "sessions", taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "summary.md"), "READY FOR REVIEW — round 1", "utf8");
+    const { isSummaryStale } = await import("../coordinatorNudge");
+    // Stamp the round-2 child as ending far in the future so the mtime
+    // comparison is unambiguous regardless of FS clock skew.
+    const futureEnd = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    expect(
+      isSummaryStale({
+        taskId,
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator(),
+          child(CHILD_A_SID, "done", { endedAt: futureEnd }),
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when summary mtime is newer than every child's endedAt", async () => {
+    const taskId = "t_99990101_013";
+    const dir = join(tempSessionsRoot, "sessions", taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "summary.md"), "READY FOR REVIEW — fresh", "utf8");
+    const { isSummaryStale } = await import("../coordinatorNudge");
+    // Child finished an hour ago; summary was just written.
+    const pastEnd = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    expect(
+      isSummaryStale({
+        taskId,
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator(),
+          child(CHILD_A_SID, "done", { endedAt: pastEnd }),
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores children that aren't direct descendants of parentSessionId", async () => {
+    const taskId = "t_99990101_014";
+    const dir = join(tempSessionsRoot, "sessions", taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "summary.md"), "READY FOR REVIEW", "utf8");
+    const { isSummaryStale } = await import("../coordinatorNudge");
+    const futureEnd = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    // Future-ended run belongs to a different parent — must not
+    // trigger staleness for COORD_SID.
+    expect(
+      isSummaryStale({
+        taskId,
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator(),
+          child(CHILD_A_SID, "done", {
+            parentSessionId: "different-parent",
+            endedAt: futureEnd,
+          }),
+        ],
+      }),
+    ).toBe(false);
   });
 });
 

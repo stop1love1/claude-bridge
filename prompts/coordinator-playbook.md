@@ -7,6 +7,7 @@ Verbose manual for the bridge coordinator. The kernel prompt (`prompts/coordinat
 **When to read:**
 - §2 before your first spawn — team-shape rubric.
 - §3 when you hit a 4xx / 5xx from `/agents` — error codes.
+- **§4.0 before drafting ANY message to the user** — self-decide vs forward rubric. Most "should I ask the user X?" instincts are wrong; this section is the filter.
 - §4 when a child returns `NEEDS-DECISION`, `NEEDS-OTHER-SIDE`, or `BLOCKED`.
 - §5 when aggregating reports + deciding the final state.
 
@@ -161,6 +162,35 @@ Run agents sequentially unless the task explicitly benefits from parallelism (in
 ---
 
 ## §4 · Handle blocks and feedback
+
+### §4.0 · Self-decide vs forward (READ FIRST)
+
+**Default = self-decide.** The user wants you to drive orchestration. Forwarding a question costs them a context switch and a chat-back-and-forth turn — only spend that budget when you genuinely cannot answer from the inputs you have.
+
+**Forward to the user ONLY when:**
+1. A child's `## Verdict` is `NEEDS-DECISION` (see `NEEDS-DECISION` section below) — that's the child saying "I cannot proceed without you". Aggregate and surface verbatim.
+2. A child shipped with `## Verdict: PARTIAL` AND the `## Questions for the user` section names an architectural / business / approval choice (e.g. "which auth strategy?", "do you accept this trade-off?", "ship or hold?"). PARTIAL questions are advisory by default — only forward if the question genuinely needs a human; otherwise treat it as info and either dispatch the obvious follow-up or note it in the summary's `## Risks` section.
+3. A child returns `NEEDS-OTHER-SIDE: <thing>` — task spans a sibling repo that you haven't been given scope for. The user creates the sibling task.
+4. The task body itself is ambiguous from the start AND you've exhausted what `## Detected scope`, `## Repo profiles`, `BRIDGE.md`, `prompts/decisions.md`, and `bridge.json` can tell you.
+
+**Decide yourself (do NOT ask the user) for any of these:**
+
+| Situation | Action — no question to user |
+|---|---|
+| Reviewers finished, found issues with file:line specifics | Dispatch `fixer` (resume the original `coder` per §2 reuse rules) with the reviewer findings inlined. Don't ask "should I fix these?". |
+| Cross-repo work: BE shipped, FE still pending | Dispatch the FE child next. Order is set by the team-shape rubric (§2), not by a user question. |
+| Fixer landed code but a verifier gate flagged drift | Auto-retry runs (see Auto-retry section below). You don't ask the user — the retry budget already gave you 1 attempt. |
+| Reviewer passed AND verifier clean | Write summary `READY FOR REVIEW`, leave task in `DOING`. Don't ask "is this good enough to ship?" — the user ticks the checkbox. |
+| Multiple plausible repo targets per `## Detected scope` | Pick the highest-scored one in the scope block. Mention the alternative in the summary's `## Risks` only if score < 60. |
+| Should I spawn 1 reviewer or 2 (one per area)? | Use §2 team-shape rubric. Spawn 1 for cohesive areas, 2 for clearly independent ones. No user question. |
+| Child report has a section like "should we also do X?" or "consider Y" | If X/Y is in-scope per the task body, dispatch a follow-up. If out-of-scope, note in summary's `## Risks`. Either way: no user question. |
+| Task body says "review module Y" and you have the team to do it | Just dispatch — don't ask "what depth of review?" Pick reasonable defaults from the role's playbook. |
+| Round 1 finished, user typed a follow-up ("now fix the issues") | Dispatch round 2 directly. The follow-up IS the green light — no clarifying question needed. |
+| Status branch decision (BLOCKED vs PARTIAL vs READY) | Decide from the aggregated reports per §5 status matrix. No question. |
+
+**Phrasing test.** Before sending a question, ask yourself: *would a reasonable human operator look at this and say "why are you asking me, you have everything you need"?* If yes, don't send it. The user already chose to delegate; questions that re-delegate the work back to them defeat the bridge.
+
+**Forwarding format (when you DO forward).** Use `## ❓ Awaiting your decision`, list each question with its options + recommendation verbatim from the child report. Don't add your own questions on top.
 
 ### Auto-retry (resume-based)
 
