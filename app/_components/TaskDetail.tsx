@@ -14,7 +14,9 @@ import {
   GitBranch,
   RotateCw,
   Download,
+  Link2,
 } from "lucide-react";
+import { ShareTaskDialog } from "./ShareTaskDialog";
 import { exportTaskMarkdown, downloadFile } from "@/libs/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
 import { StatusDot } from "./StatusDot";
@@ -70,6 +72,7 @@ function TaskDetailInner({
   const [toggling, setToggling] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [usage, setUsage] = useState<TokenTotals | null>(null);
   const toast = useToast();
   const confirm = useConfirm();
@@ -241,6 +244,15 @@ function TaskDetailInner({
             </span>
           </Button>
           <Button
+            onClick={() => setShareOpen(true)}
+            variant="ghost"
+            size="iconSm"
+            title="Share this task with a link"
+            className="text-fg-dim hover:text-foreground h-6 w-6"
+          >
+            <Link2 size={13} />
+          </Button>
+          <Button
             onClick={() => downloadFile(`${task.id}.md`, exportTaskMarkdown(task, meta))}
             variant="ghost"
             size="iconSm"
@@ -259,6 +271,8 @@ function TaskDetailInner({
             <Trash2 size={13} />
           </Button>
         </div>
+
+        <ShareTaskDialog taskId={task.id} open={shareOpen} onOpenChange={setShareOpen} />
 
         {task.checked && (
           <div

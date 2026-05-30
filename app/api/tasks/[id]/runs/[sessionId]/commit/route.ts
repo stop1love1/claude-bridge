@@ -35,6 +35,7 @@ import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
+import { verifyRequestActor } from "@/libs/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -70,7 +71,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (message.length > MAX_MESSAGE_BYTES) {
     return badRequest(`message too long (max ${MAX_MESSAGE_BYTES} bytes)`);
   }
-  const push = !!body.push;
+  let push = !!body.push;
+  // A task-share guest may push only when the share grants `push`. The
+  // proxy already confirmed the `commit` grant to let this route run;
+  // the push sub-flag is enforced here where we know the actor.
+  const actor = verifyRequestActor(req);
+  if (actor?.kind === "guest" && !actor.grants.push) push = false;
 
   const dir = join(SESSIONS_DIR, id);
   const meta = readMeta(dir);

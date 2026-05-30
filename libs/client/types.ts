@@ -20,6 +20,13 @@ export interface Run {
   sessionId: string;
   role: string;
   repo: string;          // folder name of the repo this run targets
+  /**
+   * Absolute path of `repo`, resolved server-side and surfaced by
+   * `GET /api/tasks/<id>/meta`. The operator UI usually derives this from
+   * the repos list; a task-share guest (which can't list repos) relies on
+   * it to open the session tail stream. Absent if the repo can't resolve.
+   */
+  repoPath?: string | null;
   status: RunStatus;
   startedAt: string | null;
   endedAt: string | null;
