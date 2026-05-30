@@ -185,7 +185,7 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
           {phase === "error" ? (
             <div className="grid gap-2 text-sm">
               <div className="text-destructive">This share link is invalid or expired.</div>
-              {error ? <p className="text-xs text-muted-foreground break-words">{error}</p> : null}
+              {error ? <p className="text-xs text-muted-foreground wrap-break-word">{error}</p> : null}
               <Button variant="ghost" onClick={() => setPhase("gate")}>Retry</Button>
             </div>
           ) : null}

@@ -201,7 +201,7 @@ const MD_COMPONENTS = {
       // shoving the chat scroll area wider than the mobile viewport.
       return (
         <code
-          className="px-1 py-px rounded bg-secondary border border-border text-[11px] font-mono [overflow-wrap:anywhere]"
+          className="px-1 py-px rounded bg-secondary border border-border text-[11px] font-mono wrap-anywhere"
           {...rest}
         >
           {children}
