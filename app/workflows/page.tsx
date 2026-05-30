@@ -101,14 +101,14 @@ function WorkflowsPage() {
         <div className="p-4 sm:p-6 max-w-3xl mx-auto space-y-5 sm:space-y-6">
           <div className="flex items-center gap-2 mb-1">
             <WorkflowIcon size={18} className="text-primary" />
-            <h2 className="text-base sm:text-lg font-semibold">Quy trình</h2>
+            <h2 className="text-base sm:text-lg font-semibold">Workflows</h2>
           </div>
           <p className="text-[11px] sm:text-xs text-muted-foreground">
-            Tự động hoá 24/7: chạy task theo lịch (cron), tự bơm các task gắn cờ
-            <span className="font-mono text-foreground"> auto </span>
-            từ hàng đợi (theo trần đồng thời), và theo dõi tiến trình nền. Quy
-            trình không bao giờ tự đánh dấu DONE — vẫn dừng ở READY FOR REVIEW
-            chờ bạn duyệt.
+            24/7 automation: run tasks on a schedule (cron), auto-dispatch{" "}
+            <span className="font-mono text-foreground">auto</span>-flagged tasks
+            from the queue (within the concurrency cap), and monitor the
+            background process. Workflows never auto-mark a task DONE — they stop
+            at READY FOR REVIEW for you to confirm.
           </p>
 
           {status && <StatusPanel status={status} />}
@@ -118,15 +118,15 @@ function WorkflowsPage() {
 
           <section className="space-y-2">
             <h3 className="text-xs uppercase tracking-wide text-muted-foreground">
-              Lịch ({workflows.length})
+              Schedules ({workflows.length})
             </h3>
             {loading ? (
-              <p className="text-xs text-muted-foreground">Đang tải…</p>
+              <p className="text-xs text-muted-foreground">Loading…</p>
             ) : workflows.length === 0 ? (
               <EmptyState
                 icon={CalendarClock}
-                title="Chưa có quy trình nào"
-                hint="Tạo một lịch ở trên để bridge tự tạo + dispatch task định kỳ."
+                title="No workflows yet"
+                hint="Create a schedule above so the bridge mints + dispatches tasks periodically."
               />
             ) : (
               workflows.map((wf) => (
@@ -161,16 +161,16 @@ function StatusPanel({ status }: { status: SchedulerStatus }) {
         ) : (
           <Activity size={14} className="text-amber-500" />
         )}
-        <h3 className="text-[13px] sm:text-sm font-semibold">Trạng thái 24/7</h3>
+        <h3 className="text-[13px] sm:text-sm font-semibold">24/7 status</h3>
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
         <dt className="text-muted-foreground">Scheduler</dt>
-        <dd>{status.installed ? "đang chạy" : "chưa cài"}</dd>
-        <dt className="text-muted-foreground">Tiến trình chính (lock)</dt>
-        <dd>{status.isLockHolder ? "process này" : "process khác / chưa có"}</dd>
-        <dt className="text-muted-foreground">Tick gần nhất</dt>
+        <dd>{status.installed ? "running" : "not installed"}</dd>
+        <dt className="text-muted-foreground">Lock holder</dt>
+        <dd>{status.isLockHolder ? "this process" : "other process / none"}</dd>
+        <dt className="text-muted-foreground">Last tick</dt>
         <dd className="font-mono">{fmtTime(status.lastTickAt)}</dd>
-        <dt className="text-muted-foreground">Chu kỳ tick</dt>
+        <dt className="text-muted-foreground">Tick interval</dt>
         <dd className="font-mono">{Math.round(status.tickIntervalMs / 1000)}s</dd>
         {status.holder && (
           <>
@@ -182,7 +182,7 @@ function StatusPanel({ status }: { status: SchedulerStatus }) {
         )}
         {status.lastError && (
           <>
-            <dt className="text-destructive">Lỗi gần nhất</dt>
+            <dt className="text-destructive">Last error</dt>
             <dd className="text-destructive break-all">{status.lastError}</dd>
           </>
         )}
@@ -193,21 +193,21 @@ function StatusPanel({ status }: { status: SchedulerStatus }) {
         onClick={() => setShowInstall((v) => !v)}
         className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-primary underline-offset-2 hover:underline"
       >
-        <Server size={12} /> Cài chạy nền 24/7 (Windows)
+        <Server size={12} /> Run 24/7 in the background (Windows)
       </button>
       {showInstall && (
         <div className="mt-2 rounded-md border border-border bg-card p-3 text-[11px] text-muted-foreground space-y-2">
           <p>
-            Đăng ký bridge tự khởi động khi đăng nhập + tự restart khi crash, dùng
-            Windows Task Scheduler (không cần cài thêm). Mở PowerShell tại thư mục
-            bridge và chạy:
+            Register the bridge to auto-start on login and auto-restart on crash
+            using Windows Task Scheduler (no extra install). Open PowerShell in
+            the bridge folder and run:
           </p>
           <pre className="rounded bg-secondary p-2 font-mono text-foreground whitespace-pre-wrap break-all">
             powershell -ExecutionPolicy Bypass -File scripts\install-service.ps1
           </pre>
           <p>
-            Gỡ: <code className="font-mono text-foreground">…install-service.ps1 -Uninstall</code>.
-            Chi tiết trong <code className="font-mono text-foreground">docs/24-7-setup.md</code>.
+            Uninstall: <code className="font-mono text-foreground">…install-service.ps1 -Uninstall</code>.
+            Details in <code className="font-mono text-foreground">docs/24-7-setup.md</code>.
           </p>
         </div>
       )}
@@ -247,7 +247,7 @@ function SettingsPanel({
         autoDispatchEnabled: enabled,
         maxConcurrentCoordinators: Number(cap),
       });
-      toast("success", "Đã lưu cài đặt auto-queue");
+      toast("success", "Auto-queue settings saved");
       await onSaved();
     } catch (e) {
       toast("error", (e as Error).message);
@@ -260,7 +260,7 @@ function SettingsPanel({
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2 mb-3">
         <Power size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Tự động (auto-queue)</h3>
+        <h3 className="text-[13px] sm:text-sm font-semibold">Auto-queue</h3>
       </div>
       <label className="flex items-start gap-2 cursor-pointer mb-3">
         <input
@@ -270,16 +270,16 @@ function SettingsPanel({
           onChange={(e) => setEnabled(e.target.checked)}
         />
         <span className="text-xs">
-          <span className="text-foreground font-medium">Bật bơm tự động</span>{" "}
+          <span className="text-foreground font-medium">Enable auto-dispatch</span>{" "}
           <span className="text-muted-foreground/80">
-            — tự lấy task gắn cờ auto trong TODO và spawn coordinator, cũ nhất
-            trước, tới khi chạm trần đồng thời.
+            — pulls auto-flagged TODO tasks and spawns a coordinator, oldest
+            first, until the concurrency cap is reached.
           </span>
         </span>
       </label>
       <div className="flex flex-wrap items-end gap-2">
         <div className="grid gap-1.5">
-          <Label htmlFor="wf-cap">Trần đồng thời (số task chạy song song)</Label>
+          <Label htmlFor="wf-cap">Concurrency cap (tasks running in parallel)</Label>
           <Input
             id="wf-cap"
             value={cap}
@@ -289,7 +289,7 @@ function SettingsPanel({
           />
         </div>
         <Button onClick={save} disabled={saving}>
-          {saving ? "Đang lưu…" : "Lưu"}
+          {saving ? "Saving…" : "Save"}
         </Button>
         <span className="text-[11px] text-muted-foreground">1–10</span>
       </div>
@@ -332,11 +332,11 @@ function CreateWorkflowForm({ onCreated }: { onCreated: () => Promise<void> | vo
   const submit = async () => {
     const schedule = buildSchedule();
     if (!schedule) {
-      toast("error", "Lịch không hợp lệ");
+      toast("error", "Invalid schedule");
       return;
     }
     if (!title.trim()) {
-      toast("error", "Cần tiêu đề task");
+      toast("error", "Task title required");
       return;
     }
     setSubmitting(true);
@@ -348,7 +348,7 @@ function CreateWorkflowForm({ onCreated }: { onCreated: () => Promise<void> | vo
         title: title.trim(),
         body: body.trim(),
       });
-      toast("success", "Đã tạo quy trình");
+      toast("success", "Workflow created");
       setName(""); setTitle(""); setBody(""); setApp("");
       setOpen(false);
       await onCreated();
@@ -362,7 +362,7 @@ function CreateWorkflowForm({ onCreated }: { onCreated: () => Promise<void> | vo
   if (!open) {
     return (
       <Button variant="outline" onClick={() => setOpen(true)}>
-        <Plus size={13} /> Tạo quy trình
+        <Plus size={13} /> New workflow
       </Button>
     );
   }
@@ -371,27 +371,27 @@ function CreateWorkflowForm({ onCreated }: { onCreated: () => Promise<void> | vo
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2 mb-3">
         <CalendarClock size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Quy trình mới (cron)</h3>
+        <h3 className="text-[13px] sm:text-sm font-semibold">New workflow (cron)</h3>
       </div>
       <form
         onSubmit={(e) => { e.preventDefault(); void submit(); }}
         className="grid gap-3"
       >
         <div className="grid gap-1.5">
-          <Label htmlFor="wf-name">Tên quy trình</Label>
-          <Input id="wf-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="VD: Dọn log hằng đêm" className="h-8" />
+          <Label htmlFor="wf-name">Workflow name</Label>
+          <Input id="wf-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Nightly log cleanup" className="h-8" />
         </div>
 
         <div className="grid gap-1.5 sm:grid-cols-[auto_1fr] sm:items-end sm:gap-3">
           <div className="grid gap-1.5">
-            <Label htmlFor="wf-kind">Lịch</Label>
+            <Label htmlFor="wf-kind">Schedule</Label>
             <Select value={kind} onValueChange={(v) => setKind(v as ScheduleKind)}>
               <SelectTrigger id="wf-kind" className="h-8 w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="interval">Mỗi N (interval)</SelectItem>
-                <SelectItem value="daily">Hằng ngày lúc</SelectItem>
+                <SelectItem value="interval">Every N (interval)</SelectItem>
+                <SelectItem value="daily">Daily at</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -406,9 +406,9 @@ function CreateWorkflowForm({ onCreated }: { onCreated: () => Promise<void> | vo
               <Select value={unit} onValueChange={(v) => setUnit(v as IntervalUnit)}>
                 <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="m">phút</SelectItem>
-                  <SelectItem value="h">giờ</SelectItem>
-                  <SelectItem value="d">ngày</SelectItem>
+                  <SelectItem value="m">minutes</SelectItem>
+                  <SelectItem value="h">hours</SelectItem>
+                  <SelectItem value="d">days</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -423,31 +423,31 @@ function CreateWorkflowForm({ onCreated }: { onCreated: () => Promise<void> | vo
         </div>
 
         <div className="grid gap-1.5">
-          <Label htmlFor="wf-app">App đích (để trống = auto)</Label>
-          <Input id="wf-app" value={app} onChange={(e) => setApp(e.target.value)} placeholder="tên app, hoặc để trống" className="h-8" />
+          <Label htmlFor="wf-app">Target app (blank = auto)</Label>
+          <Input id="wf-app" value={app} onChange={(e) => setApp(e.target.value)} placeholder="app name, or leave blank" className="h-8" />
         </div>
 
         <div className="grid gap-1.5">
-          <Label htmlFor="wf-title">Tiêu đề task</Label>
-          <Input id="wf-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Dòng đầu = tiêu đề task được tạo" className="h-8" required />
+          <Label htmlFor="wf-title">Task title</Label>
+          <Input id="wf-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="First line = title of the created task" className="h-8" required />
         </div>
 
         <div className="grid gap-1.5">
-          <Label htmlFor="wf-body">Nội dung task</Label>
+          <Label htmlFor="wf-body">Task body</Label>
           <Textarea
             id="wf-body"
             value={body}
             onChange={(e) => setBody(e.target.value)}
             rows={4}
             className="font-mono"
-            placeholder="Mô tả công việc coordinator sẽ thực hiện mỗi lần chạy."
+            placeholder="Describe the work the coordinator runs each time."
           />
         </div>
 
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Huỷ</Button>
+          <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
           <Button type="submit" disabled={submitting || !title.trim()}>
-            {submitting ? "Đang tạo…" : "Tạo"}
+            {submitting ? "Creating…" : "Create"}
           </Button>
         </div>
       </form>
@@ -484,7 +484,7 @@ function WorkflowRow({
     setBusy(true);
     try {
       const r = await api.runWorkflowNow(wf.id);
-      toast("success", `Đã tạo ${r.task.id} (auto)`);
+      toast("success", `Created ${r.task.id} (auto)`);
       await onChanged();
     } catch (e) {
       toast("error", (e as Error).message);
@@ -495,9 +495,9 @@ function WorkflowRow({
 
   const remove = async () => {
     const ok = await confirm({
-      title: "Xoá quy trình này?",
-      description: "Lịch dừng ngay. Các task đã tạo trước đó không bị ảnh hưởng.",
-      confirmLabel: "Xoá",
+      title: "Delete this workflow?",
+      description: "The schedule stops immediately. Tasks it already created are unaffected.",
+      confirmLabel: "Delete",
       destructive: true,
     });
     if (!ok) return;
@@ -519,26 +519,26 @@ function WorkflowRow({
               : "bg-secondary text-muted-foreground"
           }`}
         >
-          {wf.enabled ? "bật" : "tắt"}
+          {wf.enabled ? "on" : "off"}
         </span>
         <span className="text-sm font-medium truncate">{wf.name}</span>
         <span className="text-[11px] text-muted-foreground font-mono">{describeSchedule(wf.schedule)}</span>
         {wf.app && <span className="text-[11px] text-muted-foreground">· {wf.app}</span>}
         <div className="flex-1" />
-        <Button variant="ghost" size="xs" onClick={() => void runNow()} disabled={busy} title="Chạy ngay">
-          <Play size={11} /><span className="hidden sm:inline">Chạy ngay</span>
+        <Button variant="ghost" size="xs" onClick={() => void runNow()} disabled={busy} title="Run now">
+          <Play size={11} /><span className="hidden sm:inline">Run now</span>
         </Button>
-        <Button variant="ghost" size="xs" onClick={() => void toggle()} disabled={busy} title={wf.enabled ? "Tắt" : "Bật"}>
-          <Power size={11} /><span className="hidden sm:inline">{wf.enabled ? "Tắt" : "Bật"}</span>
+        <Button variant="ghost" size="xs" onClick={() => void toggle()} disabled={busy} title={wf.enabled ? "Disable" : "Enable"}>
+          <Power size={11} /><span className="hidden sm:inline">{wf.enabled ? "Disable" : "Enable"}</span>
         </Button>
-        <Button variant="ghost" size="xs" onClick={() => void remove()} className="text-fg-dim hover:text-destructive" title="Xoá">
-          <Trash2 size={11} /><span className="hidden sm:inline">Xoá</span>
+        <Button variant="ghost" size="xs" onClick={() => void remove()} className="text-fg-dim hover:text-destructive" title="Delete">
+          <Trash2 size={11} /><span className="hidden sm:inline">Delete</span>
         </Button>
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-        <span>Lần tới: <span className="font-mono">{fmtEpoch(wf.nextRunAt)}</span></span>
-        <span>· Lần cuối: <span className="font-mono">{fmtTime(wf.lastRunAt)}</span></span>
-        {wf.history.length > 0 && <span>· Đã tạo {wf.history.length} task</span>}
+        <span>Next: <span className="font-mono">{fmtEpoch(wf.nextRunAt)}</span></span>
+        <span>· Last: <span className="font-mono">{fmtTime(wf.lastRunAt)}</span></span>
+        {wf.history.length > 0 && <span>· {wf.history.length} task(s) created</span>}
       </div>
       <p className="mt-1 text-xs text-muted-foreground truncate">↳ {wf.title}</p>
     </div>

@@ -311,10 +311,11 @@ function NewTaskDialogBody({
             onChange={(e) => setAuto(e.target.checked)}
           />
           <span className="text-xs">
-            <span className="text-foreground font-medium">Tự chạy (auto-queue)</span>{" "}
+            <span className="text-foreground font-medium">Auto-run (auto-queue)</span>{" "}
             <span className="text-muted-foreground/80">
-              — để Quy trình tự dispatch khi có chỗ trống (theo trần đồng thời),
-              thay vì spawn coordinator ngay. Vẫn dừng ở READY FOR REVIEW chờ duyệt.
+              — let Workflows dispatch this when a slot is free (within the
+              concurrency cap) instead of spawning a coordinator now. Still
+              stops at READY FOR REVIEW for your approval.
             </span>
           </span>
         </label>

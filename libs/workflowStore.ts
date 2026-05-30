@@ -15,7 +15,7 @@
  * call is atomic with respect to the event loop.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { BRIDGE_STATE_DIR } from "./paths";
@@ -107,8 +107,20 @@ function load(): void {
         },
       };
     }
-  } catch {
-    // Corrupt file → start clean; the next mutation rewrites it.
+  } catch (err) {
+    // Corrupt file → start clean rather than crash, but DON'T do it
+    // silently: log loudly and preserve the bad file as `.corrupt` so the
+    // operator can recover, instead of having the next write overwrite it
+    // with empty state and lose every workflow definition.
+    console.error(
+      `[workflowStore] ${WORKFLOWS_FILE} is unreadable — starting empty and preserving the bad copy as .corrupt:`,
+      (err as Error).message,
+    );
+    try {
+      renameSync(WORKFLOWS_FILE, `${WORKFLOWS_FILE}.corrupt`);
+    } catch {
+      /* best-effort backup */
+    }
     state.data = { workflows: [], settings: { ...DEFAULT_SETTINGS } };
   }
   state.loaded = true;

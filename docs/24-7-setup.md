@@ -1,55 +1,56 @@
-# Chạy Claude Bridge 24/7 (Windows)
+# Running Claude Bridge 24/7 (Windows)
 
-Tính năng **Quy trình** (cron + auto-queue) chỉ hữu ích khi tiến trình bridge
-luôn sống. Bridge tự thân không thể tự hồi sinh nếu process chết — đó là việc
-của một supervisor ở tầng OS. Trên Windows, cách gọn nhất (không cài thêm gì)
-là **Windows Task Scheduler**.
+The **Workflows** feature (cron + auto-queue) is only useful while the bridge
+process stays alive. The bridge can't resurrect itself if the process dies —
+that's the job of an OS-level supervisor. On Windows, the simplest option (no
+extra install) is **Windows Task Scheduler**.
 
-## Cài nhanh (Task Scheduler — khuyến nghị)
+## Quick install (Task Scheduler — recommended)
 
-Mở PowerShell tại thư mục bridge và chạy:
+Open PowerShell in the bridge folder and run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install-service.ps1
 ```
 
-Script đăng ký một task tên `ClaudeBridge`:
+The script registers a task named `ClaudeBridge`:
 
-- **Trigger:** chạy khi bạn đăng nhập Windows (`AtLogOn`).
-- **Auto-restart:** nếu process thoát/crash, Task Scheduler khởi động lại sau
-  mỗi 1 phút (tối đa 999 lần) — tức là "luôn sống".
-- **Một bản duy nhất:** `MultipleInstances IgnoreNew` + advisory process-lock
-  của bridge đảm bảo không có 2 bridge cùng ghi vào `sessions/`.
-- **Log:** stdout/stderr nối vào `.bridge-state\bridge-service.log`.
+- **Trigger:** starts when you log on to Windows (`AtLogOn`).
+- **Auto-restart:** if the process exits/crashes, Task Scheduler restarts it
+  every minute (up to 999 times) — i.e. "always alive".
+- **Single instance:** `MultipleInstances IgnoreNew` plus the bridge's advisory
+  process lock guarantees two bridges never write to `sessions/` at once.
+- **Logs:** stdout/stderr are appended to `.bridge-state\bridge-service.log`.
 
-Khởi động ngay (không cần đăng xuất/đăng nhập lại):
+Start it now (no need to log off/on):
 
 ```powershell
 Start-ScheduledTask -TaskName ClaudeBridge
 ```
 
-Kiểm tra trạng thái:
+Check status:
 
 ```powershell
 Get-ScheduledTask -TaskName ClaudeBridge | Get-ScheduledTaskInfo
 ```
 
-Gỡ:
+Uninstall:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install-service.ps1 -Uninstall
 ```
 
-> Lưu ý: `AtLogOn` cần phiên đăng nhập của bạn đang mở. Nếu cần bridge chạy cả
-> khi không ai đăng nhập (máy chủ headless), dùng NSSM bên dưới để chạy như một
-> Windows Service thực thụ.
+> Note: `AtLogOn` requires your login session to be open. If you need the bridge
+> to run even when nobody is logged in (a headless server), use NSSM below to
+> run it as a real Windows Service.
 
-## Tuỳ chọn: NSSM (Windows Service thật)
+## Optional: NSSM (a real Windows Service)
 
-NSSM chạy bridge như một service độc lập phiên đăng nhập, có log stream riêng.
+NSSM runs the bridge as a service independent of a login session, with its own
+log stream.
 
-1. Tải nssm: <https://nssm.cc/download> và đặt `nssm.exe` lên PATH.
-2. Tạo service (chỉnh đường dẫn `bun` và thư mục bridge cho đúng):
+1. Download nssm: <https://nssm.cc/download> and put `nssm.exe` on PATH.
+2. Create the service (adjust the `bun` path and bridge folder to match yours):
 
    ```powershell
    $bun = (Get-Command bun).Source
@@ -61,14 +62,22 @@ NSSM chạy bridge như một service độc lập phiên đăng nhập, có log
    nssm start ClaudeBridge
    ```
 
-3. Gỡ: `nssm stop ClaudeBridge; nssm remove ClaudeBridge confirm`.
+3. Remove: `nssm stop ClaudeBridge; nssm remove ClaudeBridge confirm`.
 
-## Sau khi cài
+## After installing
 
-- Mở **Quy trình** trong UI để xem panel **Trạng thái 24/7** (PID, uptime,
-  tick gần nhất), bật **auto-queue** + đặt **trần đồng thời**, và tạo các lịch
-  **cron**.
-- Scheduler chỉ chạy trên đúng tiến trình giữ process-lock, nên dù Task
-  Scheduler có lỡ chạy 2 bản thì cũng không double-dispatch.
-- Mọi task do scheduler/cron tạo đều dừng ở **READY FOR REVIEW** — không bao
-  giờ tự đánh dấu DONE; bạn vẫn là người duyệt.
+- Open **Workflows** in the UI to see the **24/7 status** panel (PID, uptime,
+  last tick), toggle **auto-queue** + set the **concurrency cap**, and create
+  **cron** schedules.
+- The scheduler only ticks on the process that holds the advisory lock, so even
+  if Task Scheduler accidentally launches two copies it won't double-dispatch.
+- Every task created by the scheduler/cron stops at **READY FOR REVIEW** — it
+  never auto-marks DONE; you remain the reviewer.
+
+## Time-of-day schedules and timezones
+
+`daily at HH:MM` schedules are interpreted in the **server's local timezone**.
+On timezones that observe DST, a time that falls in the spring-forward gap
+(e.g. `02:30` where 02:00→03:00 is skipped) is shifted by the OS and will fire
+at the adjusted wall-clock time. Pick a time outside the DST gap if your machine
+observes daylight saving.

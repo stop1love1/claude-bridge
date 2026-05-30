@@ -27,7 +27,7 @@ const ITEMS: {
   { key: "apps",      href: "/apps",      label: "Apps",      Icon: Boxes },
   { key: "tasks",     href: "/tasks",     label: "Tasks",     Icon: LayoutGrid },
   { key: "sessions",  href: "/sessions",  label: "Sessions",  Icon: Terminal },
-  { key: "workflows", href: "/workflows", label: "Quy trình", Icon: Workflow },
+  { key: "workflows", href: "/workflows", label: "Workflows", Icon: Workflow },
   { key: "tunnels",   href: "/tunnels",   label: "Tunnels",   Icon: Globe2 },
   { key: "settings",  href: "/settings",  label: "Settings",  Icon: SettingsIcon },
 ];
