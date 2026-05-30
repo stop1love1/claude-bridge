@@ -28,6 +28,17 @@ export async function PUT(req: NextRequest) {
       { status: 400 },
     );
   }
-  setNgrokAuthtoken(body.authtoken);
+  // Cap the length before it reaches bridge.json. Real ngrok authtokens
+  // are ~49 chars; anything past 1 KB is a typo or an attempt to bloat
+  // the persisted config / spam logs. Trim first so trailing whitespace
+  // from a paste doesn't trip the cap.
+  const authtoken = body.authtoken.trim();
+  if (authtoken.length > 1024) {
+    return NextResponse.json(
+      { error: "authtoken too long (max 1024 chars)" },
+      { status: 400 },
+    );
+  }
+  setNgrokAuthtoken(authtoken);
   return NextResponse.json({ providers: detectProviders() });
 }

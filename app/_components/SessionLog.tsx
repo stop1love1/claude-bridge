@@ -594,6 +594,13 @@ function SessionLogInner({
      */
     const openStream = () => {
       if (stopped || es) return;
+      // Never open while the tab is hidden. The visibility-flip path
+      // reopens via `api.tail(...).finally(openStream)`; if the tab is
+      // hidden again before that async tail resolves, the finally would
+      // otherwise open an SSE connection on a hidden tab — pinning one of
+      // the browser's 6 per-origin slots, the exact waste the
+      // hidden-close avoids. `onVis` reopens cleanly on the next show.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       const url = `/api/sessions/${encodeURIComponent(run.sessionId)}/tail/stream?repo=${encodeURIComponent(run.repoPath)}&since=${offsetRef.current}`;
       try {
         es = new EventSource(url);

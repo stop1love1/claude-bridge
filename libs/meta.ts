@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   readFileSync,
+  readdirSync,
   existsSync,
 } from "node:fs";
 import { basename, join } from "node:path";
@@ -824,6 +825,31 @@ export async function applyManyRuns(
  * removed (so the caller can track which tasks were affected), false
  * if the meta is missing or the session wasn't linked to this task.
  */
+/**
+ * Find the task directories whose `meta.json` references `sessionId`.
+ *
+ * Reads every task's meta through the cached `readMeta`, so a warm cache
+ * makes this a memory scan rather than N file reads. Callers that need
+ * to *mutate* the matching task(s) — e.g. unlinking a deleted session —
+ * use this to avoid taking a `withTaskLock` + read-modify-write on every
+ * task dir when, in practice, a sessionId belongs to exactly one task.
+ *
+ * Returns absolute dirs (joinable as `SESSIONS_DIR/<taskId>`). A session
+ * can legitimately appear in more than one task only via data corruption,
+ * so callers should treat >1 hit as "unlink from all".
+ */
+export function findSessionTaskDirs(sessionId: string): string[] {
+  if (!existsSync(SESSIONS_DIR)) return [];
+  const hits: string[] = [];
+  for (const taskId of readdirSync(SESSIONS_DIR)) {
+    const dir = join(SESSIONS_DIR, taskId);
+    const meta = readMeta(dir);
+    if (!meta) continue;
+    if (meta.runs.some((r) => r.sessionId === sessionId)) hits.push(dir);
+  }
+  return hits;
+}
+
 export async function removeSessionFromTask(
   dir: string,
   sessionId: string,

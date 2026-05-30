@@ -22,6 +22,7 @@ import {
 } from "./apps";
 import { BRIDGE_PORT, BRIDGE_URL } from "./paths";
 import { clearSetupToken, ensureSetupToken } from "./setupToken";
+import { acquireProcessLock } from "./processLock";
 
 type CheckStatus = "ok" | "configured" | "missing" | "warn" | "error";
 
@@ -233,6 +234,33 @@ function checkAuth(): CheckResult {
   };
 }
 
+/**
+ * Claim the single-process lock for this `SESSIONS_DIR`. A live foreign
+ * holder means two bridges share one state dir — their meta.json writes
+ * race outside the in-process per-task mutex, and freshly-spawned runs
+ * can be silently dropped. Surface it loudly so the operator kills the
+ * duplicate. Stale-lock takeover (previous crash) is the normal restart
+ * path and reports `ok`.
+ */
+function checkProcessLock(): CheckResult {
+  const lock = acquireProcessLock({ port: BRIDGE_PORT, url: BRIDGE_URL });
+  if (!lock.acquired && lock.heldBy) {
+    const at = lock.heldBy.url ? ` (${lock.heldBy.url})` : "";
+    return {
+      name: "process-lock",
+      status: "error",
+      detail: `another bridge (pid ${lock.heldBy.pid}${at}) already owns this sessions dir — concurrent meta.json writes can drop runs; stop the duplicate`,
+    };
+  }
+  return {
+    name: "process-lock",
+    status: "ok",
+    detail: lock.tookOverStale
+      ? `acquired (reclaimed stale lock from a crashed boot), pid ${process.pid}`
+      : `acquired, pid ${process.pid}`,
+  };
+}
+
 function checkApps(): CheckResult {
   const apps = loadApps();
   if (apps.length === 0) {
@@ -278,16 +306,22 @@ export async function runStartupChecks(): Promise<CheckResult[]> {
   writeRuntimeMeta({ url: BRIDGE_URL, port: BRIDGE_PORT });
 
   // Synchronous checks first (instant), async ones in parallel after.
-  const sync: CheckResult[] = [checkAuth(), checkApps(), checkTelegramUserClient()];
+  const sync: CheckResult[] = [
+    checkProcessLock(),
+    checkAuth(),
+    checkApps(),
+    checkTelegramUserClient(),
+  ];
 
   const asyncResults = await Promise.all([checkClaudeCli(), checkTelegramBot()]);
 
   const all: CheckResult[] = [
-    sync[0],            // auth
+    sync[0],            // process-lock
+    sync[1],            // auth
     asyncResults[0],    // claude-cli
-    sync[1],            // apps
+    sync[2],            // apps
     asyncResults[1],    // telegram-bot
-    sync[2],            // telegram-user
+    sync[3],            // telegram-user
   ];
 
   for (const r of all) {
