@@ -13,6 +13,8 @@ import { DEFAULT_GIT_SETTINGS, resolveAppFromRouteSegment } from "@/libs/apps";
 import { autoCommitAndPush } from "@/libs/gitOps";
 import { badRequest } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
+import { checkRateLimit } from "@/libs/rateLimit";
+import { getClientIp } from "@/libs/clientIp";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +29,13 @@ const MAX_MESSAGE_BYTES = 4 * 1024;
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { name: segment } = await ctx.params;
+
+  // Each call shells out to git (commit + optional push). Cap it so a
+  // stuck client or a runaway script can't hammer the working tree.
+  const denied = checkRateLimit("apps:commit:ip", getClientIp(req.headers), 10, 60_000);
+  if (denied) {
+    return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
+  }
 
   let body: CommitBody;
   try {
