@@ -121,9 +121,10 @@ export async function spawnRetry(
 
   const app = getApp(finishedRun.repo);
 
-  // Re-derive eligibility at spawn time so a concurrent spawn that
-  // raced us past the budget bails here rather than producing an
-  // orphan Run record.
+  // Candidate attempt number used to build the role/patch. `precomputed`
+  // is only a HINT here — it's authoritatively re-validated inside the
+  // task lock below (see the updateRun precondition), so a stale hint
+  // can't push us past the budget.
   let nextAttempt: number;
   if (precomputedAttempt) {
     nextAttempt = precomputedAttempt.nextAttempt;
@@ -150,7 +151,6 @@ export async function spawnRetry(
   // same transcript file. The meta row mutates in place; no new row
   // is appended.
   const sessionId = finishedRun.sessionId;
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
   // Flip the existing run row back to running BEFORE the spawn so the
   // UI shows progress immediately and the lifecycle hook sees the row
@@ -159,16 +159,38 @@ export async function spawnRetry(
   // this is.
   const nextRole = nextRetryRole(parsed.baseRole, gate, nextAttempt);
   try {
-    const updateResult = await updateRun(sessionsDir, sessionId, {
-      role: nextRole,
-      status: "running",
-      startedAt: new Date().toISOString(),
-      endedAt: null,
-      retryAttempt: nextAttempt,
-    });
+    // Atomic check-and-flip: the precondition re-runs eligibility against
+    // the freshest LOCKED read of meta (the `liveRun` still carries its
+    // pre-flip role/retryAttempt because this runs before the patch is
+    // applied). If a concurrent retry for a sibling already consumed the
+    // per-task / per-gate budget — or already flipped THIS row — the live
+    // re-check yields a different nextAttempt (or ineligible) and we skip
+    // the flip, returning applied:false. This closes the window where two
+    // exit handlers both pass a stale eligibility snapshot.
+    const updateResult = await updateRun(
+      sessionsDir,
+      sessionId,
+      {
+        role: nextRole,
+        status: "running",
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        retryAttempt: nextAttempt,
+      },
+      (liveRun, liveMeta) => {
+        if (liveRun.status === "running") return false; // already live / re-flipped
+        const elig = checkEligibility({
+          finishedRun: liveRun,
+          meta: liveMeta,
+          gate,
+          retry: app?.retry,
+        });
+        return elig.eligible && elig.nextAttempt === nextAttempt;
+      },
+    );
     if (!updateResult.applied || !updateResult.run) {
       console.error(
-        `${logLabel} could not flip prior run back to running for`,
+        `${logLabel} retry not applied (budget raced or precondition failed) for`,
         taskId,
         sessionId,
       );
@@ -178,6 +200,11 @@ export async function spawnRetry(
     console.error(`${logLabel} meta updateRun failed for`, taskId, sessionId, e);
     return null;
   }
+
+  // Write the per-session settings only AFTER the flip is confirmed — a
+  // precondition rejection above would otherwise leave an orphan settings
+  // file (this path never spawns, so nothing reaps it).
+  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
   let child;
   try {

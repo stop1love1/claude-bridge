@@ -283,6 +283,12 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
     let disposeWs: (() => void) | null = null;
 
     const wireWebSocket = async () => {
+      // Tear down any prior wiring first. The 1006 retry path re-invokes
+      // this function; without disposing here, the previous `term.onData`
+      // listener leaks (it lives until term.dispose() on unmount) and
+      // every keystroke would fan out to every dead socket's send path.
+      disposeWs?.();
+      disposeWs = null;
       setConnUi("opening");
       const t = await fetchTicket();
       if (released) return;

@@ -467,21 +467,31 @@ async function computeStalePatches(
  * mustn't block the rest of the sweep, and the per-task reaper will
  * retry the bad one on its next call anyway.
  */
-let bootSweepDone = false;
-let bootSweepInFlight: Promise<void> | null = null;
+// Stashed on globalThis so a Next.js HMR reload (which re-evaluates this
+// module) does NOT reset the "boot sweep already ran" flag. Without this,
+// every hot reload re-runs the full sweep over sessions/*/meta.json — the
+// most destructive op in the reaper — and can flip a legitimately long-
+// running run to `stale` because the in-memory registry was also just
+// reinitialised. Same pattern as the other bridge-wide singletons.
+const GR = globalThis as unknown as {
+  __bridgeBootSweep?: { done: boolean; inFlight: Promise<void> | null };
+};
+const bootSweepState = GR.__bridgeBootSweep ?? { done: false, inFlight: null };
+GR.__bridgeBootSweep = bootSweepState;
+
 async function bootSweepIfNeeded(): Promise<void> {
-  if (bootSweepDone) return;
+  if (bootSweepState.done) return;
   // Vitest runs against tmp dirs but `SESSIONS_DIR` resolves to the
   // bridge's real sessions/ — sweeping there during tests would mutate
   // the developer's actual meta files. The unit tests for this module
   // exercise reapStaleRunsForDir directly, so the boot path adds no
   // coverage anyway.
   if (process.env.VITEST) {
-    bootSweepDone = true;
+    bootSweepState.done = true;
     return;
   }
-  if (bootSweepInFlight) return bootSweepInFlight;
-  bootSweepInFlight = (async () => {
+  if (bootSweepState.inFlight) return bootSweepState.inFlight;
+  bootSweepState.inFlight = (async () => {
     try {
       if (!existsSync(SESSIONS_DIR)) return;
       const ids = readdirSync(SESSIONS_DIR);
@@ -499,9 +509,9 @@ async function bootSweepIfNeeded(): Promise<void> {
         }
       }
     } finally {
-      bootSweepDone = true;
-      bootSweepInFlight = null;
+      bootSweepState.done = true;
+      bootSweepState.inFlight = null;
     }
   })();
-  return bootSweepInFlight;
+  return bootSweepState.inFlight;
 }

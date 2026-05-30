@@ -48,6 +48,7 @@ interface CreateBody {
 function parseGrants(g: Partial<ShareGrants> | undefined): ShareGrants {
   return {
     sendMessage: !!g?.sendMessage,
+    spawnAgent: !!g?.spawnAgent,
     answerPermission: !!g?.answerPermission,
     commit: !!g?.commit,
     push: !!g?.push,

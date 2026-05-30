@@ -723,14 +723,17 @@ export async function updateRun(
   dir: string,
   sessionId: string,
   patch: Partial<Run>,
-  precondition?: (run: Run) => boolean,
+  precondition?: (run: Run, meta: Meta) => boolean,
 ): Promise<{ applied: boolean; run: Run | null }> {
   return withTaskLock(dir, () => {
     const meta = readMeta(dir);
     if (!meta) throw new Error(`meta.json missing at ${dir}`);
     const run = meta.runs.find((r) => r.sessionId === sessionId);
     if (!run) throw new Error(`run ${sessionId} not found`);
-    if (precondition && !precondition(run)) {
+    // The precondition runs against the freshest locked read of BOTH the
+    // row and the whole meta, so callers can guard task-wide invariants
+    // (e.g. retry-budget re-check) atomically with the patch.
+    if (precondition && !precondition(run, meta)) {
       // Caller's invariant didn't hold — most commonly the run already
       // reached a terminal state. Return without writing so we never
       // demote `done → failed` (or any other final-state regression).

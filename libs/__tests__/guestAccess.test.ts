@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { authorizeGuestRequest, type GuestScope } from "../guestAccess";
 import type { ShareGrants } from "../shareStore";
 
-const NONE: ShareGrants = { sendMessage: false, answerPermission: false, commit: false, push: false };
-const ALL: ShareGrants = { sendMessage: true, answerPermission: true, commit: true, push: true };
+const NONE: ShareGrants = { sendMessage: false, spawnAgent: false, answerPermission: false, commit: false, push: false };
+const ALL: ShareGrants = { sendMessage: true, spawnAgent: true, answerPermission: true, commit: true, push: true };
 
 function scope(grants: ShareGrants, taskId = "t_1"): GuestScope {
   return { taskId, grants };
@@ -44,12 +44,11 @@ describe("authorizeGuestRequest — wrong task is always denied", () => {
 });
 
 describe("authorizeGuestRequest — grant gates", () => {
-  it("sendMessage gates message/agents/continue/kill/upload", () => {
+  it("sendMessage gates message/continue/kill/upload", () => {
     const paths: Array<[string, string]> = [
       ["POST", "/api/sessions/sess-9/message"],
       ["POST", "/api/sessions/sess-9/upload"],
       ["POST", "/api/sessions/sess-9/kill"],
-      ["POST", "/api/tasks/t_1/agents"],
       ["POST", "/api/tasks/t_1/continue"],
       ["POST", "/api/tasks/t_1/runs/sess-9/kill"],
     ];
@@ -57,6 +56,14 @@ describe("authorizeGuestRequest — grant gates", () => {
       expect(authorizeGuestRequest(m, p, scope(NONE), inTask).ok).toBe(false);
       expect(authorizeGuestRequest(m, p, scope({ ...NONE, sendMessage: true }), inTask).ok).toBe(true);
     }
+  });
+
+  it("spawnAgent (NOT sendMessage) gates the agents-spawn route", () => {
+    const p = "/api/tasks/t_1/agents";
+    expect(authorizeGuestRequest("POST", p, scope(NONE), inTask).ok).toBe(false);
+    // sendMessage alone is no longer enough to spawn agents.
+    expect(authorizeGuestRequest("POST", p, scope({ ...NONE, sendMessage: true }), inTask).ok).toBe(false);
+    expect(authorizeGuestRequest("POST", p, scope({ ...NONE, spawnAgent: true }), inTask).ok).toBe(true);
   });
 
   it("answerPermission gates the permission decision POST", () => {

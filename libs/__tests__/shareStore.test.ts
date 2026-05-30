@@ -26,6 +26,7 @@ let saved: string | null = null;
 
 const GRANTS: ShareGrants = {
   sendMessage: true,
+  spawnAgent: false,
   answerPermission: false,
   commit: false,
   push: false,

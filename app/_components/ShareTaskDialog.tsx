@@ -31,7 +31,8 @@ const TTL_OPTIONS: Array<{ label: string; ms: number | null }> = [
 ];
 
 const GRANT_FIELDS: Array<{ key: keyof ShareGrants; label: string; hint: string }> = [
-  { key: "sendMessage", label: "Send prompts", hint: "drive the task: send messages, spawn agents" },
+  { key: "sendMessage", label: "Send prompts", hint: "drive existing runs: send messages, upload, stop" },
+  { key: "spawnAgent", label: "Spawn agents", hint: "launch new agent processes against the task" },
   { key: "answerPermission", label: "Answer permission popups", hint: "Allow/Deny risky tools" },
   { key: "commit", label: "Commit code", hint: "commit the working tree" },
   { key: "push", label: "Push code", hint: "push commits (implies commit)" },
@@ -62,6 +63,7 @@ export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
   // Create-form state.
   const [grants, setGrants] = useState<ShareGrants>({
     sendMessage: true,
+    spawnAgent: false,
     answerPermission: true,
     commit: false,
     push: false,

@@ -103,16 +103,26 @@ export const INTERNAL_TOKEN_HEADER = "x-bridge-internal-token";
  * first byte mismatch and lets a network-adjacent attacker recover
  * the secret one byte at a time via response-latency measurements.
  */
+// Per-process random key for the length-blinding HMAC below. Fresh each
+// boot; never persisted — it only has to make the two HMAC digests
+// uncorrelated with the raw inputs within a single run.
+const CT_BLIND_KEY = randomBytes(32);
+
 export function constantTimeStringEqual(
   a: string | null | undefined,
   b: string | null | undefined,
 ): boolean {
   if (typeof a !== "string" || typeof b !== "string") return false;
   if (a.length === 0 || b.length === 0) return false;
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
+  // HMAC both inputs to a FIXED 32-byte digest before comparing. The old
+  // code returned early on `bufA.length !== bufB.length`, which is a
+  // length oracle: an attacker probing latency could learn the secret's
+  // byte-length. Hashing to equal-length digests removes that branch —
+  // timingSafeEqual now always runs over 32 bytes regardless of input
+  // length, and a digest match implies an input match (collision-safe).
+  const digA = createHmac("sha256", CT_BLIND_KEY).update(a, "utf8").digest();
+  const digB = createHmac("sha256", CT_BLIND_KEY).update(b, "utf8").digest();
+  return timingSafeEqual(digA, digB);
 }
 
 /**

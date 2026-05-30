@@ -100,8 +100,26 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // Approved — sign the cookie + (optionally) record a trusted device
-  // entry, mirroring the post-credentials path of /api/auth/login.
+  // Approved — but only hand the cookie to the SAME device that
+  // initiated the login. An attacker who learned the pendingId (it
+  // appears in the 202 response body) could otherwise race the poll and
+  // capture the session the moment the operator approves. Bind on the
+  // user-agent (always available) and the IP when it's known (it's
+  // "unknown" for both sides unless BRIDGE_TRUSTED_PROXY is set, so this
+  // never produces a false mismatch on plain localhost). A mismatch gets
+  // a harmless 202 and the entry is left intact for the real device.
+  const uaMatch = (req.headers.get("user-agent") ?? "") === entry.userAgent;
+  const ipKnown = ip !== "unknown" && entry.remoteIp !== "unknown";
+  const ipMatch = !ipKnown || ip === entry.remoteIp;
+  if (!uaMatch || !ipMatch) {
+    return NextResponse.json(
+      { status: "pending", expiresAt: new Date(entry.expiresAt).toISOString() },
+      { status: 202 },
+    );
+  }
+
+  // sign the cookie + (optionally) record a trusted device entry,
+  // mirroring the post-credentials path of /api/auth/login.
   let deviceId: string | undefined;
   if (entry.trust) {
     const { device } = addTrustedDevice(entry.deviceLabel);

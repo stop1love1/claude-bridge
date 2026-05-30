@@ -264,7 +264,7 @@ export function usePermissionQueue(scope: Scope): UsePermissionQueueResult {
       handle(req);
     };
 
-    (async () => {
+    const loadBacklog = async () => {
       try {
         const r = await fetch(endpoints.backlog!);
         if (!r.ok) return;
@@ -274,27 +274,48 @@ export function usePermissionQueue(scope: Scope): UsePermissionQueueResult {
           if (isValidPendingRequest(p)) ingest(p);
         }
       } catch { /* ignore — SSE is the live source of truth */ }
-    })();
+    };
 
-    const es = new EventSource(endpoints.stream!);
-    es.addEventListener("pending", (ev: MessageEvent) => {
-      try {
-        const parsed = JSON.parse(ev.data);
-        if (isValidPendingRequest(parsed)) ingest(parsed);
-      } catch { /* ignore malformed event */ }
-    });
-    es.addEventListener("answered", (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as { requestId?: unknown };
-        if (typeof data.requestId !== "string" || data.requestId.length === 0) return;
-        setQueue((q) => reduceQueue(q, { kind: "answered", requestId: data.requestId as string }));
-      } catch { /* ignore */ }
-    });
-    es.onerror = () => { /* browser auto-retries */ };
+    // Open the SSE only while the tab is visible — a hidden tab would
+    // otherwise pin one of the browser's ~6 per-origin connection slots
+    // open indefinitely. On (re)connect we refetch the backlog to
+    // reconcile any pending requests we missed while paused.
+    let es: EventSource | null = null;
+    const openStream = () => {
+      if (stopped || es) return;
+      void loadBacklog();
+      es = new EventSource(endpoints.stream!);
+      es.addEventListener("pending", (ev: MessageEvent) => {
+        try {
+          const parsed = JSON.parse(ev.data);
+          if (isValidPendingRequest(parsed)) ingest(parsed);
+        } catch { /* ignore malformed event */ }
+      });
+      es.addEventListener("answered", (ev: MessageEvent) => {
+        try {
+          const data = JSON.parse(ev.data) as { requestId?: unknown };
+          if (typeof data.requestId !== "string" || data.requestId.length === 0) return;
+          setQueue((q) => reduceQueue(q, { kind: "answered", requestId: data.requestId as string }));
+        } catch { /* ignore */ }
+      });
+      es.onerror = () => { /* browser auto-retries */ };
+    };
+    const closeStream = () => {
+      if (es) { es.close(); es = null; }
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") closeStream();
+      else openStream();
+    };
+
+    const hasDoc = typeof document !== "undefined";
+    if (!hasDoc || document.visibilityState !== "hidden") openStream();
+    if (hasDoc) document.addEventListener("visibilitychange", onVis);
 
     return () => {
       stopped = true;
-      es.close();
+      if (hasDoc) document.removeEventListener("visibilitychange", onVis);
+      closeStream();
     };
   }, [sessionId, isAll, handle]);
 

@@ -277,15 +277,23 @@ function runClaude(
     let stderr = "";
     let settled = false;
 
+    // Feed the prompt via stdin, NEVER as a positional CLI arg. On Windows
+    // `CLAUDE_BIN` is typically a `claude.cmd` shim, so an arg routed
+    // through cmd.exe can be broken / injected by `"`, `&`, `|` in the
+    // prompt (the prompt embeds the untrusted task title), and a large
+    // diff would blow the ~32 KB command-line limit. stdin sidesteps both.
     const child = spawn(
       CLAUDE_BIN,
-      ["-p", "--permission-mode", "bypassPermissions", prompt],
+      ["-p", "--permission-mode", "bypassPermissions"],
       {
         cwd,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },
     );
+    child.stdin.on("error", () => { /* EPIPE if claude exits early — ignored */ });
+    child.stdin.write(prompt, "utf8");
+    child.stdin.end();
 
     const settle = (value: string | null) => {
       if (settled) return;

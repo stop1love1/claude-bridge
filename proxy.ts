@@ -144,13 +144,26 @@ export function proxy(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Internal bypass for child agents (loopback only — Next gives us
-  // `req.ip` on the server runtime; trust the header only when paired
-  // with the per-install random token to avoid header spoofing from
-  // the browser).
+  // Internal bypass for child agents. The token is a per-install secret
+  // shared only with locally-spawned children (`agents/permission-hook.cjs`,
+  // coordinator curl-backs), which connect to `localhost` DIRECTLY — no
+  // reverse proxy, so no forwarding headers. A request that arrived through
+  // a tunnel (ngrok/cloudflared) or reverse proxy carries `x-forwarded-for`
+  // / `forwarded` / `x-real-ip`; ngrok forwards to localhost so a socket
+  // -level IP check can't tell tunnel traffic from a real child, but the
+  // forwarding headers can. We therefore REFUSE the bypass for any request
+  // that transited a proxy — closing the "attacker on the internet replays
+  // a leaked internal token over the public tunnel" hole. Local children
+  // are unaffected.
   const internalToken = req.headers.get(INTERNAL_TOKEN_HEADER);
+  const viaProxy =
+    !!req.headers.get("x-forwarded-for") ||
+    !!req.headers.get("x-real-ip") ||
+    !!req.headers.get("forwarded") ||
+    !!req.headers.get("x-forwarded-host");
   if (
     internalToken &&
+    !viaProxy &&
     cfg.internalToken &&
     constantTimeStringEqual(internalToken, cfg.internalToken)
   ) {

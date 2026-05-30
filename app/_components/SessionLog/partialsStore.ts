@@ -19,6 +19,13 @@
  * one specific message id; the empty-state placeholder reads "is the
  * map empty?". The rest of the tree never re-renders on token deltas.
  *
+ * Listener granularity: each message id has its OWN listener set, and the
+ * key-set watchers are a separate set. A text delta for message A fires
+ * only A's text listeners (plus the key-set watchers when the *set* of
+ * ids changes) — NOT every other streaming row's listener. Sharing one
+ * session-wide listener set used to make this O(M²): M streaming rows
+ * each re-rendering on every one of M streams' deltas.
+ *
  * Scoped by `sessionId` so a stale partial from a previously-mounted
  * session can't bleed into a different session — the SessionLog wrapper
  * remounts the inner on session change, but the store lives across
@@ -31,9 +38,13 @@ type Listener = () => void;
 interface SessionEntry {
   partials: Partials;
   // Stable snapshot for `useSyncExternalStore`. Replaced (not mutated)
-  // on every change so React's strict-equality bail-out works.
+  // on every key-set change so React's strict-equality bail-out works.
   snapshotKeys: string[];
-  listeners: Set<Listener>;
+  // Watchers of the key SET (which ids are streaming). Fire only when an
+  // id is added / removed.
+  keyListeners: Set<Listener>;
+  // Per-message-id text watchers. Fire on every append to THAT id only.
+  textListeners: Map<string, Set<Listener>>;
 }
 
 const sessions = new Map<string, SessionEntry>();
@@ -51,18 +62,45 @@ const PARTIAL_CAP_BYTES = 256 * 1024;
 function getEntry(sessionId: string): SessionEntry {
   let entry = sessions.get(sessionId);
   if (!entry) {
-    entry = { partials: {}, snapshotKeys: [], listeners: new Set() };
+    entry = {
+      partials: {},
+      snapshotKeys: [],
+      keyListeners: new Set(),
+      textListeners: new Map(),
+    };
     sessions.set(sessionId, entry);
   }
   return entry;
 }
 
-function notify(entry: SessionEntry): void {
-  // Recompute the snapshot key list once per mutation. Subscribers that
-  // read individual values bail out via their own selector compare;
-  // subscribers that watch the key set get a new array identity.
+/** Drop the session entry once nothing references it — no listeners of
+ *  either kind and no buffered text. Never drop while text is buffered:
+ *  a remount would re-initialise to empty and lose the ghost row mid-
+ *  stream. */
+function maybeGc(sessionId: string, entry: SessionEntry): void {
+  if (
+    entry.keyListeners.size === 0 &&
+    entry.textListeners.size === 0 &&
+    Object.keys(entry.partials).length === 0
+  ) {
+    sessions.delete(sessionId);
+  }
+}
+
+/** Recompute the key snapshot (new array identity) and fire the key-set
+ *  watchers. Call only when the SET of ids changed. */
+function notifyKeys(entry: SessionEntry): void {
   entry.snapshotKeys = Object.keys(entry.partials);
-  for (const l of entry.listeners) {
+  for (const l of entry.keyListeners) {
+    try { l(); } catch { /* never let one listener break the rest */ }
+  }
+}
+
+/** Fire only the text watchers for one message id. */
+function notifyText(entry: SessionEntry, messageId: string): void {
+  const set = entry.textListeners.get(messageId);
+  if (!set) return;
+  for (const l of set) {
     try { l(); } catch { /* never let one listener break the rest */ }
   }
 }
@@ -76,8 +114,12 @@ export function appendPartial(sessionId: string, messageId: string, text: string
   const entry = getEntry(sessionId);
   const cur = entry.partials[messageId] ?? "";
   if (cur.length >= PARTIAL_CAP_BYTES) return;
+  const isNewId = entry.partials[messageId] === undefined;
   entry.partials = { ...entry.partials, [messageId]: cur + text };
-  notify(entry);
+  // A brand-new id changes the key set → tell the key-set watchers (this
+  // also refreshes snapshotKeys). Pure growth on an existing id does not.
+  if (isNewId) notifyKeys(entry);
+  notifyText(entry, messageId);
 }
 
 /**
@@ -88,23 +130,26 @@ export function appendPartial(sessionId: string, messageId: string, text: string
 export function dropOnArrival(sessionId: string, arrivedIds: Iterable<string>): void {
   const entry = sessions.get(sessionId);
   if (!entry) return;
-  let mutated = false;
+  const removed: string[] = [];
   const next = { ...entry.partials };
   for (const id of arrivedIds) {
     if (next[id] !== undefined) {
       delete next[id];
-      mutated = true;
+      removed.push(id);
     }
   }
   for (const k of Object.keys(next)) {
     if (k.startsWith("live:")) {
       delete next[k];
-      mutated = true;
+      removed.push(k);
     }
   }
-  if (!mutated) return;
+  if (removed.length === 0) return;
   entry.partials = next;
-  notify(entry);
+  notifyKeys(entry);
+  // Tell the (still-mounted) streaming rows for the removed ids so they
+  // re-read an empty snapshot and unmount their ghost text.
+  for (const id of removed) notifyText(entry, id);
 }
 
 /**
@@ -115,9 +160,11 @@ export function dropOnArrival(sessionId: string, arrivedIds: Iterable<string>): 
 export function clearPartials(sessionId: string): void {
   const entry = sessions.get(sessionId);
   if (!entry) return;
-  if (Object.keys(entry.partials).length === 0) return;
+  const removed = Object.keys(entry.partials);
+  if (removed.length === 0) return;
   entry.partials = {};
-  notify(entry);
+  notifyKeys(entry);
+  for (const id of removed) notifyText(entry, id);
 }
 
 /**
@@ -125,7 +172,10 @@ export function clearPartials(sessionId: string): void {
  * isolate themselves without colliding on shared module state.
  */
 export function __resetPartialsStoreForTests(): void {
-  for (const e of sessions.values()) e.listeners.clear();
+  for (const e of sessions.values()) {
+    e.keyListeners.clear();
+    e.textListeners.clear();
+  }
   sessions.clear();
 }
 
@@ -152,26 +202,17 @@ export function subscribePartialKeys(sessionId: string): Subscriber<readonly str
   return {
     subscribe(listener) {
       const entry = getEntry(sessionId);
-      entry.listeners.add(listener);
+      entry.keyListeners.add(listener);
       return () => {
-        entry.listeners.delete(listener);
-        // Best-effort GC: drop the entry when no one's listening AND
-        // there's no buffered text. We must NOT drop it when there's
-        // text — a remount would re-initialise to empty and lose the
-        // ghost row mid-stream.
-        if (
-          entry.listeners.size === 0 &&
-          Object.keys(entry.partials).length === 0
-        ) {
-          sessions.delete(sessionId);
-        }
+        entry.keyListeners.delete(listener);
+        maybeGc(sessionId, entry);
       };
     },
     getSnapshot() {
       const entry = sessions.get(sessionId);
       if (!entry) return EMPTY_KEYS;
       // `snapshotKeys` is replaced (new array identity) every time the
-      // key set changes — see `notify()`. Suitable for the stability
+      // key set changes — see `notifyKeys()`. Suitable for the stability
       // guarantee `useSyncExternalStore` requires.
       return entry.snapshotKeys;
     },
@@ -180,19 +221,30 @@ export function subscribePartialKeys(sessionId: string): Subscriber<readonly str
 
 /**
  * Subscriber for one message id's accumulated text. Re-fires on every
- * append; consumers should be small components (just the streaming row)
- * so the per-token re-render cost stays bounded.
+ * append to THAT id; consumers should be small components (just the
+ * streaming row) so the per-token re-render cost stays bounded.
  */
 export function subscribePartialText(sessionId: string, messageId: string): Subscriber<string> {
   return {
     subscribe(listener) {
       const entry = getEntry(sessionId);
-      entry.listeners.add(listener);
-      return () => { entry.listeners.delete(listener); };
+      let set = entry.textListeners.get(messageId);
+      if (!set) {
+        set = new Set();
+        entry.textListeners.set(messageId, set);
+      }
+      set.add(listener);
+      return () => {
+        const s = entry.textListeners.get(messageId);
+        if (s) {
+          s.delete(listener);
+          if (s.size === 0) entry.textListeners.delete(messageId);
+        }
+        maybeGc(sessionId, entry);
+      };
     },
     getSnapshot() {
       return sessions.get(sessionId)?.partials[messageId] ?? "";
     },
   };
 }
-

@@ -22,6 +22,7 @@ import { badRequest, isValidSessionId } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
 import { generateCommitMessageWithLLM } from "@/libs/commitMessage";
 import { buildHeuristicMessage, collectChanges } from "@/libs/commitHeuristic";
+import { withInFlight } from "@/libs/inFlight";
 
 export const dynamic = "force-dynamic";
 
@@ -88,13 +89,17 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // "what was supposed to ship" context plus the embedded diff so the
     // model grounds the subject in the actual change, in one pass.
     if (!wantHeuristic) {
-      const llm = await generateCommitMessageWithLLM({
-        cwd,
-        taskTitle: meta.taskTitle,
-        nameStatus,
-        diff,
-        diffTruncated,
-      });
+      // Dedupe concurrent generations for the same tree so two button
+      // clicks / tabs never spawn two `claude -p` children at once.
+      const llm = await withInFlight("commit-suggest", cwd, () =>
+        generateCommitMessageWithLLM({
+          cwd,
+          taskTitle: meta.taskTitle,
+          nameStatus,
+          diff,
+          diffTruncated,
+        }),
+      );
       if (llm) {
         return NextResponse.json({ message: llm.message, fileCount: rows.length, cwd, source: "llm" });
       }

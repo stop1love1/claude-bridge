@@ -22,6 +22,7 @@ const META_POLL_MS = 5000;
 
 const GRANT_LABELS: Record<keyof ShareGrants, string> = {
   sendMessage: "send prompts",
+  spawnAgent: "spawn agents",
   answerPermission: "answer permissions",
   commit: "commit",
   push: "push",

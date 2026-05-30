@@ -150,9 +150,22 @@ const MD_COMPONENTS = {
     <blockquote className="border-l-2 border-border pl-3 my-1 text-muted-foreground italic" {...p} />
   ),
   hr: () => <hr className="my-2 border-border" />,
-  a: (p: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a className="text-primary hover:underline" target="_blank" rel="noopener noreferrer" {...p} />
-  ),
+  a: ({ href, ...p }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
+    // react-markdown does NOT sanitize hrefs. Assistant/tool text can be
+    // attacker-influenced (prompt injection via repo content or a tool
+    // result), so a `[x](javascript:…)` link would execute on click.
+    // Allow only http(s)/mailto; neutralise everything else.
+    const safe = href && /^(https?:|mailto:)/i.test(href) ? href : undefined;
+    return (
+      <a
+        className="text-primary hover:underline"
+        target="_blank"
+        rel="noopener noreferrer"
+        href={safe}
+        {...p}
+      />
+    );
+  },
   strong: (p: React.HTMLAttributes<HTMLElement>) => (
     <strong className="font-semibold text-foreground" {...p} />
   ),

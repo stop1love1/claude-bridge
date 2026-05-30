@@ -34,6 +34,13 @@ const G = globalThis as unknown as { __bridgeHeartbeatStore?: Store };
 const store: Store = G.__bridgeHeartbeatStore ?? { beats: new Map() };
 G.__bridgeHeartbeatStore = store;
 
+/** Size at which we sweep entries older than the TTL. Heartbeats are only
+ *  meaningful to the reaper for ~minutes; a long-running bridge would
+ *  otherwise accumulate one entry per session-UUID it ever saw, forever. */
+const HEARTBEAT_MAX_ENTRIES = 2000;
+/** Evict entries this old (2h ≫ any reaper staleness window). */
+const HEARTBEAT_TTL_MS = 2 * 60 * 60 * 1000;
+
 /**
  * Record a heartbeat for `sessionId`. Idempotent — overwrites the
  * previous timestamp. Called from the heartbeat endpoint and any
@@ -41,7 +48,16 @@ G.__bridgeHeartbeatStore = store;
  */
 export function recordHeartbeat(sessionId: string): void {
   if (!sessionId) return;
-  store.beats.set(sessionId, Date.now());
+  const now = Date.now();
+  // Opportunistic GC: only when the map gets large, sweep stale entries
+  // so a long-lived bridge doesn't leak one entry per session forever.
+  if (store.beats.size >= HEARTBEAT_MAX_ENTRIES) {
+    const cutoff = now - HEARTBEAT_TTL_MS;
+    for (const [sid, ts] of store.beats) {
+      if (ts < cutoff) store.beats.delete(sid);
+    }
+  }
+  store.beats.set(sessionId, now);
 }
 
 /**

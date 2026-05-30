@@ -39,10 +39,16 @@ export function treeKill(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"
     // either way. We don't `await` — kill is best-effort and the caller
     // re-checks via the registry anyway.
     try {
-      const force = signal === "SIGKILL" ? ["/F"] : [];
+      // Always force-terminate (`/F`). `taskkill` without `/F` posts a
+      // `WM_CLOSE` window message, which a headless Node/CLI process
+      // (claude.exe) has no message loop to receive — so a plain SIGTERM
+      // is a silent no-op on Windows and the process lingers until the
+      // 3s SIGKILL escalation. Since children are no longer spawned
+      // `detached`, there's no graceful-shutdown semantics to preserve at
+      // this layer; `/F` is the only thing that actually kills the tree.
       const tk = spawn(
         "taskkill",
-        [...force, "/T", "/PID", String(pid)],
+        ["/F", "/T", "/PID", String(pid)],
         { stdio: "ignore", windowsHide: true },
       );
       tk.on("error", () => { /* taskkill itself missing — ignore */ });

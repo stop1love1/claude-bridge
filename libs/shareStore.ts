@@ -25,8 +25,12 @@ import { writeJsonAtomic } from "./atomicWrite";
 const SHARES_FILE = join(BRIDGE_STATE_DIR, "shares.json");
 
 export interface ShareGrants {
-  /** Send prompts / spawn agents to drive the task. */
+  /** Send prompts / drive existing runs (message, upload, kill). */
   sendMessage: boolean;
+  /** Spawn NEW agent processes against the task (POST /tasks/:id/agents).
+   *  Separate from `sendMessage` so "let them chat" doesn't silently also
+   *  mean "let them launch unbounded subprocesses". */
+  spawnAgent: boolean;
   /** Answer Allow/Deny permission popups for risky tools. */
   answerPermission: boolean;
   /** Commit the working tree. */
@@ -159,8 +163,14 @@ export function createShare(input: CreateShareInput): { share: Share; token: str
 /** Push implies commit; keep the flags internally consistent. */
 function normalizeGrants(g: ShareGrants): ShareGrants {
   const commit = !!g.commit || !!g.push;
+  // Back-compat: shares persisted before `spawnAgent` existed (and API
+  // callers that omit it) inherit `sendMessage`, preserving the old
+  // behavior where sending also allowed spawning. Callers that pass the
+  // field explicitly (the UI) get independent control.
+  const spawnAgent = g.spawnAgent === undefined ? !!g.sendMessage : !!g.spawnAgent;
   return {
     sendMessage: !!g.sendMessage,
+    spawnAgent,
     answerPermission: !!g.answerPermission,
     commit,
     push: !!g.push,

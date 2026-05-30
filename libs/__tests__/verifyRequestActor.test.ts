@@ -25,7 +25,7 @@ let savedShares: string | null = null;
 
 const SECRET = "test-secret-key";
 const INTERNAL = "internal-token-xyz";
-const GRANTS: ShareGrants = { sendMessage: true, answerPermission: false, commit: false, push: false };
+const GRANTS: ShareGrants = { sendMessage: true, spawnAgent: false, answerPermission: false, commit: false, push: false };
 const GIT: ShareGit = { branchMode: "current", autoCommit: false, autoPush: false };
 
 function writeAuthConfig(): void {

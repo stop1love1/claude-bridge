@@ -7,6 +7,7 @@ import { resolveRepoCwd } from "@/libs/repos";
 import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { getChild } from "@/libs/spawnRegistry";
+import { isAlive } from "@/libs/sessionEvents";
 import { ok } from "@/libs/apiResponse";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +39,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // truncate while it's mid-write, either the in-progress turn is lost or
   // the child writes at a now-invalid offset and corrupts the file. Refuse
   // the rewind until the operator stops or finishes the run.
-  if (getChild(sessionId)) {
+  // `getChild` only knows about bridge-spawned children; `isAlive` also
+  // covers externally-spawned / IDE / heartbeat-only sessions and
+  // bridge children whose registry entry was dropped by an HMR reload.
+  if (getChild(sessionId) || isAlive(sessionId)) {
     return NextResponse.json(
       { error: "session is still running — stop the run before rewinding" },
       { status: 409 },

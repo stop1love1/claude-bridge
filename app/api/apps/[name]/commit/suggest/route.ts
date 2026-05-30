@@ -18,6 +18,7 @@ import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { safeErrorMessage } from "@/libs/errorResponse";
 import { generateCommitMessageWithLLM } from "@/libs/commitMessage";
 import { buildHeuristicMessage, collectChanges } from "@/libs/commitHeuristic";
+import { withInFlight } from "@/libs/inFlight";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // Try LLM first (unless explicitly disabled). The diff is embedded in
     // the prompt so the model writes a semantic message in one pass.
     if (!wantHeuristic) {
-      const llm = await generateCommitMessageWithLLM({ cwd, nameStatus, diff, diffTruncated });
+      // Dedupe concurrent generations for the same tree (button-mash / two
+      // tabs) so we never run two `claude -p` children at once. If one is
+      // already in flight, withInFlight returns null → fall through to the
+      // heuristic rather than spawning a duplicate.
+      const llm = await withInFlight("commit-suggest", cwd, () =>
+        generateCommitMessageWithLLM({ cwd, nameStatus, diff, diffTruncated }),
+      );
       if (llm) {
         return NextResponse.json({ message: llm.message, fileCount: rows.length, cwd, source: "llm" });
       }

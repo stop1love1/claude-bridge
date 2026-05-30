@@ -19,7 +19,7 @@ import pty, { type IPty } from "node-pty";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { DEMO_MODE } from "../libs/demoMode";
 import { execLocked, filterPtyStdinChunk } from "../libs/appExecGuard";
-import { INTERNAL_TOKEN_HEADER, verifyRequestAuthOrInternal } from "../libs/auth";
+import { verifyRequestAuthOrInternal } from "../libs/auth";
 import { consumePtyWsTicket } from "../libs/ptyWsTickets";
 import { resolveAppFromRouteSegment } from "../libs/apps";
 
@@ -232,22 +232,14 @@ async function main() {
       return;
     }
 
-    const internalFromQuery =
-      typeof q.internalToken === "string"
-        ? q.internalToken
-        : Array.isArray(q.internalToken)
-          ? q.internalToken[0]
-          : undefined;
-
+    // The internal token is accepted ONLY via the request header, never a
+    // query parameter — query strings leak into access logs, browser
+    // history, and referer headers. Header-less clients (browsers, which
+    // can't set WS upgrade headers) use the one-time `?ticket=` path below.
     let session = verifyRequestAuthOrInternal({
       cookies: cookiesFromHeader(req.headers.cookie),
       headers: {
         get(name: string) {
-          if (name.toLowerCase() === INTERNAL_TOKEN_HEADER.toLowerCase()) {
-            const h = headerGet(req, INTERNAL_TOKEN_HEADER);
-            if (h) return h;
-            return internalFromQuery ?? null;
-          }
           return headerGet(req, name);
         },
       },

@@ -161,6 +161,12 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
   const encoder = new TextEncoder();
 
+  // Hoisted so the stream's `cancel()` hook can run the same teardown as
+  // the abort listener — the runtime can cancel a ReadableStream
+  // independently of `req.signal` (e.g. on a server reload), and without
+  // this the keepalive interval / session listener / fs.watch would leak.
+  let closeRef: (() => void) | null = null;
+
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
@@ -323,7 +329,13 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         try { req.signal.removeEventListener("abort", close); } catch { /* ignore */ }
       };
 
+      closeRef = close;
       req.signal.addEventListener("abort", close);
+    },
+    cancel() {
+      // Runtime-initiated cancel (not via req.signal). Run the same
+      // idempotent teardown so nothing is left dangling.
+      closeRef?.();
     },
   });
 

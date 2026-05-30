@@ -558,7 +558,12 @@ function sectionVerb(
  * In `verbose` mode we skip the coalescer entirely so debugging the
  * permission flow itself still gets a per-request signal.
  */
-const permCoalesce = new Map<string, number>();
+// Stashed on globalThis so a dev HMR reload doesn't reset the window and
+// resume pinging Telegram once per request until it re-elapses (every
+// other stateful map in this layer follows the same pattern).
+const GPC = globalThis as unknown as { __bridgePermCoalesce?: Map<string, number> };
+const permCoalesce: Map<string, number> = GPC.__bridgePermCoalesce ?? new Map<string, number>();
+GPC.__bridgePermCoalesce = permCoalesce;
 
 function shouldCoalescePermission(
   level: TelegramNotificationLevel,

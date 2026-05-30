@@ -139,6 +139,10 @@ function renderHeader(buf: SessionBuffer): string {
  * settings change invalidates automatically because the key changes.
  */
 const importantRegexCache = new Map<string, RegExp>();
+/** In practice there's one live pattern set at a time; this only grows
+ *  when an operator experiments with different configs. Cap it so it
+ *  can't accumulate one compiled regex per distinct config forever. */
+const IMPORTANT_REGEX_CACHE_MAX = 50;
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -147,6 +151,9 @@ function importantPatternFor(tokens: string[]): RegExp | null {
   const key = tokens.join("");
   let cached = importantRegexCache.get(key);
   if (!cached) {
+    if (importantRegexCache.size >= IMPORTANT_REGEX_CACHE_MAX) {
+      importantRegexCache.clear();
+    }
     cached = new RegExp(tokens.map(escapeRegex).join("|"), "i");
     importantRegexCache.set(key, cached);
   }

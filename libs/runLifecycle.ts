@@ -1083,12 +1083,15 @@ export function wireRunLifecycle(
     // .catch() rather than crashing the Next.js dev server (Risk 1).
     //
     // Safety net: if postExitFlow throws BEFORE any gate had a chance to
-    // call attachGateResult (which writes status:done), the run would
-    // stay status:running until the stale-run reaper notices the
+    // call attachGateResult (which writes a terminal status), the run
+    // would stay status:running until the stale-run reaper notices the
     // registry-miss on the next read.
-    // The catch below explicitly flips status:done (precondition: still
-    // running) so a crash in loadVerifyChain / verifyConfigOf cannot
-    // ghost a successful child indefinitely.
+    // The catch below flips status:FAILED (precondition: still running),
+    // NOT done. A crash in loadVerifyChain / verifyConfigOf means we could
+    // not verify the child's work — surfacing a false green checkmark (and
+    // letting the auto-commit gate proceed on unverified output) is worse
+    // than an honest failure. If a gate already wrote a terminal state the
+    // `status === "running"` precondition makes this a no-op.
     if (finishedRun && finishedRun.role !== "coordinator") {
       void postExitFlow({
         sessionsDir,
@@ -1102,11 +1105,11 @@ export function wireRunLifecycle(
           await updateRun(
             sessionsDir,
             sessionId,
-            { status: "done", endedAt: new Date().toISOString() },
+            { status: "failed", endedAt: new Date().toISOString() },
             (r) => r.status === "running",
           );
         } catch (e) {
-          logError("post-exit", "safety-net status:done flip failed", e, { tag });
+          logError("post-exit", "safety-net status:failed flip failed", e, { tag });
         }
       });
     }

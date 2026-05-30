@@ -65,7 +65,10 @@ const RULES: Rule[] = [
   { method: "POST", pattern: ["sessions", ":sid", "message"], grant: "sendMessage", checkSession: true },
   { method: "POST", pattern: ["sessions", ":sid", "upload"], grant: "sendMessage", checkSession: true },
   { method: "POST", pattern: ["sessions", ":sid", "kill"], grant: "sendMessage", checkSession: true },
-  { method: "POST", pattern: ["tasks", ":tid", "agents"], grant: "sendMessage" },
+  // Spawning NEW agents is a heavier capability than sending a message —
+  // gate it behind its own grant so `sendMessage` alone can't launch
+  // unbounded subprocesses.
+  { method: "POST", pattern: ["tasks", ":tid", "agents"], grant: "spawnAgent" },
   { method: "POST", pattern: ["tasks", ":tid", "continue"], grant: "sendMessage" },
   { method: "POST", pattern: ["tasks", ":tid", "runs", ":sid", "kill"], grant: "sendMessage" },
 

@@ -280,6 +280,9 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
   const safeTaskBody = sanitizeTaskBodyForFence(taskBody);
+  // Title is user-controlled; defang template/splice markers and flatten
+  // newlines so it can't break out of its single `- Title:` line.
+  const safeTitle = sanitizeUserPromptContent(taskTitle).replace(/\r?\n/g, " ");
   const profileLine = profile
     ? renderProfileLine(profile)
     : `(no profile cached — call \`GET ${BRIDGE_URL}/api/repos/profiles\` to refresh)`;
@@ -333,7 +336,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "## Task",
     "",
     `- ID: \`${taskId}\``,
-    `- Title: ${taskTitle}`,
+    `- Title: ${safeTitle}`,
     "- Original body (verbatim from the user):",
     "",
     "  ```",
@@ -348,7 +351,12 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     );
   }
 
-  const sharedPlanTrimmed = (sharedPlan ?? "").trim();
+  // `plan.md` / `notes.md` are written by sibling child agents, so they're
+  // as untrusted as task body — a malicious/confused child could plant
+  // instructions or a fence break. Defang both before splicing.
+  const sharedPlanTrimmed = sanitizeTaskBodyForFence(
+    sanitizeUserPromptContent((sharedPlan ?? "").trim()),
+  );
   if (sharedPlanTrimmed.length > 0) {
     lines.push(
       "## Shared plan (from planner)",
@@ -360,7 +368,9 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     );
   }
 
-  const peerNotesTrimmed = (opts.peerNotes ?? "").trim();
+  const peerNotesTrimmed = sanitizeTaskBodyForFence(
+    sanitizeUserPromptContent((opts.peerNotes ?? "").trim()),
+  );
   if (peerNotesTrimmed.length > 0) {
     lines.push(
       "## Peer notes (from sibling agents)",
@@ -695,6 +705,7 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
   const safeTaskBody = sanitizeTaskBodyForFence(taskBody);
+  const safeTitle = sanitizeUserPromptContent(taskTitle).replace(/\r?\n/g, " ");
   const ctx = (contextBlock ?? "").trim() || "(none — bridge skipped pre-warm)";
 
   const lines: string[] = [
@@ -705,7 +716,7 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     "## Task",
     "",
     `- ID: \`${taskId}\``,
-    `- Title: ${taskTitle}`,
+    `- Title: ${safeTitle}`,
     "- Original body (verbatim from the user):",
     "",
     "  ```",
@@ -720,7 +731,9 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     );
   }
 
-  const sharedPlanTrimmed = (sharedPlan ?? "").trim();
+  const sharedPlanTrimmed = sanitizeTaskBodyForFence(
+    sanitizeUserPromptContent((sharedPlan ?? "").trim()),
+  );
   if (sharedPlanTrimmed.length > 0) {
     lines.push(
       "## Shared plan (from planner)",
@@ -732,7 +745,9 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     );
   }
 
-  const peerNotesTrimmed = (opts.peerNotes ?? "").trim();
+  const peerNotesTrimmed = sanitizeTaskBodyForFence(
+    sanitizeUserPromptContent((opts.peerNotes ?? "").trim()),
+  );
   if (peerNotesTrimmed.length > 0) {
     lines.push(
       "## Peer notes (from sibling agents)",

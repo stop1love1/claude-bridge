@@ -18,6 +18,7 @@ const POLL_MS = 3000;
 
 const GRANT_LABELS: Record<string, string> = {
   sendMessage: "Send prompts",
+  spawnAgent: "Spawn agents",
   answerPermission: "Answer permission popups",
   commit: "Commit",
   push: "Push",

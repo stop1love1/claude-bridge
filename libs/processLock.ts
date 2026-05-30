@@ -86,17 +86,34 @@ function readLock(): LockRecord | null {
   }
 }
 
+/** Thrown by `writeLock` when the create-exclusive race was lost to a
+ *  different, still-alive process. Carries the winner's record so the
+ *  caller can report `heldBy` instead of falsely claiming the lock. */
+class LockRaceLost extends Error {
+  constructor(public readonly heldBy: LockRecord) {
+    super("process lock race lost");
+    this.name = "LockRaceLost";
+  }
+}
+
 function writeLock(rec: LockRecord): void {
   mkdirSync(BRIDGE_STATE_DIR, { recursive: true });
   // 'wx' = create-exclusive: atomically fails with EEXIST if the file
   // already exists, which closes the read-then-write race between two
-  // processes booting at the same instant. The caller only reaches here
-  // after deciding any existing lock is stale/ours, so on EEXIST we
-  // overwrite — the existing file is known-safe to replace.
+  // processes booting at the same instant.
   try {
     writeFileSync(LOCK_FILE, JSON.stringify(rec), { encoding: "utf8", flag: "wx" });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    // Lost the create-exclusive race. Re-read to decide: if a DIFFERENT,
+    // LIVE process now owns the file, a concurrent booter won — do NOT
+    // overwrite it (that's exactly the bug that let two processes both
+    // believe they held the lock). Bubble up so the caller reports
+    // `acquired: false`. Only a stale/dead/own record is safe to replace.
+    const winner = readLock();
+    if (winner && winner.pid !== process.pid && isPidAlive(winner.pid)) {
+      throw new LockRaceLost(winner);
+    }
     writeFileSync(LOCK_FILE, JSON.stringify(rec), "utf8");
   }
 }
@@ -125,7 +142,12 @@ export function acquireProcessLock(info?: { port?: number; url?: string }): Lock
     const tookOverStale = !!existing && existing.pid !== process.pid;
     writeLock(me);
     return { acquired: true, tookOverStale, heldBy: null };
-  } catch {
+  } catch (err) {
+    // Lost the boot race to a concurrent live process — report the real
+    // holder rather than falsely claiming the lock.
+    if (err instanceof LockRaceLost) {
+      return { acquired: false, tookOverStale: false, heldBy: err.heldBy };
+    }
     // Best-effort: never let a lock-file IO error block boot.
     return { acquired: true, tookOverStale: false, heldBy: null };
   }

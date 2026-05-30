@@ -66,7 +66,15 @@ export const BLOCKED_EXTENSIONS: ReadonlySet<string> = new Set([
   // loaded by an existing JVM workflow. Both are out.
   ".jar", ".class",
   // POSIX shells
-  ".sh",
+  ".sh", ".bash", ".zsh", ".ksh", ".fish",
+  // Interpreted-script source the model could run via Bash on any OS
+  // (`python exploit.py`, `node x.mjs`, `ruby x.rb`, …). The bridge
+  // exposes upload paths to the model; a careless tool call executes them.
+  // NB: `.ts`/`.tsx` are deliberately NOT here — they need a transpiler to
+  // run and are first-class content for a coding tool (see test).
+  ".py", ".pyw", ".pyc", ".pyo",
+  ".rb", ".pl", ".pm", ".php", ".phar",
+  ".mjs", ".cjs", ".lua",
   // Disk images that mount as a drive on Windows / macOS, exposing
   // arbitrary contents (autorun hooks, signed installers, etc.).
   ".iso", ".img", ".vhd", ".vhdx",
