@@ -9,7 +9,8 @@ import { BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR, readBridgeMd } from "@/lib
 import { resolveRepoCwd, resolveRepos } from "@/libs/repos";
 import { resumeClaude, spawnFreeSession } from "@/libs/spawn";
 import { wireRunLifecycle } from "@/libs/coordinator";
-import { getApp } from "@/libs/apps";
+import { getApp, type AppGitSettings } from "@/libs/apps";
+import { verifyRequestActor, type Actor } from "@/libs/auth";
 import { prepareBranch } from "@/libs/gitOps";
 import { createWorktreeForRun, removeWorktree } from "@/libs/worktrees";
 import { loadProfiles } from "@/libs/profileStore";
@@ -38,6 +39,8 @@ import { buildRecentDirection } from "@/libs/recentDirection";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest, isValidAgentRole, isValidSessionId } from "@/libs/validate";
 import { safeErrorMessage, serverError } from "@/libs/errorResponse";
+import { checkRateLimit } from "@/libs/rateLimit";
+import { getClientIp } from "@/libs/clientIp";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
@@ -183,9 +186,40 @@ function ensureSystemPromptFile(content: string): string | null {
  *
  * Returns 201 `{ sessionId, action: "spawned" }` on success.
  */
+/**
+ * Git settings to use for THIS spawn. For an operator it's the app's own
+ * policy. For a task-share guest, the share's branch config wins
+ * (branchMode / branch name / autoCommit / autoPush), push is downgraded
+ * unless the share grants it, and post-success integration (auto-merge /
+ * PR) is forced off — a guest's work never lands on a protected branch or
+ * opens a PR/MR on the operator's behalf.
+ */
+function effectiveGitForActor(appGit: AppGitSettings, actor: Actor | null): AppGitSettings {
+  if (actor?.kind !== "guest") return appGit;
+  const g = actor.share.git;
+  return {
+    ...appGit,
+    branchMode: g.branchMode,
+    fixedBranch: g.branchMode === "fixed" ? (g.branchName ?? "") : appGit.fixedBranch,
+    autoCommit: g.autoCommit,
+    autoPush: g.autoPush && actor.grants.push,
+    integrationMode: "none",
+  };
+}
+
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
+
+  // Each spawn launches a `claude` child (real CPU + LLM spend). The cap
+  // is generous so a coordinator's legitimate fan-out (many children in
+  // a burst) isn't blocked, but a runaway loop / hostile script can't
+  // spin up unbounded agents. Keyed by IP; internal children share the
+  // bridge host's IP so this also bounds recursive self-dispatch.
+  const denied = checkRateLimit("tasks:agents:ip", getClientIp(req.headers), 60, 60_000);
+  if (denied) {
+    return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
+  }
 
   let body: Partial<AgentBody>;
   try {
@@ -397,16 +431,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Skip prepareBranch in worktree mode — the worktree handles branch
   // policy via `resolveTargetBranch` in `libs/worktrees.ts`.
   const app = getApp(repo);
-  const useWorktree = !!(app && app.git.worktreeMode === "enabled");
-  if (app && app.git.branchMode !== "current" && !useWorktree) {
-    const result = await prepareBranch(repoCwd, app.git, id);
+  // For a task-share guest, the share's git config overrides the app's
+  // (branch + commit/push), so the guest's work lands where the operator
+  // scoped it. Operators keep the app's own policy.
+  const actor = verifyRequestActor(req);
+  const effGit = app ? effectiveGitForActor(app.git, actor) : null;
+  const useWorktree = !!(app && effGit && effGit.worktreeMode === "enabled");
+  if (app && effGit && effGit.branchMode !== "current" && !useWorktree) {
+    const result = await prepareBranch(repoCwd, effGit, id);
     if (!result.ok) {
       return NextResponse.json(
         {
           error: `git branch setup failed: ${result.message}`,
           detail: result.error ?? null,
           repo,
-          branchMode: app.git.branchMode,
+          branchMode: effGit.branchMode,
         },
         { status: 500 },
       );
@@ -471,10 +510,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   let worktreePath: string | null = null;
   let worktreeBranch: string | null = null;
   let worktreeBaseBranch: string | null = null;
-  if (useWorktree && app) {
+  if (useWorktree && app && effGit) {
     const handle = await createWorktreeForRun({
       appPath: app.path,
-      settings: app.git,
+      settings: effGit,
       taskId: id,
       sessionId,
     });

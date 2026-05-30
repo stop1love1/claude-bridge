@@ -5,6 +5,7 @@ import { ConfirmProvider } from "./ConfirmProvider";
 import { TooltipProvider } from "./ui/tooltip";
 import { ThemeProvider } from "./ThemeProvider";
 import { LoginApprovalDialog } from "./LoginApprovalDialog";
+import { ShareApprovalDialog } from "./ShareApprovalDialog";
 
 /**
  * Client-side provider stack. Wraps every page once via the root layout
@@ -33,6 +34,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 component itself returns null for unauthenticated
                 callers — the polled endpoint 401s, dialog never opens. */}
             <LoginApprovalDialog />
+            {/* Sibling poller for task-share guest access requests. Same
+                global-mount rationale; 401s silently for guests. */}
+            <ShareApprovalDialog />
           </ConfirmProvider>
         </ToastProvider>
       </TooltipProvider>

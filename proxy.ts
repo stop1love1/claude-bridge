@@ -7,9 +7,12 @@ import {
   loadAuthConfig,
   touchTrustedDevice,
   verifySession,
+  type SessionPayload,
 } from "@/libs/auth";
 import { checkCsrf } from "@/libs/csrf";
 import { DEMO_MODE } from "@/libs/demoMode";
+import { findValidDevice, getShare, isShareUsable } from "@/libs/shareStore";
+import { authorizeGuestRequest, sessionBelongsToTask } from "@/libs/guestAccess";
 
 /**
  * Paths the demo-mode gate redirects to `/`. Anything here is part of
@@ -45,7 +48,14 @@ export const config = {
   // a non-empty path AFTER the leading slash via `.+` (rather than
   // `.*`) — that single extra `+` is what keeps `/` itself out of
   // the matcher.
-  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|api/auth/|login|docs).+)"],
+  // `share/` (the public guest landing page) and `api/share/access/`
+  // (the public guest request/poll endpoints) are excluded so a guest
+  // with no cookie can reach them — same rationale as `/login` +
+  // `/api/auth/`. The OPERATOR share API (`/api/share`, `/api/share/
+  // requests/...`) is deliberately NOT excluded, so it stays cookie-
+  // gated. Gated guest DATA routes (`/api/tasks/<tid>/...`) also stay in
+  // the matcher so the guest branch below authorizes them per-share.
+  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|api/auth/|api/share/access/|share/|login|docs).+)"],
 };
 
 /**
@@ -152,6 +162,13 @@ export function proxy(req: NextRequest) {
   if (token) {
     const payload = verifySession(token, cfg.secret);
     if (payload) {
+      // Guest (task-share) cookie: authorize against the LIVE share —
+      // never the cookie's stale claims — so revoke / expiry / grant
+      // edits take effect instantly. Deny-by-default: a guest is only
+      // allowed the per-share allowlist of API routes bound to its task.
+      if (payload.kind === "guest") {
+        return authorizeGuest(req, payload, pathname, search);
+      }
       // If the cookie claims a trusted device, the device has to still
       // be in the allowlist — otherwise a "remember me" session is
       // unrevokable. Bump `lastSeenAt` for active devices.
@@ -166,6 +183,47 @@ export function proxy(req: NextRequest) {
     }
   }
 
+  return rejectAuth(req, pathname, search);
+}
+
+/**
+ * Authorize a task-share guest. Validates the cookie's share + device
+ * against the LIVE store (instant revoke/expiry), then applies the
+ * deny-by-default allowlist bound to the share's task. Guests only ever
+ * touch the gated API; a guest who navigates to a dashboard page is
+ * bounced to login like any unauthenticated visitor.
+ */
+function authorizeGuest(
+  req: NextRequest,
+  payload: SessionPayload,
+  pathname: string,
+  search: string,
+): NextResponse {
+  const { sid, tid, did } = payload;
+  const share = sid ? getShare(sid) : null;
+  if (
+    !share ||
+    !isShareUsable(share) ||
+    !tid ||
+    share.taskId !== tid ||
+    !did ||
+    !findValidDevice(share, did)
+  ) {
+    return rejectAuth(req, pathname, search);
+  }
+  const decision = authorizeGuestRequest(
+    req.method,
+    pathname,
+    { taskId: share.taskId, grants: share.grants },
+    (s) => sessionBelongsToTask(share.taskId, s),
+  );
+  if (decision.ok) return NextResponse.next();
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json(
+      { error: "forbidden", reason: decision.reason ?? null },
+      { status: 403 },
+    );
+  }
   return rejectAuth(req, pathname, search);
 }
 

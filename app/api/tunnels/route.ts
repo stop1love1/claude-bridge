@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { listTunnels, startTunnel, type TunnelProvider } from "@/libs/tunnels";
+import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ tunnel: entry }, { status: 201 });
   } catch (err) {
     return NextResponse.json(
-      { error: (err as Error).message || "failed to start tunnel" },
+      { error: safeErrorMessage(err, "failed to start tunnel") },
       { status: 400 },
     );
   }

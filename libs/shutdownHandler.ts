@@ -11,6 +11,7 @@
  */
 
 import { killAllTunnels } from "./tunnels";
+import { releaseProcessLock } from "./processLock";
 
 interface ShutdownGlobal { __bridgeShutdownInstalled?: boolean }
 
@@ -21,6 +22,9 @@ export function installShutdownHandlers(): void {
 
   const onSignal = (code: number) => {
     try { killAllTunnels(); } catch { /* best-effort on shutdown */ }
+    // Release the single-process lock so the next boot sees a clean
+    // handoff rather than a stale-takeover. No-op if we never held it.
+    try { releaseProcessLock(); } catch { /* best-effort on shutdown */ }
     // The OS reaps children once we exit; still call exit explicitly so
     // a stuck Telegram poller can't keep the process alive past the
     // signal. Numeric code matches POSIX convention (SIGINT → 130,
@@ -31,5 +35,6 @@ export function installShutdownHandlers(): void {
   process.once("SIGTERM", () => onSignal(143));
   process.once("exit", () => {
     try { killAllTunnels(); } catch { /* best-effort */ }
+    try { releaseProcessLock(); } catch { /* best-effort */ }
   });
 }

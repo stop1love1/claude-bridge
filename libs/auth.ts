@@ -44,6 +44,13 @@ import {
   readBridgeManifest,
   updateBridgeManifest,
 } from "./bridgeManifest";
+import {
+  findValidDevice,
+  getShare,
+  isShareUsable,
+  type Share,
+  type ShareGrants,
+} from "./shareStore";
 
 interface ScryptOpts {
   N?: number;
@@ -280,12 +287,21 @@ export async function verifyPassword(plain: string, stored: string): Promise<boo
 // -----------------------------------------------------------------------------
 
 export interface SessionPayload {
-  /** Subject — username. */
+  /** Subject — username (operator) or `"guest"` for share sessions. */
   sub: string;
   /** Expiry epoch milliseconds. */
   exp: number;
   /** Trusted device id, set when "Trust this device" was checked. */
   did?: string;
+  /**
+   * Actor discriminator. Absent / `"operator"` = the single operator.
+   * `"guest"` = a task-share guest, scoped to one task by `sid`/`tid`.
+   */
+  kind?: "operator" | "guest";
+  /** Guest only: the share id this session was issued for. */
+  sid?: string;
+  /** Guest only: the task id the share is scoped to. */
+  tid?: string;
 }
 
 function b64urlEncode(buf: Buffer): string {
@@ -485,6 +501,105 @@ export function verifyRequestAuthOrInternal(
   return {
     sub: cfg.email,
     exp: Number.MAX_SAFE_INTEGER,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Guest (task-share) sessions
+// -----------------------------------------------------------------------------
+
+/**
+ * Cookie lifetime for a guest with no device TTL (share remembers the
+ * device "forever"). The cookie is identity-only — authorization is
+ * re-checked against the live share on every request — so a long cookie
+ * life is safe: revoking the share or the device kills access instantly.
+ */
+export const GUEST_COOKIE_MAX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Sign a scoped guest session cookie. Returns the token and the
+ * `maxAgeMs` to hand to `sessionCookieOptions`. `exp` is clamped to the
+ * device TTL when one is set, else the 30-day cap.
+ */
+export function signGuestSession(args: {
+  shareId: string;
+  taskId: string;
+  did: string;
+  deviceTtlMs: number | null;
+}): { token: string; maxAgeMs: number } {
+  const cfg = loadAuthConfig();
+  if (!cfg) throw new Error("auth not configured");
+  const maxAgeMs =
+    args.deviceTtlMs === null
+      ? GUEST_COOKIE_MAX_TTL_MS
+      : Math.min(args.deviceTtlMs, GUEST_COOKIE_MAX_TTL_MS);
+  const payload: SessionPayload = {
+    sub: "guest",
+    kind: "guest",
+    sid: args.shareId,
+    tid: args.taskId,
+    did: args.did,
+    exp: Date.now() + maxAgeMs,
+  };
+  return { token: signSession(payload, cfg.secret), maxAgeMs };
+}
+
+/**
+ * Resolved actor behind a request: the single operator (cookie or
+ * internal token) or a task-share guest validated against the live
+ * store. `null` when neither holds.
+ *
+ * The guest branch re-reads the share on every call (not the cookie's
+ * stale claims), so revocation / expiry / grant edits take effect
+ * immediately — the cookie only proves which share + device.
+ */
+export type Actor =
+  | { kind: "operator"; payload: SessionPayload }
+  | { kind: "guest"; share: Share; taskId: string; did: string; grants: ShareGrants };
+
+export function verifyRequestActor(req: RequestLike): Actor | null {
+  const cfg = loadAuthConfig();
+  if (!cfg) return null;
+
+  // Internal-token callers (child agents / CLI) act with operator scope.
+  const internal = req.headers?.get(INTERNAL_TOKEN_HEADER);
+  if (internal && cfg.internalToken && constantTimeStringEqual(internal, cfg.internalToken)) {
+    return { kind: "operator", payload: { sub: cfg.email, exp: Number.MAX_SAFE_INTEGER } };
+  }
+
+  const token = req.cookies.get(COOKIE_NAME)?.value;
+  if (!token) return null;
+  const payload = verifySession(token, cfg.secret);
+  if (!payload) return null;
+
+  if (payload.kind === "guest") {
+    return resolveGuest(payload);
+  }
+
+  // Operator cookie — same trusted-device revocation check the proxy uses.
+  if (payload.did && !findTrustedDevice(payload.did)) return null;
+  return { kind: "operator", payload };
+}
+
+/**
+ * Validate a guest cookie payload against the live share store. Returns
+ * a guest actor only when the share exists, is usable (not revoked /
+ * expired), the cookie's task matches the share, and the device is still
+ * an approved, unexpired member.
+ */
+function resolveGuest(payload: SessionPayload): Actor | null {
+  if (!payload.sid || !payload.tid || !payload.did) return null;
+  const share = getShare(payload.sid);
+  if (!share || !isShareUsable(share)) return null;
+  // Defense-in-depth: the cookie's task must match the share's task.
+  if (share.taskId !== payload.tid) return null;
+  if (!findValidDevice(share, payload.did)) return null;
+  return {
+    kind: "guest",
+    share,
+    taskId: share.taskId,
+    did: payload.did,
+    grants: share.grants,
   };
 }
 

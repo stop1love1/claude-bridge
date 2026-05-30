@@ -56,6 +56,21 @@ export interface GenerateCommitMessageOptions {
    * `COMMIT_MSG_TIMEOUT_MS` when omitted.
    */
   timeoutMs?: number;
+  /**
+   * Compact `git status`-style summary of the changed files, computed by
+   * the caller (`collectChanges`). When present it's embedded in the
+   * prompt so the model sees the change set without a Bash round-trip.
+   */
+  nameStatus?: string;
+  /**
+   * Truncated unified diff of the tracked changes. Embedding it is the
+   * single biggest lever on SEMANTIC quality — the model reads real
+   * hunks instead of inferring intent from filenames (or skipping the
+   * `git diff` Bash call entirely and guessing).
+   */
+  diff?: string;
+  /** True when `diff` was cut short — the model is told it may read more. */
+  diffTruncated?: boolean;
 }
 
 export interface GenerateCommitMessageResult {
@@ -69,20 +84,56 @@ export interface GenerateCommitMessageResult {
 }
 
 /**
- * Public entry. Returns `null` on any failure so the caller falls back
- * to the heuristic generator. Never throws.
+ * Corrective nudge appended to the retry prompt. Cheaper than dropping
+ * to the file-list heuristic: when the first pass came back malformed or
+ * mechanical, one focused reminder usually fixes it.
+ */
+const CORRECTIVE_SUFFIX = [
+  "",
+  "---",
+  "Your previous attempt was REJECTED. It was either malformed (not exactly `<type>(<scope>): <subject>`) or mechanical (a file list / `update N files`-style subject that describes WHICH files changed instead of WHAT the change does).",
+  "Re-read the diff above and write the SEMANTIC change — the behavior, contract, or invariant that shifted. Output ONLY the corrected commit message, nothing else.",
+].join("\n");
+
+/** Cap a retry's timeout so two attempts can't blow the latency budget. */
+const RETRY_TIMEOUT_MS = 30_000;
+
+/**
+ * One generation attempt. Returns the parsed message, or `null` when the
+ * spawn failed, the output didn't parse, or it came back file-list-shaped
+ * (the caller decides whether to retry / fall back).
+ */
+async function attempt(
+  opts: GenerateCommitMessageOptions,
+  corrective: boolean,
+): Promise<GenerateCommitMessageResult | null> {
+  const prompt = buildPrompt(opts) + (corrective ? CORRECTIVE_SUFFIX : "");
+  const timeoutMs = corrective
+    ? Math.min(opts.timeoutMs ?? COMMIT_MSG_TIMEOUT_MS, RETRY_TIMEOUT_MS)
+    : opts.timeoutMs;
+  const raw = await runClaude(prompt, opts.cwd, timeoutMs);
+  if (!raw) return null;
+  const parsed = parseLLMResponse(raw);
+  if (!parsed) return null;
+  if (isFileListShaped(parsed)) return null;
+  return { message: parsed, source: "llm" };
+}
+
+/**
+ * Public entry. Runs up to two passes: a normal one, then — if it failed
+ * to parse or came back mechanical — a single corrective retry. Returns
+ * `null` on any failure so the caller falls back to the heuristic
+ * generator. Never throws.
  */
 export async function generateCommitMessageWithLLM(
   opts: GenerateCommitMessageOptions,
 ): Promise<GenerateCommitMessageResult | null> {
   try {
     if (!existsSync(opts.cwd)) return null;
-    const prompt = buildPrompt(opts);
-    const raw = await runClaude(prompt, opts.cwd, opts.timeoutMs);
-    if (!raw) return null;
-    const parsed = parseLLMResponse(raw);
-    if (!parsed) return null;
-    return { message: parsed, source: "llm" };
+    const first = await attempt(opts, false);
+    if (first) return first;
+    // Corrective retry — the first pass was malformed or file-list-shaped.
+    return await attempt(opts, true);
   } catch (err) {
     console.warn("[commit-message] generate crashed (non-fatal)", err);
     return null;
@@ -123,6 +174,29 @@ export function buildPrompt(opts: GenerateCommitMessageOptions): string {
     "4. If multiple files changed for the SAME reason, treat it as one semantic change. If they changed for unrelated reasons, the subject should name the dominant one and the body lists the rest as sub-bullets.",
     "",
   );
+
+  // Embed the diff inline when the caller computed it. This is what
+  // makes the message SEMANTIC: the model reads the actual hunks here
+  // instead of relying on its own (often skipped) `git diff` Bash call.
+  // The investigation steps above stay as a fallback for anything not
+  // shown (untracked file bodies, truncated tail).
+  if ((opts.nameStatus && opts.nameStatus.trim()) || (opts.diff && opts.diff.trim())) {
+    lines.push(
+      "The change set is provided below — read it and describe what it DOES. The `git` commands above are optional; use them only to read more than what's shown (an untracked file's body, or a truncated section).",
+      "",
+      "── Changed files ──",
+      (opts.nameStatus && opts.nameStatus.trim()) || "(see diff)",
+      "",
+    );
+    if (opts.diff && opts.diff.trim()) {
+      lines.push(
+        "── Diff ──" +
+          (opts.diffTruncated ? " (TRUNCATED — run `git diff HEAD` for the remainder if the tail matters)" : ""),
+        opts.diff.trim(),
+        "",
+      );
+    }
+  }
 
   if (opts.taskTitle && opts.taskTitle.trim().length > 0) {
     lines.push(
@@ -304,10 +378,15 @@ export function parseLLMResponse(raw: string): string | null {
   const headerLine = rawLines[i];
   if (!looksLikeHeader(headerLine)) return null;
 
-  // Subject cap — truncate hard if the model exceeded it.
+  // Subject cap — prefer a word boundary near the cap so we don't slice
+  // mid-word; fall back to a hard cut for a single very long token.
   let subject = headerLine.trim();
   if (subject.length > SUBJECT_CAP_CHARS) {
-    subject = subject.slice(0, SUBJECT_CAP_CHARS - 1) + "…";
+    const hard = SUBJECT_CAP_CHARS - 1; // leave room for the ellipsis
+    let cut = subject.slice(0, hard);
+    const lastSpace = cut.lastIndexOf(" ");
+    if (lastSpace > 0 && lastSpace >= hard - 16) cut = cut.slice(0, lastSpace);
+    subject = cut.replace(/[\s,;:_–-]+$/, "") + "…";
   }
 
   // Body: everything after the header, with leading/trailing blank
@@ -327,6 +406,35 @@ export function parseLLMResponse(raw: string): string | null {
   const body = collapseBlankRuns(bodyLines).join("\n").trim();
 
   return body.length > 0 ? `${subject}\n\n${body}` : subject;
+}
+
+/**
+ * Detect a "file-list-shaped" message — the recurring failure mode where
+ * the model describes mechanics (which files moved) instead of the
+ * semantic change. Used by the generator to REJECT such output and try
+ * one corrective pass before falling back to the heuristic. Conservative
+ * on purpose: it must not flag a legitimate semantic message.
+ *
+ *   bad: `chore: update 5 files`
+ *   bad: `chore: update config.ts`          (generic verb + bare filename)
+ *   bad: a body that is only `- update X.ts` / `- add Y/z` bullets
+ */
+export function isFileListShaped(message: string): boolean {
+  const lines = message.split(/\r?\n/);
+  const subject = (lines[0] ?? "").trim();
+  // "update N files" / "3 files changed" anywhere in the subject.
+  if (/\b\d+\s+files?\b/i.test(subject)) return true;
+  // Generic verb + a single bare filename as the entire object.
+  if (/^[a-z]+(\([^)]*\))?:\s*(update|change|modify|edit|touch)\s+[\w./-]+\.\w+\s*$/i.test(subject)) {
+    return true;
+  }
+  // Body made up entirely of file-operation bullets.
+  const body = lines.slice(1).map((l) => l.trim()).filter((l) => l.length > 0);
+  if (body.length >= 2) {
+    const fileOp = /^[-*]\s*(add|update|remove|delete|rename|modify|change|create|touch|copy)\b.*[\/.]\w+/i;
+    if (body.every((l) => fileOp.test(l))) return true;
+  }
+  return false;
 }
 
 /** True iff the line looks like `<type>(<scope>): subject` or `<type>: subject`. */

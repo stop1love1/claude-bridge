@@ -3,8 +3,8 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { resolveRepos } from "@/libs/repos";
 import { discoverOrphanProjects, projectDirFor } from "@/libs/sessions";
-import { removeSessionFromTask } from "@/libs/meta";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { findSessionTaskDirs, removeSessionFromTask } from "@/libs/meta";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
 import { bustSessionsListCache } from "@/libs/sessionListCache";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { safeErrorMessage } from "@/libs/errorResponse";
@@ -95,18 +95,15 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   // the same per-task lock that protects appendRun/updateRun (H7) and
   // through `atomicWriteJson` rather than a raw `writeFileSync`.
   //
-  // TODO: O(N) scan over every task dir on every delete. A reverse
-  // index (sessionId → taskId) — see `buildLinkIndex` in
-  // app/api/sessions/all/route.ts — could turn this into a single
-  // lookup. Punted: factoring that helper into `libs/meta.ts` is wider
-  // than this brief.
+  // `findSessionTaskDirs` resolves the owning task(s) up front off the
+  // cached meta, so we only take the per-task lock + rewrite on the dir
+  // that actually holds the session — not all N task dirs. A session
+  // belongs to exactly one task in practice; >1 hit (corruption) still
+  // unlinks from each.
   const unlinkedFromTasks: string[] = [];
-  if (existsSync(SESSIONS_DIR)) {
-    for (const taskId of readdirSync(SESSIONS_DIR)) {
-      const dir = join(SESSIONS_DIR, taskId);
-      const removed = await removeSessionFromTask(dir, sessionId);
-      if (removed) unlinkedFromTasks.push(taskId);
-    }
+  for (const dir of findSessionTaskDirs(sessionId)) {
+    const removed = await removeSessionFromTask(dir, sessionId);
+    if (removed) unlinkedFromTasks.push(basename(dir));
   }
 
   if (!removedFile && unlinkedFromTasks.length === 0) {

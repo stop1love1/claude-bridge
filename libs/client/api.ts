@@ -14,6 +14,7 @@ import type {
   TunnelInstallResult,
   UsageSnapshot,
 } from "./types";
+import type { ShareView, ShareGrants, ShareGit } from "../shareStore";
 
 /**
  * Optional cancellation handle accepted by every read-side `api.*` helper.
@@ -490,4 +491,83 @@ export const api = {
     req<{ ok: boolean }>(`/auth/devices?id=${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
+
+  // ─── Task share links (operator) ─────────────────────────────────
+  listShares: (taskId: string, opts?: ReqOpts) =>
+    req<{ shares: ShareView[] }>(
+      `/share?taskId=${encodeURIComponent(taskId)}`,
+      { signal: opts?.signal },
+    ),
+  createShare: (body: {
+    taskId: string;
+    grants: ShareGrants;
+    git: ShareGit;
+    deviceTtlMs?: number | null;
+    expiresAt?: number | null;
+    label?: string;
+  }) =>
+    req<{ share: ShareView; url: string }>("/share", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateShare: (
+    id: string,
+    patch: {
+      grants?: Partial<ShareGrants>;
+      git?: Partial<ShareGit>;
+      deviceTtlMs?: number | null;
+      expiresAt?: number | null;
+      label?: string;
+      revoked?: boolean;
+    },
+  ) =>
+    req<{ share: ShareView }>(`/share/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteShare: (id: string) =>
+    req<{ ok: true }>(`/share/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  revokeShareDevice: (id: string, did: string) =>
+    req<{ ok: true }>(
+      `/share/${encodeURIComponent(id)}/devices/${encodeURIComponent(did)}`,
+      { method: "DELETE" },
+    ),
+  shareRequests: (opts?: ReqOpts) =>
+    req<{ pending: ShareRequestDto[] }>(`/share/requests`, { signal: opts?.signal }),
+  answerShareRequest: (reqId: string, decision: "approved" | "denied", reason?: string) =>
+    req<{ ok: true; status: string }>(
+      `/share/requests/${encodeURIComponent(reqId)}`,
+      { method: "POST", body: JSON.stringify({ decision, reason }) },
+    ),
+
+  // ─── Task share access (guest, public endpoints) ─────────────────
+  shareAccess: (id: string, token: string, name?: string) =>
+    req<
+      | { status: "approved"; taskId: string; grants: ShareGrants }
+      | { status: "pending"; requestId: string; taskId: string }
+    >(`/share/access/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ token, name }),
+    }),
+  shareAccessPoll: (id: string, reqId: string) =>
+    req<
+      | { status: "approved"; taskId: string; grants: ShareGrants }
+      | { status: "pending" }
+      | { status: "denied"; reason: string | null }
+      | { status: "expired" }
+    >(`/share/access/${encodeURIComponent(id)}/pending/${encodeURIComponent(reqId)}`),
 };
+
+/** Pending guest access request, as surfaced to the operator's modal. */
+export interface ShareRequestDto {
+  id: string;
+  shareId: string;
+  taskId: string;
+  displayName: string;
+  ip: string;
+  userAgent: string;
+  createdAt: string;
+  expiresAt: string;
+  shareLabel: string | null;
+  grants: ShareGrants | null;
+}

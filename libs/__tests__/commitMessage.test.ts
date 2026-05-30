@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPrompt, parseLLMResponse } from "../commitMessage";
+import { buildPrompt, isFileListShaped, parseLLMResponse } from "../commitMessage";
 
 describe("parseLLMResponse", () => {
   it("accepts a clean Conventional Commits header + body", () => {
@@ -215,5 +215,85 @@ describe("buildPrompt", () => {
     expect(p).toMatch(/feat = user-visible/);
     expect(p).toMatch(/fix = corrects a bug/);
     expect(p).toMatch(/refactor = same external behavior/);
+  });
+
+  it("embeds the provided name-status + diff so the model reads real hunks", () => {
+    const p = buildPrompt({
+      cwd: "/x",
+      nameStatus: "M  libs/auth/token.ts",
+      diff: "diff --git a/libs/auth/token.ts b/libs/auth/token.ts\n-old\n+new",
+      diffTruncated: false,
+    });
+    expect(p).toContain("── Changed files ──");
+    expect(p).toContain("M  libs/auth/token.ts");
+    expect(p).toContain("── Diff ──");
+    expect(p).toContain("+new");
+  });
+
+  it("flags a truncated diff so the model knows to read more", () => {
+    const p = buildPrompt({ cwd: "/x", diff: "diff --git ...", diffTruncated: true });
+    expect(p).toMatch(/TRUNCATED/);
+  });
+
+  it("omits the change-set section when neither diff nor name-status is given", () => {
+    const p = buildPrompt({ cwd: "/x" });
+    expect(p).not.toContain("── Changed files ──");
+  });
+});
+
+describe("isFileListShaped", () => {
+  it("flags an 'update N files' subject", () => {
+    expect(isFileListShaped("chore: update 5 files")).toBe(true);
+    expect(isFileListShaped("chore(api): change 3 files")).toBe(true);
+  });
+
+  it("flags a generic verb + bare filename subject", () => {
+    expect(isFileListShaped("chore: update config.ts")).toBe(true);
+    expect(isFileListShaped("fix: modify libs/auth/token.ts")).toBe(true);
+  });
+
+  it("flags a body that is only file-operation bullets", () => {
+    const msg = ["chore: touch things", "", "- update a/x.ts", "- add b/y.ts"].join("\n");
+    expect(isFileListShaped(msg)).toBe(true);
+  });
+
+  it("does NOT flag a legitimate semantic message", () => {
+    expect(isFileListShaped("fix(payments): acquire fund lock before opening transaction")).toBe(false);
+    const good = [
+      "feat(finance): expose batch invoice export with truncation flag",
+      "",
+      "Large exports timed out at the gateway; stream rows and flag the cut",
+      "so the client can page the remainder.",
+    ].join("\n");
+    expect(isFileListShaped(good)).toBe(false);
+  });
+
+  it("does NOT flag a real noun even with a generic verb", () => {
+    // "update auth retry budget" is a specific noun, not a filename.
+    expect(isFileListShaped("fix(auth): update retry budget ceiling")).toBe(false);
+  });
+});
+
+describe("word-boundary subject truncation", () => {
+  it("breaks at a word boundary near the cap instead of mid-word", () => {
+    const subject =
+      "feat(scope): add a reasonably long subject that overflows the seventy two char cap here";
+    const out = parseLLMResponse(subject);
+    const first = out!.split("\n")[0];
+    expect(first.length).toBeLessThanOrEqual(72);
+    expect(first.endsWith("…")).toBe(true);
+    // The stem (everything before the ellipsis) must be a prefix of the
+    // original that ends exactly at a word boundary — i.e. the next char
+    // in the original is whitespace. That proves we didn't slice mid-word.
+    const stem = first.slice(0, -1);
+    expect(subject.startsWith(stem)).toBe(true);
+    expect(/\s/.test(subject[stem.length] ?? "")).toBe(true);
+  });
+
+  it("hard-cuts a single very long token (no spaces to break on)", () => {
+    const out = parseLLMResponse("feat(everything): " + "x".repeat(120));
+    const first = out!.split("\n")[0];
+    expect(first.length).toBeLessThanOrEqual(72);
+    expect(first.endsWith("…")).toBe(true);
   });
 });
