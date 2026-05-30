@@ -33,7 +33,7 @@ export const APP_AUTO = "__auto__";
 interface DialogProps {
   apps: App[];
   repos?: Repo[];
-  onCreate: (t: { body: string; app: string | null }) => Promise<void>;
+  onCreate: (t: { body: string; app: string | null; auto?: boolean }) => Promise<void>;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }
 
@@ -92,7 +92,7 @@ function NewTaskDialogBody({
 }: {
   apps: App[];
   repos: Repo[];
-  onCreate: (t: { body: string; app: string | null }) => Promise<void>;
+  onCreate: (t: { body: string; app: string | null; auto?: boolean }) => Promise<void>;
   onClose: () => void;
 }) {
   const branchByApp = useMemo(
@@ -101,6 +101,7 @@ function NewTaskDialogBody({
   );
   const [body, setBody] = useState("");
   const [app, setApp] = useState<string>(APP_AUTO);
+  const [auto, setAuto] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   // Lazy initialiser — runs once on mount, which here means the
@@ -146,6 +147,7 @@ function NewTaskDialogBody({
       await onCreate({
         body: trimmed,
         app: app === APP_AUTO ? null : app,
+        auto,
       });
       onClose();
     } finally {
@@ -300,6 +302,22 @@ function NewTaskDialogBody({
             the heuristic chooses based on the task body.
           </p>
         </div>
+
+        <label className="flex items-start gap-2 cursor-pointer rounded-md border border-border bg-muted/20 p-2.5">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-3.5 w-3.5 rounded border-border accent-primary cursor-pointer"
+            checked={auto}
+            onChange={(e) => setAuto(e.target.checked)}
+          />
+          <span className="text-xs">
+            <span className="text-foreground font-medium">Tự chạy (auto-queue)</span>{" "}
+            <span className="text-muted-foreground/80">
+              — để Quy trình tự dispatch khi có chỗ trống (theo trần đồng thời),
+              thay vì spawn coordinator ngay. Vẫn dừng ở READY FOR REVIEW chờ duyệt.
+            </span>
+          </span>
+        </label>
 
         <Textarea
           ref={taRef}

@@ -41,6 +41,12 @@ export async function register(): Promise<void> {
   const { ensureCoordinatorNudge } = await import("./libs/coordinatorNudge");
   ensureCoordinatorNudge();
 
+  // Autonomous scheduler ("Quy trình"): cron workflows + the auto-queue
+  // pump. Gated internally on the process lock so only the singleton
+  // bridge dispatches. Idempotent + HMR-safe.
+  const { ensureScheduler } = await import("./libs/scheduler");
+  ensureScheduler();
+
   // Tunnel shutdown handlers live behind a dynamic import so the Node-
   // only `process.once` / `process.exit` calls stay invisible to the
   // Edge runtime static analyzer.

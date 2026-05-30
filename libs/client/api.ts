@@ -15,6 +15,12 @@ import type {
   UsageSnapshot,
 } from "./types";
 import type { ShareView, ShareGrants, ShareGit } from "../shareStore";
+import type {
+  Workflow,
+  SchedulerSettings,
+  CronSchedule,
+} from "../workflowStore";
+import type { SchedulerStatus } from "../scheduler";
 
 /**
  * Optional cancellation handle accepted by every read-side `api.*` helper.
@@ -38,7 +44,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   repos: () => req<Repo[]>("/repos"),
   tasks: () => req<Task[]>("/tasks"),
-  createTask: (body: { title?: string; body: string; app?: string | null }) =>
+  createTask: (body: { title?: string; body: string; app?: string | null; auto?: boolean }) =>
     req<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
   updateTask: (id: string, patch: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
@@ -556,6 +562,48 @@ export const api = {
       | { status: "denied"; reason: string | null }
       | { status: "expired" }
     >(`/share/access/${encodeURIComponent(id)}/pending/${encodeURIComponent(reqId)}`),
+
+  // ─── Workflows ("Quy trình": cron + auto-queue + 24/7 status) ─────
+  workflows: (opts?: ReqOpts) =>
+    req<{ workflows: Workflow[]; settings: SchedulerSettings; status: SchedulerStatus }>(
+      `/workflows`,
+      { signal: opts?.signal },
+    ),
+  createWorkflow: (body: {
+    name?: string;
+    schedule: CronSchedule;
+    app?: string | null;
+    title: string;
+    body?: string;
+    enabled?: boolean;
+  }) =>
+    req<Workflow>(`/workflows`, { method: "POST", body: JSON.stringify(body) }),
+  updateWorkflow: (
+    id: string,
+    patch: {
+      name?: string;
+      enabled?: boolean;
+      schedule?: CronSchedule;
+      app?: string | null;
+      title?: string;
+      body?: string;
+    },
+  ) =>
+    req<Workflow>(`/workflows/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteWorkflow: (id: string) =>
+    req<{ ok: true }>(`/workflows/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  runWorkflowNow: (id: string) =>
+    req<{ ok: true; task: Task }>(`/workflows/${encodeURIComponent(id)}/run-now`, {
+      method: "POST",
+    }),
+  setSchedulerSettings: (patch: Partial<SchedulerSettings>) =>
+    req<SchedulerSettings>(`/workflows/settings`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
 };
 
 /** Pending guest access request, as surfaced to the operator's modal. */

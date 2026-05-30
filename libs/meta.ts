@@ -288,6 +288,18 @@ export interface Meta {
    */
   taskApp?: string | null;
   createdAt: string;
+  /**
+   * When true, this task opts into AUTONOMOUS dispatch by the scheduler
+   * ("auto-queue"): instead of spawning a coordinator immediately at
+   * create time, the task waits in TODO and the scheduler picks it up
+   * (oldest-first, up to the global concurrency cap). Absent/false = the
+   * classic "dispatch a coordinator right away" behavior.
+   */
+  auto?: boolean;
+  /** How this task was created / dispatched — attribution for the UI. */
+  origin?: "manual" | "cron" | "auto";
+  /** When `origin === "cron"`, the id of the workflow that minted it. */
+  workflowId?: string | null;
   runs: Run[];
   /**
    * Cached output of `lib/detect` for this task. Computed once at

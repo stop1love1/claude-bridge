@@ -48,6 +48,9 @@ function metaToTask(meta: Meta): Task {
     section: meta.taskSection,
     checked: meta.taskChecked,
     app: meta.taskApp ?? null,
+    auto: meta.auto ?? false,
+    origin: meta.origin ?? "manual",
+    workflowId: meta.workflowId ?? null,
   };
 }
 
@@ -183,12 +186,21 @@ export function createTask(input: {
   title: string;
   body: string;
   app?: string | null;
+  /** Opt the task into autonomous scheduler dispatch (auto-queue). */
+  auto?: boolean;
+  /** Provenance — "manual" (UI), "auto" (auto-queue), "cron" (workflow). */
+  origin?: "manual" | "cron" | "auto";
+  /** Originating workflow id when minted by a cron workflow. */
+  workflowId?: string | null;
 }): Task {
   ensureSessionsDir();
   const now = new Date();
   const id = generateTaskId(now);
   const dir = join(SESSIONS_DIR, id);
   const taskApp = input.app && input.app.trim() ? input.app.trim() : null;
+  const auto = input.auto ?? false;
+  const origin = input.origin ?? "manual";
+  const workflowId = input.workflowId ?? null;
   createMeta(dir, {
     taskId: id,
     taskTitle: input.title,
@@ -198,6 +210,9 @@ export function createTask(input: {
     taskChecked: false,
     taskApp,
     createdAt: now.toISOString(),
+    auto,
+    origin,
+    workflowId,
   });
   return {
     id,
@@ -208,10 +223,13 @@ export function createTask(input: {
     section: "TODO",
     checked: false,
     app: taskApp,
+    auto,
+    origin,
+    workflowId,
   };
 }
 
-type TaskPatch = Partial<Pick<Task, "title" | "body" | "section" | "status" | "checked">>;
+type TaskPatch = Partial<Pick<Task, "title" | "body" | "section" | "status" | "checked" | "auto">>;
 
 export async function updateTask(id: string, patch: TaskPatch): Promise<Task | null> {
   const dir = safeSessionDir(id);
@@ -229,6 +247,7 @@ export async function updateTask(id: string, patch: TaskPatch): Promise<Task | n
     if (patch.title !== undefined) meta.taskTitle = patch.title;
     if (patch.body !== undefined) meta.taskBody = patch.body;
     if (patch.checked !== undefined) meta.taskChecked = patch.checked;
+    if (patch.auto !== undefined) meta.auto = patch.auto;
     if (patch.section !== undefined) {
       meta.taskSection = patch.section;
       meta.taskStatus = SECTION_STATUS[patch.section];

@@ -7,9 +7,16 @@ import {
   LayoutGrid,
   Settings as SettingsIcon,
   Terminal,
+  Workflow,
 } from "lucide-react";
 
-export type MainNavSection = "apps" | "tasks" | "sessions" | "tunnels" | "settings";
+export type MainNavSection =
+  | "apps"
+  | "tasks"
+  | "sessions"
+  | "workflows"
+  | "tunnels"
+  | "settings";
 
 const ITEMS: {
   key: MainNavSection;
@@ -17,11 +24,12 @@ const ITEMS: {
   label: string;
   Icon: React.ComponentType<{ size?: number; className?: string }>;
 }[] = [
-  { key: "apps",     href: "/apps",     label: "Apps",     Icon: Boxes },
-  { key: "tasks",    href: "/tasks",    label: "Tasks",    Icon: LayoutGrid },
-  { key: "sessions", href: "/sessions", label: "Sessions", Icon: Terminal },
-  { key: "tunnels",  href: "/tunnels",  label: "Tunnels",  Icon: Globe2 },
-  { key: "settings", href: "/settings", label: "Settings", Icon: SettingsIcon },
+  { key: "apps",      href: "/apps",      label: "Apps",      Icon: Boxes },
+  { key: "tasks",     href: "/tasks",     label: "Tasks",     Icon: LayoutGrid },
+  { key: "sessions",  href: "/sessions",  label: "Sessions",  Icon: Terminal },
+  { key: "workflows", href: "/workflows", label: "Quy trình", Icon: Workflow },
+  { key: "tunnels",   href: "/tunnels",   label: "Tunnels",   Icon: Globe2 },
+  { key: "settings",  href: "/settings",  label: "Settings",  Icon: SettingsIcon },
 ];
 
 /**

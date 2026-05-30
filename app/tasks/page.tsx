@@ -151,12 +151,14 @@ function Dashboard() {
     [router],
   );
 
-  const handleCreate = async ({ body, app }: { body: string; app: string | null }) => {
+  const handleCreate = async ({ body, app, auto }: { body: string; app: string | null; auto?: boolean }) => {
     try {
-      const t = await api.createTask({ body, app });
+      const t = await api.createTask({ body, app, auto });
       await refreshTasks();
-      toast("success", `Created ${t.id}`);
-      router.push(`/tasks/${t.id}`);
+      toast("success", auto ? `Queued ${t.id} (auto)` : `Created ${t.id}`);
+      // Auto tasks have no coordinator yet (scheduler dispatches later),
+      // so stay on the board; manual tasks open the freshly-spawned run.
+      if (!auto) router.push(`/tasks/${t.id}`);
     } catch (e) { toast("error", (e as Error).message); throw e; }
   };
 

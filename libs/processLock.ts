@@ -30,7 +30,7 @@ import { BRIDGE_STATE_DIR } from "./paths";
 
 const LOCK_FILE = join(BRIDGE_STATE_DIR, "bridge.lock");
 
-interface LockRecord {
+export interface LockRecord {
   pid: number;
   port?: number;
   url?: string;
@@ -167,6 +167,32 @@ export function releaseProcessLock(): void {
   } catch {
     /* best-effort on shutdown */
   }
+}
+
+/**
+ * True iff THIS process currently holds the bridge lock — the lock file
+ * exists and records our pid. Background loops that have SIDE EFFECTS
+ * (the scheduler dispatching coordinators, cron minting tasks) gate on
+ * this so a second bridge instance booted against the same SESSIONS_DIR
+ * can't double-fire. Read-only and cheap; safe to call every tick.
+ *
+ * Fails safe: any read error / missing lock returns false, so a
+ * degraded lock file pauses autonomous dispatch rather than risking a
+ * duplicate-spawn race.
+ */
+export function isLockHolder(): boolean {
+  try {
+    const rec = readLock();
+    return !!rec && rec.pid === process.pid;
+  } catch {
+    return false;
+  }
+}
+
+/** The current lock holder record (pid/port/url/bootAt), or null when no
+ *  lock file exists. Used by the 24/7 status panel. */
+export function readLockHolder(): LockRecord | null {
+  return readLock();
 }
 
 /** Exposed for tests. */
