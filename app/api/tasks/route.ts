@@ -71,13 +71,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
   }
 
-  const { title: givenTitle, body, app, auto } = (await req.json()) as {
+  const { title: givenTitle, body, app } = (await req.json()) as {
     title?: string;
     body?: string;
     app?: string | null;
-    /** When true, defer dispatch to the scheduler's auto-queue instead of
-     *  spawning a coordinator immediately (the "Quy trình" auto mode). */
-    auto?: boolean;
   };
   const rawBody = (body ?? "").trim();
   const title = givenTitle?.trim() || deriveTitle(rawBody);
@@ -86,24 +83,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "description required" }, { status: 400 });
   }
 
-  const isAuto = auto === true;
-  const task = createTask({
-    title,
-    body: rawBody,
-    app: app ?? null,
-    auto: isAuto,
-    origin: isAuto ? "auto" : "manual",
-  });
+  const task = createTask({ title, body: rawBody, app: app ?? null });
   // Phase G: build repo profiles once before the very first coordinator
   // spawn so the prompt gets the enriched "## Repo profiles" block.
   autoInitProfilesOnce();
-
-  // AUTO tasks wait in TODO for the scheduler's auto-queue pump, which
-  // owns detect + spawn at dispatch time (respecting the concurrency
-  // cap). Return immediately without spawning a coordinator here.
-  if (isAuto) {
-    return NextResponse.json(task, { status: 201 });
-  }
 
   // Detect: run the heuristic synchronously and persist BEFORE spawning
   // the coordinator so its prompt reads a populated scope. Then, if the

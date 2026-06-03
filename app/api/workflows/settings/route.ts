@@ -7,8 +7,8 @@ import {
 export const dynamic = "force-dynamic";
 
 interface SettingsBody {
-  autoDispatchEnabled?: boolean;
-  maxConcurrentCoordinators?: number;
+  cronEnabled?: boolean;
+  maxConcurrentRuns?: number;
 }
 
 /** GET /api/workflows/settings — global scheduler settings. */
@@ -17,8 +17,8 @@ export function GET() {
 }
 
 /**
- * PUT /api/workflows/settings — toggle the auto-queue pump and set the
- * concurrency cap. The cap is clamped to [1, 10] in the store.
+ * PUT /api/workflows/settings — toggle cron auto-runs and set the
+ * max-concurrent-runs cap (clamped to [1, 10] in the store).
  */
 export async function PUT(req: NextRequest) {
   let body: SettingsBody;
@@ -27,12 +27,9 @@ export async function PUT(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  if (
-    body.maxConcurrentCoordinators !== undefined &&
-    typeof body.maxConcurrentCoordinators !== "number"
-  ) {
+  if (body.maxConcurrentRuns !== undefined && typeof body.maxConcurrentRuns !== "number") {
     return NextResponse.json(
-      { error: "maxConcurrentCoordinators must be a number" },
+      { error: "maxConcurrentRuns must be a number" },
       { status: 400 },
     );
   }

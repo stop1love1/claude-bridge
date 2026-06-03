@@ -19,8 +19,10 @@ import type {
   Workflow,
   SchedulerSettings,
   CronSchedule,
+  StageInput,
 } from "../workflowStore";
 import type { SchedulerStatus } from "../scheduler";
+import type { ActivePipelineRun } from "../pipelineEngine";
 
 /**
  * Optional cancellation handle accepted by every read-side `api.*` helper.
@@ -44,7 +46,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   repos: () => req<Repo[]>("/repos"),
   tasks: () => req<Task[]>("/tasks"),
-  createTask: (body: { title?: string; body: string; app?: string | null; auto?: boolean }) =>
+  createTask: (body: { title?: string; body: string; app?: string | null }) =>
     req<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
   updateTask: (id: string, patch: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
@@ -563,19 +565,20 @@ export const api = {
       | { status: "expired" }
     >(`/share/access/${encodeURIComponent(id)}/pending/${encodeURIComponent(reqId)}`),
 
-  // ─── Workflows ("Quy trình": cron + auto-queue + 24/7 status) ─────
+  // ─── Workflows (multi-stage pipelines + cron + 24/7 status) ───────
   workflows: (opts?: ReqOpts) =>
-    req<{ workflows: Workflow[]; settings: SchedulerSettings; status: SchedulerStatus }>(
-      `/workflows`,
-      { signal: opts?.signal },
-    ),
+    req<{
+      workflows: Workflow[];
+      settings: SchedulerSettings;
+      status: SchedulerStatus;
+      runs: ActivePipelineRun[];
+    }>(`/workflows`, { signal: opts?.signal }),
   createWorkflow: (body: {
-    name?: string;
-    schedule: CronSchedule;
+    name: string;
     app?: string | null;
-    title: string;
-    body?: string;
+    stages: StageInput[];
     enabled?: boolean;
+    schedule?: CronSchedule | null;
   }) =>
     req<Workflow>(`/workflows`, { method: "POST", body: JSON.stringify(body) }),
   updateWorkflow: (
@@ -583,10 +586,9 @@ export const api = {
     patch: {
       name?: string;
       enabled?: boolean;
-      schedule?: CronSchedule;
+      schedule?: CronSchedule | null;
       app?: string | null;
-      title?: string;
-      body?: string;
+      stages?: StageInput[];
     },
   ) =>
     req<Workflow>(`/workflows/${encodeURIComponent(id)}`, {
@@ -595,8 +597,8 @@ export const api = {
     }),
   deleteWorkflow: (id: string) =>
     req<{ ok: true }>(`/workflows/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  runWorkflowNow: (id: string) =>
-    req<{ ok: true; task: Task }>(`/workflows/${encodeURIComponent(id)}/run-now`, {
+  runWorkflow: (id: string) =>
+    req<{ ok: true; taskId: string }>(`/workflows/${encodeURIComponent(id)}/run`, {
       method: "POST",
     }),
   setSchedulerSettings: (patch: Partial<SchedulerSettings>) =>

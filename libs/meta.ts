@@ -295,11 +295,17 @@ export interface Meta {
    * (oldest-first, up to the global concurrency cap). Absent/false = the
    * classic "dispatch a coordinator right away" behavior.
    */
-  auto?: boolean;
   /** How this task was created / dispatched — attribution for the UI. */
-  origin?: "manual" | "cron" | "auto";
-  /** When `origin === "cron"`, the id of the workflow that minted it. */
+  origin?: "manual" | "cron" | "pipeline";
+  /** When `origin === "cron" | "pipeline"`, the id of the workflow that minted it. */
   workflowId?: string | null;
+  /**
+   * Pipeline run state — present only on tasks started from a multi-stage
+   * Workflow. The pipeline engine sequences the workflow's stages on this
+   * one task/working tree, advancing only when the current stage's run
+   * finishes (and passes verify, when the stage requires it).
+   */
+  pipeline?: PipelineRunState | null;
   runs: Run[];
   /**
    * Cached output of `lib/detect` for this task. Computed once at
@@ -311,6 +317,44 @@ export interface Meta {
    * "fall back to live detection".
    */
   detectedScope?: DetectedScopeCacheEntry | null;
+}
+
+/**
+ * Per-task pipeline run state for multi-stage Workflows. The engine
+ * (`libs/pipelineEngine.ts`) owns transitions: it dispatches the stage at
+ * `stageIndex` as an agent run, records its `stageRunSessionId`, and on
+ * that run's terminal transition either advances to the next stage,
+ * finishes (`review`), or halts (`blocked`).
+ */
+/** Immutable copy of a workflow stage, snapshotted into a run so later
+ *  edits/deletes of the workflow can't change an in-flight pipeline. */
+export interface PipelineStageSnapshot {
+  name: string;
+  role: string;
+  prompt: string;
+  verify: boolean;
+}
+
+export interface PipelineRunState {
+  workflowId: string;
+  /** Snapshotted at run start (workflow name may change/delete later). */
+  workflowName: string;
+  /** Snapshotted stage list — the engine sequences THIS, never the live
+   *  workflow, so editing/deleting the workflow mid-run is safe. */
+  stages: PipelineStageSnapshot[];
+  /** Index into `stages` currently executing. */
+  stageIndex: number;
+  /** Total stages at run time (== stages.length; kept for UI progress). */
+  stageCount: number;
+  /** Repo all stages run on. Pinned from the first stage's resolved repo
+   *  so an auto-detect (app=null) workflow keeps every stage on one tree. */
+  repo: string | null;
+  /** Agent run dispatched for the current stage; null between dispatches. */
+  stageRunSessionId: string | null;
+  status: "running" | "blocked" | "review";
+  startedAt: string;
+  /** Names of stages already completed, in order — handoff context + UI. */
+  completedStages: string[];
 }
 
 const FILE = "meta.json";

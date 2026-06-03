@@ -4,6 +4,7 @@ import {
   getWorkflow,
   updateWorkflow,
   type CronSchedule,
+  type StageInput,
 } from "@/libs/workflowStore";
 import { safeErrorMessage } from "@/libs/errorResponse";
 
@@ -14,13 +15,12 @@ type Ctx = { params: Promise<{ id: string }> };
 interface PatchBody {
   name?: string;
   enabled?: boolean;
-  schedule?: CronSchedule;
+  schedule?: CronSchedule | null;
   app?: string | null;
-  title?: string;
-  body?: string;
+  stages?: StageInput[];
 }
 
-/** PATCH /api/workflows/[id] — update fields / toggle enabled. */
+/** PATCH /api/workflows/[id] — update fields / stages / toggle enabled. */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!getWorkflow(id)) {

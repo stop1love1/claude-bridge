@@ -36,6 +36,9 @@ $ErrorActionPreference = "Stop"
 $BridgeRoot = Split-Path -Parent $PSScriptRoot
 
 if ($Uninstall) {
+  # Clean up the generated launcher too, so uninstall leaves nothing behind.
+  $launcher = Join-Path (Join-Path $BridgeRoot ".bridge-state") "run-service.cmd"
+  if (Test-Path $launcher) { Remove-Item -Path $launcher -Force -ErrorAction SilentlyContinue }
   $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if ($null -eq $existing) {
     Write-Host "Task '$TaskName' is not registered — nothing to remove."
@@ -60,11 +63,23 @@ $stateDir = Join-Path $BridgeRoot ".bridge-state"
 if (-not (Test-Path $stateDir)) { New-Item -ItemType Directory -Force -Path $stateDir | Out-Null }
 $logFile = Join-Path $stateDir "bridge-service.log"
 
-# Wrap the launch in cmd so we can append stdout+stderr to a log file.
-# Inner double-quotes around each path survive the cmd /c parse.
-$cmdArgs = "/c """"$bunPath"" run start >> ""$logFile"" 2>&1"""
+# Write a tiny launcher .cmd instead of cramming the whole command into the
+# task's Argument string. Nested double-quoting of a `cmd /c` one-liner is
+# fragile and breaks the `>>` redirection when the bun path / log path /
+# bridge root contains spaces (e.g. C:\Users\John Smith\...). A .cmd file
+# quotes each path at a single level, which cmd handles correctly.
+$launcher = Join-Path $stateDir "run-service.cmd"
+$launcherBody = @"
+@echo off
+cd /d "$BridgeRoot"
+"$bunPath" run start >> "$logFile" 2>&1
+"@
+# OEM matches cmd.exe's console code page, so non-ASCII path characters
+# (e.g. an accented Windows username) survive instead of becoming `?`.
+Set-Content -Path $launcher -Value $launcherBody -Encoding OEM
 
-$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $cmdArgs -WorkingDirectory $BridgeRoot
+# Run the launcher via cmd /c, with the launcher path quoted once.
+$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$launcher`"" -WorkingDirectory $BridgeRoot
 
 # Fire at log on for the current user.
 $trigger = New-ScheduledTaskTrigger -AtLogOn

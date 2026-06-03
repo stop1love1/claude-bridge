@@ -33,11 +33,9 @@ export interface Task {
   checked: boolean;      // [x] vs [ ]
   /** Target app name; `null` means "auto" (coordinator decides). */
   app?: string | null;
-  /** Opt-in to autonomous dispatch by the scheduler (auto-queue). */
-  auto?: boolean;
   /** How the task was created / dispatched. */
-  origin?: "manual" | "cron" | "auto";
-  /** Originating workflow id when `origin === "cron"`. */
+  origin?: "manual" | "cron" | "pipeline";
+  /** Originating workflow id when `origin === "cron" | "pipeline"`. */
   workflowId?: string | null;
 }
 

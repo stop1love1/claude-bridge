@@ -4,8 +4,10 @@ import {
   getSchedulerSettings,
   listWorkflows,
   type CronSchedule,
+  type StageInput,
 } from "@/libs/workflowStore";
 import { getSchedulerStatus } from "@/libs/scheduler";
+import { listPipelineRuns } from "@/libs/pipelineEngine";
 import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
@@ -13,28 +15,28 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/workflows
  *
- * One-shot snapshot for the "Quy trình" page: the workflow list, the
- * global scheduler settings (auto-queue + concurrency cap), and the
- * 24/7 scheduler/lock status.
+ * One-shot snapshot for the Workflows page: the workflow list, global
+ * scheduler settings (cron + concurrency cap), the 24/7 scheduler status,
+ * and the current pipeline runs (so the UI can show which stage each is on).
  */
 export function GET() {
   return NextResponse.json({
     workflows: listWorkflows(),
     settings: getSchedulerSettings(),
     status: getSchedulerStatus(),
+    runs: listPipelineRuns(),
   });
 }
 
 interface CreateBody {
   name?: string;
-  schedule?: CronSchedule;
   app?: string | null;
-  title?: string;
-  body?: string;
+  stages?: StageInput[];
   enabled?: boolean;
+  schedule?: CronSchedule | null;
 }
 
-/** POST /api/workflows — create a cron workflow. */
+/** POST /api/workflows — create a multi-stage workflow. */
 export async function POST(req: NextRequest) {
   let body: CreateBody;
   try {
@@ -42,24 +44,22 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  if (!body.schedule) {
-    return NextResponse.json({ error: "schedule required" }, { status: 400 });
+  if (!body.name || !body.name.trim()) {
+    return NextResponse.json({ error: "name required" }, { status: 400 });
   }
-  if (!body.title || !body.title.trim()) {
-    return NextResponse.json({ error: "title required" }, { status: 400 });
+  if (!Array.isArray(body.stages) || body.stages.length === 0) {
+    return NextResponse.json({ error: "at least one stage is required" }, { status: 400 });
   }
   try {
     const wf = createWorkflow({
-      name: body.name ?? body.title,
-      schedule: body.schedule,
+      name: body.name,
       app: body.app ?? null,
-      title: body.title,
-      body: body.body ?? "",
+      stages: body.stages,
       enabled: body.enabled ?? true,
+      schedule: body.schedule ?? null,
     });
     return NextResponse.json(wf, { status: 201 });
   } catch (err) {
-    // createWorkflow throws on an invalid schedule / missing title.
     return NextResponse.json({ error: safeErrorMessage(err, "invalid workflow") }, { status: 400 });
   }
 }

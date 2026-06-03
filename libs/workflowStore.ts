@@ -1,18 +1,21 @@
 /**
- * Persistent store for **workflows** (the "Quy trình" feature).
+ * Persistent store for **workflows** (the "Workflows" feature).
  *
- * A workflow is an operator-defined automation the bridge runs on its
- * own. Currently one kind: a CRON workflow that mints + auto-dispatches a
- * task on a schedule (interval or daily). The store also holds the global
- * SCHEDULER SETTINGS (auto-queue on/off + the concurrency cap) that the
- * auto-dispatch pump reads each tick.
+ * A workflow is an operator-defined, ordered PIPELINE of stages. Each
+ * stage runs an agent (role + prompt) on the SAME task/working tree, and
+ * the pipeline engine (`libs/pipelineEngine.ts`) advances to the next
+ * stage only when the current one finishes (and passes verify, when the
+ * stage requires it). Stages are fully user-defined — nothing is
+ * hardcoded; "Code → Test → Review" is just one example a user might
+ * build.
  *
- * Backed by `.bridge-state/workflows.json`. The bridge is single-process
- * (enforced by `libs/processLock.ts`), so we keep an authoritative
- * in-memory copy on `globalThis` and write through on every mutation —
- * HMR-safe via the same globalThis stash the other stores use. All
- * mutations are synchronous (no `await` between read and write), so each
- * call is atomic with respect to the event loop.
+ * The store also holds global SCHEDULER SETTINGS (cron on/off + the
+ * max-concurrent-runs cap).
+ *
+ * Backed by `.bridge-state/workflows.json`. Single-process (enforced by
+ * `libs/processLock.ts`), so we keep an authoritative in-memory copy on
+ * `globalThis` and write through on every mutation — HMR-safe. All
+ * mutations are synchronous, so each call is atomic w.r.t. the event loop.
  */
 
 import { existsSync, readFileSync, renameSync } from "node:fs";
@@ -20,46 +23,60 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { writeJsonAtomic } from "./atomicWrite";
+import { isValidAgentRole } from "./validate";
 import {
   computeNextRun,
   validateSchedule,
   type CronSchedule,
 } from "./cronSchedule";
 
-// Re-export so callers can treat CronSchedule as part of the workflow API
-// surface (routes / client all import workflow types from here).
+// Re-export so callers can treat CronSchedule as part of the workflow API.
 export type { CronSchedule } from "./cronSchedule";
 
 const WORKFLOWS_FILE = join(BRIDGE_STATE_DIR, "workflows.json");
 
-/** How many minted task ids to keep per workflow for the UI history. */
+/** Keep this many past run task-ids per workflow for the UI history. */
 const HISTORY_CAP = 20;
+
+/** One ordered step of a workflow pipeline. Fully user-defined. */
+export interface WorkflowStage {
+  /** Stable id within the workflow. */
+  id: string;
+  /** Display label, e.g. "Code", "Test", "Review" (arbitrary). */
+  name: string;
+  /** Agent role for this stage (validated charset). */
+  role: string;
+  /** Instructions handed to the stage's agent. */
+  prompt: string;
+  /** Require the verify gate (if the app configures one) to pass before
+   *  advancing to the next stage. */
+  verify: boolean;
+}
 
 export interface Workflow {
   id: string;
   name: string;
-  enabled: boolean;
-  schedule: CronSchedule;
-  /** Target app name; null = "auto" (coordinator decides). */
+  /** Target app/repo all stages run on; null = auto-detect. */
   app: string | null;
-  /** Title for tasks this workflow mints. */
-  title: string;
-  /** Body for tasks this workflow mints. */
-  body: string;
+  /** Ordered pipeline stages. */
+  stages: WorkflowStage[];
+  enabled: boolean;
+  /** Optional cron trigger to auto-run the pipeline; null = manual only. */
+  schedule: CronSchedule | null;
   createdAt: string;
-  /** ISO of the last time this workflow minted a task; null = never. */
+  /** ISO of the last time a run was started; null = never. */
   lastRunAt: string | null;
-  /** Epoch ms of the next scheduled fire; null when disabled. */
+  /** Epoch ms of the next scheduled auto-run; null when no schedule/disabled. */
   nextRunAt: number | null;
-  /** Most-recent-first task ids this workflow minted (capped). */
+  /** Most-recent-first task ids of runs this workflow started (capped). */
   history: string[];
 }
 
 export interface SchedulerSettings {
-  /** Master switch for the auto-queue pump (auto-flagged TODO tasks). */
-  autoDispatchEnabled: boolean;
-  /** Max tasks worked concurrently (live coordinators) the pump allows. */
-  maxConcurrentCoordinators: number;
+  /** Master switch for cron-triggered auto-runs. */
+  cronEnabled: boolean;
+  /** Max workflow runs in flight at once (cron defers new runs past this). */
+  maxConcurrentRuns: number;
 }
 
 interface StoreShape {
@@ -73,14 +90,14 @@ interface StoreState {
 }
 
 export const DEFAULT_SETTINGS: SchedulerSettings = {
-  autoDispatchEnabled: true,
-  maxConcurrentCoordinators: 2,
+  cronEnabled: true,
+  maxConcurrentRuns: 2,
 };
 
 const MAX_CAP = 10;
 
 function clampCap(n: unknown): number {
-  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_SETTINGS.maxConcurrentCoordinators;
+  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_SETTINGS.maxConcurrentRuns;
   return Math.min(MAX_CAP, Math.max(1, Math.floor(n)));
 }
 
@@ -101,17 +118,15 @@ function load(): void {
       state.data = {
         workflows: Array.isArray(parsed.workflows) ? parsed.workflows : [],
         settings: {
-          autoDispatchEnabled:
-            parsed.settings?.autoDispatchEnabled ?? DEFAULT_SETTINGS.autoDispatchEnabled,
-          maxConcurrentCoordinators: clampCap(parsed.settings?.maxConcurrentCoordinators),
+          cronEnabled: parsed.settings?.cronEnabled ?? DEFAULT_SETTINGS.cronEnabled,
+          maxConcurrentRuns: clampCap(parsed.settings?.maxConcurrentRuns),
         },
       };
     }
   } catch (err) {
     // Corrupt file → start clean rather than crash, but DON'T do it
-    // silently: log loudly and preserve the bad file as `.corrupt` so the
-    // operator can recover, instead of having the next write overwrite it
-    // with empty state and lose every workflow definition.
+    // silently: log and preserve the bad file as `.corrupt` so the
+    // operator can recover instead of having the next write overwrite it.
     console.error(
       `[workflowStore] ${WORKFLOWS_FILE} is unreadable — starting empty and preserving the bad copy as .corrupt:`,
       (err as Error).message,
@@ -130,8 +145,8 @@ function persist(): void {
   writeJsonAtomic(WORKFLOWS_FILE, state.data);
 }
 
-function genId(): string {
-  return `wf_${randomBytes(8).toString("hex")}`;
+function genId(prefix: string): string {
+  return `${prefix}_${randomBytes(8).toString("hex")}`;
 }
 
 // ── Settings ──────────────────────────────────────────────────────────
@@ -143,117 +158,154 @@ export function getSchedulerSettings(): SchedulerSettings {
 
 export function setSchedulerSettings(patch: Partial<SchedulerSettings>): SchedulerSettings {
   load();
-  if (patch.autoDispatchEnabled !== undefined) {
-    state.data.settings.autoDispatchEnabled = !!patch.autoDispatchEnabled;
+  if (patch.cronEnabled !== undefined) {
+    state.data.settings.cronEnabled = !!patch.cronEnabled;
   }
-  if (patch.maxConcurrentCoordinators !== undefined) {
-    state.data.settings.maxConcurrentCoordinators = clampCap(patch.maxConcurrentCoordinators);
+  if (patch.maxConcurrentRuns !== undefined) {
+    state.data.settings.maxConcurrentRuns = clampCap(patch.maxConcurrentRuns);
   }
   persist();
   return { ...state.data.settings };
+}
+
+// ── Stage validation ──────────────────────────────────────────────────
+
+export interface StageInput {
+  name: string;
+  role: string;
+  prompt: string;
+  verify?: boolean;
+}
+
+/** Validate + normalize a stage list. Throws on the first invalid stage. */
+function normalizeStages(stages: StageInput[] | undefined): WorkflowStage[] {
+  if (!Array.isArray(stages) || stages.length === 0) {
+    throw new Error("at least one stage is required");
+  }
+  if (stages.length > 20) {
+    throw new Error("too many stages (max 20)");
+  }
+  return stages.map((s, i) => {
+    const name = (s.name ?? "").trim().slice(0, 80);
+    const role = (s.role ?? "").trim();
+    const prompt = (s.prompt ?? "").trim();
+    if (!name) throw new Error(`stage ${i + 1}: name required`);
+    if (!isValidAgentRole(role)) throw new Error(`stage ${i + 1}: invalid role "${role}"`);
+    if (!prompt) throw new Error(`stage ${i + 1}: prompt required`);
+    return {
+      id: genId("st"),
+      name,
+      role,
+      prompt: prompt.slice(0, 8000),
+      verify: s.verify ?? true,
+    };
+  });
+}
+
+function clone(wf: Workflow): Workflow {
+  return { ...wf, stages: wf.stages.map((s) => ({ ...s })), history: [...wf.history] };
 }
 
 // ── Workflow CRUD ─────────────────────────────────────────────────────
 
 export function listWorkflows(): Workflow[] {
   load();
-  return state.data.workflows.map((w) => ({ ...w, history: [...w.history] }));
+  return state.data.workflows.map(clone);
 }
 
 export function getWorkflow(id: string): Workflow | null {
   load();
   const w = state.data.workflows.find((x) => x.id === id);
-  return w ? { ...w, history: [...w.history] } : null;
+  return w ? clone(w) : null;
 }
 
 export interface CreateWorkflowInput {
   name: string;
-  schedule: CronSchedule;
   app?: string | null;
-  title: string;
-  body?: string;
+  stages: StageInput[];
   enabled?: boolean;
+  schedule?: CronSchedule | null;
 }
 
 /**
- * Create a workflow. Throws on an invalid schedule (caller should
- * surface a 400). `nextRunAt` is computed from now when enabled.
+ * Create a workflow. Throws on invalid stages / schedule (caller surfaces
+ * a 400). `nextRunAt` is computed from now when enabled AND scheduled.
  */
 export function createWorkflow(input: CreateWorkflowInput): Workflow {
   load();
-  const scheduleErr = validateSchedule(input.schedule);
-  if (scheduleErr) throw new Error(scheduleErr);
-  const name = input.name.trim().slice(0, 120) || "(unnamed)";
-  const title = input.title.trim().slice(0, 200);
-  if (!title) throw new Error("title required");
+  const name = (input.name ?? "").trim().slice(0, 120) || "(unnamed)";
+  const stages = normalizeStages(input.stages);
+  const schedule = input.schedule ?? null;
+  if (schedule) {
+    const err = validateSchedule(schedule);
+    if (err) throw new Error(err);
+  }
   const enabled = input.enabled ?? true;
   const now = Date.now();
   const wf: Workflow = {
-    id: genId(),
+    id: genId("wf"),
     name,
-    enabled,
-    schedule: input.schedule,
     app: input.app && input.app.trim() ? input.app.trim() : null,
-    title,
-    body: (input.body ?? "").slice(0, 8000),
+    stages,
+    enabled,
+    schedule,
     createdAt: new Date(now).toISOString(),
     lastRunAt: null,
-    nextRunAt: enabled ? computeNextRun(input.schedule, now) : null,
+    nextRunAt: enabled && schedule ? computeNextRun(schedule, now) : null,
     history: [],
   };
   state.data.workflows.push(wf);
   persist();
-  return { ...wf, history: [] };
+  return clone(wf);
 }
 
 export interface UpdateWorkflowPatch {
   name?: string;
   enabled?: boolean;
-  schedule?: CronSchedule;
+  schedule?: CronSchedule | null;
   app?: string | null;
-  title?: string;
-  body?: string;
+  stages?: StageInput[];
 }
 
 /**
  * Patch a workflow. Recomputes `nextRunAt` when the schedule changes or
- * the workflow flips enabled→on. Returns null if not found, throws on an
- * invalid schedule.
+ * the workflow flips enabled→on. Returns null if not found, throws on
+ * invalid stages/schedule.
  */
 export function updateWorkflow(id: string, patch: UpdateWorkflowPatch): Workflow | null {
   load();
   const wf = state.data.workflows.find((x) => x.id === id);
   if (!wf) return null;
 
-  if (patch.schedule !== undefined) {
-    const err = validateSchedule(patch.schedule);
-    if (err) throw new Error(err);
-    wf.schedule = patch.schedule;
-  }
+  if (patch.stages !== undefined) wf.stages = normalizeStages(patch.stages);
   if (patch.name !== undefined) wf.name = patch.name.trim().slice(0, 120) || "(unnamed)";
   if (patch.app !== undefined) wf.app = patch.app && patch.app.trim() ? patch.app.trim() : null;
-  if (patch.title !== undefined) {
-    const t = patch.title.trim().slice(0, 200);
-    if (!t) throw new Error("title required");
-    wf.title = t;
+
+  let scheduleChanged = false;
+  if (patch.schedule !== undefined) {
+    if (patch.schedule === null) {
+      wf.schedule = null;
+    } else {
+      const err = validateSchedule(patch.schedule);
+      if (err) throw new Error(err);
+      wf.schedule = patch.schedule;
+    }
+    scheduleChanged = true;
   }
-  if (patch.body !== undefined) wf.body = patch.body.slice(0, 8000);
 
   const wasEnabled = wf.enabled;
   if (patch.enabled !== undefined) wf.enabled = !!patch.enabled;
-
-  // Recompute the next fire time when the schedule changed or we just
-  // turned the workflow on. Turning it off clears nextRunAt.
-  const scheduleChanged = patch.schedule !== undefined;
   const justEnabled = !wasEnabled && wf.enabled;
-  if (!wf.enabled) {
+
+  // Recompute the next auto-run time. No schedule (or disabled) → null.
+  if (!wf.enabled || !wf.schedule) {
     wf.nextRunAt = null;
   } else if (scheduleChanged || justEnabled || wf.nextRunAt === null) {
     wf.nextRunAt = computeNextRun(wf.schedule, Date.now());
   }
 
   persist();
-  return { ...wf, history: [...wf.history] };
+  return clone(wf);
 }
 
 export function deleteWorkflow(id: string): boolean {
@@ -266,9 +318,9 @@ export function deleteWorkflow(id: string): boolean {
 }
 
 /**
- * Record that a workflow fired: stamp lastRunAt, prepend the minted task
- * id to history (capped), and recompute nextRunAt from `firedAtMs`.
- * No-op when the workflow no longer exists.
+ * Record that a workflow started a run: stamp lastRunAt, prepend the task
+ * id to history (capped), and recompute nextRunAt from `firedAtMs` (only
+ * when enabled + scheduled). No-op when the workflow no longer exists.
  */
 export function recordWorkflowFire(id: string, taskId: string, firedAtMs: number): void {
   load();
@@ -276,7 +328,7 @@ export function recordWorkflowFire(id: string, taskId: string, firedAtMs: number
   if (!wf) return;
   wf.lastRunAt = new Date(firedAtMs).toISOString();
   wf.history = [taskId, ...wf.history].slice(0, HISTORY_CAP);
-  wf.nextRunAt = wf.enabled ? computeNextRun(wf.schedule, firedAtMs) : null;
+  wf.nextRunAt = wf.enabled && wf.schedule ? computeNextRun(wf.schedule, firedAtMs) : null;
   persist();
 }
 

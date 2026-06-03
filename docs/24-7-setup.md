@@ -1,9 +1,9 @@
 # Running Claude Bridge 24/7 (Windows)
 
-The **Workflows** feature (cron + auto-queue) is only useful while the bridge
-process stays alive. The bridge can't resurrect itself if the process dies —
-that's the job of an OS-level supervisor. On Windows, the simplest option (no
-extra install) is **Windows Task Scheduler**.
+The **Workflows** feature (multi-stage pipelines + optional cron triggers) is
+only useful while the bridge process stays alive. The bridge can't resurrect
+itself if the process dies — that's the job of an OS-level supervisor. On
+Windows, the simplest option (no extra install) is **Windows Task Scheduler**.
 
 ## Quick install (Task Scheduler — recommended)
 
@@ -67,12 +67,15 @@ log stream.
 ## After installing
 
 - Open **Workflows** in the UI to see the **24/7 status** panel (PID, uptime,
-  last tick), toggle **auto-queue** + set the **concurrency cap**, and create
-  **cron** schedules.
-- The scheduler only ticks on the process that holds the advisory lock, so even
-  if Task Scheduler accidentally launches two copies it won't double-dispatch.
-- Every task created by the scheduler/cron stops at **READY FOR REVIEW** — it
-  never auto-marks DONE; you remain the reviewer.
+  last tick), build **multi-stage pipelines** (Run them manually or on a cron
+  schedule), toggle **cron auto-runs**, and set the **max concurrent runs** cap.
+- The scheduler + pipeline engine only act on the process that holds the
+  advisory lock, so even if Task Scheduler accidentally launches two copies they
+  won't double-dispatch.
+- A pipeline advances to the next stage only after the current stage finishes
+  and passes verify; a failed stage retries, then the task goes **BLOCKED**.
+  When all stages complete the task stops at **READY FOR REVIEW** — it never
+  auto-marks DONE; you remain the reviewer.
 
 ## Time-of-day schedules and timezones
 

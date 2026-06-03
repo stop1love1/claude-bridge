@@ -12,6 +12,7 @@ import {
   DEFAULT_SETTINGS,
   _internal,
   _resetForTests,
+  type StageInput,
 } from "../workflowStore";
 
 const { WORKFLOWS_FILE } = _internal;
@@ -32,78 +33,103 @@ afterEach(() => {
   _resetForTests();
 });
 
-describe("workflow CRUD", () => {
-  it("creates a workflow with computed nextRunAt and lists it", () => {
-    const wf = createWorkflow({
-      name: "Nightly cleanup",
-      schedule: { kind: "interval", everyMs: 3_600_000 },
-      title: "Run cleanup",
-      body: "do the thing",
-    });
+const STAGES: StageInput[] = [
+  { name: "Code", role: "coder", prompt: "implement it" },
+  { name: "Test", role: "tester", prompt: "write + run tests" },
+  { name: "Review", role: "reviewer", prompt: "review the change", verify: false },
+];
+
+describe("workflow CRUD (stages)", () => {
+  it("creates a workflow with ordered stages and assigns stage ids", () => {
+    const wf = createWorkflow({ name: "Ship", stages: STAGES });
     expect(wf.id).toMatch(/^wf_/);
-    expect(wf.enabled).toBe(true);
-    expect(wf.nextRunAt).toBeGreaterThan(Date.now());
+    expect(wf.stages).toHaveLength(3);
+    expect(wf.stages.map((s) => s.name)).toEqual(["Code", "Test", "Review"]);
+    expect(wf.stages.every((s) => s.id.startsWith("st_"))).toBe(true);
+    expect(wf.stages[0].verify).toBe(true); // defaults true
+    expect(wf.stages[2].verify).toBe(false);
+    expect(wf.schedule).toBeNull(); // manual by default
+    expect(wf.nextRunAt).toBeNull();
     expect(listWorkflows()).toHaveLength(1);
-    expect(getWorkflow(wf.id)?.name).toBe("Nightly cleanup");
   });
 
-  it("rejects an invalid schedule", () => {
+  it("rejects an empty stage list", () => {
+    expect(() => createWorkflow({ name: "x", stages: [] })).toThrow(/at least one stage/);
+  });
+
+  it("rejects an invalid role", () => {
     expect(() =>
-      createWorkflow({ name: "bad", schedule: { kind: "interval", everyMs: 5 }, title: "x" }),
-    ).toThrow(/interval/);
+      createWorkflow({ name: "x", stages: [{ name: "S", role: "bad role!", prompt: "p" }] }),
+    ).toThrow(/invalid role/);
   });
 
-  it("requires a title", () => {
+  it("rejects a stage missing name / prompt", () => {
     expect(() =>
-      createWorkflow({ name: "x", schedule: { kind: "daily", time: "09:00" }, title: "   " }),
-    ).toThrow(/title/);
+      createWorkflow({ name: "x", stages: [{ name: "", role: "coder", prompt: "p" }] }),
+    ).toThrow(/name required/);
+    expect(() =>
+      createWorkflow({ name: "x", stages: [{ name: "S", role: "coder", prompt: "" }] }),
+    ).toThrow(/prompt required/);
   });
 
-  it("clears nextRunAt when disabled and recomputes when re-enabled", () => {
+  it("computes nextRunAt only when enabled AND scheduled", () => {
+    const manual = createWorkflow({ name: "m", stages: STAGES });
+    expect(manual.nextRunAt).toBeNull();
+    const scheduled = createWorkflow({
+      name: "s",
+      stages: STAGES,
+      schedule: { kind: "interval", everyMs: 3_600_000 },
+    });
+    expect(scheduled.nextRunAt).toBeGreaterThan(Date.now());
+  });
+
+  it("replaces the stage list on update", () => {
+    const wf = createWorkflow({ name: "w", stages: STAGES });
+    const updated = updateWorkflow(wf.id, {
+      stages: [{ name: "Only", role: "coder", prompt: "do" }],
+    });
+    expect(updated?.stages).toHaveLength(1);
+    expect(updated?.stages[0].name).toBe("Only");
+  });
+
+  it("clears nextRunAt when the schedule is removed", () => {
     const wf = createWorkflow({
       name: "w",
+      stages: STAGES,
       schedule: { kind: "daily", time: "09:00" },
-      title: "t",
     });
-    const off = updateWorkflow(wf.id, { enabled: false });
+    expect(wf.nextRunAt).toBeGreaterThan(0);
+    const off = updateWorkflow(wf.id, { schedule: null });
+    expect(off?.schedule).toBeNull();
     expect(off?.nextRunAt).toBeNull();
-    const on = updateWorkflow(wf.id, { enabled: true });
-    expect(on?.nextRunAt).toBeGreaterThan(Date.now());
-  });
-
-  it("recomputes nextRunAt when the schedule changes", () => {
-    const wf = createWorkflow({
-      name: "w",
-      schedule: { kind: "interval", everyMs: 60_000 },
-      title: "t",
-    });
-    const updated = updateWorkflow(wf.id, { schedule: { kind: "interval", everyMs: 3_600_000 } });
-    expect(updated?.schedule).toEqual({ kind: "interval", everyMs: 3_600_000 });
   });
 
   it("deletes a workflow", () => {
-    const wf = createWorkflow({
-      name: "w",
-      schedule: { kind: "interval", everyMs: 60_000 },
-      title: "t",
-    });
+    const wf = createWorkflow({ name: "w", stages: STAGES });
     expect(deleteWorkflow(wf.id)).toBe(true);
     expect(listWorkflows()).toHaveLength(0);
     expect(deleteWorkflow(wf.id)).toBe(false);
   });
 
-  it("records a fire: stamps lastRunAt, prepends history, advances nextRunAt", () => {
-    const wf = createWorkflow({
-      name: "w",
-      schedule: { kind: "interval", everyMs: 60_000 },
-      title: "t",
-    });
-    const fireAt = Date.now();
-    recordWorkflowFire(wf.id, "t_20260530_001", fireAt);
+  it("records a run: stamps lastRunAt, prepends history", () => {
+    const wf = createWorkflow({ name: "w", stages: STAGES });
+    recordWorkflowFire(wf.id, "t_20260530_001", Date.now());
     const after = getWorkflow(wf.id)!;
     expect(after.lastRunAt).not.toBeNull();
     expect(after.history[0]).toBe("t_20260530_001");
-    expect(after.nextRunAt).toBe(fireAt + 60_000);
+    // manual workflow → no schedule → nextRunAt stays null
+    expect(after.nextRunAt).toBeNull();
+  });
+
+  it("advances nextRunAt on fire for a scheduled workflow", () => {
+    const wf = createWorkflow({
+      name: "w",
+      stages: STAGES,
+      schedule: { kind: "interval", everyMs: 60_000 },
+    });
+    const fireAt = Date.now();
+    recordWorkflowFire(wf.id, "t_20260530_002", fireAt);
+    expect(getWorkflow(wf.id)!.nextRunAt).toBe(fireAt + 60_000);
   });
 });
 
@@ -113,13 +139,13 @@ describe("scheduler settings", () => {
   });
 
   it("clamps the concurrency cap into [1, 10]", () => {
-    expect(setSchedulerSettings({ maxConcurrentCoordinators: 0 }).maxConcurrentCoordinators).toBe(1);
-    expect(setSchedulerSettings({ maxConcurrentCoordinators: 999 }).maxConcurrentCoordinators).toBe(10);
-    expect(setSchedulerSettings({ maxConcurrentCoordinators: 3 }).maxConcurrentCoordinators).toBe(3);
+    expect(setSchedulerSettings({ maxConcurrentRuns: 0 }).maxConcurrentRuns).toBe(1);
+    expect(setSchedulerSettings({ maxConcurrentRuns: 999 }).maxConcurrentRuns).toBe(10);
+    expect(setSchedulerSettings({ maxConcurrentRuns: 3 }).maxConcurrentRuns).toBe(3);
   });
 
-  it("toggles autoDispatchEnabled", () => {
-    expect(setSchedulerSettings({ autoDispatchEnabled: false }).autoDispatchEnabled).toBe(false);
-    expect(setSchedulerSettings({ autoDispatchEnabled: true }).autoDispatchEnabled).toBe(true);
+  it("toggles cronEnabled", () => {
+    expect(setSchedulerSettings({ cronEnabled: false }).cronEnabled).toBe(false);
+    expect(setSchedulerSettings({ cronEnabled: true }).cronEnabled).toBe(true);
   });
 });

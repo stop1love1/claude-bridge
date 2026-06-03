@@ -41,9 +41,12 @@ export async function register(): Promise<void> {
   const { ensureCoordinatorNudge } = await import("./libs/coordinatorNudge");
   ensureCoordinatorNudge();
 
-  // Autonomous scheduler ("Quy trình"): cron workflows + the auto-queue
-  // pump. Gated internally on the process lock so only the singleton
-  // bridge dispatches. Idempotent + HMR-safe.
+  // Workflows: the pipeline engine sequences each multi-stage run, and the
+  // scheduler triggers scheduled (cron) runs. Both gate internally on the
+  // process lock so only the singleton bridge advances/dispatches.
+  // Idempotent + HMR-safe.
+  const { ensurePipelineEngine } = await import("./libs/pipelineEngine");
+  ensurePipelineEngine();
   const { ensureScheduler } = await import("./libs/scheduler");
   ensureScheduler();
 
