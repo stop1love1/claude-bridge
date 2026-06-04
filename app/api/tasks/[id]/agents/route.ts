@@ -1,14 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { appendRunIfNotDuplicate, readMeta, updateRun, type Run } from "@/libs/meta";
-import { BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { appendRunIfNotDuplicate, readMeta, readIntake, setIntake, updateRun, type Run } from "@/libs/meta";
+import { evaluatePlanGate } from "@/libs/planGate";
+import { readPlanGateConfig } from "@/libs/planGateConfig";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { ensureSystemPromptFile } from "@/libs/systemPrompt";
 import { resolveRepoCwd, resolveRepos } from "@/libs/repos";
 import { resumeClaude, spawnFreeSession } from "@/libs/spawn";
-import { wireRunLifecycle } from "@/libs/coordinator";
+import { wireRunLifecycle, spawnCoordinatorForTask } from "@/libs/coordinator";
 import { getApp, type AppGitSettings } from "@/libs/apps";
 import { verifyRequestActor, type Actor } from "@/libs/auth";
 import { prepareBranch } from "@/libs/gitOps";
@@ -37,7 +40,7 @@ import { ensureFreshStyleFingerprint } from "@/libs/styleStore";
 import { attachReferences } from "@/libs/contextAttach";
 import { buildRecentDirection } from "@/libs/recentDirection";
 import { isValidTaskId } from "@/libs/tasks";
-import { badRequest, isValidAgentRole, isValidSessionId } from "@/libs/validate";
+import { badRequest, isValidAgentRole, isValidEffort, isValidSessionId, type EffortLevel } from "@/libs/validate";
 import { safeErrorMessage, serverError } from "@/libs/errorResponse";
 import { checkRateLimit } from "@/libs/rateLimit";
 import { getClientIp } from "@/libs/clientIp";
@@ -102,6 +105,16 @@ interface AgentBody {
    */
   mode?: "spawn" | "resume";
   /**
+   * Effort tier for this child (low|medium|high|xhigh|max|ultracode).
+   * Absent → the child inherits the task's effort (meta `taskEffort`), so
+   * a task created at a given effort fans out children at the same effort
+   * without the coordinator having to thread it on every spawn. The
+   * coordinator can still override per-child by setting this explicitly.
+   * `ultracode` resolves to `--effort xhigh` plus the bridge fan-out
+   * directive — see libs/systemPrompt.ts.
+   */
+  effort?: EffortLevel;
+  /**
    * Resume target override (only consulted when `mode: "resume"`).
    * When set, the bridge resumes THIS exact session id instead of
    * looking up the prior run by `(parentSessionId, role, repo)`. Lets
@@ -147,26 +160,9 @@ type Ctx = { params: Promise<{ id: string }> };
  */
 const PROMPT_CACHE_ENABLED = process.env.BRIDGE_PROMPT_CACHE === "1";
 
-const SYS_PROMPT_CACHE_DIR = join(BRIDGE_STATE_DIR, "cache", "sys-prompts");
-
-/**
- * Write `content` to a content-addressed file under
- * `.bridge-state/cache/sys-prompts/<sha256>.txt` (idempotent — same
- * content writes to the same path). Returns the absolute path so
- * the caller can pass it to `claude --append-system-prompt-file`.
- *
- * Returns `null` when content is empty (caller should skip the flag).
- */
-function ensureSystemPromptFile(content: string): string | null {
-  if (!content || content.length === 0) return null;
-  const hash = createHash("sha256").update(content).digest("hex").slice(0, 32);
-  const path = join(SYS_PROMPT_CACHE_DIR, `${hash}.txt`);
-  if (!existsSync(path)) {
-    mkdirSync(SYS_PROMPT_CACHE_DIR, { recursive: true });
-    writeFileSync(path, content, "utf8");
-  }
-  return path;
-}
+// `ensureSystemPromptFile` (content-addressed cache writer) now lives in
+// `@/libs/systemPrompt` so the spawn layer can share it for the ultracode
+// directive. Same `.bridge-state/cache/sys-prompts/<sha256>.txt` path.
 
 /**
  * Spawn a child Claude agent for a task. Centralizes what the coordinator
@@ -274,6 +270,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return badRequest("priorSessionId is only valid with mode: 'resume'");
     }
   }
+  // Effort tier for this child. An unknown value is rejected loudly
+  // rather than silently dropped; absent falls back to the task's effort
+  // once meta is loaded (see `effectiveEffort` below).
+  if (body.effort !== undefined && !isValidEffort(body.effort)) {
+    return badRequest("invalid effort");
+  }
+  const requestedEffort: EffortLevel | undefined = isValidEffort(body.effort)
+    ? body.effort
+    : undefined;
 
   if (!role) {
     return NextResponse.json({ error: "role is required" }, { status: 400 });
@@ -309,6 +314,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!meta) {
     return NextResponse.json({ error: "task not found" }, { status: 404 });
   }
+  // Hoisted: the plan gate (below) and `effectiveGitForActor` (further down)
+  // both need the actor. Computed once here.
+  const actor = verifyRequestActor(req);
+  // Effort the child actually runs at: the explicit per-dispatch pick,
+  // else the task's effort (so a task created at e.g. `ultracode` fans
+  // out children at the same tier without per-spawn threading), else
+  // claude's own default.
+  const effectiveEffort: EffortLevel | undefined =
+    requestedEffort ?? meta.taskEffort ?? undefined;
   let detectedScope: DetectedScope | null = null;
   try {
     detectedScope = await getOrComputeScope(sessionsDir, () =>
@@ -357,6 +371,55 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
+  // ─── Intent & Planning Gate ─────────────────────────────────────────
+  // Block mutating roles (coder/fixer/…) until the task's plan is approved.
+  // Non-mutating roles (planner/reviewer/…) always pass so the gate can
+  // produce a plan. Guests are always gated; the operator gate is
+  // configurable. Runs BEFORE worktree alloc / prompt build / spawn so a
+  // blocked call does no wasted work. Covers spawn AND resume.
+  {
+    const cfg = readPlanGateConfig();
+    const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
+    const intake = readIntake(sessionsDir);
+    const decision = evaluatePlanGate({
+      role,
+      intakeStatus: intake?.status ?? "none",
+      gateApplies,
+    });
+    if (!decision.allowed) {
+      if (decision.kickPlanning) {
+        // No plan yet → open planning and ensure a coordinator is running
+        // to drive the planner. The contributor (or the coordinator) re-
+        // issues the mutating spawn after approval.
+        await setIntake(sessionsDir, {
+          status: "planning",
+          submittedBy:
+            actor?.kind === "guest"
+              ? { kind: "guest", label: "guest" }
+              : { kind: "operator", label: "operator" },
+        });
+        if (!meta.runs.some((r) => r.role === "coordinator")) {
+          void spawnCoordinatorForTask({
+            id: meta.taskId,
+            title: meta.taskTitle,
+            body: meta.taskBody,
+            app: meta.taskApp ?? null,
+            effort: meta.taskEffort ?? null,
+          });
+        }
+      }
+      return NextResponse.json(
+        {
+          error: "plan-gate",
+          reason: decision.reason,
+          intakeStatus: intake?.status ?? "none",
+          kickedPlanning: decision.kickPlanning,
+        },
+        { status: 423 },
+      );
+    }
+  }
+
   // ─── Resume branch ──────────────────────────────────────────────────
   // When mode==="resume" we do NOT spawn a fresh child. The bridge looks
   // up the prior run by (parentSessionId, role, repo), reuses its
@@ -386,6 +449,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       parentSessionId: parentSessionId ?? null,
       priorSessionId: priorSessionId ?? null,
       runs: meta.runs,
+      effort: effectiveEffort,
     });
   }
 
@@ -433,8 +497,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const app = getApp(repo);
   // For a task-share guest, the share's git config overrides the app's
   // (branch + commit/push), so the guest's work lands where the operator
-  // scoped it. Operators keep the app's own policy.
-  const actor = verifyRequestActor(req);
+  // scoped it. Operators keep the app's own policy. `actor` was hoisted to
+  // the top of the handler so the plan gate could read it too.
   const effGit = app ? effectiveGitForActor(app.git, actor) : null;
   const useWorktree = !!(app && effGit && effGit.worktreeMode === "enabled");
   if (app && effGit && effGit.branchMode !== "current" && !useWorktree) {
@@ -782,7 +846,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     childHandle = spawnFreeSession(
       spawnCwd,
       prependedPrompt,
-      { mode: "bypassPermissions" },
+      { mode: "bypassPermissions", effort: effectiveEffort },
       settingsPath,
       sessionId,
       systemPromptFile,
@@ -1173,6 +1237,8 @@ async function handleResume(args: {
   parentSessionId: string | null;
   priorSessionId: string | null;
   runs: Run[];
+  /** Effort tier for the resumed turn (already resolved: dispatch pick → task default). */
+  effort?: EffortLevel;
 }): Promise<NextResponse> {
   const {
     sessionsDir,
@@ -1184,6 +1250,7 @@ async function handleResume(args: {
     parentSessionId,
     priorSessionId,
     runs,
+    effort,
   } = args;
 
   let prior: Run;
@@ -1360,7 +1427,7 @@ async function handleResume(args: {
       spawnCwd,
       prior.sessionId,
       resumePrompt,
-      { mode: "bypassPermissions" },
+      { mode: "bypassPermissions", effort },
       settingsPath,
     );
   } catch (e) {
