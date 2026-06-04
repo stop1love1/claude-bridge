@@ -27,6 +27,7 @@ import { useConfirm } from "./ConfirmProvider";
 import { api } from "@/libs/client/api";
 import { AgentTree } from "./AgentTree";
 import { PlanReviewCard } from "./PlanReviewCard";
+import { CommitReviewCard } from "./CommitReviewCard";
 import { LivePreview } from "./LivePreview";
 import { Button } from "./ui/button";
 
@@ -217,6 +218,8 @@ function TaskDetailInner({
       <div className="p-4 sm:p-6 max-w-3xl mx-auto">
         {/* Intent & Planning Gate — operator always may approve. */}
         <PlanReviewCard taskId={task.id} intake={meta?.intake} canApprove />
+        {/* Reliability (B2) — low-confidence runs held for operator review. */}
+        <CommitReviewCard taskId={task.id} runs={meta?.runs ?? []} />
         {/* Live app preview (Epic C) — operator sets the URL inline. */}
         <div className="mb-4">
           <LivePreview taskId={task.id} mode="operator" />

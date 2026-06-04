@@ -485,6 +485,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ url }),
     }),
+  reviewRunConfidence: (taskId: string, sessionId: string, action: "ship" | "dismiss") =>
+    req<{ ok: boolean; action: string; push: { ok: boolean; message: string; error: string | null } | null }>(
+      `/tasks/${taskId}/runs/${sessionId}/confidence/review`,
+      { method: "POST", body: JSON.stringify({ action }) },
+    ),
   confidenceSettings: (opts?: ReqOpts) =>
     req<{ enabled: boolean; threshold: number }>(`/settings/confidence`, { signal: opts?.signal }),
   updateConfidenceSettings: (patch: { enabled?: boolean; threshold?: number }) =>
