@@ -18,9 +18,12 @@ import {
 import { detectWithLLM } from "@/libs/detect/llm";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { safeErrorMessage } from "@/libs/errorResponse";
+import { isValidEffort } from "@/libs/validate";
 import { checkRateLimit } from "@/libs/rateLimit";
-import { verifyRequestAuth } from "@/libs/auth";
+import { verifyRequestAuth, verifyRequestActor } from "@/libs/auth";
 import { getClientIp } from "@/libs/clientIp";
+import { readPlanGateConfig } from "@/libs/planGateConfig";
+import { setIntake } from "@/libs/meta";
 
 export const dynamic = "force-dynamic";
 
@@ -71,10 +74,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
   }
 
-  const { title: givenTitle, body, app } = (await req.json()) as {
+  const { title: givenTitle, body, app, effort } = (await req.json()) as {
     title?: string;
     body?: string;
     app?: string | null;
+    effort?: unknown;
   };
   const rawBody = (body ?? "").trim();
   const title = givenTitle?.trim() || deriveTitle(rawBody);
@@ -82,8 +86,16 @@ export async function POST(req: NextRequest) {
   if (!title || (title === "(untitled)" && !rawBody)) {
     return NextResponse.json({ error: "description required" }, { status: 400 });
   }
+  if (effort !== undefined && effort !== null && !isValidEffort(effort)) {
+    return NextResponse.json({ error: "invalid effort" }, { status: 400 });
+  }
 
-  const task = createTask({ title, body: rawBody, app: app ?? null });
+  const task = createTask({
+    title,
+    body: rawBody,
+    app: app ?? null,
+    effort: isValidEffort(effort) ? effort : null,
+  });
   // Phase G: build repo profiles once before the very first coordinator
   // spawn so the prompt gets the enriched "## Repo profiles" block.
   autoInitProfilesOnce();
@@ -121,6 +133,28 @@ export async function POST(req: NextRequest) {
     console.warn("[detect] sync heuristic write failed (non-fatal):", err);
   }
 
+  // Intent & Planning Gate: if the gate applies to this creator, mark the
+  // task as `planning` before the coordinator spawns. The coordinator is
+  // mandated (prompt) to spawn the planner first; the bridge gate blocks
+  // its mutating children until the plan is approved. Non-fatal on error —
+  // never block task creation on the gate.
+  try {
+    const cfg = readPlanGateConfig();
+    const actor = verifyRequestActor(req);
+    const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
+    if (gateApplies) {
+      await setIntake(join(SESSIONS_DIR, task.id), {
+        status: "planning",
+        submittedBy:
+          actor?.kind === "guest"
+            ? { kind: "guest", label: "guest" }
+            : { kind: "operator", label: "operator" },
+      });
+    }
+  } catch (err) {
+    console.warn("[plan-gate] task-create gate init failed (non-fatal):", err);
+  }
+
   // Wrap the coordinator spawn so a `claude` binary missing / fork
   // failure / etc. doesn't make the route return 500 with the task
   // already half-created on disk — that would prompt clients to retry,
@@ -139,6 +173,7 @@ export async function POST(req: NextRequest) {
       title: task.title,
       body: task.body,
       app: task.app ?? null,
+      effort: task.effort ?? null,
     });
     if (!sessionId) {
       spawnError = "coordinator spawn returned null (see server logs)";
