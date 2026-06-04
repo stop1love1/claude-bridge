@@ -5,6 +5,7 @@ import { SESSIONS_DIR } from "@/libs/paths";
 import { readMeta, readIntake, setIntake } from "@/libs/meta";
 import { canApprove, type IntakeAnswer } from "@/libs/planGate";
 import { continueCoordinator } from "@/libs/planGateLifecycle";
+import { readPlanGateConfig } from "@/libs/planGateConfig";
 import { verifyRequestActor } from "@/libs/auth";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest } from "@/libs/validate";
@@ -73,7 +74,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   if (action === "request-changes") {
-    const rec = await setIntake(sessionsDir, { status: "planning" });
+    // Enforce maxClarifyRounds: cap operator-driven re-plan cycles so an
+    // endless "request changes" loop can't churn the planner forever. Past
+    // the cap the operator must approve or reject the current plan.
+    const cfg = readPlanGateConfig();
+    if (intake.rounds >= cfg.maxClarifyRounds) {
+      return NextResponse.json(
+        {
+          error: "max clarify rounds reached",
+          reason: `re-planning is capped at ${cfg.maxClarifyRounds} round(s) — approve or reject the current plan`,
+          intake,
+        },
+        { status: 409 },
+      );
+    }
+    const rec = await setIntake(sessionsDir, { status: "planning", rounds: intake.rounds + 1 });
     // Re-dispatch planning with the operator note. `replan` flips the
     // coordinator message to "re-plan" (NOT "gate is now open") so it
     // doesn't try to dispatch coders against the still-closed gate.

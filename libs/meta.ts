@@ -259,6 +259,14 @@ export interface RunStyleCritic {
   criticSessionId?: string | null;
   durationMs: number;
   retryScheduled?: boolean;
+  /** Reliability Amplifier: number of critics dispatched (1 = single). */
+  panelSize?: number;
+  /** Per-lens votes when run as a panel. Absent on legacy / single runs. */
+  votes?: Array<{
+    lens: string;
+    verdict: "match" | "drift" | "alien";
+    reason: string;
+  }>;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { semanticVerifierEnabled, resolvePanelSize } from "../apps";
+import { semanticVerifierEnabled, resolvePanelSize, resolveCriticPanelSize } from "../apps";
 
 const app = (quality: unknown) => ({ quality } as Parameters<typeof semanticVerifierEnabled>[0]);
 
@@ -24,5 +24,14 @@ describe("resolvePanelSize", () => {
     expect(resolvePanelSize(app({ verifierPanel: 0 }))).toBe(1);
     expect(resolvePanelSize(app({ verifierPanel: 9 }))).toBe(5);
     expect(resolvePanelSize(app({ verifierPanel: 2 }))).toBe(2);
+  });
+});
+
+describe("resolveCriticPanelSize", () => {
+  it("defaults to 3 and clamps to 1..5", () => {
+    expect(resolveCriticPanelSize(app({}))).toBe(3);
+    expect(resolveCriticPanelSize(app({ criticPanel: 0 }))).toBe(1);
+    expect(resolveCriticPanelSize(app({ criticPanel: 9 }))).toBe(5);
+    expect(resolveCriticPanelSize(app({ criticPanel: 4 }))).toBe(4);
   });
 });

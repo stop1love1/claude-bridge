@@ -183,6 +183,8 @@ export interface AppQuality {
   verifier?: boolean;
   /** Reliability Amplifier (B1): semantic judges to run (1 = single, default 3). Clamped 1..5. */
   verifierPanel?: number;
+  /** Style critics to run when `critic` is on (1 = single, default 3). Clamped 1..5. */
+  criticPanel?: number;
 }
 
 export const DEFAULT_QUALITY: AppQuality = {};
@@ -199,6 +201,13 @@ export function semanticVerifierEnabled(app: Pick<App, "quality">): boolean {
 /** Number of semantic judges to dispatch — clamped to 1..5, default 3. */
 export function resolvePanelSize(app: Pick<App, "quality">): number {
   const n = app.quality?.verifierPanel;
+  if (typeof n !== "number" || !Number.isFinite(n)) return 3;
+  return Math.max(1, Math.min(5, Math.floor(n)));
+}
+
+/** Number of style critics to dispatch — clamped to 1..5, default 3. */
+export function resolveCriticPanelSize(app: Pick<App, "quality">): number {
+  const n = app.quality?.criticPanel;
   if (typeof n !== "number" || !Number.isFinite(n)) return 3;
   return Math.max(1, Math.min(5, Math.floor(n)));
 }
@@ -526,6 +535,9 @@ function normalizeQuality(raw: unknown): AppQuality {
   if (typeof r.verifierPanel === "number" && Number.isFinite(r.verifierPanel)) {
     out.verifierPanel = Math.floor(r.verifierPanel);
   }
+  if (typeof r.criticPanel === "number" && Number.isFinite(r.criticPanel)) {
+    out.criticPanel = Math.floor(r.criticPanel);
+  }
   return out;
 }
 
@@ -580,6 +592,9 @@ function serializeQuality(q: AppQuality | undefined): AppQuality | undefined {
   else if (q.verifier === false) out.verifier = false; // persist the opt-out
   if (typeof q.verifierPanel === "number" && Number.isFinite(q.verifierPanel)) {
     out.verifierPanel = Math.floor(q.verifierPanel);
+  }
+  if (typeof q.criticPanel === "number" && Number.isFinite(q.criticPanel)) {
+    out.criticPanel = Math.floor(q.criticPanel);
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -1662,12 +1677,19 @@ export function updateAppQuality(
     else if (patch.verifier === false) next.verifier = false;
     else delete next.verifier;
   }
-  // `verifierPanel`: a finite number sets it; null/undefined clears (default 3).
+  // `verifierPanel` / `criticPanel`: a finite number sets it; else clears (default 3).
   if (Object.prototype.hasOwnProperty.call(patch, "verifierPanel")) {
     if (typeof patch.verifierPanel === "number" && Number.isFinite(patch.verifierPanel)) {
       next.verifierPanel = Math.floor(patch.verifierPanel);
     } else {
       delete next.verifierPanel;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "criticPanel")) {
+    if (typeof patch.criticPanel === "number" && Number.isFinite(patch.criticPanel)) {
+      next.criticPanel = Math.floor(patch.criticPanel);
+    } else {
+      delete next.criticPanel;
     }
   }
   target.quality = next;

@@ -19,6 +19,8 @@
  */
 import { type Run, type RunStyleCritic } from "./meta";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
+import { runGatePanel, aggregatePanel, type PanelLens, type PanelVote } from "./judgePanel";
+import { getApp, resolveCriticPanelSize } from "./apps";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
 
@@ -26,6 +28,31 @@ export const STYLE_CRITIC_ROLE = "style-critic";
 export const STYLE_CRITIC_RETRY_SUFFIX = "-stretry";
 const VERDICT_FILE = "style-critic-verdict.json";
 const ISSUES_CAP = 10;
+
+/** B1-style panel lenses for the style critic. */
+export const STYLE_LENSES: PanelLens[] = [
+  {
+    key: "conventions",
+    nudge: "Judge ONLY whether the diff follows this codebase's conventions, file layout, and idioms (per your playbook). `alien` if it reads foreign.",
+  },
+  {
+    key: "reuse",
+    nudge: "Judge whether the diff reuses the existing helpers / abstractions it should, instead of reinventing or inlining them. `alien` on clear reinvention.",
+  },
+  {
+    key: "naming",
+    nudge: "Judge naming, types, and structure — do new symbols match the codebase's vocabulary and shape? `alien` on jarring mismatches.",
+  },
+];
+
+/** Map style verdicts onto the generic panel scale (and back) so the shared
+ *  `aggregatePanel` majority logic can be reused. match≈pass, alien≈broken. */
+function styleToGeneric(v: "match" | "drift" | "alien"): PanelVote["verdict"] {
+  return v === "match" ? "pass" : v === "alien" ? "broken" : "drift";
+}
+function genericToStyle(v: "pass" | "drift" | "broken" | "skipped"): RunStyleCritic["verdict"] {
+  return v === "pass" ? "match" : v === "broken" ? "alien" : v === "skipped" ? "skipped" : "drift";
+}
 
 export interface RunStyleCriticOptions {
   /** Absolute cwd of the target app — the critic spawns here. */
@@ -52,7 +79,7 @@ const BRIEF_BODY = [
  */
 export function parseCriticVerdict(
   raw: unknown,
-): { verdict: RunStyleCritic["verdict"]; reason: string; issues: string[] } | null {
+): { verdict: "match" | "drift" | "alien"; reason: string; issues: string[] } | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
 
@@ -95,35 +122,73 @@ export async function runStyleCritic(
     durationMs: Date.now() - start,
   });
 
-  const outcome: AgentGateOutcome = await runAgentGate({
+  const app = getApp(opts.finishedRun.repo);
+  const panelSize = app ? resolveCriticPanelSize(app) : 3;
+
+  // Single-critic path (panelSize === 1) — the pre-panel behavior.
+  if (panelSize === 1) {
+    const outcome: AgentGateOutcome = await runAgentGate({
+      appPath: opts.appPath,
+      taskId: opts.taskId,
+      finishedRun: opts.finishedRun,
+      taskTitle: opts.taskTitle,
+      taskBody: opts.taskBody,
+      role: STYLE_CRITIC_ROLE,
+      briefBody: BRIEF_BODY,
+      verdictFileName: VERDICT_FILE,
+    });
+    if (outcome.kind === "skipped") {
+      return skipped(outcome.reason, outcome.sessionId ?? null);
+    }
+    const parsed = parseCriticVerdict(outcome.verdict);
+    if (!parsed) {
+      return skipped("verdict file did not match `{verdict, reason, issues}` schema", outcome.sessionId);
+    }
+    return {
+      verdict: parsed.verdict,
+      reason: parsed.reason,
+      issues: parsed.issues,
+      criticSessionId: outcome.sessionId,
+      durationMs: Date.now() - start,
+      panelSize: 1,
+    };
+  }
+
+  // Panel path: one critic per lens, majority rule (alien ≈ broken).
+  const lenses = STYLE_LENSES.slice(0, panelSize);
+  const results = await runGatePanel({
     appPath: opts.appPath,
     taskId: opts.taskId,
     finishedRun: opts.finishedRun,
     taskTitle: opts.taskTitle,
     taskBody: opts.taskBody,
     role: STYLE_CRITIC_ROLE,
-    briefBody: BRIEF_BODY,
-    verdictFileName: VERDICT_FILE,
+    baseBrief: BRIEF_BODY,
+    verdictFilePrefix: "style-verdict",
+    lenses,
   });
 
-  if (outcome.kind === "skipped") {
-    return skipped(outcome.reason, outcome.sessionId ?? null);
+  const genericVotes: PanelVote[] = [];
+  const styleVotes: NonNullable<RunStyleCritic["votes"]> = [];
+  let firstSessionId: string | null = null;
+  for (const { lens, outcome } of results) {
+    if (outcome.kind !== "spawned") continue;
+    firstSessionId = firstSessionId ?? outcome.sessionId;
+    const parsed = parseCriticVerdict(outcome.verdict);
+    if (!parsed) continue;
+    genericVotes.push({ lens, verdict: styleToGeneric(parsed.verdict), reason: parsed.reason, concerns: parsed.issues });
+    styleVotes.push({ lens, verdict: parsed.verdict, reason: parsed.reason });
   }
 
-  const parsed = parseCriticVerdict(outcome.verdict);
-  if (!parsed) {
-    return skipped(
-      "verdict file did not match `{verdict, reason, issues}` schema",
-      outcome.sessionId,
-    );
-  }
-
+  const agg = aggregatePanel(genericVotes, lenses.length);
   return {
-    verdict: parsed.verdict,
-    reason: parsed.reason,
-    issues: parsed.issues,
-    criticSessionId: outcome.sessionId,
+    verdict: genericToStyle(agg.verdict),
+    reason: agg.reason,
+    issues: agg.concerns,
+    criticSessionId: firstSessionId,
     durationMs: Date.now() - start,
+    panelSize: lenses.length,
+    votes: styleVotes,
   };
 }
 
