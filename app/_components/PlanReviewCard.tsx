@@ -30,6 +30,7 @@ export function PlanReviewCard({
   const [planMd, setPlanMd] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [actErr, setActErr] = useState<string | null>(null);
   const status = intake?.status;
   const active = status === "planning" || status === "awaiting-approval" || status === "error";
 
@@ -57,8 +58,9 @@ export function PlanReviewCard({
 
   async function act(action: "approve" | "request-changes" | "reject", note?: string) {
     setBusy(true);
+    setActErr(null);
     try {
-      await fetch(`/api/tasks/${encodeURIComponent(taskId)}/plan/approve`, {
+      const r = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/plan/approve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -67,6 +69,12 @@ export function PlanReviewCard({
           answers: Object.entries(answers).map(([questionId, answer]) => ({ questionId, answer })),
         }),
       });
+      if (!r.ok) {
+        // e.g. 409 when re-planning hits maxClarifyRounds.
+        const j = (await r.json().catch(() => null)) as { reason?: string; error?: string } | null;
+        setActErr(j?.reason ?? j?.error ?? `request failed (${r.status})`);
+        return;
+      }
       onActed?.();
     } finally {
       setBusy(false);
@@ -151,6 +159,7 @@ export function PlanReviewCard({
       ) : (
         <p className="text-xs text-muted-foreground">Chờ chủ dự án duyệt kế hoạch.</p>
       )}
+      {actErr && <p className="text-xs text-red-500">{actErr}</p>}
     </div>
   );
 }
