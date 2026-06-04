@@ -49,9 +49,8 @@ function persist(): void {
 export function isValidPreviewUrl(url: string): boolean {
   if (!/^https?:\/\//i.test(url)) return false;
   try {
-    // eslint-disable-next-line no-new
-    new URL(url);
-    return true;
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
   } catch {
     return false;
   }

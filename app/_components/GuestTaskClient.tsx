@@ -8,6 +8,7 @@ import type { ShareGrants } from "@/libs/shareStore";
 import type { ActiveRun } from "./SessionLog/helpers";
 import { SessionLog } from "./SessionLog";
 import { PlanReviewCard } from "./PlanReviewCard";
+import { LivePreview } from "./LivePreview";
 import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -224,7 +225,7 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
       </header>
       {/* Intent & Planning Gate — guests can approve only with the grant.
           The px-4 wrapper collapses to zero height when the card is inactive. */}
-      <div className="px-4">
+      <div className="px-4 space-y-3 empty:hidden">
         {taskId && (
           <PlanReviewCard
             taskId={taskId}
@@ -232,6 +233,9 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
             canApprove={!!grants?.approvePlan}
             onActed={() => { if (taskId) void api.meta(taskId).then(setMeta).catch(() => {}); }}
           />
+        )}
+        {taskId && (
+          <LivePreview taskId={taskId} mode="guest" canView={!!grants?.viewPreview} />
         )}
       </div>
       <div className="min-h-0 flex-1">

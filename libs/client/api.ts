@@ -468,6 +468,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  taskPreview: (id: string, opts?: ReqOpts) =>
+    req<{ app: string | null; url: string | null }>(`/tasks/${id}/preview`, { signal: opts?.signal }),
+  updateTaskPreview: (id: string, url: string) =>
+    req<{ app: string | null; url: string | null }>(`/tasks/${id}/preview`, {
+      method: "PUT",
+      body: JSON.stringify({ url }),
+    }),
   confidenceSettings: (opts?: ReqOpts) =>
     req<{ enabled: boolean; threshold: number }>(`/settings/confidence`, { signal: opts?.signal }),
   updateConfidenceSettings: (patch: { enabled?: boolean; threshold?: number }) =>
