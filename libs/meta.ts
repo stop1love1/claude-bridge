@@ -11,10 +11,13 @@ import type { TaskStatus, TaskSection } from "./tasks";
 import type { DetectedScopeCacheEntry } from "./detect/types";
 import { SESSIONS_DIR } from "./paths";
 import type { RunStatus } from "./runStatus";
+import type { IntakeRecord } from "./planGate";
+import { defaultIntake } from "./planGate";
 
 // Re-exported so existing call sites that did `import { RunStatus } from "./meta"`
 // keep working — single source of truth lives in `./runStatus`.
 export type { RunStatus };
+export type { IntakeRecord } from "./planGate";
 
 /**
  * Write `meta.json` atomically. Delegates to the shared
@@ -287,6 +290,13 @@ export interface Meta {
    * decide which repo to dispatch to based on the task body.
    */
   taskApp?: string | null;
+  /**
+   * Effort tier the coordinator runs at, and the default every child
+   * agent inherits (the agents route reads this when a dispatch omits its
+   * own `effort`). `null` / absent = claude's own default. Values mirror
+   * `EffortLevel` (libs/client/types.ts); inlined to keep meta import-light.
+   */
+  taskEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | null;
   createdAt: string;
   /**
    * When true, this task opts into AUTONOMOUS dispatch by the scheduler
@@ -317,6 +327,12 @@ export interface Meta {
    * "fall back to live detection".
    */
   detectedScope?: DetectedScopeCacheEntry | null;
+  /**
+   * Intent & Planning Gate (Epic A) sub-state. Absent on tasks created
+   * before this feature → treat as `none` (gate inert). See
+   * docs/superpowers/specs/2026-06-04-intent-planning-gate-design.md.
+   */
+  intake?: IntakeRecord | null;
 }
 
 /**
@@ -807,6 +823,37 @@ export async function updateRun(
       prevStatus,
     });
     return { applied: true as const, run: { ...run } };
+  });
+}
+
+/**
+ * Read the task's current Intent & Planning Gate intake record. Returns
+ * null when the task's meta is missing or the task predates the feature.
+ */
+export function readIntake(dir: string): IntakeRecord | null {
+  const meta = readMeta(dir);
+  return meta?.intake ?? null;
+}
+
+/**
+ * Patch the task's intake record under the per-task lock (same read-
+ * modify-write discipline as `updateRun`). Creates the record from
+ * `defaultIntake()` on first write. Returns null when the task's meta is
+ * missing; the caller treats that as "task gone".
+ */
+export function setIntake(
+  dir: string,
+  patch: Partial<IntakeRecord>,
+): Promise<IntakeRecord | null> {
+  return withTaskLock(dir, () => {
+    const meta = readMeta(dir);
+    if (!meta) return null;
+    const base = meta.intake ?? defaultIntake();
+    const next: IntakeRecord = { ...base, ...patch, updatedAt: new Date().toISOString() };
+    meta.intake = next;
+    atomicWriteJson(join(dir, FILE), meta);
+    emit(dir, { taskId: taskIdFromDir(dir), kind: "writeMeta" });
+    return next;
   });
 }
 
