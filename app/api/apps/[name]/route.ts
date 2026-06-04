@@ -40,7 +40,10 @@ interface PatchBody {
   retry?: Partial<Record<keyof AppRetry, number | null>>;
 }
 
-const QUALITY_KEYS: Array<keyof AppQuality> = ["critic", "verifier"];
+// Boolean-only quality flags this PATCH endpoint accepts. `verifierPanel`
+// (a number, B1) is intentionally excluded — it's configured via bridge.json,
+// not this boolean toggle route.
+const QUALITY_KEYS = ["critic", "verifier"] as const;
 
 const RETRY_KEYS: Array<keyof AppRetry> = [
   "crash", "verify", "claim", "preflight", "style", "semantic",

@@ -30,9 +30,15 @@ import {
 } from "./permissionSettings";
 import { readOriginalPrompt } from "./promptStore";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
+import {
+  runGatePanel,
+  aggregatePanel,
+  type PanelLens,
+  type PanelVote,
+} from "./judgePanel";
 import { inheritWorktreeFields } from "./worktrees";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
-import { getApp } from "./apps";
+import { getApp, resolvePanelSize } from "./apps";
 import {
   checkEligibility,
   maxAttemptsFor,
@@ -45,6 +51,29 @@ export const SEMANTIC_VERIFIER_ROLE = "semantic-verifier";
 export const SEMANTIC_VERIFIER_RETRY_SUFFIX = "-svretry";
 const VERDICT_FILE = "semantic-verifier-verdict.json";
 const CONCERNS_CAP = 10;
+
+/**
+ * Reliability Amplifier (B1): the three diverse lenses the semantic panel
+ * judges through. Each judge runs the same playbook with one lens nudge
+ * appended; the panel blocks only on majority `broken`.
+ */
+export const SEMANTIC_LENSES: PanelLens[] = [
+  {
+    key: "correctness",
+    nudge:
+      "Judge ONLY whether the diff satisfies the task body's acceptance criteria. Does it deliver what was asked, end to end?",
+  },
+  {
+    key: "edge-cases",
+    nudge:
+      "Hunt for an input or state the diff handles WRONG — empty/boundary/error paths, off-by-one, missing null guards. Try to break it; if you find a real gap, verdict `broken`.",
+  },
+  {
+    key: "regression",
+    nudge:
+      "Judge whether this change breaks EXISTING behavior or opens an input/boundary/security risk elsewhere in the codebase. Look beyond the touched lines.",
+  },
+];
 
 export interface RunSemanticVerifierOptions {
   /** Absolute cwd of the target app. */
@@ -70,7 +99,8 @@ const BRIEF_BODY = [
 export function parseSemanticVerdict(
   raw: unknown,
 ): {
-  verdict: RunSemanticVerifier["verdict"];
+  // Never "skipped": the guard below rejects anything but pass/drift/broken.
+  verdict: "pass" | "drift" | "broken";
   reason: string;
   concerns: string[];
 } | null {
@@ -115,35 +145,79 @@ export async function runSemanticVerifier(
     durationMs: Date.now() - start,
   });
 
-  const outcome: AgentGateOutcome = await runAgentGate({
+  const app = getApp(opts.finishedRun.repo);
+  const panelSize = app ? resolvePanelSize(app) : 3;
+
+  // Single-judge path (panelSize === 1) — byte-for-byte the pre-B1 behavior.
+  if (panelSize === 1) {
+    const outcome: AgentGateOutcome = await runAgentGate({
+      appPath: opts.appPath,
+      taskId: opts.taskId,
+      finishedRun: opts.finishedRun,
+      taskTitle: opts.taskTitle,
+      taskBody: opts.taskBody,
+      role: SEMANTIC_VERIFIER_ROLE,
+      briefBody: BRIEF_BODY,
+      verdictFileName: VERDICT_FILE,
+    });
+    if (outcome.kind === "skipped") {
+      return skipped(outcome.reason, outcome.sessionId ?? null);
+    }
+    const parsed = parseSemanticVerdict(outcome.verdict);
+    if (!parsed) {
+      return skipped(
+        "verdict file did not match `{verdict, reason, concerns}` schema",
+        outcome.sessionId,
+      );
+    }
+    return {
+      verdict: parsed.verdict,
+      reason: parsed.reason,
+      concerns: parsed.concerns,
+      verifierSessionId: outcome.sessionId,
+      durationMs: Date.now() - start,
+      panelSize: 1,
+    };
+  }
+
+  // Panel path: one judge per lens (capped to the defined lenses), majority rule.
+  const lenses = SEMANTIC_LENSES.slice(0, panelSize);
+  const results = await runGatePanel({
     appPath: opts.appPath,
     taskId: opts.taskId,
     finishedRun: opts.finishedRun,
     taskTitle: opts.taskTitle,
     taskBody: opts.taskBody,
     role: SEMANTIC_VERIFIER_ROLE,
-    briefBody: BRIEF_BODY,
-    verdictFileName: VERDICT_FILE,
+    baseBrief: BRIEF_BODY,
+    verdictFilePrefix: "semantic-verdict",
+    lenses,
   });
 
-  if (outcome.kind === "skipped") {
-    return skipped(outcome.reason, outcome.sessionId ?? null);
+  const votes: PanelVote[] = [];
+  let firstSessionId: string | null = null;
+  for (const { lens, outcome } of results) {
+    if (outcome.kind !== "spawned") continue;
+    firstSessionId = firstSessionId ?? outcome.sessionId;
+    const parsed = parseSemanticVerdict(outcome.verdict);
+    if (!parsed) continue;
+    votes.push({
+      lens,
+      verdict: parsed.verdict,
+      reason: parsed.reason,
+      concerns: parsed.concerns,
+    });
   }
 
-  const parsed = parseSemanticVerdict(outcome.verdict);
-  if (!parsed) {
-    return skipped(
-      "verdict file did not match `{verdict, reason, concerns}` schema",
-      outcome.sessionId,
-    );
-  }
-
+  const agg = aggregatePanel(votes, lenses.length);
   return {
-    verdict: parsed.verdict,
-    reason: parsed.reason,
-    concerns: parsed.concerns,
-    verifierSessionId: outcome.sessionId,
+    verdict: agg.verdict,
+    reason: agg.reason,
+    concerns: agg.concerns,
+    verifierSessionId: firstSessionId,
     durationMs: Date.now() - start,
+    panelSize: lenses.length,
+    votes: votes.map((v) => ({ lens: v.lens, verdict: v.verdict, reason: v.reason })),
   };
 }
 
