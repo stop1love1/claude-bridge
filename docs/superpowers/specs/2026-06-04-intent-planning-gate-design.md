@@ -130,11 +130,14 @@ coordinator prompt-drift.
 - `app/api/tasks/[id]/agents/route.ts` — call `evaluatePlanGate()` first; 423 + auto-kick
   planner for blocked mutating roles.
 - `app/api/tasks/route.ts` — on task creation: if the gate applies, set
-  `intake.status = planning` and dispatch the **`planner` first** (not the coordinator).
-  The coordinator is dispatched **after approval** (by the `approve` endpoint), so it
-  enters with an approved plan already injected and its coder spawns pass the gate
-  immediately. If the gate does not apply (operator off, operator-created task), behavior
-  is unchanged: dispatch the coordinator directly with `intake.status = none`.
+  `intake.status = planning` before spawning the coordinator (gate off → `none`,
+  unchanged). The **coordinator stays the single entry orchestrator** — we do **not** build
+  a parallel planner-dispatch path. The coordinator is mandated (prompt) to spawn the
+  `planner` first; `planner` is non-mutating so it passes the gate, while the bridge blocks
+  the coordinator's *mutating* children until `approved`. This reuses the existing
+  coordinator + `NEEDS-DECISION` + `POST /api/tasks/:id/continue` machinery instead of a
+  new dispatcher. (Revised 2026-06-04 from an earlier "planner-first, coordinator-after"
+  model — Option Y, chosen for maximal reuse / lower risk.)
 - `prompts/playbooks/planner.md` — when the bridge injects a `## Intake gate` block,
   the planner additionally writes `sessions/<id>/intake.json` (fixed schema below). The
   derive step falls back to parsing `plan.md` if the JSON is absent/corrupt.
@@ -165,19 +168,22 @@ coordinator prompt-drift.
 1. Prompt arrives (task create OR guest POST that needs a mutating role)
 2. Gate applies?  (config.operatorEnabled || actor.kind === "guest")
         └─ no → intake.status = none → legacy behavior, nothing else changes
-3. intake.status = planning → bridge spawns `planner` (brief = prompt + ## Intake gate)
+3. intake.status = planning → coordinator runs and (mandated) spawns the `planner`
+   (non-mutating → passes gate). For a guest's direct mutating /agents that 423s with no
+   coordinator yet, the bridge ensures one is spawned via `spawnCoordinatorForTask`.
 4. planner writes plan.md + intake.json {verdict, questions}
-5. on planner exit, runLifecycle calls deriveGateVerdict():
+5. on planner exit, `planGateLifecycle.resolvePlanGateAfterPlanner()` (called from
+   `wireRunLifecycle`) runs `deriveGateVerdict()`:
      clear  & approver auto-eligible → approved (auto)
      clear  & guest w/o grant         → awaiting-approval (operator)
      needs-decision                   → awaiting-approval (questions surfaced)
 6. approver opens plan, answers questions if any, clicks Approve
      → approved (+answers appended into plan.md so downstream coders see them)
-     → or Request changes → planning (planner refines)
-7. on reaching `approved` (auto or manual), the bridge dispatches the coordinator with the
-   plan injected; its mutating /agents calls now pass the gate → code → existing
-   verify-then-ship chain. (For the guest direct-/agents path, the originally blocked
-   mutating spawn is what the contributor re-issues — or the coordinator owns it.)
+     → or Request changes → planning (coordinator re-dispatches planner to refine)
+7. on reaching `approved` (auto or manual), the bridge continues the coordinator via the
+   existing `POST /api/tasks/:id/continue` path with a synthesized "plan approved + answers"
+   message; its mutating /agents calls now pass the gate → code → existing verify-then-ship
+   chain.
 ```
 
 Answers + plan ride the existing `loadSharedPlan` injection into every downstream coder —
