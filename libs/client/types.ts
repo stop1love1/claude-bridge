@@ -59,6 +59,13 @@ export interface Run {
     panelSize?: number;
     votes?: Array<{ lens: string; verdict: "pass" | "drift" | "broken"; reason: string }>;
   } | null;
+  /** Reliability Amplifier (B2): aggregate confidence + escalation hold. */
+  confidence?: {
+    score: number;
+    band: "high" | "medium" | "low";
+    heldAt?: string | null;
+    reviewedBy?: { label: string; at: string } | null;
+  } | null;
 }
 
 /** Intent & Planning Gate — UI-facing subset of the server IntakeRecord. */

@@ -468,6 +468,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  confidenceSettings: (opts?: ReqOpts) =>
+    req<{ enabled: boolean; threshold: number }>(`/settings/confidence`, { signal: opts?.signal }),
+  updateConfidenceSettings: (patch: { enabled?: boolean; threshold?: number }) =>
+    req<{ enabled: boolean; threshold: number }>(`/settings/confidence`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   appTree: (appRouteKey: string, dir = "", opts?: ReqOpts) =>
     req<{
       rel: string;

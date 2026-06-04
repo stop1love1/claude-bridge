@@ -86,6 +86,7 @@ function SettingsPage() {
           <PublicUrlSection />
           <DetectSettingsSection />
           <PlanGateSettingsSection />
+          <ConfidenceSettingsSection />
           <TrustedDevicesSection />
           <TelegramSettingsSection />
           <TelegramUserSection />
@@ -402,6 +403,104 @@ function PlanGateSettingsSection() {
             <p className="text-[11px] text-muted-foreground">
               How many clarify cycles before the gate forces a manual decision.
               Default 3.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ConfidenceSettingsSection() {
+  const [enabled, setEnabled] = useState(true);
+  const [threshold, setThreshold] = useState(70);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const s = await api.confidenceSettings({ signal: ac.signal });
+        if (ac.signal.aborted) return;
+        setEnabled(s.enabled);
+        setThreshold(s.threshold);
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [toast]);
+
+  const save = async (patch: { enabled?: boolean; threshold?: number }) => {
+    setSaving(true);
+    try {
+      const next = await api.updateConfidenceSettings(patch);
+      setEnabled(next.enabled);
+      setThreshold(next.threshold);
+      toast("success", "Confidence gate saved");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <ShieldCheck size={14} className="text-primary" />
+        <h3 className="text-[13px] sm:text-sm font-semibold">Confidence gate</h3>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-4">
+        After the quality gates pass, the bridge scores each run 0–100 from the gate results
+        (verify, claim-vs-diff, style, semantic panel). Below the threshold it <strong>holds
+        the outward action</strong> (push / merge / PR) and flags the run for your review —
+        the local commit still lands. Worktree-mode runs record the score but aren&apos;t held.
+      </p>
+
+      {loading ? (
+        <ListSkeleton rows={2} />
+      ) : (
+        <div className="grid gap-3">
+          <button
+            type="button"
+            onClick={() => save({ enabled: !enabled })}
+            disabled={saving}
+            aria-pressed={enabled}
+            className={`text-left rounded-md border p-3 transition-colors disabled:opacity-50 ${
+              enabled ? "border-primary/40 bg-primary/5" : "border-border hover:border-primary/30 hover:bg-accent/30"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex h-3.5 w-3.5 rounded-full border ${enabled ? "border-primary bg-primary" : "border-border bg-transparent"}`} aria-hidden />
+              <span className="text-sm font-medium">Hold low-confidence runs {enabled ? "(on)" : "(off)"}</span>
+            </div>
+            <p className="mt-1 ml-5 text-[11px] text-muted-foreground">
+              {enabled
+                ? "Below-threshold runs hold push/integration for your review."
+                : "Scores are still recorded, but nothing is ever held."}
+            </p>
+          </button>
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="conf-threshold">Threshold (0–100)</Label>
+            <Input
+              id="conf-threshold"
+              type="number"
+              min={0}
+              max={100}
+              value={String(threshold)}
+              onChange={(e) => setThreshold(Math.max(0, Math.min(100, Math.floor(Number(e.target.value) || 0))))}
+              onBlur={() => save({ threshold })}
+              disabled={saving || !enabled}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Runs scoring below this hold their outward action. Default 70.
             </p>
           </div>
         </div>

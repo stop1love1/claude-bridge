@@ -296,6 +296,20 @@ function AgentNode({
           <RoleIcon role={run.role} size={12} className={`${iconCls} shrink-0`} />
           <span className="text-foreground font-semibold shrink-0">{run.role}</span>
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
+            {run.confidence && (
+              <span
+                className={`text-[9px] font-mono font-semibold px-1 py-px rounded ${
+                  run.confidence.band === "high"
+                    ? "bg-emerald-500/15 text-emerald-500"
+                    : run.confidence.band === "medium"
+                      ? "bg-amber-500/15 text-amber-500"
+                      : "bg-red-500/15 text-red-500"
+                }`}
+                title={`Confidence ${run.confidence.score}/100 (${run.confidence.band})${run.confidence.heldAt ? " — held for review before shipping" : ""}`}
+              >
+                {run.confidence.heldAt ? "⏸ " : ""}{run.confidence.score}
+              </span>
+            )}
             {dur && <span className="text-fg-dim text-[10px]">{dur}</span>}
             <StatusPill run={run} />
           </span>
