@@ -51,6 +51,21 @@ export interface Run {
   } | null;
 }
 
+/** Intent & Planning Gate — UI-facing subset of the server IntakeRecord. */
+export type IntakeStatus = "none" | "planning" | "awaiting-approval" | "approved" | "error";
+export interface IntakeQuestion {
+  id: string;
+  text: string;
+  options?: string[];
+  recommended?: string;
+}
+export interface TaskIntake {
+  status: IntakeStatus;
+  verdict: "clear" | "needs-decision" | null;
+  summary: string | null;
+  questions: IntakeQuestion[];
+}
+
 export interface Meta {
   taskId: string;
   taskTitle: string;
@@ -60,6 +75,8 @@ export interface Meta {
   taskChecked: boolean;
   createdAt: string;
   runs: Run[];
+  /** Intent & Planning Gate sub-state (absent on legacy / gate-off tasks). */
+  intake?: TaskIntake | null;
 }
 
 export interface Repo {
@@ -209,7 +226,11 @@ export type PermissionMode =
   | "bypassPermissions"
   | "dontAsk";
 
-export type EffortLevel = "low" | "medium" | "high" | "max";
+// `low|medium|high|xhigh|max` map straight to `claude --effort`; `ultracode`
+// is the bridge-only top tier (resolves to xhigh + an orchestration
+// directive — see libs/systemPrompt.ts). Kept in sync with `EffortLevel`
+// in libs/spawn.ts and `EFFORT_LEVELS` in libs/validate.ts.
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode";
 
 export interface ChatSettings {
   mode?: PermissionMode;

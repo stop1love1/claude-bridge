@@ -50,6 +50,8 @@ function metaToTask(meta: Meta): Task {
     app: meta.taskApp ?? null,
     origin: meta.origin ?? "manual",
     workflowId: meta.workflowId ?? null,
+    effort: meta.taskEffort ?? null,
+    intakeStatus: meta.intake?.status ?? null,
   };
 }
 
@@ -189,6 +191,8 @@ export function createTask(input: {
   origin?: "manual" | "cron" | "pipeline";
   /** Originating workflow id when minted by a workflow. */
   workflowId?: string | null;
+  /** Effort tier for the coordinator + (by default) its children. */
+  effort?: Task["effort"];
 }): Task {
   ensureSessionsDir();
   const now = new Date();
@@ -197,6 +201,7 @@ export function createTask(input: {
   const taskApp = input.app && input.app.trim() ? input.app.trim() : null;
   const origin = input.origin ?? "manual";
   const workflowId = input.workflowId ?? null;
+  const taskEffort = input.effort ?? null;
   createMeta(dir, {
     taskId: id,
     taskTitle: input.title,
@@ -205,6 +210,7 @@ export function createTask(input: {
     taskSection: "TODO",
     taskChecked: false,
     taskApp,
+    taskEffort,
     createdAt: now.toISOString(),
     origin,
     workflowId,
@@ -220,6 +226,7 @@ export function createTask(input: {
     app: taskApp,
     origin,
     workflowId,
+    effort: taskEffort,
   };
 }
 

@@ -26,6 +26,7 @@ import { useToast } from "./Toasts";
 import { useConfirm } from "./ConfirmProvider";
 import { api } from "@/libs/client/api";
 import { AgentTree } from "./AgentTree";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { Button } from "./ui/button";
 
 interface TaskDetailProps {
@@ -213,6 +214,8 @@ function TaskDetailInner({
   return (
     <section className="flex-1 min-w-0 overflow-y-auto border-r border-border">
       <div className="p-4 sm:p-6 max-w-3xl mx-auto">
+        {/* Intent & Planning Gate — operator always may approve. */}
+        <PlanReviewCard taskId={task.id} intake={meta?.intake} canApprove />
         <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
           <Button
             onClick={copyId}

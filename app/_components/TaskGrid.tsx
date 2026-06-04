@@ -126,6 +126,15 @@ function GridCard({
         >
           {task.title}
         </h3>
+        {(task.intakeStatus === "planning" || task.intakeStatus === "awaiting-approval") && (
+          <span
+            className="shrink-0 text-xs leading-none"
+            title={task.intakeStatus === "planning" ? "Đang lập kế hoạch" : "Chờ duyệt kế hoạch"}
+            aria-label={task.intakeStatus === "planning" ? "Planning" : "Awaiting plan approval"}
+          >
+            {task.intakeStatus === "planning" ? "🧭" : "⏳"}
+          </span>
+        )}
         <span
           className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-wide ${pill.cls}`}
         >

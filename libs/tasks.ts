@@ -37,6 +37,19 @@ export interface Task {
   origin?: "manual" | "cron" | "pipeline";
   /** Originating workflow id when `origin === "cron" | "pipeline"`. */
   workflowId?: string | null;
+  /**
+   * Effort tier the coordinator (and, by default, its children) run at.
+   * `null` / absent means claude's own default. Mirrors `EffortLevel` in
+   * libs/client/types.ts — inlined here to keep this leaf module
+   * import-free.
+   */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | null;
+  /**
+   * Intent & Planning Gate sub-state, surfaced for the board badge.
+   * `none` / absent = gate inert. Inlined union to keep this leaf
+   * module import-free.
+   */
+  intakeStatus?: "none" | "planning" | "awaiting-approval" | "approved" | "error" | null;
 }
 
 export const SECTION_STATUS: Record<TaskSection, TaskStatus> = {

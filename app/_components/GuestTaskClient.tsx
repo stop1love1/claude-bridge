@@ -7,6 +7,7 @@ import type { Meta, Run } from "@/libs/client/types";
 import type { ShareGrants } from "@/libs/shareStore";
 import type { ActiveRun } from "./SessionLog/helpers";
 import { SessionLog } from "./SessionLog";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -220,6 +221,18 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
           </select>
         ) : null}
       </header>
+      {/* Intent & Planning Gate — guests can approve only with the grant.
+          The px-4 wrapper collapses to zero height when the card is inactive. */}
+      <div className="px-4">
+        {taskId && (
+          <PlanReviewCard
+            taskId={taskId}
+            intake={meta?.intake}
+            canApprove={!!grants?.approvePlan}
+            onActed={() => { if (taskId) void api.meta(taskId).then(setMeta).catch(() => {}); }}
+          />
+        )}
+      </div>
       <div className="min-h-0 flex-1">
         {activeRun ? (
           <SessionLog run={activeRun} repos={[]} taskId={taskId ?? undefined} />
