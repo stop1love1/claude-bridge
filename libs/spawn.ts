@@ -4,6 +4,7 @@ import { registerChild } from "./spawnRegistry";
 import { emitAlive, emitPartial, emitStatus } from "./sessionEvents";
 import { BRIDGE_PORT, BRIDGE_URL } from "./paths";
 import { getOrCreateInternalToken } from "./auth";
+import { withUltracodeDirective } from "./systemPrompt";
 
 /**
  * `claude` binary path. Defaults to the bare command so the OS resolves
@@ -19,7 +20,16 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
  */
 export interface ChatSettings {
   mode?: "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions" | "dontAsk";
-  effort?: "low" | "medium" | "high" | "max";
+  /**
+   * Effort tier. `low|medium|high|xhigh|max` map straight to the real
+   * `claude --effort` flag. `ultracode` is a bridge-only tier: it resolves
+   * to `--effort xhigh` AND appends the ultracode directive to the system
+   * prompt (see `resolveEffort` + `withUltracodeDirective`). The IDE's
+   * "Ultracode = xhigh + workflows" can't be replicated headlessly — the
+   * Workflow tool is unreachable from `claude -p` — so the directive
+   * substitutes the bridge's own dispatch for "workflows".
+   */
+  effort?: EffortLevel;
   model?: string;
   /**
    * Tool names to deny via `--disallowed-tools`. Used by the coordinator
@@ -36,19 +46,47 @@ export interface ChatSettings {
   disallowedTools?: string[];
 }
 
+/** The five effort values the `claude --effort` flag actually accepts. */
+export type CliEffort = "low" | "medium" | "high" | "xhigh" | "max";
+/** What the user can pick: the CLI levels plus the bridge-only `ultracode` tier. */
+export type EffortLevel = CliEffort | "ultracode";
+
 const VALID_MODES = new Set<NonNullable<ChatSettings["mode"]>>([
   "default", "acceptEdits", "plan", "auto", "bypassPermissions", "dontAsk",
 ]);
-const VALID_EFFORT = new Set<NonNullable<ChatSettings["effort"]>>([
-  "low", "medium", "high", "max",
-]);
+const CLI_EFFORTS = new Set<CliEffort>(["low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * Resolve a user-facing effort tier into (a) the value to hand the
+ * `--effort` flag and (b) whether to inject the ultracode directive.
+ *
+ *   - `ultracode`            → { cliEffort: "xhigh", ultracode: true }
+ *   - any real CLI level     → { cliEffort: <level>, ultracode: false }
+ *   - undefined / garbage    → { ultracode: false } (no flag emitted)
+ *
+ * Centralizing here means the `ultracode → xhigh` substitution lives in
+ * exactly one place; every spawn path routes through it.
+ */
+export function resolveEffort(
+  e: ChatSettings["effort"],
+): { cliEffort?: CliEffort; ultracode: boolean } {
+  if (e === "ultracode") return { cliEffort: "xhigh", ultracode: true };
+  if (e && CLI_EFFORTS.has(e as CliEffort)) {
+    return { cliEffort: e as CliEffort, ultracode: false };
+  }
+  return { ultracode: false };
+}
+
 const TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_]*(\([^)]*\))?$/;
 
 function settingsArgs(s: ChatSettings | undefined): string[] {
   const args: string[] = [];
   if (!s) return args;
   if (s.mode && VALID_MODES.has(s.mode)) args.push("--permission-mode", s.mode);
-  if (s.effort && VALID_EFFORT.has(s.effort)) args.push("--effort", s.effort);
+  // `ultracode` is forwarded as `--effort xhigh` (the real flag rejects
+  // "ultracode"); the directive half is handled via the system prompt.
+  const { cliEffort } = resolveEffort(s.effort);
+  if (cliEffort) args.push("--effort", cliEffort);
   if (s.model && /^[a-zA-Z0-9._-]+$/.test(s.model)) args.push("--model", s.model);
   if (Array.isArray(s.disallowedTools) && s.disallowedTools.length > 0) {
     // claude accepts space-separated tool names after --disallowed-tools
@@ -465,9 +503,16 @@ export interface SpawnedSession {
  */
 export function spawnClaude(cwd: string, opts: SpawnOpts): SpawnedSession {
   const sessionId = opts.sessionId ?? randomUUID();
+  // Ultracode tier → append the directive to (any) per-spawn system
+  // prompt before building the args. Coordinator spawns carry no
+  // systemPromptFile today, so this becomes a directive-only file.
+  const { ultracode } = resolveEffort(opts.settings?.effort);
+  const effectiveOpts: SpawnOpts = ultracode
+    ? { ...opts, systemPromptFile: withUltracodeDirective(opts.systemPromptFile, true) }
+    : opts;
   const child = spawnClaudeWithStdin(
     cwd,
-    buildCoordinatorArgs(opts, sessionId),
+    buildCoordinatorArgs(effectiveOpts, sessionId),
     opts.prompt,
     sessionId,
     opts.settings,
@@ -491,6 +536,12 @@ export function spawnFreeSession(
   systemPromptFile?: string,
 ): SpawnedSession {
   sessionId = sessionId ?? randomUUID();
+  // Ultracode tier → fold the directive into the per-app system prompt
+  // (combining with the prompt-cache content when present).
+  systemPromptFile = withUltracodeDirective(
+    systemPromptFile,
+    resolveEffort(settings?.effort).ultracode,
+  );
   const child = spawnClaudeWithStdin(
     cwd,
     [
@@ -532,12 +583,21 @@ export function resumeClaude(
   settings?: ChatSettings,
   settingsPath?: string,
 ): ChildProcess {
+  // Ultracode tier → reapply the directive each resume turn (claude treats
+  // every --resume as a fresh subprocess, so append-system-prompt, like
+  // effort/model, has to be re-passed). Directive-only file: the original
+  // session already carries any per-app context in its transcript.
+  const sysFile = withUltracodeDirective(
+    undefined,
+    resolveEffort(settings?.effort).ultracode,
+  );
   const child = spawnClaudeWithStdin(
     cwd,
     [
       "-p",
       "--resume", sessionId,
       ...(settingsPath ? ["--settings", settingsPath] : []),
+      ...(sysFile ? ["--append-system-prompt-file", sysFile] : []),
       ...settingsArgs(settings),
       ...streamingArgs(),
     ],

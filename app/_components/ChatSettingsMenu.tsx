@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { Hand, Code2, ListTree, Zap, Check, ShieldOff } from "lucide-react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import type { ChatSettings, PermissionMode, EffortLevel } from "@/libs/client/types";
+import type { ChatSettings, PermissionMode } from "@/libs/client/types";
 import { Button } from "./ui/button";
+import { EffortControl } from "./EffortControl";
 import { cn } from "@/libs/cn";
 
 const MODE_OPTIONS: Array<{
@@ -52,8 +53,6 @@ const MODE_OPTIONS: Array<{
     : []),
 ];
 
-const EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "max"];
-
 /**
  * Mode + effort picker — Claude-style. Anchors to the mode-pill
  * Trigger and pops upward, right-aligned with the trigger so the
@@ -71,8 +70,6 @@ export function ChatSettingsMenu({
   const currentMode = value.mode ?? "default";
   const currentMeta = MODE_OPTIONS.find((m) => m.value === currentMode) ?? MODE_OPTIONS[0];
   const ModeIcon = currentMeta.icon;
-  const effortIdx = value.effort ? EFFORT_LEVELS.indexOf(value.effort) : EFFORT_LEVELS.length - 1;
-  const effortLabel = value.effort ?? "max";
 
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
@@ -147,40 +144,11 @@ export function ChatSettingsMenu({
             })}
           </div>
 
-          <div className="border-t border-border px-3 py-2.5 flex items-center gap-3">
-            <div className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground">
-              <span className="inline-flex items-center justify-center h-4 w-4 rounded-sm border border-border text-muted-foreground">
-                <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M3 6h10M3 10h10" strokeLinecap="round" />
-                  <circle cx="6" cy="6" r="1.5" fill="currentColor" />
-                  <circle cx="10" cy="10" r="1.5" fill="currentColor" />
-                </svg>
-              </span>
-              Effort
-              <span className="text-muted-foreground font-normal">
-                ({effortLabel})
-              </span>
-            </div>
-            <div className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-secondary/60 border border-border">
-              {EFFORT_LEVELS.map((lvl, i) => {
-                const filled = i <= effortIdx;
-                return (
-                  <button
-                    key={lvl}
-                    type="button"
-                    onClick={() => onChange({ ...value, effort: lvl })}
-                    title={lvl}
-                    aria-label={`Effort: ${lvl}`}
-                    className={cn(
-                      "h-2 w-2 rounded-full transition-colors",
-                      filled
-                        ? "bg-foreground"
-                        : "bg-muted-foreground/25 hover:bg-muted-foreground/50",
-                    )}
-                  />
-                );
-              })}
-            </div>
+          <div className="border-t border-border px-3 py-2.5">
+            <EffortControl
+              value={value.effort}
+              onChange={(effort) => onChange({ ...value, effort })}
+            />
           </div>
         </PopoverPrimitive.Content>
       </PopoverPrimitive.Portal>

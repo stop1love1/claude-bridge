@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GitBranch, Plus, Bookmark, BookmarkPlus, X } from "lucide-react";
-import type { App, Repo } from "@/libs/client/types";
+import type { App, Repo, EffortLevel } from "@/libs/client/types";
+import { EffortControl } from "./EffortControl";
 import {
   type TaskTemplate,
   allTemplates,
@@ -33,7 +34,7 @@ export const APP_AUTO = "__auto__";
 interface DialogProps {
   apps: App[];
   repos?: Repo[];
-  onCreate: (t: { body: string; app: string | null }) => Promise<void>;
+  onCreate: (t: { body: string; app: string | null; effort: EffortLevel | null }) => Promise<void>;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }
 
@@ -92,7 +93,7 @@ function NewTaskDialogBody({
 }: {
   apps: App[];
   repos: Repo[];
-  onCreate: (t: { body: string; app: string | null }) => Promise<void>;
+  onCreate: (t: { body: string; app: string | null; effort: EffortLevel | null }) => Promise<void>;
   onClose: () => void;
 }) {
   const branchByApp = useMemo(
@@ -101,6 +102,7 @@ function NewTaskDialogBody({
   );
   const [body, setBody] = useState("");
   const [app, setApp] = useState<string>(APP_AUTO);
+  const [effort, setEffort] = useState<EffortLevel | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   // Lazy initialiser — runs once on mount, which here means the
@@ -146,6 +148,7 @@ function NewTaskDialogBody({
       await onCreate({
         body: trimmed,
         app: app === APP_AUTO ? null : app,
+        effort: effort ?? null,
       });
       onClose();
     } finally {
@@ -298,6 +301,17 @@ function NewTaskDialogBody({
           <p className="text-[11px] text-muted-foreground">
             Pick a specific app to constrain dispatch, or leave on Auto so
             the heuristic chooses based on the task body.
+          </p>
+        </div>
+
+        <div className="grid gap-1.5">
+          <div className="rounded-md border border-border px-3 py-2">
+            <EffortControl value={effort} onChange={setEffort} />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Effort tier for the coordinator and the children it spawns.
+            <span className="font-medium"> Ultracode</span> runs at xhigh and
+            tells agents to fan out work aggressively via bridge dispatch.
           </p>
         </div>
 

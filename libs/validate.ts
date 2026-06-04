@@ -86,6 +86,33 @@ function bypassEnabled(): boolean {
   return process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS === "1";
 }
 
+/**
+ * Allowed values for `ChatSettings.effort` — kept in sync with
+ * `EffortLevel` in `libs/spawn.ts` (the canonical list, since that module
+ * shells out to `claude --effort`) and `libs/client/types.ts`. Unlike the
+ * permission modes there's no privileged subset: `ultracode` is safe to
+ * accept from any caller — it resolves to `--effort xhigh` plus a
+ * prompt-level directive, never a permission escalation.
+ */
+const EFFORT_LEVELS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultracode",
+] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/**
+ * Type-guard for `ChatSettings.effort`. Rejects anything outside the
+ * documented tiers so a hostile body can't smuggle an arbitrary string
+ * toward the `--effort` flag.
+ */
+export function isValidEffort(s: unknown): s is EffortLevel {
+  return typeof s === "string" && (EFFORT_LEVELS as readonly string[]).includes(s);
+}
+
 export function isValidSessionId(s: unknown): s is string {
   return typeof s === "string" && UUID_RE.test(s);
 }

@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   asBlocks,
+  buildAnswerMessage,
   classify,
   extractAttachments,
   extractImagePaths,
   HIDDEN_TYPES,
+  parseAskUserQuestion,
   prettyToolName,
   stringifyResult,
   stripSystemTags,
   summarizeInput,
+  type AskUserQuestion,
   type LogEntry,
 } from "../../app/_components/SessionLog/helpers";
 
@@ -254,5 +257,94 @@ describe("extractAttachments", () => {
     const { stripped, items } = extractAttachments(text);
     expect(stripped).toBe("");
     expect(items).toHaveLength(1);
+  });
+});
+
+describe("parseAskUserQuestion", () => {
+  const valid = {
+    questions: [
+      {
+        question: "What is your favorite color?",
+        header: "Color",
+        multiSelect: false,
+        options: [
+          { label: "Red", description: "A warm color" },
+          { label: "Blue", description: "A cool color" },
+        ],
+      },
+    ],
+  };
+
+  it("parses a well-formed single-question payload", () => {
+    const out = parseAskUserQuestion(valid);
+    expect(out).toHaveLength(1);
+    expect(out![0]).toMatchObject({
+      question: "What is your favorite color?",
+      header: "Color",
+      multiSelect: false,
+    });
+    expect(out![0].options).toEqual([
+      { label: "Red", description: "A warm color" },
+      { label: "Blue", description: "A cool color" },
+    ]);
+  });
+
+  it("parses multiple questions and a multiSelect flag", () => {
+    const out = parseAskUserQuestion({
+      questions: [
+        { header: "A", multiSelect: true, options: [{ label: "x" }, { label: "y" }] },
+        { header: "B", options: [{ label: "z" }] },
+      ],
+    });
+    expect(out).toHaveLength(2);
+    expect(out![0].multiSelect).toBe(true);
+    expect(out![1].multiSelect).toBe(false); // absent → false
+    expect(out![1].options[0]).toEqual({ label: "z", description: undefined });
+  });
+
+  it("drops options with no label and questions with no usable options stay present", () => {
+    const out = parseAskUserQuestion({
+      questions: [{ header: "A", options: [{ label: "" }, { description: "x" }, { label: "keep" }] }],
+    });
+    expect(out![0].options).toEqual([{ label: "keep", description: undefined }]);
+  });
+
+  it("returns null for non-object / missing-questions / empty payloads", () => {
+    expect(parseAskUserQuestion(null)).toBeNull();
+    expect(parseAskUserQuestion("nope")).toBeNull();
+    expect(parseAskUserQuestion({})).toBeNull();
+    expect(parseAskUserQuestion({ questions: "x" })).toBeNull();
+    expect(parseAskUserQuestion({ questions: [] })).toBeNull();
+  });
+});
+
+describe("buildAnswerMessage", () => {
+  const qs: AskUserQuestion[] = [
+    { question: "Fav color?", header: "Color", multiSelect: false, options: [{ label: "Red" }, { label: "Blue" }] },
+    { question: "Pick langs", header: "Langs", multiSelect: true, options: [{ label: "TS" }, { label: "Go" }] },
+  ];
+
+  it("renders one labeled line per answered question", () => {
+    expect(buildAnswerMessage(qs, [["Red"], ["TS", "Go"]])).toBe("Color: Red\nLangs: TS, Go");
+  });
+
+  it("falls back to the question text, then a numbered label, when header is absent", () => {
+    const noHeader: AskUserQuestion[] = [
+      { question: "Fav color?", header: "", multiSelect: false, options: [] },
+      { question: "", header: "", multiSelect: false, options: [] },
+    ];
+    expect(buildAnswerMessage(noHeader, [["Red"], ["x"]])).toBe("Fav color?: Red\nQuestion 2: x");
+  });
+
+  it("skips questions with no selection and trims/blank-filters picks", () => {
+    expect(buildAnswerMessage(qs, [[], ["  TS  ", "", "Go"]])).toBe("Langs: TS, Go");
+  });
+
+  it("returns an empty string when nothing is selected", () => {
+    expect(buildAnswerMessage(qs, [[], []])).toBe("");
+  });
+
+  it("includes free-text 'Other' values verbatim (they arrive as picks)", () => {
+    expect(buildAnswerMessage([qs[0]], [["Chartreuse"]])).toBe("Color: Chartreuse");
   });
 });

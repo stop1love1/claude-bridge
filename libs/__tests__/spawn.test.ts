@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoApproveEnv, buildCoordinatorArgs } from "../spawn";
+import { readFileSync } from "node:fs";
+import { autoApproveEnv, buildCoordinatorArgs, resolveEffort } from "../spawn";
+import { ULTRACODE_DIRECTIVE, withUltracodeDirective } from "../systemPrompt";
 import { appendRun, createMeta, readMeta, updateRun } from "../meta";
 
 describe("buildCoordinatorArgs", () => {
@@ -152,7 +154,7 @@ describe("buildCoordinatorArgs", () => {
     expect(args[args.indexOf("--permission-mode") + 1]).toBe(mode);
   });
 
-  it.each(["low", "medium", "high", "max"] as const)(
+  it.each(["low", "medium", "high", "xhigh", "max"] as const)(
     "forwards the valid effort %s",
     (effort) => {
       const args = buildCoordinatorArgs(
@@ -163,6 +165,19 @@ describe("buildCoordinatorArgs", () => {
       expect(args[args.indexOf("--effort") + 1]).toBe(effort);
     },
   );
+
+  // The bridge `ultracode` tier is NOT a real `--effort` value — claude
+  // rejects it. It must resolve to `--effort xhigh` (the directive half is
+  // injected via the system prompt, exercised separately below).
+  it("resolves the ultracode tier to --effort xhigh, never --effort ultracode", () => {
+    const args = buildCoordinatorArgs(
+      { role: "coordinator", taskId: "t_x", prompt: "", settings: { effort: "ultracode" } },
+      "id",
+    );
+    expect(args).toContain("--effort");
+    expect(args[args.indexOf("--effort") + 1]).toBe("xhigh");
+    expect(args).not.toContain("ultracode");
+  });
 
   it("rejects model strings that contain shell or path traversal characters", () => {
     // Plain alphanumerics + `.` `-` `_` only — anything that could
@@ -335,5 +350,51 @@ describe("autoApproveEnv (CRIT-1)", () => {
   it("returns empty when settings or mode is absent", () => {
     expect(autoApproveEnv(undefined)).toEqual({});
     expect(autoApproveEnv({})).toEqual({});
+  });
+});
+
+/**
+ * Effort tier resolution. `low|medium|high|xhigh|max` pass through to the
+ * real `--effort` flag; `ultracode` is the bridge-only tier that maps to
+ * `--effort xhigh` AND flags the directive injection. Garbage maps to
+ * "nothing" (no flag), matching the silent-reject contract above.
+ */
+describe("resolveEffort", () => {
+  it.each(["low", "medium", "high", "xhigh", "max"] as const)(
+    "passes the real CLI level %s through unchanged, ultracode off",
+    (e) => {
+      expect(resolveEffort(e)).toEqual({ cliEffort: e, ultracode: false });
+    },
+  );
+
+  it("maps ultracode → { cliEffort: 'xhigh', ultracode: true }", () => {
+    expect(resolveEffort("ultracode")).toEqual({ cliEffort: "xhigh", ultracode: true });
+  });
+
+  it("treats undefined / unknown values as no-effort, ultracode off", () => {
+    expect(resolveEffort(undefined)).toEqual({ ultracode: false });
+    // @ts-expect-error — runtime rejection of an out-of-band value
+    expect(resolveEffort("ULTRA")).toEqual({ ultracode: false });
+  });
+});
+
+/**
+ * The ultracode directive is delivered via `--append-system-prompt-file`.
+ * `withUltracodeDirective` returns the base file untouched when the tier
+ * is off, and a NEW content-addressed file carrying the directive (folded
+ * onto any base content) when on.
+ */
+describe("withUltracodeDirective", () => {
+  it("returns the base file unchanged when ultracode is off", () => {
+    expect(withUltracodeDirective(undefined, false)).toBeUndefined();
+    expect(withUltracodeDirective("/tmp/base.txt", false)).toBe("/tmp/base.txt");
+  });
+
+  it("writes a directive-only file when ultracode is on and there is no base", () => {
+    const path = withUltracodeDirective(undefined, true);
+    expect(path).toBeTruthy();
+    const content = readFileSync(path!, "utf8");
+    expect(content).toContain("<bridge-ultracode>");
+    expect(content).toBe(ULTRACODE_DIRECTIVE);
   });
 });

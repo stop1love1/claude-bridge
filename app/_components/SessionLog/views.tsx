@@ -21,20 +21,26 @@ import {
   AlertCircle,
   Asterisk,
   Brain,
+  Check,
   CheckSquare,
   ChevronDown,
   ChevronRight,
   FileText,
   ListTodo,
+  MessageCircleQuestion,
   Sparkles,
   Square,
   Wrench,
+  X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "../ui/dialog";
+import { cn } from "@/libs/cn";
 import {
+  buildAnswerMessage,
   extractImagePaths,
+  parseAskUserQuestion,
   prettyToolName,
   stringifyResult,
   stripSystemTags,
@@ -425,12 +431,276 @@ export function SkillToolUseView({ block }: { block: ContentBlock }) {
   );
 }
 
-export function ToolUseView({ block }: { block: ContentBlock }) {
+/** Radio (single-select) / checkbox (multi-select) indicator dot. */
+function ChoiceMark({ selected, multi }: { selected: boolean; multi: boolean }) {
+  return (
+    <span
+      className={cn(
+        "mt-0.5 shrink-0 h-3.5 w-3.5 border flex items-center justify-center transition-colors",
+        multi ? "rounded-[3px]" : "rounded-full",
+        selected ? "border-primary bg-primary" : "border-muted-foreground/40",
+      )}
+    >
+      {selected &&
+        (multi ? (
+          <Check size={10} className="text-primary-foreground" />
+        ) : (
+          <span className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />
+        ))}
+    </span>
+  );
+}
+
+/**
+ * Interactive renderer for the `AskUserQuestion` tool. Mirrors the
+ * Claude Code IDE card: multiple questions become tabs (one per
+ * `header`); each shows its options as radio (single) / checkbox
+ * (multi) rows with label + description, plus a free-text "Other…".
+ *
+ * Click-to-send: the headless child can't field the question itself
+ * (the tool errors past in `-p` and the turn ends), so submitting routes
+ * the chosen answers back through the same composer send path as the
+ * next user message (`onAnswer`). Only the most-recent unanswered
+ * question is interactive (`canAnswer`); historical ones render read-only.
+ */
+export function AskUserQuestionView({
+  block,
+  canAnswer,
+  onAnswer,
+}: {
+  block: ContentBlock;
+  canAnswer?: boolean;
+  onAnswer?: (text: string) => void | Promise<void>;
+}) {
+  const questions = parseAskUserQuestion(block.input);
+  const [tab, setTab] = useState(0);
+  const [selections, setSelections] = useState<string[][]>(() => (questions ?? []).map(() => []));
+  const [otherOn, setOtherOn] = useState<boolean[]>(() => (questions ?? []).map(() => false));
+  const [otherText, setOtherText] = useState<string[]>(() => (questions ?? []).map(() => ""));
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+
+  if (!questions) {
+    // Malformed / partial payload — degrade to a labeled JSON blob so the
+    // transcript still shows *something* rather than crashing.
+    return (
+      <div className="my-1 text-[11px]">
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <MessageCircleQuestion size={12} className="text-info shrink-0" />
+          <span className="font-medium text-foreground">AskUserQuestion</span>
+        </div>
+        <pre className="ml-5 mt-1 px-2 py-1 rounded bg-muted/40 text-[11px] text-muted-foreground whitespace-pre-wrap wrap-break-word font-mono">
+          {JSON.stringify(block.input ?? {}, null, 2)}
+        </pre>
+      </div>
+    );
+  }
+
+  const interactive = !!canAnswer && !!onAnswer && !submitted && !dismissed;
+  const qi = Math.min(tab, questions.length - 1);
+  const q = questions[qi];
+
+  const effectivePicks = (i: number): string[] => {
+    const base = selections[i] ?? [];
+    const ot = (otherOn[i] ?? false) && (otherText[i] ?? "").trim() ? [(otherText[i] ?? "").trim()] : [];
+    return [...base, ...ot];
+  };
+  const answeredCount = questions.filter((_, i) => effectivePicks(i).length > 0).length;
+  const allAnswered = answeredCount === questions.length;
+
+  const pickRadio = (i: number, label: string) => {
+    setSelections((prev) => prev.map((s, j) => (j === i ? [label] : s)));
+    setOtherOn((prev) => prev.map((v, j) => (j === i ? false : v)));
+  };
+  const toggleCheck = (i: number, label: string) => {
+    setSelections((prev) =>
+      prev.map((s, j) => (j !== i ? s : s.includes(label) ? s.filter((l) => l !== label) : [...s, label])),
+    );
+  };
+  const pickOther = (i: number, multi: boolean) => {
+    setOtherOn((prev) => prev.map((v, j) => (j === i ? true : v)));
+    if (!multi) setSelections((prev) => prev.map((s, j) => (j === i ? [] : s)));
+  };
+
+  const submit = async () => {
+    if (!interactive || !allAnswered || submitting) return;
+    const msg = buildAnswerMessage(
+      questions,
+      questions.map((_, i) => effectivePicks(i)),
+    );
+    if (!msg.trim()) return;
+    setSubmitting(true);
+    try {
+      await onAnswer!(msg);
+      setSubmitted(true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const otherSelected = otherOn[qi] ?? false;
+
+  return (
+    <div className="my-1.5 rounded-lg border border-border bg-card/60 overflow-hidden text-left">
+      {/* Header: tabs (one per question) or a single label, + dismiss. */}
+      <div className="flex items-start gap-2 border-b border-border px-2.5 pt-2">
+        <MessageCircleQuestion size={13} className="text-info shrink-0 mt-0.5 mb-2" />
+        {questions.length > 1 ? (
+          <div className="flex flex-wrap gap-x-3 flex-1 min-w-0">
+            {questions.map((qq, i) => {
+              const active = i === qi;
+              const done = effectivePicks(i).length > 0;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setTab(i)}
+                  className={cn(
+                    "pb-2 -mb-px text-[11.5px] font-medium border-b-2 transition-colors",
+                    active
+                      ? "text-foreground border-primary"
+                      : "text-muted-foreground border-transparent hover:text-foreground",
+                  )}
+                >
+                  {qq.header || `Q${i + 1}`}
+                  {done && <Check size={10} className="inline-block ml-0.5 -mt-0.5 text-success" />}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <span className="flex-1 pb-2 text-[11.5px] font-medium text-foreground">
+            {q.header || "Question"}
+          </span>
+        )}
+        {interactive && (
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            title="Dismiss — don't answer"
+            aria-label="Dismiss question"
+            className="mb-1.5 shrink-0 text-muted-foreground/70 hover:text-foreground"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+
+      {/* Body: active question text + its options. */}
+      <div className="px-3 py-2.5">
+        {q.question && (
+          <p className="mb-2 text-[12.5px] font-medium text-foreground leading-snug">{q.question}</p>
+        )}
+        <div className="space-y-1">
+          {q.options.map((opt, oi) => {
+            const selected = !otherSelected && (selections[qi] ?? []).includes(opt.label);
+            return (
+              <button
+                key={oi}
+                type="button"
+                disabled={!interactive}
+                onClick={() => (q.multiSelect ? toggleCheck(qi, opt.label) : pickRadio(qi, opt.label))}
+                className={cn(
+                  "w-full text-left rounded-md border px-2.5 py-1.5 flex items-start gap-2 transition-colors",
+                  selected ? "border-primary bg-primary/10" : "border-border/70",
+                  interactive ? "hover:border-primary/60 hover:bg-accent/40" : "cursor-default opacity-90",
+                )}
+              >
+                <ChoiceMark selected={selected} multi={q.multiSelect} />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[12px] font-medium text-foreground leading-tight">{opt.label}</span>
+                  {opt.description && (
+                    <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+                      {opt.description}
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
+
+          {/* Free-text "Other" — matches the native card's always-available option. */}
+          <div
+            className={cn(
+              "rounded-md border px-2.5 py-1.5 transition-colors",
+              otherSelected ? "border-primary bg-primary/10" : "border-border/70",
+            )}
+          >
+            <button
+              type="button"
+              disabled={!interactive}
+              onClick={() => pickOther(qi, q.multiSelect)}
+              className={cn(
+                "w-full text-left flex items-center gap-2",
+                interactive ? "" : "cursor-default opacity-90",
+              )}
+            >
+              <ChoiceMark selected={otherSelected} multi={q.multiSelect} />
+              <span className="text-[12px] font-medium text-foreground">Other…</span>
+            </button>
+            {interactive && otherSelected && (
+              <input
+                autoFocus
+                value={otherText[qi] ?? ""}
+                onChange={(e) =>
+                  setOtherText((prev) => prev.map((t, j) => (j === qi ? e.target.value : t)))
+                }
+                placeholder="Type your answer…"
+                className="mt-1.5 w-full rounded-md border border-border bg-background px-2 py-1 text-[12px] text-foreground outline-none focus:border-primary"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Footer: submit + progress, or a closed-state note. */}
+      <div className="flex items-center gap-2 border-t border-border px-3 py-2">
+        {interactive ? (
+          <>
+            <button
+              type="button"
+              disabled={!allAnswered || submitting}
+              onClick={submit}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-colors",
+                allAnswered && !submitting
+                  ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                  : "bg-secondary text-muted-foreground cursor-not-allowed",
+              )}
+            >
+              {submitting ? "Sending…" : "Submit answers"}
+            </button>
+            <span className="text-[10.5px] text-muted-foreground">
+              {answeredCount}/{questions.length} selected
+            </span>
+          </>
+        ) : (
+          <span className="text-[10.5px] italic text-muted-foreground">
+            {submitted ? "Answered" : dismissed ? "Dismissed" : "This question is closed — reply in the composer to continue."}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ToolUseView({
+  block,
+  canAnswer,
+  onAnswer,
+}: {
+  block: ContentBlock;
+  canAnswer?: boolean;
+  onAnswer?: (text: string) => void | Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const rawName = block.name ?? "tool";
   if (rawName === "Bash") return <BashToolUseView block={block} />;
   if (rawName === "TodoWrite") return <TodoWriteView block={block} />;
   if (rawName === "Skill") return <SkillToolUseView block={block} />;
+  if (rawName === "AskUserQuestion")
+    return <AskUserQuestionView block={block} canAnswer={canAnswer} onAnswer={onAnswer} />;
   const displayName = prettyToolName(rawName);
   const summary = summarizeInput(block.input);
   return (

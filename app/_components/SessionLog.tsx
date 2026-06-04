@@ -65,6 +65,8 @@ const LogRow = memo(function LogRow({
   toolNames,
   repo,
   prevTimestamp,
+  canAnswer,
+  onAnswer,
 }: {
   entry: LogEntry;
   sessionId: string;
@@ -72,6 +74,10 @@ const LogRow = memo(function LogRow({
   toolNames?: Map<string, string>;
   repo?: string;
   prevTimestamp?: string;
+  /** True only for the most-recent unanswered AskUserQuestion (and only while idle). */
+  canAnswer?: boolean;
+  /** Send the operator's answer back as the next user message (reuses the composer send path). */
+  onAnswer?: (text: string) => void | Promise<void>;
 }) {
   const kind = classify(entry);
   if (kind === "hidden") return null;
@@ -153,7 +159,11 @@ const LogRow = memo(function LogRow({
         if (b.type !== "tool_result") return null;
         const tuid = b.tool_use_id ?? "";
         const name = tuid && toolNames ? toolNames.get(tuid) : undefined;
-        const suppress = name === "TodoWrite";
+        // TodoWrite confirmations are ceremony; AskUserQuestion's headless
+        // result is the "Answer questions?" error stub (the tool can't be
+        // fielded in -p) — both carry no signal, so suppress them. The
+        // tool_use block renders the real content (the question card).
+        const suppress = name === "TodoWrite" || name === "AskUserQuestion";
         // Stable key: tool_use_id pairs each result to its unique
         // tool_use call. Falling back to index is fine when the model
         // emitted a result without an id (rare malformed payloads).
@@ -217,7 +227,7 @@ const LogRow = memo(function LogRow({
       {merged.map((m, i) => {
         if (m.kind === "text") return <TextBlockView key={i} text={m.text} role="assistant" />;
         if (m.kind === "thinking") return <ThinkingBlockView key={i} text={m.text} durationSec={thoughtDurationSec} />;
-        return <ToolUseView key={i} block={m.block} />;
+        return <ToolUseView key={i} block={m.block} canAnswer={canAnswer} onAnswer={onAnswer} />;
       })}
       {showStopBadge && (
         <div className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-warning/10 text-warning border border-warning/30">
@@ -238,6 +248,10 @@ const LogRow = memo(function LogRow({
   if (prev.onRewindToHere !== next.onRewindToHere) return false;
   if (prev.repo !== next.repo) return false;
   if (prev.prevTimestamp !== next.prevTimestamp) return false;
+  // AskUserQuestion interactivity flips when the question becomes the
+  // latest-unanswered one and the session goes idle — must re-render then.
+  if (prev.canAnswer !== next.canAnswer) return false;
+  if (prev.onAnswer !== next.onAnswer) return false;
   // Pull tool_use_ids that this entry's tool_result blocks point at and
   // compare their resolved names. If the entry doesn't have any, the
   // toolNames prop is irrelevant.
@@ -1199,6 +1213,47 @@ function SessionLogInner({
     [],
   );
 
+  // Index (into visibleEntries) of the most-recent AskUserQuestion still
+  // awaiting an answer — the only one rendered interactively. Scanning
+  // from the end: a user *text* message after the question means it was
+  // already answered (→ -1). The intervening tool_result stub
+  // ("Answer questions?") and the assistant's "please select" text are
+  // not answers, so they don't close it.
+  const pendingQuestionIdx = useMemo(() => {
+    for (let i = visibleEntries.length - 1; i >= 0; i--) {
+      const e = visibleEntries[i];
+      if (classify(e) === "user") return -1;
+      if (
+        e.type === "assistant" &&
+        asBlocks(e.message?.content).some(
+          (b) => b.type === "tool_use" && b.name === "AskUserQuestion",
+        )
+      ) {
+        return i;
+      }
+    }
+    return -1;
+  }, [visibleEntries]);
+
+  // Send an AskUserQuestion answer back as the next user message, reusing
+  // the exact composer send path (optimistic row + sendMessage → the
+  // route resumes the session). The child errored past the tool and ended
+  // its turn, so this naturally continues the conversation.
+  const handleAnswer = useCallback(
+    async (text: string) => {
+      if (!run) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      onSent(trimmed);
+      try {
+        await api.sendMessage(run.sessionId, { message: trimmed, repo: run.repo });
+      } catch (e) {
+        toast("error", (e as Error).message);
+      }
+    },
+    [run, onSent, toast],
+  );
+
   const handleRewind = useCallback(async (uuid: string) => {
     if (!run) return;
     const ok = await confirm({
@@ -1513,6 +1568,8 @@ function SessionLogInner({
                       toolNames={toolNames}
                       repo={run.repo}
                       prevTimestamp={visibleEntries[i - 1]?.timestamp}
+                      canAnswer={!isResponding && i === pendingQuestionIdx && !!run.repo}
+                      onAnswer={handleAnswer}
                     />
                   </div>
                 );

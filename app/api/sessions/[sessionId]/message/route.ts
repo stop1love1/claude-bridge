@@ -8,7 +8,7 @@ import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/sp
 import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
 import { projectDirFor } from "@/libs/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
-import { badRequest, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
+import { badRequest, isValidEffort, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
 import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
 import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
 import { isValidAppName } from "@/libs/apps";
@@ -96,6 +96,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
   if (settings?.mode !== undefined && !isValidUserPermissionMode(settings.mode)) {
     return badRequest("invalid settings.mode");
+  }
+  if (settings?.effort !== undefined && !isValidEffort(settings.effort)) {
+    return badRequest("invalid settings.effort");
   }
 
   const md = readBridgeMd();

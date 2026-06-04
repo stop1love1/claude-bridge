@@ -85,7 +85,11 @@ function spliceScopeBlock(rendered: string, block: string): string {
 }
 
 export async function spawnCoordinatorForTask(
-  task: Pick<Task, "id" | "title" | "body"> & { app?: string | null },
+  task: Pick<Task, "id" | "title" | "body"> & {
+    app?: string | null;
+    /** Effort tier for the coordinator session (null/absent = claude default). */
+    effort?: Task["effort"];
+  },
 ): Promise<string | null> {
   const sessionsDir = join(SESSIONS_DIR, task.id);
 
@@ -195,7 +199,16 @@ export async function spawnCoordinatorForTask(
         // CLI level guarantees that a coordinator template change /
         // prompt drift can't quietly route work back to the in-process
         // subagent and break the contract.
-        settings: { mode: "bypassPermissions", disallowedTools: ["Task"] },
+        // Effort: the operator's per-task pick. `ultracode` also folds the
+        // bridge fan-out directive into the coordinator's system prompt
+        // (handled in spawnClaude), nudging aggressive dispatch — the
+        // bridge's stand-in for the IDE-only Workflow tool. `undefined`
+        // (no pick) leaves claude's own default untouched.
+        settings: {
+          mode: "bypassPermissions",
+          disallowedTools: ["Task"],
+          effort: task.effort ?? undefined,
+        },
       }));
     } catch (spawnErr) {
       try {

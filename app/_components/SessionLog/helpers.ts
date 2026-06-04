@@ -65,6 +65,80 @@ export interface LogEntry {
   };
 }
 
+/**
+ * Parsed shape of an `AskUserQuestion` tool call's `input`. The tool lets
+ * the model ask 1..4 questions, each with 2..4 options; `multiSelect`
+ * decides radio vs checkbox. We render this as an interactive card so the
+ * operator can answer from the bridge (the headless `claude -p` child
+ * can't field the question itself — it errors past the tool and ends its
+ * turn, so the answer rides back as the next user message).
+ */
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+export interface AskUserQuestion {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: AskUserOption[];
+}
+
+/**
+ * Defensively parse an `AskUserQuestion` tool_use `input`. Returns the
+ * questions array, or `null` when the payload isn't the expected shape
+ * (caller should fall back to the generic tool render). Drops malformed
+ * questions/options rather than throwing — a partial/streaming payload
+ * shouldn't crash the transcript.
+ */
+export function parseAskUserQuestion(input: unknown): AskUserQuestion[] | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = (input as Record<string, unknown>).questions;
+  if (!Array.isArray(raw)) return null;
+  const out: AskUserQuestion[] = [];
+  for (const q of raw) {
+    if (!q || typeof q !== "object") continue;
+    const o = q as Record<string, unknown>;
+    const optsRaw = Array.isArray(o.options) ? o.options : [];
+    const options: AskUserOption[] = optsRaw
+      .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+      .map((x) => ({
+        label: typeof x.label === "string" ? x.label : "",
+        description: typeof x.description === "string" ? x.description : undefined,
+      }))
+      .filter((x) => x.label.length > 0);
+    out.push({
+      question: typeof o.question === "string" ? o.question : "",
+      header: typeof o.header === "string" ? o.header : "",
+      multiSelect: o.multiSelect === true,
+      options,
+    });
+  }
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * Render the operator's selections into the message text sent back to the
+ * session. One line per answered question: `<header or question>: <picks>`.
+ * Picks are the chosen option labels (and/or a free-text "Other" value),
+ * comma-joined. Questions with no selection are skipped — the submit
+ * gate already requires every question answered, but this stays robust.
+ */
+export function buildAnswerMessage(
+  questions: AskUserQuestion[],
+  selections: string[][],
+): string {
+  return questions
+    .map((q, i) => {
+      const picks = (selections[i] ?? []).map((s) => s.trim()).filter(Boolean);
+      if (picks.length === 0) return null;
+      const label = (q.header || q.question || `Question ${i + 1}`).trim();
+      return `${label}: ${picks.join(", ")}`;
+    })
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
 export interface ParsedAttachment {
   rawPath: string;     // absolute path on disk, as written into the .jsonl
   name: string;        // basename

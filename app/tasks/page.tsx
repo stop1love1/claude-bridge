@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/libs/client/api";
 import {
   type App,
+  type EffortLevel,
   type Meta,
   type Repo,
   type SessionSummary,
@@ -151,9 +152,17 @@ function Dashboard() {
     [router],
   );
 
-  const handleCreate = async ({ body, app }: { body: string; app: string | null }) => {
+  const handleCreate = async ({
+    body,
+    app,
+    effort,
+  }: {
+    body: string;
+    app: string | null;
+    effort: EffortLevel | null;
+  }) => {
     try {
-      const t = await api.createTask({ body, app });
+      const t = await api.createTask({ body, app, effort });
       await refreshTasks();
       toast("success", `Created ${t.id}`);
       router.push(`/tasks/${t.id}`);
