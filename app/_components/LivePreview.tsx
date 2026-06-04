@@ -25,6 +25,8 @@ export function LivePreview({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [port, setPort] = useState("3000");
+  const [exposing, setExposing] = useState(false);
   const open = useRef(false);
 
   useEffect(() => {
@@ -58,6 +60,40 @@ export function LivePreview({
       setErr((e as Error).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * Expose a local dev port to a public URL via localtunnel (no signup),
+   * then set it as this task's preview so guests can reach it. Note: the
+   * first hit on a localtunnel URL shows an interstitial that breaks iframe
+   * embedding — the "Open in new tab" link still works, and so does sharing
+   * the URL with a guest.
+   */
+  async function expose() {
+    const p = Number(port);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) { setErr("invalid port"); return; }
+    setExposing(true);
+    setErr(null);
+    try {
+      const { tunnel } = await api.startTunnel({ port: p, provider: "localtunnel", label: `preview ${taskId}` });
+      // Poll for the public URL (localtunnel emits it on stdout after a beat).
+      let found: string | null = null;
+      for (let i = 0; i < 16 && !found; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const { tunnels } = await api.tunnels();
+        const t = tunnels.find((x) => x.id === tunnel.id);
+        if (t?.url) found = t.url;
+        else if (t?.error) throw new Error(t.error);
+      }
+      if (!found) throw new Error("tunnel did not come up in time — check the Tunnels page");
+      const r = await api.updateTaskPreview(taskId, found);
+      setUrl(r.url);
+      setDraft(r.url ?? "");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setExposing(false);
     }
   }
 
@@ -110,6 +146,28 @@ export function LivePreview({
           </>
         )}
       </div>
+      {mode === "operator" && (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-border text-[11px] text-muted-foreground">
+          <span>Or expose a local port:</span>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+            className="w-20 rounded border border-border bg-background px-1.5 py-0.5"
+          />
+          <button
+            type="button"
+            onClick={() => void expose()}
+            disabled={exposing}
+            className="rounded border border-border px-2 py-0.5 disabled:opacity-50 hover:bg-accent"
+          >
+            {exposing ? "Exposing…" : "Expose via tunnel"}
+          </button>
+          <span className="text-[10px] opacity-70">localtunnel · public URL · first hit shows an interstitial (use Open-in-tab)</span>
+        </div>
+      )}
       {err && <div className="px-3 py-1.5 text-[11px] text-red-500">{err}</div>}
       {url ? (
         <iframe

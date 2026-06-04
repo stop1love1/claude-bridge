@@ -190,13 +190,28 @@ const PROMPT_CACHE_ENABLED = process.env.BRIDGE_PROMPT_CACHE === "1";
  * PR) is forced off — a guest's work never lands on a protected branch or
  * opens a PR/MR on the operator's behalf.
  */
-function effectiveGitForActor(appGit: AppGitSettings, actor: Actor | null): AppGitSettings {
+function effectiveGitForActor(
+  appGit: AppGitSettings,
+  actor: Actor | null,
+  taskId: string,
+): AppGitSettings {
   if (actor?.kind !== "guest") return appGit;
   const g = actor.share.git;
+  // Multi-coder isolation (Epic D): a guest on `auto-create` in the LIVE
+  // tree gets their OWN branch `claude/<task>-g<did6>` instead of the shared
+  // `claude/<task>`, so two guests coding the same task concurrently don't
+  // clobber each other's commits. Worktree mode already isolates per-run, so
+  // skip the override there; `fixed`/`current` shares keep their branch.
+  const isolate = g.branchMode === "auto-create" && appGit.worktreeMode !== "enabled";
+  const guestSeg = actor.did.replace(/[^a-z0-9]/gi, "").slice(-6) || "guest";
   return {
     ...appGit,
-    branchMode: g.branchMode,
-    fixedBranch: g.branchMode === "fixed" ? (g.branchName ?? "") : appGit.fixedBranch,
+    branchMode: isolate ? "fixed" : g.branchMode,
+    fixedBranch: isolate
+      ? `claude/${taskId}-g${guestSeg}`
+      : g.branchMode === "fixed"
+        ? (g.branchName ?? "")
+        : appGit.fixedBranch,
     autoCommit: g.autoCommit,
     autoPush: g.autoPush && actor.grants.push,
     integrationMode: "none",
@@ -504,7 +519,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // (branch + commit/push), so the guest's work lands where the operator
   // scoped it. Operators keep the app's own policy. `actor` was hoisted to
   // the top of the handler so the plan gate could read it too.
-  const effGit = app ? effectiveGitForActor(app.git, actor) : null;
+  const effGit = app ? effectiveGitForActor(app.git, actor, id) : null;
   const useWorktree = !!(app && effGit && effGit.worktreeMode === "enabled");
   if (app && effGit && effGit.branchMode !== "current" && !useWorktree) {
     const result = await prepareBranch(repoCwd, effGit, id);
