@@ -590,7 +590,7 @@ function DevopsConnectionCheck({ appSegment }: { appSegment: string }) {
       {state.kind === "idle" && (
         <p className="text-[11px] text-muted-foreground">
           Verifies `gh` / `glab` is installed and authenticated for this
-          app's `origin` remote. Run before saving to avoid runtime
+          app&apos;s `origin` remote. Run before saving to avoid runtime
           surprises.
         </p>
       )}

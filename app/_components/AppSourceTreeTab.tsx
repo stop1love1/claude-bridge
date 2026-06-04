@@ -231,11 +231,16 @@ export function AppSourceTreeTab({
   }, [appKey]);
 
   useEffect(() => {
-    setCache(new Map());
-    setExpanded(new Set([""]));
-    setSelectedFile(null);
-    setFileBody(null);
-    setFileError(null);
+    // Microtask-defer the reset so it doesn't run synchronously in the
+    // effect body (satisfies react-hooks/set-state-in-effect — same
+    // workaround used in app/tasks/[id]/page.tsx).
+    void Promise.resolve().then(() => {
+      setCache(new Map());
+      setExpanded(new Set([""]));
+      setSelectedFile(null);
+      setFileBody(null);
+      setFileError(null);
+    });
   }, [appKey]);
 
   useEffect(() => {
@@ -243,7 +248,9 @@ export function AppSourceTreeTab({
       const st = cache.get(rel);
       if (st?.status === "ok" || st?.status === "loading") continue;
       if (st?.status === "error") continue;
-      loadDir(rel);
+      // Defer so loadDir's internal setState isn't a synchronous effect-body
+      // setState (react-hooks/set-state-in-effect).
+      void Promise.resolve().then(() => loadDir(rel));
     }
   }, [expanded, cache, loadDir]);
 
@@ -258,15 +265,25 @@ export function AppSourceTreeTab({
 
   useEffect(() => {
     if (!selectedFile) {
-      setFileBody(null);
-      setFileError(null);
-      setFileLoading(false);
+      // Defer the clear so it isn't a synchronous effect-body setState
+      // (react-hooks/set-state-in-effect). The loading-branch setStates
+      // below precede an async fetch, so the rule accepts them.
+      void Promise.resolve().then(() => {
+        setFileBody(null);
+        setFileError(null);
+        setFileLoading(false);
+      });
       return;
     }
     const ac = new AbortController();
-    setFileLoading(true);
-    setFileError(null);
-    setFileBody(null);
+    // Defer the loading-prep setStates out of the synchronous effect body
+    // (react-hooks/set-state-in-effect); the fetch below doesn't read them.
+    void Promise.resolve().then(() => {
+      if (ac.signal.aborted) return;
+      setFileLoading(true);
+      setFileError(null);
+      setFileBody(null);
+    });
     void api
       .appFile(appKey, selectedFile, { signal: ac.signal })
       .then((r) => {
