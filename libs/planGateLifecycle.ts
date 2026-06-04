@@ -79,11 +79,20 @@ export async function resolvePlanGateAfterPlanner(args: {
   }
 }
 
-/** Resume the coordinator (or spawn one) with a plan-approved nudge. */
+/**
+ * Resume the coordinator (or spawn one) after a plan-gate transition.
+ *
+ * `opts.replan` distinguishes the two callers: approval (the gate is now
+ * open → dispatch coders) vs `request-changes` (re-plan → spawn a fresh
+ * planner, gate stays closed). Sending the wrong message — e.g. "gate is
+ * now open" on a re-plan — makes the coordinator try to dispatch coders
+ * that immediately bounce off the still-closed gate.
+ */
 export async function continueCoordinator(
   taskId: string,
   sessionsDir: string,
   summary: string | null,
+  opts?: { replan?: boolean },
 ): Promise<void> {
   // Lazy-require to dodge the import cycle (coordinator → runLifecycle → here).
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -95,12 +104,23 @@ export async function continueCoordinator(
 
   const meta = readMeta(sessionsDir);
   if (!meta) return;
-  const coordinator = meta.runs.find((r) => r.role === "coordinator");
-  const msg = `Plan approved for bridge task ${taskId}. ${summary ? `Goal: ${summary} ` : ""}Read sessions/${taskId}/plan.md (the shared plan) and proceed with implementation — dispatch the coder(s). The bridge gate is now open.`;
-  if (coordinator) {
+
+  const coordinators = meta.runs.filter((r) => r.role === "coordinator");
+  // A live coordinator will react to the gate change on its own turn (its
+  // next coder spawn now passes the gate; the nudge re-drives it on exit).
+  // Resuming it now would race its live stdout — skip.
+  if (coordinators.some((r) => r.status === "running" || r.status === "queued")) return;
+
+  const msg = opts?.replan
+    ? `Re-plan requested for bridge task ${taskId}. ${summary ? `${summary} ` : ""}The planning gate is OPEN AGAIN (intake.status=planning): spawn a FRESH planner, address the feedback, and do NOT dispatch coders until the new plan is approved.`
+    : `Plan approved for bridge task ${taskId}. ${summary ? `Goal: ${summary} ` : ""}Read sessions/${taskId}/plan.md (the shared plan) and proceed with implementation — dispatch the coder(s). The bridge gate is now open.`;
+
+  // Resume the most recent finished coordinator if there is one; else spawn.
+  const finished = coordinators[coordinators.length - 1];
+  if (finished) {
     resumeSessionWithLifecycle({
       cwd: BRIDGE_ROOT,
-      sessionId: coordinator.sessionId,
+      sessionId: finished.sessionId,
       message: msg,
       settings: { mode: "bypassPermissions" },
       context: `plan-gate-continue ${taskId}`,

@@ -398,7 +398,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
               ? { kind: "guest", label: "guest" }
               : { kind: "operator", label: "operator" },
         });
-        if (!meta.runs.some((r) => r.role === "coordinator")) {
+        // Only skip when a LIVE coordinator exists — a finished one can't
+        // react to the gate transition, so we still need to drive planning.
+        const hasActiveCoordinator = meta.runs.some(
+          (r) => r.role === "coordinator" && (r.status === "running" || r.status === "queued"),
+        );
+        if (!hasActiveCoordinator) {
           void spawnCoordinatorForTask({
             id: meta.taskId,
             title: meta.taskTitle,

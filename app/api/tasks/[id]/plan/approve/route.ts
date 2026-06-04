@@ -74,8 +74,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   if (action === "request-changes") {
     const rec = await setIntake(sessionsDir, { status: "planning" });
-    // Re-dispatch planning with the operator note via the continue path.
-    await continueCoordinator(id, sessionsDir, `Re-plan: ${body.note ?? "operator requested changes"}`);
+    // Re-dispatch planning with the operator note. `replan` flips the
+    // coordinator message to "re-plan" (NOT "gate is now open") so it
+    // doesn't try to dispatch coders against the still-closed gate.
+    await continueCoordinator(
+      id,
+      sessionsDir,
+      `Operator feedback: ${body.note ?? "requested changes"}`,
+      { replan: true },
+    );
     return NextResponse.json({ ok: true, intake: rec });
   }
 
