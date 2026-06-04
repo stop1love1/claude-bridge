@@ -37,6 +37,8 @@ import {
 import { BRIDGE_ROOT, readBridgeMd } from "./paths";
 import { resolveRepoCwd } from "./repos";
 import { getApp, semanticVerifierEnabled, type App } from "./apps";
+import { computeConfidence, shouldHoldOutward } from "./confidenceScore";
+import { readConfidenceConfig } from "./confidenceConfig";
 import {
   autoCommitAndPush,
   mergeIntoTargetBranch,
@@ -718,11 +720,50 @@ async function postExitFlow(args: {
   // the flag (autoPush stays bound to the operator's setting via
   // the post-merge live-tree push below).
   const useWorktree = !!run.worktreePath;
+
+  // Reliability Amplifier (B2): aggregate the post-exit gate results into a
+  // confidence score. Re-read the run so we see the gate fields the gate
+  // functions just wrote to meta. Low confidence HOLDS the outward action
+  // (push + integration) pending operator review; local auto-commit still
+  // runs (reversible, and worktree mode needs it). Fail-soft: any error
+  // leaves `held=false` so a scoring bug never blocks the normal flow.
+  let held = false;
+  if (app) {
+    try {
+      const judged = readMeta(dir)?.runs.find((r) => r.sessionId === run.sessionId) ?? run;
+      const conf = computeConfidence(judged);
+      const cfg = readConfidenceConfig();
+      held = shouldHoldOutward(conf.score, cfg, useWorktree);
+      // Annotate only — confidence is computed AFTER the real gates, so it
+      // must NOT own the deferred status flip (the quality gates do). A
+      // plain field patch keeps status semantics unchanged.
+      await updateRun(dir, run.sessionId, {
+        confidence: {
+          score: conf.score,
+          band: conf.band,
+          heldAt: held ? new Date().toISOString() : null,
+          reviewedBy: null,
+        },
+      });
+      if (held) {
+        logWarn("confidence", `score ${conf.score} (${conf.band}) < threshold ${cfg.threshold} — holding push/integration for review`, { tag: t });
+      } else {
+        logInfo("confidence", `score ${conf.score} (${conf.band})`, { tag: t });
+      }
+    } catch (err) {
+      logError("confidence", "scoring crashed (non-fatal)", err, { tag: t });
+    }
+  }
+
   const commitCwd = run.worktreePath ?? app?.path ?? null;
   const commitSettings = app
     ? useWorktree
       ? { ...app.git, autoCommit: true, autoPush: false }
-      : app.git
+      // Held low-confidence run: commit locally but DON'T push — the
+      // operator ships it via the manual commit endpoint after review.
+      : held
+        ? { ...app.git, autoPush: false }
+        : app.git
     : null;
   const message = `[${tid}] ${title}`.trim();
   if (
@@ -750,6 +791,7 @@ async function postExitFlow(args: {
   // executed in the live tree.
   if (
     app &&
+    !held &&
     !run.worktreePath &&
     app.git.integrationMode !== "none" &&
     app.git.mergeTargetBranch.trim().length > 0 &&

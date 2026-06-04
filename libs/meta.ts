@@ -151,6 +151,18 @@ export interface Run {
     /** ISO timestamp when the failure was recorded. */
     at: string;
   } | null;
+  /**
+   * Reliability Amplifier (B2): aggregate confidence score from the post-
+   * exit gates, plus the escalation hold state. `heldAt` is set when a
+   * low-confidence run held its outward action (push/integration) pending
+   * operator review; `reviewedBy` clears the hold. Absent on legacy runs.
+   */
+  confidence?: {
+    score: number;
+    band: "high" | "medium" | "low";
+    heldAt?: string | null;
+    reviewedBy?: { label: string; at: string } | null;
+  } | null;
 }
 
 /**
