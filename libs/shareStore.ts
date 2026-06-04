@@ -37,6 +37,8 @@ export interface ShareGrants {
   commit: boolean;
   /** Push commits (implies `commit`). */
   push: boolean;
+  /** Approve a task's intake plan so coding may proceed (Intent & Planning Gate). */
+  approvePlan: boolean;
 }
 
 export interface ShareGit {
@@ -168,12 +170,17 @@ function normalizeGrants(g: ShareGrants): ShareGrants {
   // behavior where sending also allowed spawning. Callers that pass the
   // field explicitly (the UI) get independent control.
   const spawnAgent = g.spawnAgent === undefined ? !!g.sendMessage : !!g.spawnAgent;
+  // Intent & Planning Gate: default false for shares created before this
+  // grant existed (and callers that omit it) — a guest can't approve plans
+  // unless the operator explicitly grants it.
+  const approvePlan = !!g.approvePlan;
   return {
     sendMessage: !!g.sendMessage,
     spawnAgent,
     answerPermission: !!g.answerPermission,
     commit,
     push: !!g.push,
+    approvePlan,
   };
 }
 

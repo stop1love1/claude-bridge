@@ -30,6 +30,7 @@ const GRANTS: ShareGrants = {
   answerPermission: false,
   commit: false,
   push: false,
+  approvePlan: false,
 };
 const GIT: ShareGit = { branchMode: "auto-create", autoCommit: true, autoPush: false };
 
@@ -62,6 +63,24 @@ describe("createShare", () => {
     });
     expect(share.grants.commit).toBe(true);
     expect(share.grants.push).toBe(true);
+  });
+
+  it("defaults approvePlan to false when omitted (back-compat)", () => {
+    const { share } = createShare({
+      taskId: "t_1",
+      grants: { sendMessage: true } as never,
+      git: GIT,
+    });
+    expect(share.grants.approvePlan).toBe(false);
+  });
+
+  it("honors an explicit approvePlan grant", () => {
+    const { share } = createShare({
+      taskId: "t_1",
+      grants: { ...GRANTS, approvePlan: true },
+      git: GIT,
+    });
+    expect(share.grants.approvePlan).toBe(true);
   });
 
   it("drops a branchName unless branchMode is fixed", () => {

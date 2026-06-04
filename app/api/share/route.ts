@@ -52,6 +52,7 @@ function parseGrants(g: Partial<ShareGrants> | undefined): ShareGrants {
     answerPermission: !!g?.answerPermission,
     commit: !!g?.commit,
     push: !!g?.push,
+    approvePlan: !!g?.approvePlan,
   };
 }
 
