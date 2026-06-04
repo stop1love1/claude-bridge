@@ -51,9 +51,9 @@ const FINISHED: Run = {
 
 describe("runGatePanel", () => {
   it("runs one judge per lens with distinct verdict files + lens briefs", async () => {
-    const calls: Array<{ verdictFileName: string; briefBody: string }> = [];
+    const calls: Array<{ verdictFileName: string; briefBody: string; runRole?: string }> = [];
     const stub: GateRunner = async (o) => {
-      calls.push({ verdictFileName: o.verdictFileName, briefBody: o.briefBody });
+      calls.push({ verdictFileName: o.verdictFileName, briefBody: o.briefBody, runRole: o.runRole });
       return { kind: "spawned", sessionId: "s", verdict: { verdict: "pass", reason: "ok" } };
     };
     const results = await runGatePanel({
@@ -70,6 +70,10 @@ describe("runGatePanel", () => {
     expect(calls.map((c) => c.verdictFileName)).toEqual([
       "semantic-verdict-correctness.json",
       "semantic-verdict-edge-cases.json",
+    ]);
+    expect(calls.map((c) => c.runRole)).toEqual([
+      "semantic-verifier-correctness",
+      "semantic-verifier-edge-cases",
     ]);
     expect(calls[0].briefBody).toContain("BASE");
     expect(calls[0].briefBody).toContain("N1");

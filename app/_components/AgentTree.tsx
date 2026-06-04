@@ -283,7 +283,15 @@ function AgentNode({
               ? "bg-primary/10 border-primary/60 ring-1 ring-primary/30"
               : "bg-card border-border hover:bg-accent"
           }`}
-          title={`${run.role} @ ${run.repo}\n${run.sessionId}`}
+          title={
+            `${run.role} @ ${run.repo}\n${run.sessionId}` +
+            (run.semanticVerifier?.votes && run.semanticVerifier.votes.length > 0
+              ? `\n\nSemantic panel (${run.semanticVerifier.verdict}):\n` +
+                run.semanticVerifier.votes
+                  .map((v) => `• ${v.lens}: ${v.verdict} — ${v.reason}`)
+                  .join("\n")
+              : "")
+          }
         >
           <RoleIcon role={run.role} size={12} className={`${iconCls} shrink-0`} />
           <span className="text-foreground font-semibold shrink-0">{run.role}</span>

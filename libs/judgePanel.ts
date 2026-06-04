@@ -109,6 +109,9 @@ export async function runGatePanel(
         taskTitle: opts.taskTitle,
         taskBody: opts.taskBody,
         role: opts.role,
+        // Tag the tree row with the lens so the three judges are
+        // distinguishable; `role` still loads the shared playbook.
+        runRole: `${opts.role}-${lens.key}`,
         briefBody: `${opts.baseBrief}\n\n## Lens: ${lens.key}\n${lens.nudge}`,
         verdictFileName: `${opts.verdictFilePrefix}-${lens.key}.json`,
       }),

@@ -109,6 +109,13 @@ export interface AgentGateOptions {
   taskBody: string;
   /** Role label (and playbook filename) for the gate agent. */
   role: string;
+  /**
+   * Display label written to meta.json's run row (defaults to `role`).
+   * Lets a panel tag each judge with its lens (e.g.
+   * `semantic-verifier-correctness`) for the agent tree while still
+   * loading the shared `semantic-verifier` playbook via `role`.
+   */
+  runRole?: string;
   /** One-line brief the bridge passes as the gate's task-specific body. */
   briefBody: string;
   /** Filename (under `sessions/<task>/`) where the gate must drop its verdict JSON. */
@@ -202,7 +209,7 @@ export async function runAgentGate(
   // descendant, so the AgentTree can render it cleanly.
   await appendRun(sessionsDir, {
     sessionId,
-    role: opts.role,
+    role: opts.runRole ?? opts.role,
     repo: opts.finishedRun.repo,
     status: "running",
     startedAt: new Date().toISOString(),

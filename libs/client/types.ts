@@ -49,6 +49,16 @@ export interface Run {
     error: string | null;
     at: string;
   } | null;
+  /**
+   * Reliability Amplifier (B1): semantic gate result attached to the
+   * judged (coder) run. UI-facing subset of the server `RunSemanticVerifier`.
+   */
+  semanticVerifier?: {
+    verdict: "pass" | "drift" | "broken" | "skipped";
+    reason: string;
+    panelSize?: number;
+    votes?: Array<{ lens: string; verdict: "pass" | "drift" | "broken"; reason: string }>;
+  } | null;
 }
 
 /** Intent & Planning Gate — UI-facing subset of the server IntakeRecord. */
