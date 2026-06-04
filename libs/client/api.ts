@@ -4,6 +4,7 @@ import type {
   Repo,
   SessionSummary,
   ChatSettings,
+  EffortLevel,
   App,
   AppGitSettings,
   AppRetry,
@@ -46,8 +47,12 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   repos: () => req<Repo[]>("/repos"),
   tasks: () => req<Task[]>("/tasks"),
-  createTask: (body: { title?: string; body: string; app?: string | null }) =>
-    req<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
+  createTask: (body: {
+    title?: string;
+    body: string;
+    app?: string | null;
+    effort?: EffortLevel | null;
+  }) => req<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
   updateTask: (id: string, patch: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteTask: (id: string) =>
@@ -451,6 +456,15 @@ export const api = {
     req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`, { signal: opts?.signal }),
   updateDetectSettings: (patch: { source: "auto" | "llm" | "heuristic" }) =>
     req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  planGateSettings: (opts?: ReqOpts) =>
+    req<{ operatorEnabled: boolean; maxClarifyRounds: number }>(`/settings/plan-gate`, {
+      signal: opts?.signal,
+    }),
+  updatePlanGateSettings: (patch: { operatorEnabled?: boolean; maxClarifyRounds?: number }) =>
+    req<{ operatorEnabled: boolean; maxClarifyRounds: number }>(`/settings/plan-gate`, {
       method: "PUT",
       body: JSON.stringify(patch),
     }),

@@ -85,6 +85,7 @@ function SettingsPage() {
 
           <PublicUrlSection />
           <DetectSettingsSection />
+          <PlanGateSettingsSection />
           <TrustedDevicesSection />
           <TelegramSettingsSection />
           <TelegramUserSection />
@@ -293,6 +294,116 @@ function DetectSettingsSection() {
               </button>
             );
           })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PlanGateSettingsSection() {
+  const [operatorEnabled, setOperatorEnabled] = useState(true);
+  const [maxClarifyRounds, setMaxClarifyRounds] = useState(3);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const s = await api.planGateSettings({ signal: ac.signal });
+        if (ac.signal.aborted) return;
+        setOperatorEnabled(s.operatorEnabled);
+        setMaxClarifyRounds(s.maxClarifyRounds);
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [toast]);
+
+  const save = async (patch: { operatorEnabled?: boolean; maxClarifyRounds?: number }) => {
+    setSaving(true);
+    try {
+      const next = await api.updatePlanGateSettings(patch);
+      setOperatorEnabled(next.operatorEnabled);
+      setMaxClarifyRounds(next.maxClarifyRounds);
+      toast("success", "Planning gate saved");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <ShieldCheck size={14} className="text-primary" />
+        <h3 className="text-[13px] sm:text-sm font-semibold">Planning gate</h3>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-4">
+        Before a coder runs, the bridge has a planner restate the goal and
+        draft a plan; coding is blocked until the plan is approved.{" "}
+        <strong>Guests (share links) are always gated</strong> regardless of
+        this toggle — it only controls whether the gate also applies to you,
+        the operator. In smart mode a clear operator prompt auto-approves and
+        runs straight through; only ambiguous prompts pause for your decision.
+      </p>
+
+      {loading ? (
+        <ListSkeleton rows={2} />
+      ) : (
+        <div className="grid gap-3">
+          <button
+            type="button"
+            onClick={() => save({ operatorEnabled: !operatorEnabled })}
+            disabled={saving}
+            aria-pressed={operatorEnabled}
+            className={`text-left rounded-md border p-3 transition-colors disabled:opacity-50 ${
+              operatorEnabled
+                ? "border-primary/40 bg-primary/5"
+                : "border-border hover:border-primary/30 hover:bg-accent/30"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex h-3.5 w-3.5 rounded-full border ${
+                  operatorEnabled ? "border-primary bg-primary" : "border-border bg-transparent"
+                }`}
+                aria-hidden
+              />
+              <span className="text-sm font-medium">
+                Gate the operator too {operatorEnabled ? "(on)" : "(off)"}
+              </span>
+            </div>
+            <p className="mt-1 ml-5 text-[11px] text-muted-foreground">
+              {operatorEnabled
+                ? "Your own tasks go through the planning gate (smart — clear prompts auto-approve)."
+                : "Your own tasks skip the gate entirely. Guest contributions are still gated."}
+            </p>
+          </button>
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="gate-rounds">Max clarify rounds</Label>
+            <Input
+              id="gate-rounds"
+              type="number"
+              min={1}
+              max={10}
+              value={String(maxClarifyRounds)}
+              onChange={(e) => setMaxClarifyRounds(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+              onBlur={() => save({ maxClarifyRounds })}
+              disabled={saving}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              How many clarify cycles before the gate forces a manual decision.
+              Default 3.
+            </p>
+          </div>
         </div>
       )}
     </section>
