@@ -176,10 +176,32 @@ export const DEFAULT_VERIFY: AppVerify = {};
  */
 export interface AppQuality {
   critic?: boolean;
+  /**
+   * Semantic verifier gate. Reliability Amplifier (B1) made this DEFAULT-ON:
+   * absent / undefined = enabled. Set explicitly to `false` to opt out.
+   */
   verifier?: boolean;
+  /** Reliability Amplifier (B1): semantic judges to run (1 = single, default 3). Clamped 1..5. */
+  verifierPanel?: number;
 }
 
 export const DEFAULT_QUALITY: AppQuality = {};
+
+/**
+ * Default-on flip for the Reliability Amplifier: the semantic verifier
+ * runs unless the app explicitly opted out with `quality.verifier:false`.
+ * (Pre-B1 this required `quality.verifier === true`.)
+ */
+export function semanticVerifierEnabled(app: Pick<App, "quality">): boolean {
+  return app.quality?.verifier !== false;
+}
+
+/** Number of semantic judges to dispatch — clamped to 1..5, default 3. */
+export function resolvePanelSize(app: Pick<App, "quality">): number {
+  const n = app.quality?.verifierPanel;
+  if (typeof n !== "number" || !Number.isFinite(n)) return 3;
+  return Math.max(1, Math.min(5, Math.floor(n)));
+}
 
 /**
  * (Gap 2) Per-gate retry budgets. Each gate has an independent counter;
@@ -497,7 +519,13 @@ function normalizeQuality(raw: unknown): AppQuality {
   const r = raw as Partial<Record<keyof AppQuality, unknown>>;
   const out: AppQuality = {};
   if (r.critic === true) out.critic = true;
+  // `verifier` is default-on (B1): preserve an explicit `false` (the opt-out)
+  // AND an explicit `true`; only absence means "use the default".
   if (r.verifier === true) out.verifier = true;
+  else if (r.verifier === false) out.verifier = false;
+  if (typeof r.verifierPanel === "number" && Number.isFinite(r.verifierPanel)) {
+    out.verifierPanel = Math.floor(r.verifierPanel);
+  }
   return out;
 }
 
@@ -549,6 +577,10 @@ function serializeQuality(q: AppQuality | undefined): AppQuality | undefined {
   const out: AppQuality = {};
   if (q.critic === true) out.critic = true;
   if (q.verifier === true) out.verifier = true;
+  else if (q.verifier === false) out.verifier = false; // persist the opt-out
+  if (typeof q.verifierPanel === "number" && Number.isFinite(q.verifierPanel)) {
+    out.verifierPanel = Math.floor(q.verifierPanel);
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -1618,10 +1650,25 @@ export function updateAppQuality(
   const target = apps.find((a) => a.name === name);
   if (!target) return null;
   const next: AppQuality = { ...target.quality };
-  for (const key of ["critic", "verifier"] as const) {
-    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
-    if (patch[key] === true) next[key] = true;
-    else delete next[key];
+  // `critic` is opt-in: anything but `true` clears it.
+  if (Object.prototype.hasOwnProperty.call(patch, "critic")) {
+    if (patch.critic === true) next.critic = true;
+    else delete next.critic;
+  }
+  // `verifier` is default-on (B1): persist an explicit `false` (opt-out) and
+  // `true`; clearing the key reverts to the default (on).
+  if (Object.prototype.hasOwnProperty.call(patch, "verifier")) {
+    if (patch.verifier === true) next.verifier = true;
+    else if (patch.verifier === false) next.verifier = false;
+    else delete next.verifier;
+  }
+  // `verifierPanel`: a finite number sets it; null/undefined clears (default 3).
+  if (Object.prototype.hasOwnProperty.call(patch, "verifierPanel")) {
+    if (typeof patch.verifierPanel === "number" && Number.isFinite(patch.verifierPanel)) {
+      next.verifierPanel = Math.floor(patch.verifierPanel);
+    } else {
+      delete next.verifierPanel;
+    }
   }
   target.quality = next;
   saveApps(apps);
