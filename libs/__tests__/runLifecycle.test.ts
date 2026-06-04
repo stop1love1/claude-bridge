@@ -189,6 +189,15 @@ vi.mock("../apps", () => ({
   // run isn't in a worktree. Empty array keeps that path inert.
   loadApps: () => [],
   isValidAppName: () => true,
+  // Reliability Amplifier (B1): the semantic gate is default-on and reads
+  // these helpers. Mirror the real default-on semantics so a test app with
+  // `quality.verifier:false` keeps the gate off.
+  semanticVerifierEnabled: (app: { quality?: { verifier?: boolean } }) =>
+    app.quality?.verifier !== false,
+  resolvePanelSize: (app: { quality?: { verifierPanel?: number } }) => {
+    const n = app.quality?.verifierPanel;
+    return typeof n === "number" && Number.isFinite(n) ? Math.max(1, Math.min(5, Math.floor(n))) : 3;
+  },
 }));
 
 // `readBridgeMd` returning "" short-circuits resolveRepoCwd (which

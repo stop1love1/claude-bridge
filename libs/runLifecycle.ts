@@ -36,7 +36,7 @@ import {
 } from "./meta";
 import { BRIDGE_ROOT, readBridgeMd } from "./paths";
 import { resolveRepoCwd } from "./repos";
-import { getApp, type App } from "./apps";
+import { getApp, semanticVerifierEnabled, type App } from "./apps";
 import {
   autoCommitAndPush,
   mergeIntoTargetBranch,
@@ -511,15 +511,16 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
 }
 
 /**
- * Semantic-verifier gate (P2b-2). Opt-in per app via
- * `bridge.json.apps[].quality.verifier`. Runs only when the prior
- * gates didn't trigger a retry. Blocking is gated on `broken` only.
+ * Semantic-verifier gate (P2b-2). Default-on (Reliability Amplifier B1):
+ * runs unless the app opted out via `bridge.json.apps[].quality.verifier:false`.
+ * Runs as a 3-lens majority panel by default (see `resolvePanelSize`); only
+ * when the prior gates didn't trigger a retry. Blocking is gated on `broken`.
  */
 async function runSemanticVerifierGate(
   ctx: PostExitContext,
 ): Promise<GateOutcome> {
   const { dir, tid, t, run, title, app } = ctx;
-  if (!app || app.quality?.verifier !== true) {
+  if (!app || !semanticVerifierEnabled(app)) {
     return "proceed";
   }
   // Retry runs intentionally NOT skipped — checking whether the fix
