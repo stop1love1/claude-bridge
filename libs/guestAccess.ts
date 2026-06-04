@@ -60,6 +60,9 @@ const RULES: Rule[] = [
   { method: "GET", pattern: ["tasks", ":tid", "plan"], grant: null },
   // Live preview (Epic C): gated behind its own grant.
   { method: "GET", pattern: ["tasks", ":tid", "preview"], grant: "viewPreview" },
+  // Presence (Epic D): any task viewer participates — view baseline.
+  { method: "GET", pattern: ["tasks", ":tid", "presence"], grant: null },
+  { method: "POST", pattern: ["tasks", ":tid", "presence"], grant: null },
   { method: "GET", pattern: ["sessions", ":sid", "tail"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "tail", "stream"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission"], grant: null, checkSession: true },

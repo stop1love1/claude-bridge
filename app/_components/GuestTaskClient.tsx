@@ -9,6 +9,7 @@ import type { ActiveRun } from "./SessionLog/helpers";
 import { SessionLog } from "./SessionLog";
 import { PlanReviewCard } from "./PlanReviewCard";
 import { LivePreview } from "./LivePreview";
+import { PresenceBadge } from "./PresenceBadge";
 import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -209,6 +210,7 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
             Guest access · {grants ? grantBadge(grants) : "view only"}
           </div>
         </div>
+        {taskId && <span className="ml-auto"><PresenceBadge taskId={taskId} label={name} /></span>}
         {meta && meta.runs.length > 1 ? (
           <select
             className="ml-auto rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground max-w-[50%]"

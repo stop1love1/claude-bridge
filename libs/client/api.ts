@@ -468,6 +468,16 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  taskPresence: (id: string, opts?: ReqOpts) =>
+    req<{ active: Array<{ id: string; label: string; kind: "operator" | "guest" }> }>(
+      `/tasks/${id}/presence`,
+      { signal: opts?.signal },
+    ),
+  pingPresence: (id: string, label?: string) =>
+    req<{ active: Array<{ id: string; label: string; kind: "operator" | "guest" }> }>(
+      `/tasks/${id}/presence`,
+      { method: "POST", body: JSON.stringify({ label: label ?? "" }) },
+    ),
   taskPreview: (id: string, opts?: ReqOpts) =>
     req<{ app: string | null; url: string | null }>(`/tasks/${id}/preview`, { signal: opts?.signal }),
   updateTaskPreview: (id: string, url: string) =>

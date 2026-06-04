@@ -7,6 +7,7 @@ import { api } from "@/libs/client/api";
 import type { Meta, Repo, Run, Task } from "@/libs/client/types";
 import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
 import { HeaderShell } from "@/app/_components/HeaderShell";
+import { PresenceBadge } from "@/app/_components/PresenceBadge";
 import { TaskDetail } from "@/app/_components/TaskDetail";
 import { SessionLog } from "@/app/_components/SessionLog";
 import { useToast } from "@/app/_components/Toasts";
@@ -410,6 +411,7 @@ function TaskPageInner() {
         <span className="hidden sm:inline font-mono text-xs text-fg-dim shrink-0">{headerTask.id}</span>
         <span className="hidden sm:inline text-fg-dim shrink-0">·</span>
         <span className="text-[13px] sm:text-sm font-medium truncate flex-1 min-w-0">{headerTask.title}</span>
+        <PresenceBadge taskId={id} />
         <kbd className="hidden md:inline-flex items-center text-[10px] font-mono text-fg-dim px-1.5 py-0.5 rounded border border-border shrink-0">
           Esc back
         </kbd>

@@ -35,4 +35,11 @@ describe("guest plan-gate routes", () => {
     expect(denied.ok).toBe(false);
     expect(denied.reason).toMatch(/viewPreview/);
   });
+
+  it("presence GET + POST are view-baseline (no grant needed) but task-scoped", () => {
+    const noGrants = scope({ ...grantsAll, viewPreview: false, approvePlan: false });
+    expect(authorizeGuestRequest("GET", `/api/tasks/${tid}/presence`, noGrants, noop).ok).toBe(true);
+    expect(authorizeGuestRequest("POST", `/api/tasks/${tid}/presence`, noGrants, noop).ok).toBe(true);
+    expect(authorizeGuestRequest("POST", `/api/tasks/t_other_999/presence`, noGrants, noop).ok).toBe(false);
+  });
 });
