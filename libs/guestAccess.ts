@@ -56,6 +56,8 @@ const RULES: Rule[] = [
   { method: "GET", pattern: ["tasks", ":tid", "events"], grant: null },
   { method: "GET", pattern: ["tasks", ":tid", "runs", ":sid", "prompt"], grant: null },
   { method: "GET", pattern: ["tasks", ":tid", "runs", ":sid", "diff"], grant: null },
+  // Plan-gate: any task guest may view the intake plan.
+  { method: "GET", pattern: ["tasks", ":tid", "plan"], grant: null },
   { method: "GET", pattern: ["sessions", ":sid", "tail"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "tail", "stream"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission"], grant: null, checkSession: true },
@@ -71,6 +73,8 @@ const RULES: Rule[] = [
   { method: "POST", pattern: ["tasks", ":tid", "agents"], grant: "spawnAgent" },
   { method: "POST", pattern: ["tasks", ":tid", "continue"], grant: "sendMessage" },
   { method: "POST", pattern: ["tasks", ":tid", "runs", ":sid", "kill"], grant: "sendMessage" },
+  // Plan-gate: approve / request-changes / reject the intake plan.
+  { method: "POST", pattern: ["tasks", ":tid", "plan", "approve"], grant: "approvePlan" },
 
   // ── Answer permission popups (grant: answerPermission) ──────────
   { method: "POST", pattern: ["sessions", ":sid", "permission", ":rid"], grant: "answerPermission", checkSession: true },
