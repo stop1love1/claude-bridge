@@ -219,6 +219,14 @@ Procedure:
 
 **Don't pre-emptively answer.** Surface and stop. Only exception: when a question can be answered purely from `BRIDGE.md` / `bridge.json` / repo profile data the child didn't have access to — then paste the answer below the question in `summary.md` AND re-dispatch the same role with the answer inlined, flagging the override in the summary.
 
+**Intent & Planning Gate interaction.** When the task's `intake.status` is `planning` /
+`awaiting-approval`, a `planner`'s `NEEDS-DECISION` is handled by the **bridge gate**, not a
+coordinator re-dispatch: the bridge parks the task at `awaiting-approval` and surfaces the
+plan + questions in the UI / share page. The operator (or a guest with `approvePlan`)
+approves there; the bridge then resumes you with "Plan approved". Do NOT spawn `coder` /
+`fixer` before that resume — the bridge returns 423 (`error: "plan-gate"`) and you should
+finalize with an `AWAITING DECISION` summary and stop.
+
 ---
 
 ## §5 · Finalize

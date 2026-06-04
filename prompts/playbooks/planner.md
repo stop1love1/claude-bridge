@@ -92,6 +92,29 @@ One paragraph: what success looks like end-to-end, in user-visible terms.
 
 Sections may be empty (`(none)`) but **do not rename or remove** them — the downstream prompt-builder reads these headers verbatim.
 
+### 5b · Intent & Planning Gate — emit `intake.json`
+
+When the bridge injected an `## Intake gate` block above, you are the **gate planner**.
+In addition to `plan.md`, write `sessions/<task-id>/intake.json` with EXACTLY this shape:
+
+```json
+{
+  "version": 1,
+  "verdict": "clear",
+  "summary": "<1-2 sentence restatement of the understood goal>",
+  "questions": [],
+  "planPath": "plan.md"
+}
+```
+
+- Set `"verdict": "needs-decision"` and populate `questions` (each `{ "id", "text",
+  "options"?, "recommended"? }`) when there is genuine ambiguity you cannot resolve from
+  the task body + repo state. Otherwise `"clear"` with `"questions": []`.
+- Keep `questions` to the few that actually block correct work — every question is a human
+  round-trip. Always offer concrete options + a recommendation.
+- This file is the gate's machine input. If you only write `plan.md`, the bridge falls
+  back to parsing your `## Questions for the user` bullets — but the JSON is preferred.
+
 ### 6 · Write the report
 
 Per the standard `## Report contract` (above):
