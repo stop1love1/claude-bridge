@@ -266,10 +266,18 @@ export interface RunSemanticVerifier {
   reason: string;
   /** Specific gaps the verifier identified (max ~10 surfaced). */
   concerns: string[];
-  /** sessionId of the spawned `semantic-verifier` agent. */
+  /** sessionId of the spawned `semantic-verifier` agent (first judge in panel mode). */
   verifierSessionId?: string | null;
   durationMs: number;
   retryScheduled?: boolean;
+  /** Reliability Amplifier (B1): number of judges dispatched (1 = single). */
+  panelSize?: number;
+  /** Per-lens votes when run as a panel. Absent on legacy / single-judge runs. */
+  votes?: Array<{
+    lens: string;
+    verdict: "pass" | "drift" | "broken";
+    reason: string;
+  }>;
 }
 
 /**
