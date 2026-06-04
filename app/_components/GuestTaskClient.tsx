@@ -26,6 +26,7 @@ const GRANT_LABELS: Record<keyof ShareGrants, string> = {
   answerPermission: "answer permissions",
   commit: "commit",
   push: "push",
+  approvePlan: "approve plans",
 };
 
 function grantBadge(grants: ShareGrants): string {

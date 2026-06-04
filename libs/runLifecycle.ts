@@ -1078,6 +1078,25 @@ export function wireRunLifecycle(
       }
     }
 
+    // Intent & Planning Gate: when a planner finishes while the task is
+    // mid-planning, derive the verdict and advance the gate (auto-approve
+    // a clear operator plan, else park at awaiting-approval). Lazy-require
+    // to avoid the import cycle (this module ← coordinator ← planGateLifecycle).
+    // No-op for every non-planner run and when intake isn't `planning`.
+    if (finishedRun && finishedRun.role.toLowerCase().startsWith("planner")) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { resolvePlanGateAfterPlanner } = require("./planGateLifecycle") as typeof import("./planGateLifecycle");
+        void resolvePlanGateAfterPlanner({
+          taskId,
+          sessionsDir,
+          plannerSessionId: finishedRun.sessionId,
+        });
+      } catch (e) {
+        logError("lifecycle", "plan-gate planner-exit hook failed", e, { tag });
+      }
+    }
+
     // P2 — verify chain + commit gate. Wrapped in an async IIFE so the
     // `child.on("exit", ...)` handler stays sync; rejections surface via
     // .catch() rather than crashing the Next.js dev server (Risk 1).
