@@ -31,6 +31,7 @@ const GRANTS: ShareGrants = {
   commit: false,
   push: false,
   approvePlan: false,
+  viewPreview: false,
 };
 const GIT: ShareGit = { branchMode: "auto-create", autoCommit: true, autoPush: false };
 

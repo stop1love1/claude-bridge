@@ -5,7 +5,7 @@ import type { ShareGrants } from "../shareStore";
 const tid = "t_20260604_001";
 const grantsAll: ShareGrants = {
   sendMessage: true, spawnAgent: true, answerPermission: true,
-  commit: false, push: false, approvePlan: true,
+  commit: false, push: false, approvePlan: true, viewPreview: true,
 };
 const grantsNoApprove: ShareGrants = { ...grantsAll, approvePlan: false };
 const scope = (grants: ShareGrants): GuestScope => ({ taskId: tid, grants });
@@ -27,5 +27,12 @@ describe("guest plan-gate routes", () => {
   it("approve on a different task is rejected", () => {
     const r = authorizeGuestRequest("POST", `/api/tasks/t_other_999/plan/approve`, scope(grantsAll), noop);
     expect(r.ok).toBe(false);
+  });
+
+  it("GET preview requires the viewPreview grant", () => {
+    expect(authorizeGuestRequest("GET", `/api/tasks/${tid}/preview`, scope(grantsAll), noop).ok).toBe(true);
+    const denied = authorizeGuestRequest("GET", `/api/tasks/${tid}/preview`, scope({ ...grantsAll, viewPreview: false }), noop);
+    expect(denied.ok).toBe(false);
+    expect(denied.reason).toMatch(/viewPreview/);
   });
 });

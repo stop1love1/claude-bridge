@@ -53,6 +53,7 @@ function parseGrants(g: Partial<ShareGrants> | undefined): ShareGrants {
     commit: !!g?.commit,
     push: !!g?.push,
     approvePlan: !!g?.approvePlan,
+    viewPreview: !!g?.viewPreview,
   };
 }
 

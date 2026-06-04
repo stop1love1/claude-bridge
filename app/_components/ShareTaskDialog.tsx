@@ -37,6 +37,7 @@ const GRANT_FIELDS: Array<{ key: keyof ShareGrants; label: string; hint: string 
   { key: "commit", label: "Commit code", hint: "commit the working tree" },
   { key: "push", label: "Push code", hint: "push commits (implies commit)" },
   { key: "approvePlan", label: "Approve plans", hint: "approve the intake plan so coding can proceed" },
+  { key: "viewPreview", label: "View live preview", hint: "see the running app in an embedded iframe" },
 ];
 
 function grantSummary(g: ShareGrants): string {
@@ -69,6 +70,7 @@ export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
     commit: false,
     push: false,
     approvePlan: false,
+    viewPreview: false,
   });
   const [branchMode, setBranchMode] = useState<"current" | "fixed" | "auto-create">("auto-create");
   const [branchName, setBranchName] = useState("");

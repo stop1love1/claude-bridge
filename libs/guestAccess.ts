@@ -58,6 +58,8 @@ const RULES: Rule[] = [
   { method: "GET", pattern: ["tasks", ":tid", "runs", ":sid", "diff"], grant: null },
   // Plan-gate: any task guest may view the intake plan.
   { method: "GET", pattern: ["tasks", ":tid", "plan"], grant: null },
+  // Live preview (Epic C): gated behind its own grant.
+  { method: "GET", pattern: ["tasks", ":tid", "preview"], grant: "viewPreview" },
   { method: "GET", pattern: ["sessions", ":sid", "tail"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "tail", "stream"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission"], grant: null, checkSession: true },

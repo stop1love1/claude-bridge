@@ -39,6 +39,8 @@ export interface ShareGrants {
   push: boolean;
   /** Approve a task's intake plan so coding may proceed (Intent & Planning Gate). */
   approvePlan: boolean;
+  /** See the live app preview iframe on the share page (Epic C). */
+  viewPreview: boolean;
 }
 
 export interface ShareGit {
@@ -174,6 +176,7 @@ function normalizeGrants(g: ShareGrants): ShareGrants {
   // grant existed (and callers that omit it) — a guest can't approve plans
   // unless the operator explicitly grants it.
   const approvePlan = !!g.approvePlan;
+  const viewPreview = !!g.viewPreview;
   return {
     sendMessage: !!g.sendMessage,
     spawnAgent,
@@ -181,6 +184,7 @@ function normalizeGrants(g: ShareGrants): ShareGrants {
     commit,
     push: !!g.push,
     approvePlan,
+    viewPreview,
   };
 }
 
