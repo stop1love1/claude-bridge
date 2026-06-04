@@ -4,6 +4,21 @@ Every child agent spawned via `POST /api/tasks/<id>/agents` MUST write its repor
 
 The wrapper in `lib/childPrompt.ts` (function `buildChildPrompt`) already injects this contract into every child prompt; this file is the canonical standalone copy that the coordinator can `cat prompts/report-template.md` to refresh its memory, and that future hooks (e.g., a CI lint) can read.
 
+## Self-review — REQUIRED before you report `DONE`
+
+Before writing the report, review your own work as a hostile reviewer would:
+
+1. Run `git diff HEAD` and re-read every changed hunk against the `## Task` you were given.
+2. List — to yourself — the issues a strict reviewer would flag: missed acceptance
+   criteria, unhandled edge cases (empty / boundary / error inputs), changes that could
+   break existing behavior, leftover debug code, or claims you can't actually back with the
+   diff.
+3. **Fix what you find** before reporting. Only report `DONE` once your own review is clean.
+
+This is not optional. After you exit, the bridge runs a multi-judge semantic panel
+(correctness / edge-cases / regression lenses, majority rules) — catching issues here is
+cheaper than an `-svretry` round.
+
 ```markdown
 # <role> @ <repo>
 
