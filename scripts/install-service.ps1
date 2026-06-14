@@ -6,7 +6,7 @@
   Registers a scheduled task "ClaudeBridge" that:
     - starts `bun run start` in the bridge root when you log on, and
     - auto-restarts it every minute if it ever exits/crashes,
-  so the bridge — and its autonomous scheduler ("Quy trình") — stays up.
+  so the bridge — and its autonomous scheduler ("Routines") — stays up.
 
   This is the built-in, no-install option. For a true Windows Service
   (runs without an interactive login, separate log stream) install NSSM

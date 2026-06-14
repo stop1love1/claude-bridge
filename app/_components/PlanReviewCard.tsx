@@ -84,13 +84,13 @@ export function PlanReviewCard({
   return (
     <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 space-y-3">
       <div className="flex items-center gap-2 text-sm font-medium">
-        {status === "planning" && <span>🧭 Đang lập kế hoạch…</span>}
-        {status === "awaiting-approval" && <span>⏳ Chờ duyệt kế hoạch</span>}
-        {status === "error" && <span>⚠️ Lập kế hoạch lỗi</span>}
+        {status === "planning" && <span>🧭 Planning…</span>}
+        {status === "awaiting-approval" && <span>⏳ Awaiting plan approval</span>}
+        {status === "error" && <span>⚠️ Planning failed</span>}
       </div>
 
       {status === "planning" && (
-        <p className="text-xs text-muted-foreground">Planner đang chạy — kế hoạch sẽ hiện ở đây.</p>
+        <p className="text-xs text-muted-foreground">Planner is running — the plan will appear here.</p>
       )}
 
       {intake?.summary && (
@@ -110,13 +110,13 @@ export function PlanReviewCard({
               <div className="font-medium">{q.text}</div>
               {q.options && q.options.length > 0 && (
                 <div className="text-[11px] text-muted-foreground">
-                  Lựa chọn: {q.options.join(" · ")}
-                  {q.recommended ? ` — gợi ý: ${q.recommended}` : ""}
+                  Options: {q.options.join(" · ")}
+                  {q.recommended ? ` — recommended: ${q.recommended}` : ""}
                 </div>
               )}
               <input
                 className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs"
-                placeholder={q.recommended ? `Gợi ý: ${q.recommended}` : "Trả lời…"}
+                placeholder={q.recommended ? `Recommended: ${q.recommended}` : "Answer…"}
                 value={answers[q.id] ?? ""}
                 onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
               />
@@ -134,7 +134,7 @@ export function PlanReviewCard({
               onClick={() => act("approve")}
               className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
             >
-              Duyệt &amp; code
+              Approve &amp; code
             </button>
           )}
           <button
@@ -143,7 +143,7 @@ export function PlanReviewCard({
             onClick={() => act("request-changes", "operator requested changes")}
             className="rounded border border-border px-3 py-1 text-xs disabled:opacity-50"
           >
-            Sửa hướng…
+            Request changes…
           </button>
           {status === "awaiting-approval" && (
             <button
@@ -152,12 +152,12 @@ export function PlanReviewCard({
               onClick={() => act("reject")}
               className="rounded border border-red-500/40 px-3 py-1 text-xs text-red-500 disabled:opacity-50"
             >
-              Từ chối
+              Reject
             </button>
           )}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">Chờ chủ dự án duyệt kế hoạch.</p>
+        <p className="text-xs text-muted-foreground">Waiting for the project owner to approve the plan.</p>
       )}
       {actErr && <p className="text-xs text-red-500">{actErr}</p>}
     </div>

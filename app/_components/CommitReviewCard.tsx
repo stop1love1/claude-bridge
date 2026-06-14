@@ -38,11 +38,11 @@ export function CommitReviewCard({
     <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 space-y-3">
       <div className="flex items-center gap-2 text-sm font-medium">
         <ShieldAlert size={14} className="text-amber-500" />
-        <span>Chờ duyệt: {held.length} run độ tin cậy thấp đang giữ chưa ship</span>
+        <span>Awaiting review: {held.length} low-confidence run(s) held, not yet shipped</span>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Code đã commit cục bộ; push / merge bị giữ lại cho tới khi bạn xem. &ldquo;Duyệt &amp;
-        ship&rdquo; sẽ push; &ldquo;Đã xem&rdquo; chỉ gỡ cờ giữ (bạn tự ship sau qua khung diff).
+        Code is committed locally; push / merge is held until you review. &ldquo;Approve &amp;
+        ship&rdquo; pushes; &ldquo;Reviewed&rdquo; only clears the hold flag (you ship later yourself via the diff view).
       </p>
       <div className="space-y-2">
         {held.map((r) => (
@@ -63,7 +63,7 @@ export function CommitReviewCard({
               onClick={() => act(r.sessionId, "ship")}
               className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
             >
-              {busy === r.sessionId + "ship" ? "…" : "Duyệt & ship"}
+              {busy === r.sessionId + "ship" ? "…" : "Approve & ship"}
             </button>
             <button
               type="button"
@@ -71,7 +71,7 @@ export function CommitReviewCard({
               onClick={() => act(r.sessionId, "dismiss")}
               className="rounded border border-border px-2 py-1 text-[11px] disabled:opacity-50"
             >
-              Đã xem
+              Reviewed
             </button>
           </div>
         ))}

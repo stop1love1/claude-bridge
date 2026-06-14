@@ -146,21 +146,32 @@ export function proxy(req: NextRequest) {
 
   // Internal bypass for child agents. The token is a per-install secret
   // shared only with locally-spawned children (`agents/permission-hook.cjs`,
-  // coordinator curl-backs), which connect to `localhost` DIRECTLY — no
-  // reverse proxy, so no forwarding headers. A request that arrived through
-  // a tunnel (ngrok/cloudflared) or reverse proxy carries `x-forwarded-for`
-  // / `forwarded` / `x-real-ip`; ngrok forwards to localhost so a socket
-  // -level IP check can't tell tunnel traffic from a real child, but the
-  // forwarding headers can. We therefore REFUSE the bypass for any request
-  // that transited a proxy — closing the "attacker on the internet replays
-  // a leaked internal token over the public tunnel" hole. Local children
-  // are unaffected.
+  // coordinator curl-backs) connecting to `localhost:<port>` directly.
+  //
+  // "Via proxy" detection uses TWO signals together:
+  //   1. The raw `Host` header. A direct local hit shows
+  //      `Host: localhost:7780`; a tunneled request shows the public
+  //      hostname (`Host: abc.ngrok.io`) — that rewrite is the
+  //      defining mark of "transited a proxy".
+  //   2. Genuine proxy-chain headers (`x-forwarded-for`, `x-real-ip`,
+  //      RFC 7239 `forwarded`). These mark a real upstream client.
+  //      `x-forwarded-host` is deliberately NOT in this list: Next.js
+  //      16 injects it on direct local requests too, so it can't
+  //      distinguish a real proxy from a same-process request and
+  //      relying on it broke every legitimate child agent.
+  const hostHeader = (req.headers.get("host") || "").toLowerCase();
+  const hostHostname = hostHeader.split(":")[0] ?? "";
+  const isLoopbackHost =
+    hostHostname === "localhost" ||
+    hostHostname === "127.0.0.1" ||
+    hostHostname === "[::1]" ||
+    hostHostname === "::1";
   const internalToken = req.headers.get(INTERNAL_TOKEN_HEADER);
   const viaProxy =
+    !isLoopbackHost ||
     !!req.headers.get("x-forwarded-for") ||
     !!req.headers.get("x-real-ip") ||
-    !!req.headers.get("forwarded") ||
-    !!req.headers.get("x-forwarded-host");
+    !!req.headers.get("forwarded");
   if (
     internalToken &&
     !viaProxy &&
