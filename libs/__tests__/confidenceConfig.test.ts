@@ -29,7 +29,7 @@ describe("confidenceConfig", () => {
   });
   it("patches + persists", () => {
     writeConfidenceConfig({ enabled: false, threshold: 85 });
-    expect(readConfidenceConfig()).toEqual({ enabled: false, threshold: 85 });
+    expect(readConfidenceConfig()).toEqual({ enabled: false, threshold: 85, holdWorktree: false });
   });
   it("clamps threshold to 0..100", () => {
     expect(writeConfidenceConfig({ threshold: -5 }).threshold).toBe(0);

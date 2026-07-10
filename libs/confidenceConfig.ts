@@ -11,7 +11,7 @@ import type { ConfidenceGateConfig } from "./confidenceScore";
 
 const CONFIG_FILE = join(BRIDGE_STATE_DIR, "confidence.json");
 
-const DEFAULTS: ConfidenceGateConfig = { enabled: true, threshold: 70 };
+const DEFAULTS: ConfidenceGateConfig = { enabled: true, threshold: 70, holdWorktree: false };
 
 interface State {
   data: ConfidenceGateConfig;
@@ -27,7 +27,7 @@ function clampThreshold(n: unknown): number {
 }
 
 function normalize(c: ConfidenceGateConfig): ConfidenceGateConfig {
-  return { enabled: !!c.enabled, threshold: clampThreshold(c.threshold) };
+  return { enabled: !!c.enabled, threshold: clampThreshold(c.threshold), holdWorktree: !!c.holdWorktree };
 }
 
 function load(): void {

@@ -887,102 +887,143 @@ async function postExitFlow(args: {
 
   // P4/F1 — merge the worktree branch back into the base branch and
   // remove the worktree. Runs ONLY on the success path: any failing
-  // gate above already returned early so we never reach here. The
-  // merge respects whatever auto-commit just did inside the worktree;
-  // worktree pruner mops up anything left behind on a crash.
+  // gate above already returned early so we never reach here.
+  //
+  // Reliability Amplifier (B2, Task 7): when this worktree run is
+  // HELD (`cfg.holdWorktree === true` and the score came in below
+  // threshold), skip the merge-back + integration entirely and leave
+  // the worktree in place for operator review — a merge would push
+  // low-confidence work into the base branch before anyone looked at
+  // it, defeating the point of the hold. The operator's `ship` action
+  // on `/api/tasks/<id>/runs/<sessionId>/confidence/review` performs
+  // the deferred merge-back via `performWorktreeMergeBack` below once
+  // reviewed; `dismiss` just clears the hold and leaves the worktree
+  // parked (no automatic merge or cleanup).
   if (app && run.worktreePath) {
-    try {
-      const wm = await mergeAndRemoveWorktree({
-        appPath: app.path,
-        handle: {
-          path: run.worktreePath,
-          branch: run.worktreeBranch ?? "",
-          baseBranch: run.worktreeBaseBranch ?? null,
-        },
-      });
-      if (!wm.ok) {
-        logWarn("worktree", `cleanup: ${wm.message} — ${wm.error ?? ""}`, { tag: t });
-      } else {
-        logInfo("worktree", `cleanup: ${wm.message}`, { tag: t });
-      }
-      // Worktree integration: after the worktree branch merged into
-      // `baseBranch`, branch on integrationMode. Auto-merge runs the
-      // local fast-forward into mergeTargetBranch BEFORE the autoPush
-      // pass below so that pass pushes the merged target rather than
-      // baseBranch. Pull-request mode hands off to the devops agent
-      // which opens the PR/MR against the configured target.
-      // Conflict on auto-merge is fail-soft: HEAD ends up back on
-      // baseBranch and autoPush still pushes that.
-      const baseBranch = run.worktreeBaseBranch ?? null;
-      if (
-        wm.ok &&
-        baseBranch &&
-        app.git.integrationMode !== "none" &&
-        app.git.mergeTargetBranch.trim().length > 0
-      ) {
-        if (app.git.integrationMode === "auto-merge") {
-          const m = await mergeIntoTargetBranch({
-            cwd: app.path,
-            sourceBranch: baseBranch,
-            targetBranch: app.git.mergeTargetBranch,
-            message: `merge ${baseBranch} → ${app.git.mergeTargetBranch} (${tid})`,
-            // Push handled by the explicit autoPush pass below to
-            // keep a single push site per run.
-            push: false,
-          });
-          if (m.ok) {
-            logInfo("auto-merge", m.message, { tag: t });
-          } else {
-            logWarn("auto-merge", `${m.message} — ${m.error ?? ""}`, { tag: t });
-          }
-        } else if (app.git.integrationMode === "pull-request") {
-          const d = await runDevopsAgent({
-            appPath: app.path,
-            taskId: tid,
-            finishedRun: run,
-            taskTitle: title,
-            taskBody: readMeta(dir)?.taskBody ?? "",
-            sourceBranch: baseBranch,
-            targetBranch: app.git.mergeTargetBranch,
-          });
-          if (d.status === "opened" || d.status === "exists") {
-            logInfo("pull-request", `${d.status} — ${d.reason}`, { tag: t, url: d.url ?? null });
-          } else {
-            logWarn("pull-request", `${d.status} — ${d.reason}`, { tag: t });
-          }
-        }
-      }
-      // P4/F1 — push the live tree's current branch after a successful
-      // merge so `autoPush=true` reaches the merged result, not the
-      // throwaway worktree branch we suppressed above. Calling
-      // `autoCommitAndPush` with autoCommit=false short-circuits at
-      // the "no staged changes" branch, which forwards to `tryPush`
-      // when autoPush is on — exactly what we need.
-      if (wm.ok && app.git.autoPush) {
-        const r = await autoCommitAndPush(
-          app.path,
-          { ...app.git, autoCommit: false, autoPush: true },
-          message,
-        );
-        if (r.ok) {
-          logInfo("auto-push", `live tree: ${r.message}`, { tag: t });
-        } else {
-          logWarn("auto-push", `live tree: ${r.message} — ${r.error ?? ""}`, { tag: t });
-          // Worktree-mode MERGE-NO-PUSH: the worktree branch merged
-          // into base locally (wm.ok) but the push to remote failed.
-          // Stamp the run so the UI surfaces it the same way as the
-          // live-tree path's MERGE-NO-PUSH.
-          await markMergeNotPushed(
-            dir,
-            run.sessionId,
-            `MERGE-NO-PUSH: worktree merge landed locally but push failed: ${r.message}`,
-            r.error,
-          );
-        }
-      }
-    } catch (err) {
-      logError("worktree", "cleanup crashed", err, { tag: t });
+    if (held) {
+      logInfo("confidence", "worktree run held — merge-back deferred pending operator review", { tag: t });
+    } else {
+      await performWorktreeMergeBack({ app, run, tid, title, t, dir, message });
     }
+  }
+}
+
+/**
+ * P4/F1 — merge a worktree run's branch back into its base branch,
+ * remove the worktree, run the worktree-mode integration pass
+ * (auto-merge / pull-request), and push the live tree. Extracted out
+ * of `postExitFlow` (Task 7) so the confidence review route's `ship`
+ * action can replay the EXACT same merge-back for a worktree run that
+ * was held for low confidence — the unheld path calls this inline at
+ * the same point it always did, so its behavior is unchanged.
+ *
+ * The merge respects whatever auto-commit already did inside the
+ * worktree; the worktree pruner mops up anything left behind on a
+ * crash. Fail-soft throughout: failures are logged / stamped via
+ * `markMergeNotPushed`, never thrown.
+ */
+export async function performWorktreeMergeBack(params: {
+  app: App;
+  run: Run;
+  tid: string;
+  title: string;
+  t: string;
+  dir: string;
+  message: string;
+}): Promise<void> {
+  const { app, run, tid, title, t, dir, message } = params;
+  if (!run.worktreePath) return;
+  try {
+    const wm = await mergeAndRemoveWorktree({
+      appPath: app.path,
+      handle: {
+        path: run.worktreePath,
+        branch: run.worktreeBranch ?? "",
+        baseBranch: run.worktreeBaseBranch ?? null,
+      },
+    });
+    if (!wm.ok) {
+      logWarn("worktree", `cleanup: ${wm.message} — ${wm.error ?? ""}`, { tag: t });
+    } else {
+      logInfo("worktree", `cleanup: ${wm.message}`, { tag: t });
+    }
+    // Worktree integration: after the worktree branch merged into
+    // `baseBranch`, branch on integrationMode. Auto-merge runs the
+    // local fast-forward into mergeTargetBranch BEFORE the autoPush
+    // pass below so that pass pushes the merged target rather than
+    // baseBranch. Pull-request mode hands off to the devops agent
+    // which opens the PR/MR against the configured target.
+    // Conflict on auto-merge is fail-soft: HEAD ends up back on
+    // baseBranch and autoPush still pushes that.
+    const baseBranch = run.worktreeBaseBranch ?? null;
+    if (
+      wm.ok &&
+      baseBranch &&
+      app.git.integrationMode !== "none" &&
+      app.git.mergeTargetBranch.trim().length > 0
+    ) {
+      if (app.git.integrationMode === "auto-merge") {
+        const m = await mergeIntoTargetBranch({
+          cwd: app.path,
+          sourceBranch: baseBranch,
+          targetBranch: app.git.mergeTargetBranch,
+          message: `merge ${baseBranch} → ${app.git.mergeTargetBranch} (${tid})`,
+          // Push handled by the explicit autoPush pass below to
+          // keep a single push site per run.
+          push: false,
+        });
+        if (m.ok) {
+          logInfo("auto-merge", m.message, { tag: t });
+        } else {
+          logWarn("auto-merge", `${m.message} — ${m.error ?? ""}`, { tag: t });
+        }
+      } else if (app.git.integrationMode === "pull-request") {
+        const d = await runDevopsAgent({
+          appPath: app.path,
+          taskId: tid,
+          finishedRun: run,
+          taskTitle: title,
+          taskBody: readMeta(dir)?.taskBody ?? "",
+          sourceBranch: baseBranch,
+          targetBranch: app.git.mergeTargetBranch,
+        });
+        if (d.status === "opened" || d.status === "exists") {
+          logInfo("pull-request", `${d.status} — ${d.reason}`, { tag: t, url: d.url ?? null });
+        } else {
+          logWarn("pull-request", `${d.status} — ${d.reason}`, { tag: t });
+        }
+      }
+    }
+    // P4/F1 — push the live tree's current branch after a successful
+    // merge so `autoPush=true` reaches the merged result, not the
+    // throwaway worktree branch we suppressed above. Calling
+    // `autoCommitAndPush` with autoCommit=false short-circuits at
+    // the "no staged changes" branch, which forwards to `tryPush`
+    // when autoPush is on — exactly what we need.
+    if (wm.ok && app.git.autoPush) {
+      const r = await autoCommitAndPush(
+        app.path,
+        { ...app.git, autoCommit: false, autoPush: true },
+        message,
+      );
+      if (r.ok) {
+        logInfo("auto-push", `live tree: ${r.message}`, { tag: t });
+      } else {
+        logWarn("auto-push", `live tree: ${r.message} — ${r.error ?? ""}`, { tag: t });
+        // Worktree-mode MERGE-NO-PUSH: the worktree branch merged
+        // into base locally (wm.ok) but the push to remote failed.
+        // Stamp the run so the UI surfaces it the same way as the
+        // live-tree path's MERGE-NO-PUSH.
+        await markMergeNotPushed(
+          dir,
+          run.sessionId,
+          `MERGE-NO-PUSH: worktree merge landed locally but push failed: ${r.message}`,
+          r.error,
+        );
+      }
+    }
+  } catch (err) {
+    logError("worktree", "cleanup crashed", err, { tag: t });
   }
 }
 

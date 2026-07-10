@@ -5,10 +5,25 @@
  * locally but skipped the outward push/integration and stamped
  * `run.confidence.heldAt`. This operator-only endpoint clears that hold:
  *
- *   - `action: "ship"`    → push the held work (autoCommitAndPush, push on)
- *                           then clear the hold + record `reviewedBy`.
+ *   - `action: "ship"`    → live-tree run: push the held work
+ *                           (autoCommitAndPush, push on) then re-run the
+ *                           integration postExitFlow skipped. Worktree run
+ *                           (Task 7, opt-in via `holdWorktree`): the local
+ *                           commit already happened inside the worktree
+ *                           before the hold — `ship` performs the deferred
+ *                           merge-back via `performWorktreeMergeBack`, the
+ *                           SAME code path postExitFlow uses for an unheld
+ *                           worktree run, so it merges into the base
+ *                           branch, runs worktree-mode integration, and
+ *                           pushes the live tree exactly like the normal
+ *                           flow would have.
  *   - `action: "dismiss"` → just clear the hold (operator reviewed, will
- *                           ship later via the per-run commit UI).
+ *                           ship later via the per-run commit UI). For a
+ *                           worktree run this leaves the worktree PARKED
+ *                           — no merge, no removal — since dismissing
+ *                           isn't the same as approving; the operator (or
+ *                           the stale-worktree pruner, eventually) decides
+ *                           what happens to it next.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
@@ -16,6 +31,7 @@ import { join } from "node:path";
 import { DEFAULT_GIT_SETTINGS, getApp } from "@/libs/apps";
 import { autoCommitAndPush, mergeIntoTargetBranch, readCurrentBranch } from "@/libs/gitOps";
 import { runDevopsAgent } from "@/libs/devops";
+import { performWorktreeMergeBack } from "@/libs/runLifecycle";
 import { readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
@@ -58,14 +74,45 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   let pushResult: { ok: boolean; message: string; error?: string | null } | null = null;
   let integrationResult: { kind: string; ok: boolean; message: string } | null = null;
-  if (action === "ship") {
+  if (action === "ship" && run.worktreePath) {
+    // Held WORKTREE run (Task 7): the local commit already happened inside
+    // the worktree before the hold kicked in (postExitFlow always
+    // auto-commits worktree runs regardless of held status). Do NOT run
+    // autoCommitAndPush directly against the worktree here — that would
+    // push the throwaway per-run worktree branch, not merge the work into
+    // the base branch. Instead replay the exact deferred merge-back.
     const app = getApp(run.repo);
-    const cwd =
-      run.worktreePath && existsSync(run.worktreePath)
-        ? run.worktreePath
-        : app && existsSync(app.path)
-          ? app.path
-          : null;
+    if (!app) {
+      return NextResponse.json({ error: "app not found for this run's repo" }, { status: 404 });
+    }
+    if (!existsSync(run.worktreePath)) {
+      return NextResponse.json({ error: "worktree no longer exists" }, { status: 404 });
+    }
+    const message = `[${id}] ${meta.taskTitle} (operator-approved after low-confidence review)`;
+    try {
+      await performWorktreeMergeBack({
+        app,
+        run,
+        tid: id,
+        title: meta.taskTitle,
+        t: `confidence-ship:${sessionId.slice(0, 8)}`,
+        dir,
+        message,
+      });
+      pushResult = {
+        ok: true,
+        message: "worktree merge-back replayed (merge, worktree integration, live-tree push — see server logs for step-by-step detail)",
+        error: null,
+      };
+    } catch (err) {
+      return NextResponse.json(
+        { error: "ship failed", detail: safeErrorMessage(err, "unknown") },
+        { status: 500 },
+      );
+    }
+  } else if (action === "ship") {
+    const app = getApp(run.repo);
+    const cwd = app && existsSync(app.path) ? app.path : null;
     if (!cwd) {
       return NextResponse.json({ error: "cannot resolve a working tree for this run" }, { status: 404 });
     }
@@ -84,10 +131,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       );
     }
 
-    // Re-run the post-success integration that the hold skipped (non-worktree
-    // only — worktree runs integrate on cleanup, never held in v1). Failures
-    // here are surfaced, not fatal: the push already landed.
-    if (app && !run.worktreePath && app.git.integrationMode !== "none" && app.git.mergeTargetBranch.trim()) {
+    // Re-run the post-success integration that the hold skipped.
+    // Failures here are surfaced, not fatal: the push already landed.
+    if (app && app.git.integrationMode !== "none" && app.git.mergeTargetBranch.trim()) {
       try {
         const sourceBranch = await readCurrentBranch(cwd);
         if (!sourceBranch) {

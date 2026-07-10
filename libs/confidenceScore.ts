@@ -84,13 +84,22 @@ export function computeConfidence(run: Run): ConfidenceResult {
 export interface ConfidenceGateConfig {
   enabled: boolean;
   threshold: number;
+  /**
+   * Opt-in (Task 7). When absent/false, worktree runs are NEVER held
+   * (v1 behavior, unchanged): the worktree commits + merges back on
+   * cleanup regardless of score. When `true`, a worktree run below
+   * `threshold` holds exactly like a live-tree run — the merge-back +
+   * integration are deferred until an operator ships/dismisses via the
+   * confidence review route, and the worktree is kept alive for review.
+   */
+  holdWorktree?: boolean;
 }
 
 /**
  * Whether to hold outward actions (auto-push + integration). Never holds
- * when disabled, at/above threshold, or in worktree mode (the worktree
- * commits + merges back on cleanup by design — v1 records the score but
- * doesn't hold that path).
+ * when disabled or at/above threshold. Worktree runs only hold when the
+ * operator opted in via `cfg.holdWorktree` — the default is to never hold
+ * worktree runs (they commit + merge back on cleanup by design).
  */
 export function shouldHoldOutward(
   score: number,
@@ -98,6 +107,6 @@ export function shouldHoldOutward(
   isWorktree: boolean,
 ): boolean {
   if (!cfg.enabled) return false;
-  if (isWorktree) return false;
+  if (isWorktree && !cfg.holdWorktree) return false;
   return score < cfg.threshold;
 }
