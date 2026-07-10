@@ -55,7 +55,17 @@ export const config = {
   // requests/...`) is deliberately NOT excluded, so it stays cookie-
   // gated. Gated guest DATA routes (`/api/tasks/<tid>/...`) also stay in
   // the matcher so the guest branch below authorizes them per-share.
-  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|api/auth/|api/share/access/|share/|login|docs).+)"],
+  //
+  // `sw.js` (Task 9's push-notification service worker) is excluded
+  // too, alongside the other static assets: `authorizeGuest` below
+  // denies any non-`/api/` path outright (`splitApiPath` returns null),
+  // so a guest's otherwise-valid session cookie would still get a
+  // 302-to-`/login` HTML page back for `GET /sw.js` instead of the
+  // script — breaking `navigator.serviceWorker.register("/sw.js")` for
+  // every guest. The file has no sensitive content, so letting it
+  // through unauthenticated (like `manifest.webmanifest` would need to
+  // be too, but that's Task 8's gap, not this one's) is safe.
+  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|sw\\.js|api/auth/|api/share/access/|share/|login|docs).+)"],
 };
 
 /**
