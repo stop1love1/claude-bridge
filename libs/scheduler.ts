@@ -91,20 +91,21 @@ async function tick(): Promise<void> {
   state.lastTickAt = now;
   try {
     await runCron(now);
-    // Auto-queue (autonomous TODO dispatch) is a separate concern from
-    // cron workflows, gated on the same process-lock + ticking guard
-    // above. Its own try/catch keeps a failure here from clobbering
-    // `state.lastError`, which is reserved for cron. No-ops immediately
-    // when disabled (the default) — see libs/autoQueue.ts.
-    try {
-      await autoQueueTick();
-    } catch (e) {
-      logError("scheduler", "auto-queue tick failed", e);
-    }
     state.lastError = null;
   } catch (e) {
     state.lastError = (e as Error).message;
     logError("scheduler", "tick failed", e);
+  }
+  // Auto-queue (autonomous TODO dispatch) is a separate concern from
+  // cron workflows, gated on the same process-lock + ticking guard
+  // above but run unconditionally so a `runCron` failure this tick
+  // can't starve it. Its own try/catch keeps a failure here from
+  // clobbering `state.lastError`, which is reserved for cron. No-ops
+  // immediately when disabled (the default) — see libs/autoQueue.ts.
+  try {
+    await autoQueueTick();
+  } catch (e) {
+    logError("scheduler", "auto-queue tick failed", e);
   } finally {
     state.ticking = false;
   }
