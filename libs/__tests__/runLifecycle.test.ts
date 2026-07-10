@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { basename, join, resolve as resolvePath } from "node:path";
 import type { ChildProcess } from "node:child_process";
 
 /**
@@ -26,9 +26,15 @@ const Module = require("node:module") as typeof import("node:module") & {
 };
 const originalResolve = Module._resolveFilename;
 
-function seedRequireCache() {
+/**
+ * `overrides` lets a test replace individual functions on a fake gate
+ * module (e.g. make `runVerifyChain` return a failing result) while
+ * keeping the rest of the benign defaults. Keyed by module name, then
+ * shallow-merged over that module's default fake.
+ */
+function seedRequireCache(overrides: Record<string, object> = {}) {
   const libsDir = resolvePath(__dirname, "..");
-  const fakes: Record<string, unknown> = {
+  const fakes: Record<string, object> = {
     verifyChain: {
       verifyConfigOf: () => null,
       hasAnyVerifyCommand: () => false,
@@ -89,7 +95,7 @@ function seedRequireCache() {
       id: filename,
       filename,
       loaded: true,
-      exports: mod,
+      exports: { ...mod, ...(overrides[name] ?? {}) },
       children: [],
       paths: [],
     } as unknown as NodeJS.Module;
@@ -512,5 +518,198 @@ describe("wireRunLifecycle — state transitions", () => {
     expect(other?.status).toBe("running");
     // The wired (missing) sid produced no row.
     expect(meta?.runs.find((r) => r.sessionId === SID)).toBeUndefined();
+  });
+});
+
+/**
+ * Fail-loud escalation wiring (Task 4). Each gate's "blocked, no retry
+ * scheduled" branch must call `escalateGateBlock` exactly once with the
+ * right `gate` label and `retryScheduled: false`. These tests drive a
+ * real `wireRunLifecycle` exit through `postExitFlow` with the seeded
+ * gate fakes overridden to produce a failing verdict + ineligible
+ * retry, then assert on the `vi.mock`'d `escalateGateBlock`.
+ *
+ * Without these, a future edit could silently drop a call site (or flip
+ * `retryScheduled`) and the suite would stay green — the blanket mock
+ * above only prevents real side effects, it doesn't assert wiring.
+ */
+describe("postExitFlow — escalateGateBlock call-site wiring", () => {
+  const REAL_APP = {
+    name: "real-app",
+    path: "/tmp/fake-app",
+    git: { branchMode: "current", worktreeMode: "disabled", autoCommit: false, autoPush: false, mergeTargetBranch: "", integrationMode: "none" },
+    verify: {},
+    quality: { critic: false, verifier: false },
+    retry: {},
+    memory: { distill: false },
+  };
+
+  /** Seed meta + a running coder run, register the app, fire exit 0,
+   *  drain, and return the mocked escalateGateBlock's calls. */
+  async function driveExit(appOverrides: object = {}) {
+    const { createMeta, appendRun } = await import("../meta");
+    const ge = await import("../gateEscalation");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    // The vi.mock factory result survives vi.resetModules — clear the
+    // accumulated calls so each test asserts only its own escalations.
+    vi.mocked(ge.escalateGateBlock).mockClear();
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+      parentSessionId: "00000000-0000-0000-0000-000000000000",
+    });
+    getAppMock.mockReturnValue({ ...REAL_APP, ...appOverrides });
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "tag");
+    child.emit("exit", 0, null);
+    await flushAsync(10);
+
+    return vi.mocked(ge.escalateGateBlock).mock.calls;
+  }
+
+  it("verify-crash branch escalates with gate:'verify' and the inconclusive reason", async () => {
+    seedRequireCache({
+      verifyChain: {
+        verifyConfigOf: () => ({ test: "x" }),
+        hasAnyVerifyCommand: () => true,
+        runVerifyChain: async () => { throw new Error("boom"); },
+      },
+    });
+    const calls = await driveExit();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({
+      taskId: basename(tmp),
+      sessionsDir: tmp,
+      gate: "verify",
+      reason: "verify chain crashed — inconclusive",
+      retryScheduled: false,
+    });
+  });
+
+  it("verify-fail with ineligible retry escalates with gate:'verify' and the failed step name", async () => {
+    seedRequireCache({
+      verifyChain: {
+        verifyConfigOf: () => ({ test: "x" }),
+        hasAnyVerifyCommand: () => true,
+        runVerifyChain: async () => ({
+          steps: [{ name: "test", ok: false, exitCode: 1, durationMs: 1, output: "" }],
+          passed: false,
+          startedAt: "2026-04-24T10:00:02Z",
+          endedAt: "2026-04-24T10:00:03Z",
+        }),
+        // isEligibleForVerifyRetry stays false (default fake) →
+        // no scheduled retry → escalation must fire.
+      },
+    });
+    const calls = await driveExit();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "verify", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("chain failed at `test`");
+  });
+
+  it("preflight-fail with ineligible retry escalates with gate:'preflight'", async () => {
+    seedRequireCache({
+      preflightCheck: {
+        runPreflight: () => ({ verdict: "fail", reason: "read 0 files before editing" }),
+      },
+    });
+    const calls = await driveExit();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "preflight", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("read 0 files before editing");
+  });
+
+  it("claim-vs-diff drift with ineligible retry escalates with gate:'claim'", async () => {
+    seedRequireCache({
+      verifier: {
+        runVerifier: async () => ({
+          verdict: "drift",
+          reason: "claimed files never touched",
+          claimedFiles: ["a.ts"],
+          actualFiles: [],
+          unmatchedClaims: ["a.ts"],
+          unclaimedActual: [],
+          durationMs: 1,
+        }),
+      },
+    });
+    const calls = await driveExit();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "claim", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("claimed files never touched");
+  });
+
+  it("style-critic alien with ineligible retry escalates with gate:'style'", async () => {
+    seedRequireCache({
+      styleCritic: {
+        runStyleCritic: async () => ({
+          verdict: "alien",
+          reason: "raw fetch instead of api client",
+          issues: [],
+          durationMs: 1,
+        }),
+      },
+    });
+    const calls = await driveExit({ quality: { critic: true, verifier: false } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "style", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("raw fetch instead of api client");
+  });
+
+  it("semantic-verifier broken with ineligible retry escalates with gate:'semantic'", async () => {
+    seedRequireCache({
+      semanticVerifier: {
+        runSemanticVerifier: async () => ({
+          verdict: "broken",
+          reason: "does not implement the task body",
+          concerns: [],
+          durationMs: 1,
+        }),
+      },
+    });
+    const calls = await driveExit({ quality: { critic: false, verifier: true } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "semantic", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("does not implement the task body");
+  });
+
+  it("does NOT escalate when the gate schedules a retry (retryScheduled branch)", async () => {
+    const retryRun = {
+      sessionId: "99999999-9999-9999-9999-999999999999",
+      role: "coder-vretry",
+      repo: "real-app",
+      status: "running",
+      startedAt: null,
+      endedAt: null,
+    };
+    seedRequireCache({
+      verifyChain: {
+        verifyConfigOf: () => ({ test: "x" }),
+        hasAnyVerifyCommand: () => true,
+        runVerifyChain: async () => ({
+          steps: [{ name: "test", ok: false, exitCode: 1, durationMs: 1, output: "" }],
+          passed: false,
+          startedAt: "2026-04-24T10:00:02Z",
+          endedAt: "2026-04-24T10:00:03Z",
+        }),
+        isEligibleForVerifyRetry: () => true,
+        spawnVerifyRetry: async () => ({ sessionId: retryRun.sessionId, run: retryRun }),
+      },
+    });
+    const calls = await driveExit();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("gates that pass do not escalate (clean proceed path)", async () => {
+    // All default fakes return null / no-command → every gate proceeds.
+    const calls = await driveExit();
+    expect(calls).toHaveLength(0);
   });
 });
