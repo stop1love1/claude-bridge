@@ -1,0 +1,16 @@
+{
+  "name": "Claude Bridge",
+  "short_name": "Bridge",
+  "start_url": "/tasks",
+  "display": "standalone",
+  "background_color": "#12151c",
+  "theme_color": "#12151c",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

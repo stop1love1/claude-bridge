@@ -17,6 +17,11 @@ export const metadata: Metadata = {
     template: "%s | Claude Bridge",
   },
   description: "Owner dashboard for dispatching cross-repo tasks to a Claude agent team.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Claude Bridge",
+  },
 };
 
 // Explicit viewport so iOS Safari behaves: `initial-scale=1` keeps
@@ -25,6 +30,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  themeColor: "#12151c",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
