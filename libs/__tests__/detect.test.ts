@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { heuristicDetector } from "../detect/heuristic";
+import { classifyRepoRoles, detectScopeSync, heuristicDetector } from "../detect/heuristic";
 import { renderDetectedScope } from "../detect/render";
 import {
   countMatches,
@@ -290,5 +290,121 @@ describe("hashTaskBody", () => {
 
   it("distinguishes different inputs", () => {
     expect(hashTaskBody("hello")).not.toBe(hashTaskBody("world"));
+  });
+});
+
+// Migrated from the deleted `libs/repoHeuristic.ts` shim + its test file
+// (`libs/__tests__/repoHeuristic.test.ts`). `classifyRepoRoles` and the
+// sync `detectScopeSync` core aren't exercised elsewhere in this file
+// (the `heuristicDetector` suite above only drives the async wrapper),
+// so those cases are kept here against the real detect-layer exports
+// instead of being dropped.
+describe("classifyRepoRoles", () => {
+  const orchestrationProfile = makeProfile({
+    name: "claude-bridge",
+    summary: "orchestrator",
+    stack: ["next", "react"],
+    features: ["orchestration"],
+    signals: {
+      hasPackageJson: true,
+      hasReadme: false,
+      hasClaudeMd: false,
+      hasNextConfig: true,
+      hasPrismaSchema: false,
+      hasTailwindConfig: false,
+      hasNestCoreDep: false,
+      hasReactDep: true,
+      routerStyle: "app",
+      primaryLang: "ts",
+    },
+  });
+
+  it("classifies a NestJS/Prisma profile as backend only", () => {
+    expect(classifyRepoRoles(apiProfile)).toEqual(["backend"]);
+  });
+
+  it("classifies a Next/Tailwind profile as frontend only", () => {
+    expect(classifyRepoRoles(webProfile)).toEqual(["frontend"]);
+  });
+
+  it("classifies an orchestration repo exclusively (suppresses fe/be)", () => {
+    expect(classifyRepoRoles(orchestrationProfile)).toEqual(["orchestration"]);
+  });
+
+  it("returns empty when no profile is provided", () => {
+    expect(classifyRepoRoles(undefined)).toEqual([]);
+  });
+});
+
+describe("detectScopeSync — sync core (mirrors heuristicDetector.detect)", () => {
+  const bridgeProfile = makeProfile({
+    name: "claude-bridge",
+    summary: "orchestrator",
+    stack: ["next", "react"],
+    features: ["orchestration"],
+    signals: {
+      hasPackageJson: true,
+      hasReadme: false,
+      hasClaudeMd: false,
+      hasNextConfig: true,
+      hasPrismaSchema: false,
+      hasTailwindConfig: false,
+      hasNestCoreDep: false,
+      hasReactDep: true,
+      routerStyle: "app",
+      primaryLang: "ts",
+    },
+  });
+  const repos = ["app-web", "app-api", "claude-bridge"];
+  const profiles = { "app-web": webProfile, "app-api": apiProfile, "claude-bridge": bridgeProfile };
+
+  it("picks a backend-stacked repo for backend-flavored prompts", () => {
+    const scope = detectScopeSync({
+      taskBody: "Add a new endpoint POST /users/me with a Prisma migration and a JWT-protected controller.",
+      repos,
+      profiles,
+    });
+    expect(scope.repos[0]?.name).toBe("app-api");
+    expect(scope.repos[0]?.score).toBeGreaterThan(0);
+  });
+
+  it("picks a frontend-stacked repo for frontend-flavored prompts", () => {
+    const scope = detectScopeSync({
+      taskBody: "Build a React component with Tailwind that renders a form modal on the dashboard page.",
+      repos,
+      profiles,
+    });
+    expect(scope.repos[0]?.name).toBe("app-web");
+    expect(scope.repos[0]?.score).toBeGreaterThan(0);
+  });
+
+  it("picks the orchestration repo for bridge-flavored prompts", () => {
+    const scope = detectScopeSync({
+      taskBody: "Update the coordinator agent to write meta.json after spawning a child via the bridge permission popup.",
+      repos,
+      profiles,
+    });
+    expect(scope.repos[0]?.name).toBe("claude-bridge");
+    expect(scope.repos[0]?.score).toBeGreaterThan(0);
+  });
+
+  it("returns no repos when the prompt has no recognizable signal", () => {
+    const scope = detectScopeSync({ taskBody: "Please write a haiku about elephants.", repos, profiles });
+    expect(scope.repos).toHaveLength(0);
+    expect(scope.reason).toBe("heuristic: no clear match");
+  });
+
+  it("excludes repos not present in the allowlist", () => {
+    const scope = detectScopeSync({
+      taskBody: "Update the bridge coordinator agent and meta.json permission flow.",
+      repos: ["app-api"],
+      profiles: { "app-api": apiProfile },
+    });
+    expect(scope.repos[0]?.name === undefined || scope.repos[0]?.name === "app-api").toBe(true);
+  });
+
+  it("returns no repos when no profiles are passed (no signal)", () => {
+    const scope = detectScopeSync({ taskBody: "Add an endpoint", repos, profiles: undefined });
+    expect(scope.repos).toHaveLength(0);
   });
 });

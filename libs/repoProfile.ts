@@ -8,10 +8,10 @@
  * sibling never crashes the bridge.
  *
  * Two consumers:
- *  - `repoHeuristic.ts` — boosts the keyword scoring with profile signals.
- *  - `coordinator.ts`   — prepends a "## Repo profiles" block to every
- *                         coordinator prompt so the LLM knows the
- *                         contract surface of each candidate repo.
+ *  - `detect/heuristic.ts` — boosts the keyword scoring with profile signals.
+ *  - `coordinator.ts`      — prepends a "## Repo profiles" block to every
+ *                            coordinator prompt so the LLM knows the
+ *                            contract surface of each candidate repo.
  *
  * TODO: an LLM-assisted upgrade can plug in later via a
  * `summarizeWithLLM(profile)` hook on top of this heuristic baseline.

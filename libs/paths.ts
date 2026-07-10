@@ -64,13 +64,6 @@ export const BRIDGE_LOGIC_DIR = join(BRIDGE_ROOT, "prompts");
 export const HOOKS_DIR = join(BRIDGE_ROOT, "agents");
 
 /**
- * @deprecated Use `BRIDGE_LOGIC_DIR` for markdown templates and
- * `HOOKS_DIR` for `permission-hook.cjs`. Kept as an alias so older
- * callers don't break during the migration.
- */
-export const AGENTS_DIR = BRIDGE_LOGIC_DIR;
-
-/**
  * Scratch dir for bridge-managed runtime state per free (non-task)
  * session: per-session `--settings <path>` JSON, anything else internal
  * the bridge generates that ISN'T a user-uploaded chat attachment.

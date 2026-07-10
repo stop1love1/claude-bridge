@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanRepo, __test } from "../repoProfile";
-import { suggestRepo } from "../repoHeuristic";
+import { detectScopeSync } from "../detect/heuristic";
 
 function mktmp(label: string): string {
   return mkdtempSync(join(tmpdir(), `bridge-repoprofile-${label}-`));
@@ -252,28 +252,28 @@ describe("suggestRepo — profile-aware classification", () => {
   const repos = ["app-web", "app-api"];
 
   it("classifies a backend-stacked repo and scores API prompts against it", () => {
-    const out = suggestRepo(
-      "Add an enrollment endpoint for the lms course catalog with auth.",
+    const scope = detectScopeSync({
+      taskBody: "Add an enrollment endpoint for the lms course catalog with auth.",
       repos,
       profiles,
-    );
-    expect(out.repo).toBe("app-api");
-    expect(out.score).toBeGreaterThan(0);
-    expect(out.reason).toMatch(/backend|feature|stack|profile/);
+    });
+    expect(scope.repos[0]?.name).toBe("app-api");
+    expect(scope.repos[0]?.score).toBeGreaterThan(0);
+    expect(scope.repos[0]?.reason).toMatch(/backend|feature|stack|profile/);
   });
 
   it("classifies a frontend-stacked repo and scores UI prompts against it", () => {
-    const out = suggestRepo(
-      "Build a tailwind dashboard component for the course list.",
+    const scope = detectScopeSync({
+      taskBody: "Build a tailwind dashboard component for the course list.",
       repos,
       profiles,
-    );
-    expect(out.repo).toBe("app-web");
-    expect(out.score).toBeGreaterThan(0);
+    });
+    expect(scope.repos[0]?.name).toBe("app-web");
+    expect(scope.repos[0]?.score).toBeGreaterThan(0);
   });
 
   it("returns null when no profiles are supplied (no signal)", () => {
-    const out = suggestRepo("Build a Tailwind component.", repos, undefined);
-    expect(out.repo).toBeNull();
+    const scope = detectScopeSync({ taskBody: "Build a Tailwind component.", repos, profiles: undefined });
+    expect(scope.repos).toHaveLength(0);
   });
 });
