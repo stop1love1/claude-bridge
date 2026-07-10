@@ -515,6 +515,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  autoQueueSettings: (opts?: ReqOpts) =>
+    req<{ enabled: boolean; maxConcurrent: number }>(`/settings/auto-queue`, { signal: opts?.signal }),
+  updateAutoQueueSettings: (patch: { enabled?: boolean; maxConcurrent?: number }) =>
+    req<{ enabled: boolean; maxConcurrent: number }>(`/settings/auto-queue`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   appTree: (appRouteKey: string, dir = "", opts?: ReqOpts) =>
     req<{
       rel: string;

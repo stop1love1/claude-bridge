@@ -90,6 +90,7 @@ function SettingsPage() {
           <DetectSettingsSection />
           <PlanGateSettingsSection />
           <ConfidenceSettingsSection />
+          <AutoQueueSettingsSection />
           <TrustedDevicesSection />
           <TelegramSettingsSection />
           <TelegramUserSection />
@@ -563,6 +564,108 @@ function ConfidenceSettingsSection() {
             />
             <p className="text-[11px] text-muted-foreground">
               Runs scoring below this hold their outward action. Default 70.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AutoQueueSettingsSection() {
+  const [enabled, setEnabled] = useState(false);
+  const [maxConcurrent, setMaxConcurrent] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const s = await api.autoQueueSettings({ signal: ac.signal });
+        if (ac.signal.aborted) return;
+        setEnabled(s.enabled);
+        setMaxConcurrent(s.maxConcurrent);
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [toast]);
+
+  const save = async (patch: { enabled?: boolean; maxConcurrent?: number }) => {
+    setSaving(true);
+    try {
+      const next = await api.updateAutoQueueSettings(patch);
+      setEnabled(next.enabled);
+      setMaxConcurrent(next.maxConcurrent);
+      toast("success", "Auto-queue saved");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <Sparkles size={14} className="text-primary" />
+        <h3 className="text-[13px] sm:text-sm font-semibold">Auto-queue</h3>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-4">
+        Lets the bridge dispatch <strong>TODO</strong> tasks on its own, oldest
+        first, without waiting for you to open one. Every 30s the scheduler
+        checks how many coordinators are already running (or about to be) and,
+        if under the cap below, spawns the next eligible TODO task — the same
+        path <code className="font-mono">/retry</code> uses. Tasks mid-planning
+        (awaiting your plan approval) are skipped, never re-dispatched. Off by
+        default.
+      </p>
+
+      {loading ? (
+        <ListSkeleton rows={2} />
+      ) : (
+        <div className="grid gap-3">
+          <button
+            type="button"
+            onClick={() => save({ enabled: !enabled })}
+            disabled={saving}
+            aria-pressed={enabled}
+            className={`text-left rounded-md border p-3 transition-colors disabled:opacity-50 ${
+              enabled ? "border-primary/40 bg-primary/5" : "border-border hover:border-primary/30 hover:bg-accent/30"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex h-3.5 w-3.5 rounded-full border ${enabled ? "border-primary bg-primary" : "border-border bg-transparent"}`} aria-hidden />
+              <span className="text-sm font-medium">Auto-dispatch TODO tasks {enabled ? "(on)" : "(off)"}</span>
+            </div>
+            <p className="mt-1 ml-5 text-[11px] text-muted-foreground">
+              {enabled
+                ? "The scheduler spawns the oldest eligible TODO task once a concurrency slot frees up."
+                : "Tasks stay in TODO until you dispatch them manually."}
+            </p>
+          </button>
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="auto-queue-max">Max concurrent coordinators</Label>
+            <Input
+              id="auto-queue-max"
+              type="number"
+              min={1}
+              max={20}
+              value={String(maxConcurrent)}
+              onChange={(e) => setMaxConcurrent(Math.max(1, Math.min(20, Math.floor(Number(e.target.value) || 1))))}
+              onBlur={() => save({ maxConcurrent })}
+              disabled={saving || !enabled}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              How many coordinators (across all tasks) may run at once before
+              auto-queue holds off dispatching more. Default 1.
             </p>
           </div>
         </div>
