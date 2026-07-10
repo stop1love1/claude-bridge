@@ -139,8 +139,9 @@ interface SpeculativeDecision {
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * Prompt-caching opt-in. Off by default — set `BRIDGE_PROMPT_CACHE=1`
- * to enable. When on, the agents route splits the child prompt into:
+ * Prompt-caching split. On by default — set `BRIDGE_PROMPT_CACHE=0` to
+ * disable and fall back to the legacy monolithic prompt. When on, the
+ * agents route splits the child prompt into:
  *
  *   - **System append** (stable per-app): house rules, house style,
  *     memory, repo profile, available helpers, pinned files, verify
@@ -158,7 +159,7 @@ type Ctx = { params: Promise<{ id: string }> };
  * `buildChildPrompt` output — no behavioral change beyond moving stable
  * bits into the cacheable system-prompt slot.
  */
-const PROMPT_CACHE_ENABLED = process.env.BRIDGE_PROMPT_CACHE === "1";
+const PROMPT_CACHE_ENABLED = process.env.BRIDGE_PROMPT_CACHE !== "0";
 
 // `ensureSystemPromptFile` (content-addressed cache writer) now lives in
 // `@/libs/systemPrompt` so the spawn layer can share it for the ultracode
@@ -732,12 +733,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     peerNotes,
   };
 
-  // Prompt-cache split (opt-in via `BRIDGE_PROMPT_CACHE=1`). When on,
-  // stable per-app sections are written to a content-addressed file
-  // and passed via `--append-system-prompt-file` so the Anthropic API
-  // can cache them across spawns. The user message (stdin) keeps only
-  // the task-specific content. When off, everything goes via stdin
-  // exactly as before.
+  // Prompt-cache split (on by default; opt out via `BRIDGE_PROMPT_CACHE=0`).
+  // When on, stable per-app sections are written to a content-addressed
+  // file and passed via `--append-system-prompt-file` so the Anthropic
+  // API can cache them across spawns. The user message (stdin) keeps
+  // only the task-specific content. When off, everything goes via
+  // stdin exactly as before.
   let prependedPrompt: string;
   let systemPromptFile: string | undefined;
   if (PROMPT_CACHE_ENABLED) {

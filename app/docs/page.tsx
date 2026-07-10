@@ -254,6 +254,7 @@ function Configuration() {
     { name: "ALLOWED_DEV_ORIGINS", def: "—", purpose: "Comma-separated origins allowed to hit the dev server" },
     { name: "BRIDGE_LOCK_VERIFY", def: "0", purpose: "1 = reject API edits to per-app verify commands" },
     { name: "BRIDGE_TRUSTED_PROXY", def: "0", purpose: "1 = trust XFF headers when behind a proxy" },
+    { name: "BRIDGE_PROMPT_CACHE", def: "1", purpose: "0 = disable the system/user prompt-cache split; falls back to the monolithic child prompt" },
     { name: "NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS", def: "—", purpose: "Single-user opt-in for composer bypass mode" },
   ];
   return (
