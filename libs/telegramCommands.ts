@@ -61,6 +61,11 @@ import {
   type PendingRequest,
 } from "./permissionStore";
 import {
+  listPendingLogins,
+  answerPendingLogin,
+  type PendingLogin,
+} from "./loginApprovals";
+import {
   loadDetectInput,
   refreshScope,
   writeScopeCache,
@@ -383,6 +388,22 @@ export const COMMANDS: CommandDef[] = [
     name: "deny",
     description: "Deny a pending permission — usage: /deny <reqId>",
     handler: async (args) => commandPermissionAnswer(args[0], "deny"),
+  },
+  // ─── Device-login approvals ────────────────────────────────────────
+  {
+    name: "logins",
+    description: "List pending device-login approvals",
+    handler: async () => renderPendingLogins(),
+  },
+  {
+    name: "approvelogin",
+    description: "Approve a pending device login — usage: /approvelogin <idPrefix>",
+    handler: async (args) => commandLoginAnswer(args[0], "approved"),
+  },
+  {
+    name: "denylogin",
+    description: "Deny a pending device login — usage: /denylogin <idPrefix>",
+    handler: async (args) => commandLoginAnswer(args[0], "denied"),
   },
   // ─── Apps ──────────────────────────────────────────────────────────
   {
@@ -969,6 +990,52 @@ async function commandPermissionAnswer(
   return `${icon} ${decision === "allow" ? "Allowed" : "Denied"} \`${escapeMarkdownV2(target.tool)}\` for session \`${target.sessionId.slice(0, 8)}\``;
 }
 
+/**
+ * `/approvelogin <idPrefix>` / `/denylogin <idPrefix>`. Same
+ * unique-prefix UX as `commandPermissionAnswer` above (≥6 chars,
+ * ambiguity error when more than one pending login shares a prefix).
+ * `PendingLogin.id` is a 16-char hex string, so a 6-char prefix is
+ * already extremely unlikely to collide.
+ *
+ * Security note: answering here is EQUIVALENT to an existing trusted
+ * device clicking Approve/Deny in the web UI's approval modal — the
+ * Telegram chat-id allowlist checked in `handleUpdate` above is the
+ * ONLY auth boundary. Anyone who can message the configured chat can
+ * trust a brand-new device onto the account, same trust model as
+ * `/allow` / `/deny` for tool permissions and `/approve` for the plan
+ * gate.
+ */
+async function commandLoginAnswer(
+  idArg: string | undefined,
+  decision: "approved" | "denied",
+): Promise<string> {
+  const cmd = decision === "approved" ? "approvelogin" : "denylogin";
+  if (!idArg) return `Usage: \`/${cmd} <idPrefix>\` \\(from a 🔐 login ping or /logins\\)`;
+  const lookup = idArg.trim().toLowerCase();
+  if (lookup.length < 6) {
+    return "Login id is too short \\(needs ≥ 6 chars to avoid ambiguity\\)";
+  }
+  const matches = listPendingLogins().filter((p: PendingLogin) =>
+    p.id.toLowerCase().startsWith(lookup),
+  );
+  if (matches.length === 0) {
+    return `No pending login matching \`${escapeMarkdownV2(idArg)}\``;
+  }
+  if (matches.length > 1) {
+    const previews = matches
+      .slice(0, 3)
+      .map((p) => `\`${p.id.slice(0, 12)}\``)
+      .join(", ");
+    return `Ambiguous \`${escapeMarkdownV2(idArg)}\` matches ${matches.length}: ${previews} \\(use a longer prefix\\)`;
+  }
+  const target = matches[0];
+  const updated = answerPendingLogin(target.id, decision);
+  if (!updated) return `Login \`${escapeMarkdownV2(idArg)}\` no longer pending`;
+  const icon = decision === "approved" ? "✅" : "🛑";
+  const ua = escapeMarkdownV2(truncate(target.userAgent, 40));
+  return `${icon} ${decision === "approved" ? "Approved" : "Denied"} device login \`${target.id.slice(0, 8)}\` \\(${ua}\\)`;
+}
+
 async function commandScan(appArg: string | undefined): Promise<string> {
   // No arg → auto-detect siblings of the bridge folder.
   if (!appArg) {
@@ -1022,6 +1089,30 @@ function renderPending(): string {
     );
   }
   lines.push("", "Reply with `/allow <reqId>` or `/deny <reqId>` \\(8\\-char prefix is enough\\)\\.");
+  return lines.join("\n");
+}
+
+/**
+ * `/logins` — list pending device-login approvals (id-prefix, UA, IP,
+ * age) so the operator can decide from the phone without opening the
+ * approval modal in the web UI.
+ */
+function renderPendingLogins(): string {
+  const pending = listPendingLogins();
+  if (pending.length === 0) return "🟢 No pending device logins";
+  const lines: string[] = [`*${pending.length} pending device login\\(s\\):*`, ""];
+  for (const p of pending) {
+    const ua = escapeMarkdownV2(truncate(p.userAgent, 60));
+    const ip = escapeMarkdownV2(p.remoteIp);
+    const ageSec = Math.max(0, Math.round((Date.now() - Date.parse(p.createdAt)) / 1000));
+    lines.push(
+      `🔐 \`${p.id.slice(0, 8)}\` · ${ua} from \`${ip}\` · ${ageSec}s ago`,
+    );
+  }
+  lines.push(
+    "",
+    "Reply with `/approvelogin <id>` or `/denylogin <id>` \\(8\\-char prefix is enough\\)\\.",
+  );
   return lines.join("\n");
 }
 

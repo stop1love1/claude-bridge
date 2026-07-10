@@ -32,6 +32,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 
 export interface PendingLogin {
   id: string;
@@ -55,11 +56,33 @@ export interface PendingLogin {
 
 interface Store {
   pending: Map<string, PendingLogin>;
+  /**
+   * Task 10: fan-out emitter for "a new pending login was just
+   * created". Mirrors `permissionStore`'s `globalEmitter` — the
+   * Telegram notifier subscribes via `subscribeLoginApprovals` so it
+   * can ping the operator the moment a new device asks to be trusted,
+   * without polling this store itself.
+   */
+  emitter: EventEmitter;
 }
 
 const G = globalThis as unknown as { __bridgeLoginApprovals?: Store };
 const store: Store =
-  G.__bridgeLoginApprovals ?? { pending: new Map<string, PendingLogin>() };
+  G.__bridgeLoginApprovals ?? {
+    pending: new Map<string, PendingLogin>(),
+    emitter: (() => {
+      const e = new EventEmitter();
+      e.setMaxListeners(0);
+      return e;
+    })(),
+  };
+// Backfill the emitter for an HMR reload of an older module instance
+// that stashed a store without one (same guard `permissionStore` uses).
+if (!store.emitter) {
+  const e = new EventEmitter();
+  e.setMaxListeners(0);
+  store.emitter = e;
+}
 G.__bridgeLoginApprovals = store;
 
 /** TTL for an unanswered approval — 3 minutes. */
@@ -116,7 +139,33 @@ export function createPendingLogin(args: {
     status: "pending",
   };
   store.pending.set(entry.id, entry);
+  // Fire AFTER the entry is in the store so a subscriber that turns
+  // around and calls `getPendingLogin`/`listPendingLogins` synchronously
+  // (e.g. a notifier building its message) sees consistent state.
+  store.emitter.emit("pending", entry);
   return entry;
+}
+
+/**
+ * Subscribe to every newly-created pending login, across the whole
+ * process. Used by the Telegram notifier to ping the operator the
+ * moment a new device logs in and needs an existing trusted device to
+ * vouch for it — see `libs/telegramNotifier.ts`'s `onPendingLogin`.
+ * Never throws into the emitter: a crashing subscriber must not break
+ * others queued behind it. Returns an unsubscribe handle.
+ */
+export function subscribeLoginApprovals(
+  cb: (entry: PendingLogin) => void,
+): () => void {
+  const handler = (entry: PendingLogin) => {
+    try {
+      cb(entry);
+    } catch {
+      /* swallow — never crash the emitter */
+    }
+  };
+  store.emitter.on("pending", handler);
+  return () => store.emitter.off("pending", handler);
 }
 
 /**

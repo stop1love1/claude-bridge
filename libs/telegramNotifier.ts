@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { subscribeMetaAll, readMeta, type MetaChangeEvent } from "./meta";
 import { computeGateStatus, renderGateStatusLine, type GateStatus } from "./gateStatus";
 import { subscribeAllPermissions, type PendingRequest } from "./permissionStore";
+import { subscribeLoginApprovals, type PendingLogin } from "./loginApprovals";
 import {
   getManifestTelegramSettings,
   type TelegramNotificationLevel,
@@ -53,9 +54,10 @@ import {
 import { sendPushToAll } from "./webPush";
 
 /**
- * Task 9: best-effort Web Push fan-out beside the four key Telegram
- * notify sites (permission pending, coordinator ready-for-review
- * summary, task BLOCKED, plan awaiting-approval). `sendPushToAll`
+ * Task 9: best-effort Web Push fan-out beside the key Telegram notify
+ * sites (permission pending, coordinator ready-for-review summary,
+ * task BLOCKED, plan awaiting-approval, and — Task 10 — device-login
+ * pending). `sendPushToAll`
  * already no-ops with zero subscribers and never rejects internally —
  * this wrapper adds a belt-and-suspenders `.catch()` so a call site
  * can `notifyPush(...)` with no further ceremony and it can NEVER
@@ -648,6 +650,49 @@ export function renderPlanAwaitingApprovalMessage(args: {
   );
 }
 
+/**
+ * Task 10: render the "new device login pending" ping. Fires when
+ * `libs/loginApprovals.createPendingLogin` creates an entry — i.e. a
+ * NEW device supplied valid credentials but ≥ 1 trusted device already
+ * exists, so the login route parked it instead of signing a cookie
+ * outright (see that file's header comment for the full flow).
+ *
+ * Security note: approving via `/approvelogin` below is EQUIVALENT to
+ * an existing trusted device clicking Approve in the web UI's modal —
+ * the Telegram chat-id allowlist (`telegramCommands.handleUpdate`) is
+ * the ONLY auth boundary here, same as `/allow` / `/deny` for tool
+ * permissions and `/approve` for the plan gate.
+ */
+export function renderPendingLoginMessage(entry: PendingLogin): string {
+  const ua = escapeMarkdownV2(entry.userAgent.slice(0, 120));
+  const ip = escapeMarkdownV2(entry.remoteIp);
+  const prefix = escapeMarkdownV2(entry.id.slice(0, 8));
+  return `🔐 New device login pending: ${ua} from \`${ip}\` — \`/approvelogin ${prefix}\``;
+}
+
+/**
+ * Same "normal+" gating as `shouldNotifyIntakeAwaitingApproval` — a
+ * device asking to be trusted is exactly the kind of "needs your
+ * attention soon" event that should reach the operator at every level
+ * except `minimal`.
+ */
+function shouldNotifyPendingLogin(level: TelegramNotificationLevel): boolean {
+  return level !== "minimal";
+}
+
+function onPendingLogin(entry: PendingLogin): void {
+  const level = getManifestTelegramSettings().notificationLevel;
+  if (!shouldNotifyPendingLogin(level)) return;
+  const dedupeKey = `login-pending:${entry.id}`;
+  if (!shouldSend(dedupeKey)) return;
+  void sendTelegram(renderPendingLoginMessage(entry));
+  // Task 9-style web-push fan-out beside the Telegram ping.
+  notifyPush({
+    title: "🔐 New device login pending",
+    body: `${entry.userAgent.slice(0, 120)} from ${entry.remoteIp}`,
+  });
+}
+
 function sectionIcon(section: string): string {
   switch (section) {
     case SECTION_TODO: return "⚪";
@@ -749,6 +794,7 @@ export function ensureTelegramNotifier(): void {
   state.installed = true;
   state.unsubscribers.push(subscribeMetaAll(onMetaChange));
   state.unsubscribers.push(subscribeAllPermissions(onPermission));
+  state.unsubscribers.push(subscribeLoginApprovals(onPendingLogin));
   // Inbound side: long-poll Telegram for slash commands so the operator
   // can run `/tasks`, `/done <id>`, etc. from their phone. The poller
   // checks for bot creds itself and is a no-op when only the
