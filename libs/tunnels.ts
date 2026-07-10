@@ -348,6 +348,12 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
     }
     entry.endedAt = new Date().toISOString();
     pushLog(entry, `[exit] code=${code ?? "null"} signal=${signal ?? "null"}`);
+    // The process died on its own (crash, external kill) — exactly the
+    // unattended failure mode auto-start makes likely. If this tunnel's
+    // URL is still serving as the bridge's publicUrl, clear it so links
+    // don't keep pointing at a dead origin. Idempotent for the explicit
+    // stop paths (stopTunnel already cleared it before SIGTERM landed).
+    onTunnelStopped(entry);
     // Cap retained history so a long-running bridge with frequent
     // tunnel restarts doesn't accumulate the full set forever.
     pruneTunnelHistory();

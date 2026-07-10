@@ -249,6 +249,96 @@ describe("tunnel → publicUrl wiring", () => {
 
     expect(getManifestPublicUrl()).toBe("");
   });
+
+  it("clears publicUrl when the serving tunnel's process exits on its own (crash path)", async () => {
+    const fakeChild = await mockSpawn();
+    const { startTunnel } = await import("../tunnels");
+    const { getManifestPublicUrl } = await import("../apps");
+
+    const entry = startTunnel({ port: 7777, provider: "localtunnel" });
+    createdIds.push(entry.id);
+    (fakeChild.stdout as unknown as EventEmitter).emit(
+      "data",
+      "your url is: https://abc-123.loca.lt\n",
+    );
+    expect(getManifestPublicUrl()).toBe("https://abc-123.loca.lt");
+
+    // Simulate the tunnel process dying WITHOUT stopTunnel/removeTunnel —
+    // crash, OOM-kill, external taskkill. This is the unattended failure
+    // mode auto-start makes likely; publicUrl must not stay stale.
+    (fakeChild as unknown as EventEmitter).emit("exit", 1, null);
+
+    expect(getManifestPublicUrl()).toBe("");
+  });
+
+  it("leaves publicUrl alone on self-exit if the operator changed it meanwhile", async () => {
+    const fakeChild = await mockSpawn();
+    const { startTunnel } = await import("../tunnels");
+    const { getManifestPublicUrl, setManifestPublicUrl } = await import("../apps");
+
+    const entry = startTunnel({ port: 7777, provider: "localtunnel" });
+    createdIds.push(entry.id);
+    (fakeChild.stdout as unknown as EventEmitter).emit(
+      "data",
+      "your url is: https://abc-123.loca.lt\n",
+    );
+    expect(getManifestPublicUrl()).toBe("https://abc-123.loca.lt");
+
+    setManifestPublicUrl("https://operator-set.example.com");
+    (fakeChild as unknown as EventEmitter).emit("exit", 1, null);
+
+    expect(getManifestPublicUrl()).toBe("https://operator-set.example.com");
+  });
+
+  it("maybeAutoStartTunnel spawns a tunnel with the configured port + provider when enabled", async () => {
+    await mockSpawn();
+    const { maybeAutoStartTunnel, listTunnels } = await import("../tunnels");
+    const { setTunnelAutoStart } = await import("../apps");
+    setTunnelAutoStart({ enabled: true, provider: "localtunnel", port: 7777 });
+
+    await maybeAutoStartTunnel();
+
+    const live = listTunnels().filter(
+      (t) => t.status === "starting" || t.status === "running",
+    );
+    createdIds.push(...live.map((t) => t.id));
+    expect(live).toHaveLength(1);
+    expect(live[0].port).toBe(7777);
+    expect(live[0].provider).toBe("localtunnel");
+  });
+
+  it("maybeAutoStartTunnel is a no-op when disabled or unset", async () => {
+    await mockSpawn();
+    const { maybeAutoStartTunnel, listTunnels } = await import("../tunnels");
+    const { setTunnelAutoStart } = await import("../apps");
+
+    // Unset (null) config.
+    await maybeAutoStartTunnel();
+    expect(listTunnels()).toHaveLength(0);
+
+    // Present but disabled.
+    setTunnelAutoStart({ enabled: false, provider: "localtunnel", port: 7777 });
+    await maybeAutoStartTunnel();
+    expect(listTunnels()).toHaveLength(0);
+  });
+
+  it("maybeAutoStartTunnel catches + warns when startTunnel throws (never propagates)", async () => {
+    await mockSpawn();
+    const { maybeAutoStartTunnel, listTunnels } = await import("../tunnels");
+    const { setTunnelAutoStart } = await import("../apps");
+    // ngrok with no authtoken saved → startTunnel throws synchronously
+    // ("ngrok authtoken not set — …"). Auto-start must swallow it.
+    setTunnelAutoStart({ enabled: true, provider: "ngrok", port: 7777 });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(maybeAutoStartTunnel()).resolves.toBeUndefined();
+
+    expect(listTunnels()).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(
+      "[tunnels] auto-start failed:",
+      expect.stringContaining("authtoken"),
+    );
+  });
 });
 
 describe("getTunnelAutoStart / setTunnelAutoStart", () => {
