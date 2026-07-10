@@ -313,6 +313,16 @@ export interface TunnelInstallResult {
   log: string;
 }
 
+/**
+ * Mirrors `libs/apps.ts#TunnelAutoStart` — the "auto-start on boot"
+ * setting rendered as a toggle on the Tunnels page.
+ */
+export interface TunnelAutoStart {
+  enabled: boolean;
+  provider: TunnelProvider;
+  port: number;
+}
+
 export type DetectEvent =
   | { type: "started"; roots: string[]; depth: number }
   | { type: "scanning"; root: string }

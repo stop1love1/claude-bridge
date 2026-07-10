@@ -30,7 +30,8 @@ import {
   readBridgeManifest,
   updateBridgeManifest,
 } from "./bridgeManifest";
-import { USER_CLAUDE_DIR } from "./paths";
+import { getManifestPublicUrl, getTunnelAutoStart, setManifestPublicUrl } from "./apps";
+import { BRIDGE_PORT, USER_CLAUDE_DIR } from "./paths";
 import { treeKill } from "./processKill";
 
 export type TunnelStatus = "starting" | "running" | "error" | "stopped";
@@ -131,6 +132,56 @@ export function extractTunnelUrl(
   if (typeof line !== "string" || !line) return null;
   const m = URL_RES[provider]?.exec(line);
   return m && m[1] ? m[1] : null;
+}
+
+/**
+ * The port the bridge itself listens on. A tiny wrapper around the
+ * shared `BRIDGE_PORT` constant (`libs/paths.ts`) so the "is this
+ * tunnel exposing the bridge?" check below reads as one named concept
+ * rather than an inline env lookup.
+ */
+function resolveBridgePort(): number {
+  return BRIDGE_PORT;
+}
+
+/**
+ * Fired the moment a tunnel entry's status flips to "running" (called
+ * from both the stdout and stderr URL-match sites in `startTunnel`).
+ * When the tunnel is exposing the bridge's own port, its public URL
+ * becomes the operator-facing `bridge.json#publicUrl` automatically —
+ * so Telegram links / share links resolve through the tunnel instead of
+ * `localhost`. Tunnels for any other port (e.g. a Next dev server on
+ * 3000) never touch `publicUrl`.
+ *
+ * Wrapped in try/catch: a `bridge.json` write failure must never crash
+ * the stdout/stderr line parser mid-stream.
+ */
+function onTunnelRunning(entry: TunnelEntry): void {
+  if (!entry.url || entry.port !== resolveBridgePort()) return;
+  try {
+    setManifestPublicUrl(entry.url);
+  } catch (err) {
+    console.warn("[tunnels] failed to write publicUrl:", (err as Error).message);
+  }
+}
+
+/**
+ * Fired when a tunnel entry transitions to a terminal state via an
+ * explicit operator action (`stopTunnel`, `removeTunnel`,
+ * `killAllTunnels`). If the manifest's `publicUrl` still equals this
+ * entry's URL, clear it — the bridge is no longer reachable there. If
+ * the operator has since pointed `publicUrl` somewhere else, leave it
+ * alone (don't clobber a manual override with a stale clear).
+ */
+function onTunnelStopped(entry: TunnelEntry): void {
+  if (!entry.url) return;
+  try {
+    if (getManifestPublicUrl() === entry.url) {
+      setManifestPublicUrl("");
+    }
+  } catch (err) {
+    console.warn("[tunnels] failed to clear publicUrl:", (err as Error).message);
+  }
 }
 
 function pushLog(entry: TunnelEntry, line: string): void {
@@ -262,6 +313,7 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
       if (m && m[1] && !entry.url) {
         entry.url = m[1];
         entry.status = "running";
+        onTunnelRunning(entry);
       }
     }
   });
@@ -277,6 +329,7 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
       if (m && m[1] && !entry.url) {
         entry.url = m[1];
         entry.status = "running";
+        onTunnelRunning(entry);
       }
     }
   });
@@ -362,6 +415,7 @@ export function stopTunnel(id: string): boolean {
   treeKill(slot.child, "SIGTERM");
   slot.entry.status = "stopped";
   slot.entry.endedAt = new Date().toISOString();
+  onTunnelStopped(slot.entry);
   const t = setTimeout(() => {
     if (slot.child.exitCode === null && slot.child.signalCode === null) {
       treeKill(slot.child, "SIGKILL");
@@ -372,9 +426,15 @@ export function stopTunnel(id: string): boolean {
 }
 
 export function removeTunnel(id: string): boolean {
-  const existed = reg.tunnels.has(id);
+  const slot = reg.tunnels.get(id);
+  if (!slot) return false;
+  // Covers the case where the process ended on its own (crash / clean
+  // exit) without ever going through `stopTunnel` — the operator's
+  // "Remove" click is the first chance to notice the publicUrl is
+  // stale and clear it.
+  onTunnelStopped(slot.entry);
   reg.tunnels.delete(id);
-  return existed;
+  return true;
 }
 
 /**
@@ -394,7 +454,32 @@ export function killAllTunnels(): void {
       treeKill(slot.child, "SIGTERM");
       slot.entry.status = "stopped";
       slot.entry.endedAt = new Date().toISOString();
+      onTunnelStopped(slot.entry);
     }
+  }
+}
+
+/**
+ * Called once at boot (`instrumentation.ts`, after shutdown handlers
+ * are registered) to auto-spawn a tunnel when the operator has opted in
+ * via the Tunnels page's "Auto-start on boot" toggle
+ * (`bridge.json#tunnels.autoStart`). No-op when unset/disabled. Never
+ * throws — a misconfigured provider (e.g. ngrok with no authtoken saved
+ * yet) must not block the rest of the boot sequence.
+ */
+export async function maybeAutoStartTunnel(): Promise<void> {
+  let cfg: ReturnType<typeof getTunnelAutoStart>;
+  try {
+    cfg = getTunnelAutoStart();
+  } catch (err) {
+    console.warn("[tunnels] auto-start failed:", (err as Error).message);
+    return;
+  }
+  if (!cfg || !cfg.enabled) return;
+  try {
+    startTunnel({ port: cfg.port, provider: cfg.provider });
+  } catch (err) {
+    console.warn("[tunnels] auto-start failed:", (err as Error).message);
   }
 }
 

@@ -13,6 +13,7 @@ import type {
   TunnelProvider,
   TunnelProviderStatus,
   TunnelInstallResult,
+  TunnelAutoStart,
   UsageSnapshot,
 } from "./types";
 import type { ShareView, ShareGrants, ShareGit } from "../shareStore";
@@ -377,6 +378,13 @@ export const api = {
       `/tunnels/providers/ngrok/authtoken`,
       { method: "PUT", body: JSON.stringify({ authtoken }) },
     ),
+  tunnelAutoStart: (opts?: ReqOpts) =>
+    req<TunnelAutoStart>(`/tunnels/settings`, { signal: opts?.signal }),
+  updateTunnelAutoStart: (patch: TunnelAutoStart) =>
+    req<TunnelAutoStart>(`/tunnels/settings`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   bridgeSettings: (opts?: ReqOpts) =>
     req<{ publicUrl: string }>(`/bridge/settings`, { signal: opts?.signal }),
   updateBridgeSettings: (patch: { publicUrl?: string }) =>

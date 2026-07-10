@@ -1237,6 +1237,67 @@ export function setManifestPublicUrl(input: string): string {
 }
 
 /**
+ * Tunnel auto-start config — `bridge.json#tunnels.autoStart`. Read by
+ * `libs/tunnels.ts#maybeAutoStartTunnel()` at boot (`instrumentation.ts`)
+ * to optionally spawn a tunnel without operator interaction. Stored
+ * under the same `tunnels` top-level key `libs/tunnels.ts` uses for the
+ * ngrok authtoken (`tunnels.ngrok.authtoken`) — reads/writes here merge
+ * with, rather than clobber, that sibling field.
+ */
+export interface TunnelAutoStart {
+  enabled: boolean;
+  provider: "localtunnel" | "ngrok";
+  port: number;
+}
+
+interface TunnelsManifestSection {
+  autoStart?: TunnelAutoStart;
+  [key: string]: unknown;
+}
+
+/**
+ * Returns `null` when unset, disabled-by-absence, or the stored shape
+ * doesn't parse (corrupt/edited-by-hand `bridge.json`) — callers treat
+ * `null` the same as "auto-start not configured".
+ */
+export function getTunnelAutoStart(): TunnelAutoStart | null {
+  const m = readManifest();
+  const tunnels = (m as { tunnels?: TunnelsManifestSection }).tunnels;
+  const a = tunnels?.autoStart;
+  if (!a || typeof a !== "object") return null;
+  const provider =
+    a.provider === "ngrok" ? "ngrok" : a.provider === "localtunnel" ? "localtunnel" : null;
+  const port = Number(a.port);
+  if (!provider || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return { enabled: a.enabled === true, provider, port };
+}
+
+/**
+ * Persist (or clear with `null`) the auto-start config. Read-modify-
+ * write so the sibling `tunnels.ngrok` section (authtoken) is preserved
+ * untouched.
+ */
+export function setTunnelAutoStart(v: TunnelAutoStart | null): void {
+  updateBridgeManifest((m) => {
+    const next: BridgeManifest = { ...(m as BridgeManifest) };
+    const tunnels: TunnelsManifestSection = {
+      ...((next.tunnels as TunnelsManifestSection | undefined) ?? {}),
+    };
+    if (v) {
+      tunnels.autoStart = { enabled: v.enabled, provider: v.provider, port: v.port };
+    } else {
+      delete tunnels.autoStart;
+    }
+    if (Object.keys(tunnels).length > 0) {
+      (next as { tunnels?: TunnelsManifestSection }).tunnels = tunnels;
+    } else {
+      delete (next as { tunnels?: TunnelsManifestSection }).tunnels;
+    }
+    return next;
+  });
+}
+
+/**
  * Telegram notifier credentials, persisted at the bridge.json top level
  * so the operator manages them through the bridge UI rather than a
  * shell-scoped `.env`. Both `botToken` + `chatId` are required for the

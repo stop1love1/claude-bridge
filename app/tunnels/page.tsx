@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { api } from "@/libs/client/api";
 import type {
+  TunnelAutoStart,
   TunnelEntry,
   TunnelProvider,
   TunnelProviderStatus,
@@ -65,12 +66,15 @@ const NGROK_AUTHTOKEN_DASHBOARD =
 function TunnelsPage() {
   const [tunnels, setTunnels] = useState<TunnelEntry[]>([]);
   const [providers, setProviders] = useState<TunnelProviderStatus[]>([]);
+  const [publicUrl, setPublicUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState<TunnelProvider>("localtunnel");
   const [port, setPort] = useState("3000");
   const [label, setLabel] = useState("");
   const [subdomain, setSubdomain] = useState("");
   const [starting, setStarting] = useState(false);
+  const [autoStart, setAutoStart] = useState<TunnelAutoStart | null>(null);
+  const [autoStartSaving, setAutoStartSaving] = useState(false);
   const toast = useToast();
   const confirm = useConfirm();
   /**
@@ -81,9 +85,10 @@ function TunnelsPage() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [t, p] = await Promise.all([
+      const [t, p, b] = await Promise.all([
         api.tunnels({ signal }),
         api.tunnelProviders({ signal }),
+        api.bridgeSettings({ signal }),
       ]);
       if (signal?.aborted) return;
       // Detect starting → running transitions and announce them once.
@@ -95,6 +100,7 @@ function TunnelsPage() {
       }
       setTunnels(t.tunnels);
       setProviders(p.providers);
+      setPublicUrl(b.publicUrl);
     } catch (e) {
       if (signal?.aborted) return;
       toast("error", (e as Error).message);
@@ -102,6 +108,44 @@ function TunnelsPage() {
       if (!signal?.aborted) setLoading(false);
     }
   }, [toast]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const s = await api.tunnelAutoStart({ signal: ac.signal });
+        if (!ac.signal.aborted) setAutoStart(s);
+      } catch {
+        // Best-effort — the toggle just renders in its default "off" state.
+      }
+    })();
+    return () => ac.abort();
+  }, []);
+
+  const toggleAutoStart = async () => {
+    const p = Number(port);
+    const nextPort = Number.isInteger(p) && p >= 1 && p <= 65535 ? p : (autoStart?.port ?? 7777);
+    const next = {
+      enabled: !(autoStart?.enabled ?? false),
+      provider,
+      port: nextPort,
+    };
+    setAutoStartSaving(true);
+    try {
+      const saved = await api.updateTunnelAutoStart(next);
+      setAutoStart(saved);
+      toast(
+        "info",
+        saved.enabled
+          ? `Will auto-start ${saved.provider} on port ${saved.port} at boot`
+          : "Auto-start on boot disabled",
+      );
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setAutoStartSaving(false);
+    }
+  };
 
   useEffect(() => {
     const ac = new AbortController();
@@ -288,6 +332,35 @@ function TunnelsPage() {
             the bridge process exits.
           </p>
 
+          <button
+            type="button"
+            onClick={() => void toggleAutoStart()}
+            disabled={autoStartSaving}
+            aria-pressed={autoStart?.enabled ?? false}
+            className={`w-full text-left rounded-md border p-2.5 transition-colors disabled:opacity-50 ${
+              autoStart?.enabled
+                ? "border-primary/40 bg-primary/5"
+                : "border-border hover:border-primary/30 hover:bg-accent/30"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex h-3.5 w-3.5 rounded-full border ${
+                  autoStart?.enabled ? "border-primary bg-primary" : "border-border bg-transparent"
+                }`}
+                aria-hidden
+              />
+              <span className="text-sm font-medium">
+                Auto-start on boot {autoStart?.enabled ? "(on)" : "(off)"}
+              </span>
+            </div>
+            <p className="mt-1 ml-5 text-[11px] text-muted-foreground">
+              {autoStart?.enabled
+                ? `Spawns ${autoStart.provider} on port ${autoStart.port} automatically the next time the bridge starts.`
+                : "Uses the provider + port picked below — flip this on after configuring them."}
+            </p>
+          </button>
+
           <section className="rounded-lg border border-border bg-card p-4">
             <div className="flex items-center gap-2 mb-3">
               <Play size={14} className="text-primary" />
@@ -453,6 +526,7 @@ function TunnelsPage() {
                     <TunnelRow
                       key={t.id}
                       t={t}
+                      isPublicUrl={!!publicUrl && t.url === publicUrl}
                       onStop={() => void stop(t)}
                       onRestart={() => void restart(t)}
                       onRemove={() => void remove(t)}
@@ -690,11 +764,14 @@ function NgrokStatusPanel({
 
 function TunnelRow({
   t,
+  isPublicUrl = false,
   onStop,
   onRestart,
   onRemove,
 }: {
   t: TunnelEntry;
+  /** True when this tunnel's URL is currently the bridge's publicUrl. */
+  isPublicUrl?: boolean;
   onStop: () => void;
   onRestart: () => void;
   onRemove: () => void;
@@ -739,6 +816,14 @@ function TunnelRow({
         )}
         {t.label && (
           <span className="text-xs text-muted-foreground truncate">— {t.label}</span>
+        )}
+        {isPublicUrl && (
+          <span
+            className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded bg-primary/15 text-primary"
+            title="This tunnel's URL is the bridge's public URL"
+          >
+            Public URL
+          </span>
         )}
         <div className="flex-1" />
         {live && (

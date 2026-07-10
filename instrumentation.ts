@@ -55,4 +55,13 @@ export async function register(): Promise<void> {
   // Edge runtime static analyzer.
   const { installShutdownHandlers } = await import("./libs/shutdownHandler");
   installShutdownHandlers();
+
+  // Optional auto-start of a tunnel at boot (`bridge.json#tunnels.autoStart`,
+  // toggled from the Tunnels page). Registered after the shutdown
+  // handlers above so a tunnel spawned here is guaranteed to be reaped
+  // on exit. No-ops when unset; never throws past this point.
+  const { maybeAutoStartTunnel } = await import("./libs/tunnels");
+  void maybeAutoStartTunnel().catch((err: unknown) => {
+    console.warn("[tunnels] auto-start failed:", (err as Error).message);
+  });
 }
