@@ -26,7 +26,15 @@
 import type { Meta, Run, RunVerify, RunVerifier, RunStyleCritic, RunSemanticVerifier } from "./meta";
 import { parseRole } from "./retryLadder";
 
-export type GateVerdict = "pass" | "fail" | "skipped" | "held";
+/**
+ * `drift` is a distinct NON-blocking verdict: the style critic blocks
+ * only on `alien` and the semantic verifier only on `broken` (see
+ * runLifecycle.ts `needsStyleRetry` / `needsSemanticRetry`) — their
+ * `drift` verdicts ship with a note, so they must not read as red.
+ * Claim-vs-diff `drift` genuinely blocks (runLifecycle.ts
+ * `needsClaimRetry`) and maps to `fail` instead.
+ */
+export type GateVerdict = "pass" | "fail" | "drift" | "skipped" | "held";
 
 export interface GateStatusEntry {
   /** Short gate-kind label: "verify" | "claim" | "style" | "semantic" | "confidence". */
@@ -44,9 +52,14 @@ export interface GateStatus {
 const ICON: Record<GateVerdict, string> = {
   pass: "✅",
   fail: "🔴",
+  drift: "🟠",
   held: "🟡",
   skipped: "⚪",
 };
+
+/** Verdicts that do NOT flip `allGreen` — the run shipped (or the gate
+ *  simply didn't apply). `drift` is style/semantic's non-blocking note. */
+const GREEN_VERDICTS: ReadonlySet<GateVerdict> = new Set(["pass", "drift", "skipped"]);
 
 type Confidence = NonNullable<Run["confidence"]>;
 
@@ -62,21 +75,26 @@ function verifyEntry(v: RunVerify): { verdict: GateVerdict; detail: string } {
 function verifierEntry(v: RunVerifier): { verdict: GateVerdict; detail: string } {
   if (v.verdict === "pass") return { verdict: "pass", detail: v.reason };
   if (v.verdict === "skipped") return { verdict: "skipped", detail: v.reason };
-  // "drift" | "broken" — both are meaningful claim-vs-diff mismatches.
+  // "drift" | "broken" — BOTH block the commit for the claim gate
+  // (runLifecycle.ts needsClaimRetry fires on either), so both are `fail`.
   return { verdict: "fail", detail: v.reason };
 }
 
 function styleEntry(v: RunStyleCritic): { verdict: GateVerdict; detail: string } {
   if (v.verdict === "match") return { verdict: "pass", detail: v.reason };
   if (v.verdict === "skipped") return { verdict: "skipped", detail: v.reason };
-  // "drift" | "alien"
+  // Style blocks only on `alien` (runLifecycle.ts needsStyleRetry);
+  // `drift` ships with a note — surface it as non-blocking drift.
+  if (v.verdict === "drift") return { verdict: "drift", detail: v.reason };
   return { verdict: "fail", detail: v.reason };
 }
 
 function semanticEntry(v: RunSemanticVerifier): { verdict: GateVerdict; detail: string } {
   if (v.verdict === "pass") return { verdict: "pass", detail: v.reason };
   if (v.verdict === "skipped") return { verdict: "skipped", detail: v.reason };
-  // "drift" | "broken"
+  // Semantic blocks only on `broken` (runLifecycle.ts needsSemanticRetry);
+  // `drift` ships with a note — surface it as non-blocking drift.
+  if (v.verdict === "drift") return { verdict: "drift", detail: v.reason };
   return { verdict: "fail", detail: v.reason };
 }
 
@@ -138,7 +156,7 @@ export function computeGateStatus(meta: Meta): GateStatus {
     gates.push(...entriesForRun(run));
   }
 
-  const allGreen = gates.every((g) => g.verdict === "pass" || g.verdict === "skipped");
+  const allGreen = gates.every((g) => GREEN_VERDICTS.has(g.verdict));
   return { gates, allGreen };
 }
 
@@ -173,8 +191,13 @@ export function renderGateStatusMarkdown(status: GateStatus): string {
  */
 export function renderGateStatusLine(status: GateStatus): string {
   if (status.gates.length === 0) return "";
-  if (status.allGreen) return "Gates: ✅ all green";
-  const bad = status.gates.filter((g) => g.verdict !== "pass" && g.verdict !== "skipped");
+  if (status.allGreen) {
+    const drifts = status.gates.filter((g) => g.verdict === "drift").length;
+    return drifts > 0
+      ? `Gates: ✅ all green (${drifts} drift note${drifts === 1 ? "" : "s"})`
+      : "Gates: ✅ all green";
+  }
+  const bad = status.gates.filter((g) => !GREEN_VERDICTS.has(g.verdict));
   if (bad.length === 1) {
     return `Gates: ${ICON[bad[0].verdict]} ${bad[0].name} ${bad[0].verdict}`;
   }

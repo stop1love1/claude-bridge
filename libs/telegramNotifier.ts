@@ -542,19 +542,23 @@ export function renderCoordinatorSummaryMessage(args: {
   const headerLine = `${icon} *${escapeMarkdownV2(label)}* — task \`${taskId}\``;
   const link = renderTaskLink(args.taskId);
 
-  // Reserve enough room for header + link + ellipsis so a long
-  // summary doesn't push the link off the truncation cliff in
+  // Task 6: gate line is composed BEFORE the body cap so its length can
+  // be included in the reserved budget — otherwise a max-length body plus
+  // the appended gate block could push the trailing link past the
+  // truncation cliff in `sendViaBot`.
+  const gateLine = args.gateStatus ? renderGateStatusLine(args.gateStatus) : "";
+  const gateBlock = gateLine ? `\n\n${escapeMarkdownV2(gateLine)}` : "";
+
+  // Reserve enough room for header + gate line + link + ellipsis so a
+  // long summary doesn't push the link off the truncation cliff in
   // `sendViaBot`. 600 chars is a generous upper bound covering the
   // worst-case escaped link URL + header.
-  const reserved = headerLine.length + link.length + 600;
+  const reserved = headerLine.length + gateBlock.length + link.length + 600;
   const bodyCap = Math.max(500, MAX_TEXT - reserved);
   const body = args.summary.length > bodyCap
     ? args.summary.slice(0, bodyCap) + "\n…"
     : args.summary;
   const escapedBody = escapeMarkdownV2(body);
-
-  const gateLine = args.gateStatus ? renderGateStatusLine(args.gateStatus) : "";
-  const gateBlock = gateLine ? `\n\n${escapeMarkdownV2(gateLine)}` : "";
 
   return `${headerLine}\n\n${escapedBody}${gateBlock}${link}`;
 }

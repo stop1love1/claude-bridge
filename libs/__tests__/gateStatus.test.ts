@@ -167,6 +167,62 @@ describe("computeGateStatus", () => {
     expect(status.gates[0].verdict).toBe("skipped");
   });
 
+  it("style critic 'drift' is non-blocking: verdict 'drift', allGreen stays true", () => {
+    const m = meta([
+      run({
+        sessionId: "s1",
+        styleCritic: {
+          verdict: "drift",
+          reason: "minor deviations",
+          issues: ["naming slightly off"],
+          durationMs: 3,
+        },
+      }),
+    ]);
+    const status = computeGateStatus(m);
+    // Per runLifecycle.ts:498-499 style blocks only on `alien` — drift ships.
+    expect(status.allGreen).toBe(true);
+    expect(status.gates.find((g) => g.name === "style")?.verdict).toBe("drift");
+  });
+
+  it("semantic verifier 'drift' is non-blocking: verdict 'drift', allGreen stays true", () => {
+    const m = meta([
+      run({
+        sessionId: "s1",
+        semanticVerifier: {
+          verdict: "drift",
+          reason: "partial progress, commit proceeds",
+          concerns: ["edge case untested"],
+          durationMs: 4,
+        },
+      }),
+    ]);
+    const status = computeGateStatus(m);
+    // Per runLifecycle.ts:583-584 semantic blocks only on `broken` — drift ships.
+    expect(status.allGreen).toBe(true);
+    expect(status.gates.find((g) => g.name === "semantic")?.verdict).toBe("drift");
+  });
+
+  it("claim-vs-diff 'drift' genuinely blocks (runLifecycle.ts:416-418) => fail", () => {
+    const m = meta([
+      run({
+        sessionId: "s1",
+        verifier: {
+          verdict: "drift",
+          reason: "claimed files not in diff",
+          claimedFiles: ["a.ts"],
+          actualFiles: [],
+          unmatchedClaims: ["a.ts"],
+          unclaimedActual: [],
+          durationMs: 2,
+        },
+      }),
+    ]);
+    const status = computeGateStatus(m);
+    expect(status.allGreen).toBe(false);
+    expect(status.gates.find((g) => g.name === "claim")?.verdict).toBe("fail");
+  });
+
   it("style critic 'alien' and semantic 'broken' verdicts fail the gate", () => {
     const m = meta([
       run({
@@ -254,6 +310,17 @@ describe("renderGateStatusLine", () => {
       gates: [{ name: "verify", verdict: "pass" }],
     };
     expect(renderGateStatusLine(status)).toBe("Gates: ✅ all green");
+  });
+
+  it("stays green but notes non-blocking drift", () => {
+    const status: GateStatus = {
+      allGreen: true,
+      gates: [
+        { name: "verify", verdict: "pass" },
+        { name: "style", verdict: "drift", detail: "coder@app1 — minor deviations" },
+      ],
+    };
+    expect(renderGateStatusLine(status)).toBe("Gates: ✅ all green (1 drift note)");
   });
 
   it("renders the failing gate name + verdict for a single failure", () => {

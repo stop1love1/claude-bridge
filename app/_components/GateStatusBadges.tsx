@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, XCircle, ShieldAlert, MinusCircle } from "lucide-react";
+import { CheckCircle2, XCircle, ShieldAlert, MinusCircle, AlertTriangle } from "lucide-react";
 import { api } from "@/libs/client/api";
 import type { GateStatus, GateVerdict } from "@/libs/client/types";
 
 const VERDICT_STYLE: Record<GateVerdict, { icon: typeof CheckCircle2; cls: string }> = {
   pass: { icon: CheckCircle2, cls: "bg-emerald-500/15 text-emerald-500 border-emerald-500/30" },
   fail: { icon: XCircle, cls: "bg-red-500/15 text-red-500 border-red-500/30" },
+  // Non-blocking style/semantic drift — shipped with a note, amber warn.
+  drift: { icon: AlertTriangle, cls: "bg-orange-500/15 text-orange-500 border-orange-500/30" },
   held: { icon: ShieldAlert, cls: "bg-amber-500/15 text-amber-500 border-amber-500/30" },
   skipped: { icon: MinusCircle, cls: "bg-secondary text-fg-dim border-border" },
 };
