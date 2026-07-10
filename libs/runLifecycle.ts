@@ -46,6 +46,7 @@ import {
 } from "./gitOps";
 import { mergeAndRemoveWorktree } from "./worktrees";
 import { runDevopsAgent } from "./devops";
+import { escalateGateBlock } from "./gateEscalation";
 import { logError, logInfo, logWarn } from "./log";
 // Type-only imports — runtime side resolves via lazy `require` inside
 // the post-exit flow to break the import cycle (verifyChain.ts,
@@ -247,6 +248,13 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
         { status: "done", endedAt: new Date().toISOString() },
         (r) => r.status === "running",
       );
+      await escalateGateBlock({
+        taskId: tid,
+        sessionsDir: dir,
+        gate: "verify",
+        reason: "verify chain crashed — inconclusive",
+        retryScheduled: false,
+      });
       return "blocked";
     }
 
@@ -263,6 +271,13 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
         });
       } else {
         logInfo("verify", `chain failed at \`${failedName}\` — retry ineligible / already attempted`, { tag: t });
+        await escalateGateBlock({
+          taskId: tid,
+          sessionsDir: dir,
+          gate: "verify",
+          reason: `chain failed at \`${failedName}\` — retry ineligible / already attempted`,
+          retryScheduled: false,
+        });
       }
       // Verify failed → block the auto-commit. The retry (if any) will
       // re-trigger this whole flow when it exits.
@@ -360,6 +375,13 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
     });
   } else {
     logInfo("preflight", `${preflightResult.reason} — retry ineligible / already attempted`, { tag: t });
+    await escalateGateBlock({
+      taskId: tid,
+      sessionsDir: dir,
+      gate: "preflight",
+      reason: `${preflightResult.reason} — retry ineligible / already attempted`,
+      retryScheduled: false,
+    });
   }
   return "blocked";
 }
@@ -426,6 +448,13 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
       });
     } else {
       logInfo("verifier", `${verifierResult.verdict} — ${verifierResult.reason} — retry ineligible / already attempted`, { tag: t });
+      await escalateGateBlock({
+        taskId: tid,
+        sessionsDir: dir,
+        gate: "claim",
+        reason: `${verifierResult.verdict} — ${verifierResult.reason} — retry ineligible / already attempted`,
+        retryScheduled: false,
+      });
     }
     return "blocked";
   }
@@ -506,6 +535,13 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
       });
     } else {
       logInfo("style-critic", `${criticResult.verdict} — ${criticResult.reason} — retry ineligible / already attempted`, { tag: t });
+      await escalateGateBlock({
+        taskId: tid,
+        sessionsDir: dir,
+        gate: "style",
+        reason: `${criticResult.verdict} — ${criticResult.reason} — retry ineligible / already attempted`,
+        retryScheduled: false,
+      });
     }
     return "blocked";
   }
@@ -584,6 +620,13 @@ async function runSemanticVerifierGate(
       });
     } else {
       logInfo("semantic-verifier", `${semanticResult.verdict} — ${semanticResult.reason} — retry ineligible / already attempted`, { tag: t });
+      await escalateGateBlock({
+        taskId: tid,
+        sessionsDir: dir,
+        gate: "semantic",
+        reason: `${semanticResult.verdict} — ${semanticResult.reason} — retry ineligible / already attempted`,
+        retryScheduled: false,
+      });
     }
     return "blocked";
   }

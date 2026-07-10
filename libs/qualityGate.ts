@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { appendRun, updateRun, type Run } from "./meta";
+import { notifyGateInfraSkip } from "./gateEscalation";
 import { getApp } from "./apps";
 import { loadHouseRules } from "./houseRules";
 import { topMemoryEntries } from "./memory";
@@ -232,11 +233,13 @@ export async function runAgentGate(
       status: "failed",
       endedAt: new Date().toISOString(),
     });
-    return {
-      kind: "skipped",
-      reason: `${opts.role} spawn failed: ${(e as Error).message}`,
-      sessionId,
-    };
+    const reason = `${opts.role} spawn failed: ${(e as Error).message}`;
+    // Infra failure, not a legit precondition skip — the gate never
+    // got to judge the diff, so the caller silently proceeding would
+    // hide a real problem. Notify only; the section stays untouched
+    // since a spawn hiccup isn't evidence the shipped work is bad.
+    await notifyGateInfraSkip({ taskId: opts.taskId, gate: opts.role, detail: reason });
+    return { kind: "skipped", reason, sessionId };
   }
 
   // Manually manage exit — wireRunLifecycle would recursively trigger
@@ -258,17 +261,21 @@ export async function runAgentGate(
         : exitCode === EXIT_SPAWN_ERR
           ? `${opts.role} spawn errored before exit`
           : `${opts.role} exited with code ${exitCode}`;
+    // Infra failure (timeout / spawn error / non-zero exit) — same
+    // "gate never got to judge" reasoning as the spawn-failure branch
+    // above.
+    await notifyGateInfraSkip({ taskId: opts.taskId, gate: opts.role, detail: reason });
     return { kind: "skipped", reason, sessionId };
   }
 
   const verdictPath = join(sessionsDir, opts.verdictFileName);
   const verdict = readVerdictFile(verdictPath);
   if (verdict === null) {
-    return {
-      kind: "skipped",
-      reason: `${opts.role} did not write \`${opts.verdictFileName}\``,
-      sessionId,
-    };
+    const reason = `${opts.role} did not write \`${opts.verdictFileName}\``;
+    // The agent exited 0 but produced no parseable verdict — an infra/
+    // contract failure on the gate's side, not a legit skip.
+    await notifyGateInfraSkip({ taskId: opts.taskId, gate: opts.role, detail: reason });
+    return { kind: "skipped", reason, sessionId };
   }
 
   return { kind: "spawned", sessionId, verdict };

@@ -90,7 +90,10 @@ function envConfig(): { token: string; chatId: string } | null {
   return null;
 }
 
-function escapeMarkdownV2(s: string): string {
+// Exported so other modules that send raw Telegram text (e.g.
+// `libs/gateEscalation.ts`) escape dynamic text the same way instead of
+// hand-rolling their own regex.
+export function escapeMarkdownV2(s: string): string {
   // Telegram MarkdownV2 reserves these chars; escape them so role/repo
   // names with `_` / `.` / `-` don't break the message render.
   return s.replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, "\\$1");

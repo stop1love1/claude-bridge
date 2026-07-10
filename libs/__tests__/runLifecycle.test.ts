@@ -225,6 +225,16 @@ vi.mock("../devops", () => ({
   runDevopsAgent: vi.fn(),
 }));
 
+// Fail-loud escalation (BLOCKED PATCH + Telegram ping) is exercised by
+// its own unit tests in `gateEscalation.test.ts`. Stub it here so a
+// future test that reaches a real "blocked, no retry" branch can't
+// accidentally PATCH a real task or fire a real Telegram send if this
+// dev machine's `bridge.json` happens to have Telegram configured.
+vi.mock("../gateEscalation", () => ({
+  escalateGateBlock: vi.fn(),
+  notifyGateInfraSkip: vi.fn(),
+}));
+
 let tmp: string;
 const SID = "11111111-2222-3333-4444-555555555555";
 const TASK_HEADER = {
