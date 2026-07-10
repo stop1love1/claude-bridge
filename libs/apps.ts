@@ -143,6 +143,27 @@ export const DEFAULT_GIT_SETTINGS: AppGitSettings = {
 };
 
 /**
+ * "Recommended automation" preset — the safe-by-default one-click option
+ * surfaced on the Add-app dialog and the auto-detect accept flow.
+ *
+ * Commits land on a task-scoped `claude/<task-id>` branch (never the
+ * branch the operator happened to have checked out) and are committed
+ * automatically, but nothing leaves the machine (`autoPush: false`,
+ * `integrationMode: "none"`) and no worktree isolation is forced. Pairs
+ * with `quality.critic = true` (see `applyRecommendedPreset`) so the
+ * style critic gate runs on every task for apps that opt in.
+ */
+export const RECOMMENDED_GIT_SETTINGS: AppGitSettings = {
+  branchMode: "auto-create",
+  fixedBranch: "",
+  autoCommit: true,
+  autoPush: false,
+  worktreeMode: "disabled",
+  mergeTargetBranch: "",
+  integrationMode: "none",
+};
+
+/**
  * Per-app verify contract — shell commands the bridge runs after a
  * child agent finishes (Phase 2 of the agentic-coder roadmap). Each
  * field is a single shell command line; missing fields are skipped.
@@ -982,6 +1003,46 @@ export function resolveAppFromRouteSegment(segment: string): App | null {
   return null;
 }
 
+/**
+ * Applies the "recommended automation" preset to `app`: git settings
+ * from `RECOMMENDED_GIT_SETTINGS` and `quality.critic = true`.
+ *
+ * Only overwrites git fields still sitting at their `DEFAULT_GIT_SETTINGS`
+ * value (compared field-by-field) — an operator who already customized a
+ * field (e.g. set `branchMode: "fixed"` before applying the preset) keeps
+ * that choice. Pure function: returns a new `App`, does not mutate the
+ * input.
+ */
+export function applyRecommendedPreset(app: App): App {
+  const git: AppGitSettings = { ...app.git };
+  if (git.branchMode === DEFAULT_GIT_SETTINGS.branchMode) {
+    git.branchMode = RECOMMENDED_GIT_SETTINGS.branchMode;
+  }
+  if (git.fixedBranch === DEFAULT_GIT_SETTINGS.fixedBranch) {
+    git.fixedBranch = RECOMMENDED_GIT_SETTINGS.fixedBranch;
+  }
+  if (git.autoCommit === DEFAULT_GIT_SETTINGS.autoCommit) {
+    git.autoCommit = RECOMMENDED_GIT_SETTINGS.autoCommit;
+  }
+  if (git.autoPush === DEFAULT_GIT_SETTINGS.autoPush) {
+    git.autoPush = RECOMMENDED_GIT_SETTINGS.autoPush;
+  }
+  if (git.worktreeMode === DEFAULT_GIT_SETTINGS.worktreeMode) {
+    git.worktreeMode = RECOMMENDED_GIT_SETTINGS.worktreeMode;
+  }
+  if (git.mergeTargetBranch === DEFAULT_GIT_SETTINGS.mergeTargetBranch) {
+    git.mergeTargetBranch = RECOMMENDED_GIT_SETTINGS.mergeTargetBranch;
+  }
+  if (git.integrationMode === DEFAULT_GIT_SETTINGS.integrationMode) {
+    git.integrationMode = RECOMMENDED_GIT_SETTINGS.integrationMode;
+  }
+  return {
+    ...app,
+    git,
+    quality: { ...app.quality, critic: true },
+  };
+}
+
 export interface AppInput {
   name: string;
   path: string;
@@ -993,6 +1054,14 @@ export interface AppInput {
    * the settings panel.
    */
   verify?: AppVerify;
+  /**
+   * `"recommended"` applies `applyRecommendedPreset` to the freshly
+   * created app before it's persisted — the one-click "use recommended
+   * automation" option on the Add-app dialog and the auto-detect accept
+   * flow. Omitted / any other value = leave git/quality at their
+   * defaults, same as before this option existed.
+   */
+  preset?: "recommended";
 }
 
 export interface AddAppResult {
@@ -1038,7 +1107,7 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     Object.keys(operatorVerify).length > 0
       ? operatorVerify
       : detectVerifyCommands(guard.resolvedPath);
-  const app: App = {
+  let app: App = {
     name: input.name,
     rawPath,
     path: guard.resolvedPath,
@@ -1053,6 +1122,9 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     memory: { ...DEFAULT_APP_MEMORY },
     dispatch: { ...DEFAULT_APP_DISPATCH },
   };
+  if (input.preset === "recommended") {
+    app = applyRecommendedPreset(app);
+  }
   apps.push(app);
   apps.sort((a, b) => a.name.localeCompare(b.name));
   saveApps(apps);

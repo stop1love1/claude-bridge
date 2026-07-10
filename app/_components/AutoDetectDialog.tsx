@@ -67,6 +67,7 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
   const [scannedCount, setScannedCount] = useState(0);
   const [rows, setRows] = useState<CandidateRow[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [useRecommendedPreset, setUseRecommendedPreset] = useState(true);
   const esRef = useRef<EventSource | null>(null);
   const toast = useToast();
 
@@ -101,6 +102,7 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
       setScannedCount(0);
       setScanningRoot("");
       setErrorMsg(null);
+      setUseRecommendedPreset(true);
     });
   }, [open]);
 
@@ -258,6 +260,7 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
           name: r.editedName,
           path: r.candidate.rawPath,
           description: r.candidate.description,
+          preset: useRecommendedPreset ? "recommended" : undefined,
         })),
       );
 
@@ -289,7 +292,7 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
       toast("error", (e as Error).message);
       setMode("review");
     }
-  }, [rows, rootsText, savedRoots, toast, onAdded, onOpenChange]);
+  }, [rows, rootsText, savedRoots, toast, onAdded, onOpenChange, useRecommendedPreset]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -332,6 +335,8 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
             onToggleAll={toggleAll}
             onUpdateRow={updateRow}
             disabled={mode === "adding"}
+            useRecommendedPreset={useRecommendedPreset}
+            onUseRecommendedPresetChange={setUseRecommendedPreset}
           />
         )}
 
@@ -517,6 +522,8 @@ interface ReviewStepProps {
   onToggleAll: (checked: boolean) => void;
   onUpdateRow: (path: string, patch: Partial<CandidateRow>) => void;
   disabled: boolean;
+  useRecommendedPreset: boolean;
+  onUseRecommendedPresetChange: (checked: boolean) => void;
 }
 
 function ReviewStep({
@@ -527,6 +534,8 @@ function ReviewStep({
   onToggleAll,
   onUpdateRow,
   disabled,
+  useRecommendedPreset,
+  onUseRecommendedPresetChange,
 }: ReviewStepProps) {
   const newRows = rows.filter((r) => !r.candidate.alreadyRegistered);
   const registeredRows = rows.filter((r) => r.candidate.alreadyRegistered);
@@ -569,6 +578,26 @@ function ReviewStep({
           </label>
         )}
       </div>
+
+      <label
+        htmlFor="autodetect-recommended-preset"
+        className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-2.5 text-xs"
+      >
+        <input
+          id="autodetect-recommended-preset"
+          type="checkbox"
+          checked={useRecommendedPreset}
+          onChange={(e) => onUseRecommendedPresetChange(e.target.checked)}
+          disabled={disabled}
+          className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-primary disabled:cursor-not-allowed"
+        />
+        <span>
+          <span className="font-medium text-foreground">Use recommended automation</span>
+          <span className="block text-[11px] text-muted-foreground">
+            Branch per task + auto-commit + style critic — applied to every app added below
+          </span>
+        </span>
+      </label>
 
       <div className="max-h-[50vh] overflow-y-auto rounded-md border border-border">
         <ul className="divide-y divide-border">

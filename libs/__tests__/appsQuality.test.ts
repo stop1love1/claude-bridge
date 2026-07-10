@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parseApps, serializeApps, type App } from "../apps";
+import {
+  parseApps,
+  serializeApps,
+  applyRecommendedPreset,
+  RECOMMENDED_GIT_SETTINGS,
+  DEFAULT_GIT_SETTINGS,
+  type App,
+} from "../apps";
 
 const baseApp = (overrides: Partial<App>): App => ({
   name: "app-web",
@@ -72,5 +79,44 @@ describe("AppQuality serialize/parse", () => {
     });
     const apps = parseApps(json);
     expect(apps[0].quality).toEqual({});
+  });
+});
+
+describe("applyRecommendedPreset", () => {
+  it("applies the recommended git settings and quality.critic to a default-settings app", () => {
+    const app = baseApp({});
+    const result = applyRecommendedPreset(app);
+    expect(result.git).toEqual(RECOMMENDED_GIT_SETTINGS);
+    expect(result.quality.critic).toBe(true);
+  });
+
+  it("leaves an operator-customized branchMode untouched but still fills in other default fields", () => {
+    const app = baseApp({
+      git: { ...DEFAULT_GIT_SETTINGS, branchMode: "fixed", fixedBranch: "main" },
+    });
+    const result = applyRecommendedPreset(app);
+    // Operator-set, non-default values are preserved.
+    expect(result.git.branchMode).toBe("fixed");
+    expect(result.git.fixedBranch).toBe("main");
+    // Fields still at their DEFAULT_GIT_SETTINGS value get the recommended value.
+    expect(result.git.autoCommit).toBe(true);
+    expect(result.git.autoPush).toBe(false);
+    expect(result.git.worktreeMode).toBe("disabled");
+    expect(result.git.mergeTargetBranch).toBe("");
+    expect(result.git.integrationMode).toBe("none");
+    expect(result.quality.critic).toBe(true);
+  });
+
+  it("does not mutate the input app", () => {
+    const app = baseApp({});
+    applyRecommendedPreset(app);
+    expect(app.git).toEqual(DEFAULT_GIT_SETTINGS);
+    expect(app.quality).toEqual({});
+  });
+
+  it("preserves other quality flags already set on the app", () => {
+    const app = baseApp({ quality: { verifier: true, criticPanel: 2 } });
+    const result = applyRecommendedPreset(app);
+    expect(result.quality).toEqual({ verifier: true, criticPanel: 2, critic: true });
   });
 });

@@ -41,6 +41,7 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [description, setDescription] = useState("");
+  const [useRecommendedPreset, setUseRecommendedPreset] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
@@ -49,6 +50,7 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
     setName("");
     setPath("");
     setDescription("");
+    setUseRecommendedPreset(true);
     setOpen(true);
   }, []);
 
@@ -76,6 +78,7 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
         name: trimmedName,
         path: trimmedPath,
         description: trimmedDescription || undefined,
+        preset: useRecommendedPreset ? "recommended" : undefined,
       });
       // If the user didn't write a description, ask Claude to read
       // the repo and produce one. Closing the dialog and toasting
@@ -187,6 +190,24 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
                 placeholder="Frontend Next.js dashboard"
               />
             </div>
+            <label
+              htmlFor="app-recommended-preset"
+              className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-card p-2.5 text-xs"
+            >
+              <input
+                id="app-recommended-preset"
+                type="checkbox"
+                checked={useRecommendedPreset}
+                onChange={(e) => setUseRecommendedPreset(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-primary"
+              />
+              <span>
+                <span className="font-medium text-foreground">Use recommended automation</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  Branch per task + auto-commit + style critic
+                </span>
+              </span>
+            </label>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)} disabled={submitting}>

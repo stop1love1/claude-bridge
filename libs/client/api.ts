@@ -184,7 +184,7 @@ export const api = {
       { method: "POST", body: JSON.stringify(body) },
     ),
   apps: () => req<App[]>("/apps"),
-  addApp: (body: { name: string; path: string; description?: string }) =>
+  addApp: (body: { name: string; path: string; description?: string; preset?: "recommended" }) =>
     req<App>("/apps", { method: "POST", body: JSON.stringify(body) }),
   removeApp: (name: string) =>
     req<{ ok: true }>(`/apps/${encodeURIComponent(name)}`, { method: "DELETE" }),
@@ -211,7 +211,9 @@ export const api = {
    * are returned per item so the dialog can surface duplicates and
    * keep the rest of the selection.
    */
-  bulkAddApps: (apps: Array<{ name: string; path: string; description?: string }>) =>
+  bulkAddApps: (
+    apps: Array<{ name: string; path: string; description?: string; preset?: "recommended" }>,
+  ) =>
     req<{
       added: App[];
       failed: Array<{

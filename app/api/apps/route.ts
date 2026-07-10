@@ -25,7 +25,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { name?: string; path?: string; description?: string };
+  let body: { name?: string; path?: string; description?: string; preset?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
   const name = (body.name ?? "").trim();
   const path = (body.path ?? "").trim();
   const description = (body.description ?? "").trim();
+  const preset = body.preset === "recommended" ? "recommended" : undefined;
 
   if (!isValidAppName(name)) {
     return NextResponse.json(
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "path is required" }, { status: 400 });
   }
 
-  const result = addApp({ name, path, description });
+  const result = addApp({ name, path, description, preset });
   if (!result.ok) {
     const status = result.reason === "duplicate-name" ? 409 : 400;
     const body: { error: string; detail?: string } = { error: result.reason };

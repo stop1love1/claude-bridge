@@ -7,6 +7,7 @@ interface BulkAddItem {
   name?: unknown;
   path?: unknown;
   description?: unknown;
+  preset?: unknown;
 }
 
 interface BulkAddBody {
@@ -70,12 +71,13 @@ export async function POST(req: NextRequest) {
     const name = typeof item.name === "string" ? item.name.trim() : "";
     const path = typeof item.path === "string" ? item.path.trim() : "";
     const description = typeof item.description === "string" ? item.description.trim() : "";
+    const preset = item.preset === "recommended" ? "recommended" : undefined;
 
     if (!isValidAppName(name) || !path) {
       failed.push({ ok: false, name: name || "(unnamed)", reason: "invalid-input" });
       continue;
     }
-    const result = addApp({ name, path, description });
+    const result = addApp({ name, path, description, preset });
     if (result.ok) added.push(result.app);
     else {
       const item: BulkResultItemFailed = { ok: false, name, reason: result.reason };
