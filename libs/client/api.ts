@@ -18,6 +18,13 @@ import type {
   GateStatus,
 } from "./types";
 import type { ShareView, ShareGrants, ShareGit } from "../shareStore";
+// Type-only import — erased at compile time, so this does NOT pull the
+// server-only `web-push` module into the client bundle. Without the
+// explicit import, `PushSubscriptionJSON` below silently resolved to
+// lib.dom's ambient global of the same name (ALL fields optional),
+// which let a structurally-empty object typecheck against
+// `pushSubscribe` — the strict server contract requires endpoint + keys.
+import type { PushSubscriptionJSON } from "../webPush";
 import type {
   Workflow,
   SchedulerSettings,

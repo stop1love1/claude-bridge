@@ -2,6 +2,35 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
+// Type-only import (erased at compile time — no server-only `web-push`
+// code reaches the client bundle). Must be explicit: without it, the
+// name resolves to lib.dom's ambient `PushSubscriptionJSON` global,
+// whose fields are ALL optional — the old `as PushSubscriptionJSON`
+// cast typechecked even for an empty object and hid the mismatch with
+// the strict server contract in `libs/webPush.ts`.
+import type { PushSubscriptionJSON } from "../webPush";
+
+/**
+ * Narrow the browser's `PushSubscription.toJSON()` result (lib.dom
+ * types every field optional) into the strict shape the bridge API
+ * requires. In practice a successful `pushManager.subscribe()` always
+ * yields endpoint + p256dh + auth, but the type system is right that
+ * the contract doesn't guarantee it — so validate at runtime instead
+ * of casting the doubt away.
+ */
+function toStrictSubscription(sub: PushSubscription): PushSubscriptionJSON {
+  const json = sub.toJSON();
+  const p256dh = json.keys?.p256dh;
+  const auth = json.keys?.auth;
+  if (!json.endpoint || !p256dh || !auth) {
+    throw new Error("browser returned an incomplete push subscription");
+  }
+  return {
+    endpoint: json.endpoint,
+    expirationTime: json.expirationTime ?? null,
+    keys: { p256dh, auth },
+  };
+}
 
 /**
  * Task 9: browser Web Push opt-in. Mirrors the server-side flow in
@@ -100,7 +129,7 @@ export function usePushSubscribe() {
         // is a `BufferSource` at runtime, so a narrow cast here is safe.
         applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
       });
-      await api.pushSubscribe(sub.toJSON() as PushSubscriptionJSON);
+      await api.pushSubscribe(toStrictSubscription(sub));
       setState("subscribed");
     } catch (e) {
       setError((e as Error).message);

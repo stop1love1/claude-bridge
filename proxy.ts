@@ -64,8 +64,11 @@ export const config = {
   // script — breaking `navigator.serviceWorker.register("/sw.js")` for
   // every guest. The file has no sensitive content, so letting it
   // through unauthenticated (like `manifest.webmanifest` would need to
-  // be too, but that's Task 8's gap, not this one's) is safe.
-  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|sw\\.js|api/auth/|api/share/access/|share/|login|docs).+)"],
+  // be too, but that's Task 8's gap, not this one's) is safe. The `$`
+  // anchor is load-bearing: without it any path merely *starting* with
+  // `/sw.js` (`/sw.jsx`, `/sw.js-evil`) would bypass auth too — this
+  // matcher is a security boundary, so exclude exactly one path.
+  matcher: ["/((?!_next/|favicon\\.ico|logo\\.svg|robots\\.txt|sw\\.js$|api/auth/|api/share/access/|share/|login|docs).+)"],
 };
 
 /**
