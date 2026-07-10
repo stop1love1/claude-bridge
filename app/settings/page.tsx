@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  Bell,
   Globe,
   Send,
   Settings as SettingsIcon,
@@ -11,6 +12,7 @@ import {
   User,
 } from "lucide-react";
 import { api } from "@/libs/client/api";
+import { usePushSubscribe } from "@/libs/client/usePushSubscribe";
 import { HeaderShell } from "../_components/HeaderShell";
 import { Button } from "../_components/ui/button";
 import { Input } from "../_components/ui/input";
@@ -84,6 +86,7 @@ function SettingsPage() {
           </p>
 
           <PublicUrlSection />
+          <PushNotificationsSection />
           <DetectSettingsSection />
           <PlanGateSettingsSection />
           <ConfidenceSettingsSection />
@@ -203,6 +206,65 @@ function PublicUrlSection() {
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+/**
+ * Task 9: browser Web Push opt-in. Separate from the Telegram sections
+ * below — this is a per-device subscription (no bridge.json config to
+ * load/save), so the whole section is just the hook's live state plus
+ * a single action button.
+ */
+function PushNotificationsSection() {
+  const { state, busy, error, supported, subscribe, unsubscribe } = usePushSubscribe();
+
+  const statusLabel: Record<typeof state, string> = {
+    unsupported: "Not supported in this browser",
+    denied: "Blocked — allow notifications for this site in your browser settings",
+    default: "Not enabled on this device",
+    subscribed: "Enabled on this device",
+  };
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-1">
+        <Bell size={14} className="text-primary" />
+        <h3 className="text-[13px] sm:text-sm font-semibold">Push notifications</h3>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-4">
+        Get native OS notifications on this device for the same events the
+        Telegram notifier surfaces — permission requests, tasks blocked or
+        ready for review, and plans awaiting approval. No bot token
+        required; this uses the browser&apos;s own Push API. Enable it
+        separately on every browser/device you want to hear from.
+      </p>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <span
+          className={`text-xs ${state === "subscribed" ? "text-primary" : "text-muted-foreground"}`}
+        >
+          {statusLabel[state]}
+        </span>
+        <div className="flex-1" />
+        {state === "subscribed" ? (
+          <Button
+            variant="ghost"
+            onClick={unsubscribe}
+            disabled={busy}
+            className="text-fg-dim hover:text-destructive"
+          >
+            <Bell className="h-3.5 w-3.5" />
+            {busy ? "Disabling…" : "Disable"}
+          </Button>
+        ) : (
+          <Button onClick={subscribe} disabled={busy || !supported || state === "denied"}>
+            <Bell className="h-3.5 w-3.5" />
+            {busy ? "Enabling…" : "Enable notifications"}
+          </Button>
+        )}
+      </div>
+      {error ? <p className="mt-2 text-[11px] text-destructive">{error}</p> : null}
     </section>
   );
 }

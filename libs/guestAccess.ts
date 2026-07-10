@@ -67,6 +67,12 @@ const RULES: Rule[] = [
   { method: "GET", pattern: ["sessions", ":sid", "tail", "stream"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission", "stream"], grant: null, checkSession: true },
+  // Web push (Task 9): not task-scoped — a subscription is a device
+  // preference, not an action against a specific task, so any guest
+  // with a valid share cookie may fetch the VAPID key / (un)subscribe
+  // their browser, same as the always-allowed view baseline above.
+  { method: "GET", pattern: ["push", "vapid"], grant: null },
+  { method: "POST", pattern: ["push", "subscribe"], grant: null },
 
   // ── Send / drive (grant: sendMessage) ───────────────────────────
   { method: "POST", pattern: ["sessions", ":sid", "message"], grant: "sendMessage", checkSession: true },

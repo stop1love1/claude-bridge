@@ -660,6 +660,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
+  pushVapidKey: (opts?: ReqOpts) =>
+    req<{ publicKey: string }>(`/push/vapid`, { signal: opts?.signal }),
+  pushSubscribe: (subscription: PushSubscriptionJSON) =>
+    req<{ ok: true }>(`/push/subscribe`, {
+      method: "POST",
+      body: JSON.stringify({ subscription }),
+    }),
+  pushUnsubscribe: (endpoint: string) =>
+    req<{ ok: true }>(`/push/subscribe`, {
+      method: "POST",
+      body: JSON.stringify({ unsubscribe: true, endpoint }),
+    }),
 };
 
 /** Pending guest access request, as surfaced to the operator's modal. */

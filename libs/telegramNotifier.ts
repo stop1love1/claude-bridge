@@ -50,6 +50,27 @@ import {
   ensureTelegramChatForwarder,
   teardownTelegramChatForwarder,
 } from "./telegramChatForwarder";
+import { sendPushToAll } from "./webPush";
+
+/**
+ * Task 9: best-effort Web Push fan-out beside the four key Telegram
+ * notify sites (permission pending, coordinator ready-for-review
+ * summary, task BLOCKED, plan awaiting-approval). `sendPushToAll`
+ * already no-ops with zero subscribers and never rejects internally —
+ * this wrapper adds a belt-and-suspenders `.catch()` so a call site
+ * can `notifyPush(...)` with no further ceremony and it can NEVER
+ * throw or reject into the caller, matching the "never breaks the
+ * calling notifier path" contract from the Task 9 brief.
+ */
+function notifyPush(payload: { title: string; body: string; url?: string }): void {
+  try {
+    void sendPushToAll(payload).catch((err) => {
+      console.warn("[webpush] fan-out failed:", (err as Error)?.message ?? err);
+    });
+  } catch (err) {
+    console.warn("[webpush] fan-out threw synchronously:", (err as Error)?.message ?? err);
+  }
+}
 
 const TG_HOST = "https://api.telegram.org";
 const DEDUPE_MS = 1500;
@@ -413,6 +434,18 @@ function onMetaChange(ev: MetaChangeEvent): void {
           status: next,
           gateStatus,
         }));
+        // Task 9: web-push fan-out beside the coordinator ready-for-review
+        // (and blocked/failed/etc) summary ping.
+        const firstLine = (summary.split(/\r?\n/)[0] ?? "").trim();
+        const { label } =
+          next === "failed"
+            ? { label: "Coordinator failed" }
+            : classifyVerdict(firstLine);
+        notifyPush({
+          title: `${label} — ${ev.taskId}`,
+          body: summary.slice(0, 200),
+          url: `/tasks/${ev.taskId}`,
+        });
         return;
       }
       if (next === "done") {
@@ -452,6 +485,19 @@ function onMetaChange(ev: MetaChangeEvent): void {
       `task \`${taskId}\` — ${title}` +
       renderTaskLink(ev.taskId);
     void sendTelegram(text);
+    // Task 9: web-push fan-out for the "needs your attention" case
+    // specifically — BLOCKED. DONE / Started already have their own
+    // affordances in the UI (checkbox, kanban), so a push there would
+    // just be noise; a task going BLOCKED is the one section move that
+    // means "something needs a human now", matching what Telegram's
+    // `minimal` level already singles out.
+    if (ev.nextSection === SECTION_BLOCKED) {
+      notifyPush({
+        title: `🔴 Blocked — ${ev.taskId}`,
+        body: (ev.taskTitle ?? "").slice(0, 200) || "(untitled)",
+        url: `/tasks/${ev.taskId}`,
+      });
+    }
     return;
   }
   // Intent & Planning Gate: a plan just landed in awaiting-approval —
@@ -466,6 +512,12 @@ function onMetaChange(ev: MetaChangeEvent): void {
         taskTitle: ev.taskTitle ?? "",
       }) + renderTaskLink(ev.taskId);
     void sendTelegram(text);
+    // Task 9: web-push fan-out beside the plan-awaiting-approval ping.
+    notifyPush({
+      title: `📋 Plan ready for review — ${ev.taskId}`,
+      body: (ev.taskTitle ?? "").slice(0, 200) || "(untitled)",
+      url: `/tasks/${ev.taskId}`,
+    });
     return;
   }
 }
@@ -676,6 +728,14 @@ function onPermission(req: PendingRequest): void {
     `tool \`${tool}\` · session \`${sid}\`\n` +
     `req \`${reqPrefix}\` — reply \`/allow ${reqPrefix}\` or \`/deny ${reqPrefix}\``;
   void sendTelegram(text);
+  // Task 9: web-push fan-out beside the permission-pending ping. No
+  // task link — a permission request is tied to a session, not a task
+  // (`PendingRequest` carries no taskId), so the notification just
+  // surfaces enough to jog the operator into opening the bridge.
+  notifyPush({
+    title: "🔐 Permission needed",
+    body: `tool ${req.tool} · session ${req.sessionId.slice(0, 8)}`,
+  });
 }
 
 export function ensureTelegramNotifier(): void {
