@@ -1025,14 +1025,19 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
     return { ok: false, reason: "duplicate-name" };
   }
   // D2: auto-detect verify commands when the caller didn't supply any.
-  // `detectVerifyCommands` is pure/synchronous (heuristic over
-  // package.json + language markers) and returns `{}` when nothing is
-  // recognized, which is indistinguishable from "operator left it
-  // blank" downstream (`hasAnyVerifyCommand` treats both as "no chain").
-  const hasOperatorVerify =
-    input.verify != null &&
-    Object.values(input.verify).some((v) => typeof v === "string" && v.trim().length > 0);
-  const verify = hasOperatorVerify ? { ...input.verify } : detectVerifyCommands(guard.resolvedPath);
+  // Operator-supplied commands go through `normalizeVerify` first (trim
+  // values, drop blank/non-string keys) — same at-rest invariant the
+  // load path and `updateAppVerify` enforce. When nothing usable
+  // survives normalization, fall back to `detectVerifyCommands` — it's
+  // pure/synchronous (heuristic over package.json + language markers)
+  // and returns `{}` when nothing is recognized, which is
+  // indistinguishable from "operator left it blank" downstream
+  // (`hasAnyVerifyCommand` treats both as "no chain").
+  const operatorVerify = normalizeVerify(input.verify);
+  const verify =
+    Object.keys(operatorVerify).length > 0
+      ? operatorVerify
+      : detectVerifyCommands(guard.resolvedPath);
   const app: App = {
     name: input.name,
     rawPath,

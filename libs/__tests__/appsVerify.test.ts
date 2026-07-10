@@ -198,6 +198,18 @@ describe("apps.verify — addApp auto-detect (D2)", () => {
     expect(result.app.verify).toEqual({ test: "custom test command" });
   });
 
+  it("normalizes operator-supplied verify: trims values, drops blank keys", async () => {
+    const { addApp } = await import("../apps");
+    const result = addApp({
+      name: "normalize-verify-app",
+      path: appDir,
+      verify: { test: "npm test", lint: "  " },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.app.verify).toEqual({ test: "npm test" });
+  });
+
   it("backfillAppVerifyIfEmpty fills a previously-empty verify from the app path", async () => {
     const { addApp, backfillAppVerifyIfEmpty } = await import("../apps");
     const added = addApp({ name: "backfill-app", path: appDir });
