@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseApps, serializeApps, type App } from "../apps";
 
 /**
@@ -113,5 +116,115 @@ describe("apps.verify (D1)", () => {
     }];
     const after = parseApps(serializeApps(before));
     expect(after[0].verify).toEqual(before[0].verify);
+  });
+});
+
+/**
+ * D2: `addApp` / `backfillAppVerifyIfEmpty` auto-detect verify commands
+ * via `libs/verifyDetect.ts`. These tests hit the real `loadApps`/
+ * `saveApps` file I/O, so — same pattern as `sessions.test.ts` — they
+ * redirect `homedir()` to a fresh temp dir per test and re-import
+ * `../apps` after `vi.resetModules()` so the module's captured
+ * `BRIDGE_JSON` path (derived from `USER_CLAUDE_DIR` at import time)
+ * points into the sandbox instead of the operator's real
+ * `~/.claude/bridge.json`.
+ */
+describe("apps.verify — addApp auto-detect (D2)", () => {
+  let tempHome: string;
+  let appDir: string;
+  const savedAllowedRoots = process.env.BRIDGE_ALLOWED_ROOTS;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "bridge-appsverify-home-"));
+    appDir = mkdtempSync(join(tmpdir(), "bridge-appsverify-app-"));
+    process.env.HOME = tempHome;
+    process.env.USERPROFILE = tempHome;
+    delete process.env.BRIDGE_ALLOWED_ROOTS;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    vi.spyOn(require("node:os"), "homedir").mockReturnValue(tempHome);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (savedAllowedRoots === undefined) delete process.env.BRIDGE_ALLOWED_ROOTS;
+    else process.env.BRIDGE_ALLOWED_ROOTS = savedAllowedRoots;
+    try {
+      rmSync(tempHome, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+    try {
+      rmSync(appDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  it("populates verify from package.json scripts when input.verify is absent", async () => {
+    writeFileSync(
+      join(appDir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run", build: "next build" } }),
+    );
+    const { addApp } = await import("../apps");
+    const result = addApp({ name: "auto-verify-app", path: appDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.app.verify.test).toBe("npm run test");
+    expect(result.app.verify.build).toBe("npm run build");
+  });
+
+  it("leaves verify empty ({}) when nothing is detectable", async () => {
+    const { addApp } = await import("../apps");
+    const result = addApp({ name: "empty-verify-app", path: appDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.app.verify).toEqual({});
+  });
+
+  it("does not auto-detect when the caller supplies explicit verify commands", async () => {
+    writeFileSync(
+      join(appDir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } }),
+    );
+    const { addApp } = await import("../apps");
+    const result = addApp({
+      name: "explicit-verify-app",
+      path: appDir,
+      verify: { test: "custom test command" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.app.verify).toEqual({ test: "custom test command" });
+  });
+
+  it("backfillAppVerifyIfEmpty fills a previously-empty verify from the app path", async () => {
+    const { addApp, backfillAppVerifyIfEmpty } = await import("../apps");
+    const added = addApp({ name: "backfill-app", path: appDir });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    expect(added.app.verify).toEqual({});
+
+    writeFileSync(
+      join(appDir, "package.json"),
+      JSON.stringify({ scripts: { lint: "eslint ." } }),
+    );
+    const backfilled = backfillAppVerifyIfEmpty("backfill-app");
+    expect(backfilled?.verify.lint).toBe("npm run lint");
+  });
+
+  it("backfillAppVerifyIfEmpty never overwrites an operator-set verify", async () => {
+    writeFileSync(
+      join(appDir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } }),
+    );
+    const { addApp, updateAppVerify, backfillAppVerifyIfEmpty } = await import("../apps");
+    const added = addApp({ name: "operator-set-app", path: appDir });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+
+    updateAppVerify("operator-set-app", { test: "custom test" });
+    const backfilled = backfillAppVerifyIfEmpty("operator-set-app");
+    expect(backfilled?.verify).toEqual({ test: "custom test" });
   });
 });

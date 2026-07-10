@@ -43,6 +43,7 @@ import {
   updateBridgeManifest,
 } from "./bridgeManifest";
 import { validateAppPath, type PathGuardFail } from "./pathGuard";
+import { detectVerifyCommands } from "./verifyDetect";
 
 /**
  * Per-app git workflow settings, persisted alongside the app entry in
@@ -985,6 +986,13 @@ export interface AppInput {
   name: string;
   path: string;
   description?: string;
+  /**
+   * Operator-supplied verify commands, if any. When absent/empty,
+   * `addApp` auto-detects via `detectVerifyCommands` (D2) so a fresh
+   * app doesn't sit with a blank verify chain until someone visits
+   * the settings panel.
+   */
+  verify?: AppVerify;
 }
 
 export interface AddAppResult {
@@ -1016,13 +1024,22 @@ export function addApp(input: AppInput): AddAppResult | AddAppFailure {
   if (apps.some((a) => a.name === input.name)) {
     return { ok: false, reason: "duplicate-name" };
   }
+  // D2: auto-detect verify commands when the caller didn't supply any.
+  // `detectVerifyCommands` is pure/synchronous (heuristic over
+  // package.json + language markers) and returns `{}` when nothing is
+  // recognized, which is indistinguishable from "operator left it
+  // blank" downstream (`hasAnyVerifyCommand` treats both as "no chain").
+  const hasOperatorVerify =
+    input.verify != null &&
+    Object.values(input.verify).some((v) => typeof v === "string" && v.trim().length > 0);
+  const verify = hasOperatorVerify ? { ...input.verify } : detectVerifyCommands(guard.resolvedPath);
   const app: App = {
     name: input.name,
     rawPath,
     path: guard.resolvedPath,
     description: (input.description ?? "").trim(),
     git: { ...DEFAULT_GIT_SETTINGS },
-    verify: { ...DEFAULT_VERIFY },
+    verify,
     pinnedFiles: [],
     symbolDirs: [],
     quality: { ...DEFAULT_QUALITY },
@@ -1119,6 +1136,40 @@ export function updateAppVerify(
     else delete next[key];
   }
   target.verify = next;
+  saveApps(apps);
+  return target;
+}
+
+/** True iff every field is absent/blank — mirrors `hasAnyVerifyCommand`
+ * in `verifyChain.ts` without importing it (that module imports types
+ * from here, so a value-import back would be circular). */
+function isVerifyEmpty(v: AppVerify | undefined): boolean {
+  if (!v) return true;
+  return !["test", "lint", "build", "typecheck", "format"].some((key) => {
+    const val = (v as Record<string, unknown>)[key];
+    return typeof val === "string" && val.trim().length > 0;
+  });
+}
+
+/**
+ * Backfill a single app's verify contract from `detectVerifyCommands`
+ * (D2), but only when the app currently has no verify commands
+ * configured — an operator's explicit choices (including deliberately
+ * blank fields left after editing) are never overwritten. Used by the
+ * rescan flow (`app/api/apps/[name]/scan/route.ts`) so re-running the
+ * scan on an app added before this feature existed — or one whose repo
+ * gained a package.json/build tooling since — picks up sensible
+ * defaults without clobbering anything the operator already set.
+ */
+export function backfillAppVerifyIfEmpty(name: string): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  if (!isVerifyEmpty(target.verify)) return target;
+  const detected = detectVerifyCommands(target.path);
+  if (isVerifyEmpty(detected)) return target;
+  target.verify = detected;
   saveApps(apps);
   return target;
 }

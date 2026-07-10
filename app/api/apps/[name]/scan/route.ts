@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
-import { resolveAppFromRouteSegment, updateAppDescription } from "@/libs/apps";
+import { backfillAppVerifyIfEmpty, resolveAppFromRouteSegment, updateAppDescription } from "@/libs/apps";
 import { scanAppWithClaude } from "@/libs/scanApp";
 import { getClientIp } from "@/libs/clientIp";
 import { checkRateLimit } from "@/libs/rateLimit";
@@ -54,17 +54,29 @@ export async function POST(
     );
   }
 
+  // D2 backfill: a rescan is the natural point to pick up verify
+  // commands for apps registered before auto-detect existed, or whose
+  // repo has since grown a package.json / build tooling. Never touches
+  // an app that already has any verify command configured.
+  const verifyBackfilled = backfillAppVerifyIfEmpty(app.name) ?? app;
+
   const summary = await scanAppWithClaude(app.path);
   if (!summary || summary === "(no clear purpose)") {
     return NextResponse.json(
-      { ok: true, app, scanned: false, description: app.description, reason: summary ?? "scan-failed" },
+      {
+        ok: true,
+        app: verifyBackfilled,
+        scanned: false,
+        description: verifyBackfilled.description,
+        reason: summary ?? "scan-failed",
+      },
       { status: 200 },
     );
   }
 
   const updated = updateAppDescription(app.name, summary);
   return NextResponse.json(
-    { ok: true, app: updated ?? app, scanned: true, description: summary },
+    { ok: true, app: updated ?? verifyBackfilled, scanned: true, description: summary },
     { status: 200 },
   );
 }
