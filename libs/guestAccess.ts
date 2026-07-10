@@ -67,12 +67,17 @@ const RULES: Rule[] = [
   { method: "GET", pattern: ["sessions", ":sid", "tail", "stream"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission", "stream"], grant: null, checkSession: true },
-  // Web push (Task 9): not task-scoped — a subscription is a device
-  // preference, not an action against a specific task, so any guest
-  // with a valid share cookie may fetch the VAPID key / (un)subscribe
-  // their browser, same as the always-allowed view baseline above.
-  { method: "GET", pattern: ["push", "vapid"], grant: null },
-  { method: "POST", pattern: ["push", "subscribe"], grant: null },
+  // Web push (Task 9) is deliberately OPERATOR-ONLY, not in this guest
+  // allowlist: `sendPushToAll` (libs/webPush.ts) fans a notification out
+  // to EVERY subscribed browser — every task's coordinator summaries,
+  // permission pings, and login-approval pings (which include the
+  // approver's UA + IP) — with no per-task scoping. A task-scoped guest
+  // subscribing would pierce the single-task boundary this whole module
+  // exists to enforce (see the file header), seeing pings for tasks they
+  // were never granted access to. `/api/push/subscribe` and `/api/push/
+  // vapid` therefore fall through to "not in guest allowlist" below;
+  // `/api/push/subscribe` additionally enforces `actor.kind ===
+  // "operator"` at the route level as a backstop for direct callers.
 
   // ── Send / drive (grant: sendMessage) ───────────────────────────
   { method: "POST", pattern: ["sessions", ":sid", "message"], grant: "sendMessage", checkSession: true },

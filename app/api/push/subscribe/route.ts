@@ -22,11 +22,15 @@ interface SubscribeBody {
 /**
  * Register or remove a browser's Web Push subscription. Same auth
  * shape as `app/api/tasks/[id]/plan/approve/route.ts`: CSRF check →
- * rate limit → actor auth. Unlike the plan-approve route this isn't
- * task-scoped and carries no grant requirement — any signed-in actor
- * (operator OR a guest with a valid share cookie) may opt their own
- * browser into push notifications, since a subscription is a device
- * preference, not an action against a specific task.
+ * rate limit → actor auth. OPERATOR-ONLY: `sendPushToAll`
+ * (libs/webPush.ts) fans every notification out to EVERY subscribed
+ * browser — coordinator summaries, permission pings, and login-approval
+ * pings (UA + IP) across ALL tasks, not just one — so letting a
+ * task-scoped guest subscribe would pierce the single-task boundary
+ * `libs/guestAccess.ts` otherwise enforces. `libs/guestAccess.ts`
+ * already excludes this route from the guest allowlist (the proxy
+ * denies a guest cookie before the request reaches here); this check is
+ * the route-level backstop for anything that calls in directly.
  */
 export async function POST(req: NextRequest) {
   const csrf = checkCsrf(req);
@@ -42,7 +46,9 @@ export async function POST(req: NextRequest) {
   }
 
   const actor = verifyRequestActor(req);
-  if (!actor) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!actor || actor.kind !== "operator") {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   let body: SubscribeBody;
   try {

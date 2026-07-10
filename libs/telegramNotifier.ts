@@ -785,12 +785,19 @@ function onPermission(req: PendingRequest): void {
 
 export function ensureTelegramNotifier(): void {
   if (state.installed) return;
-  // Either channel being configured is enough to light up notifier —
-  // outbound `sendTelegram` will fan-out to whichever one(s) actually
-  // have credentials at send time.
+  // Whether either Telegram channel is configured only gates the
+  // Telegram-specific pieces below (the inbound command poller / user-
+  // client listener). The three lifecycle subscriptions install
+  // unconditionally: their handlers (`onMetaChange` / `onPermission` /
+  // `onPendingLogin`) are also the ONLY place the Task 9 web-push
+  // fan-out (`notifyPush`) fires from, and `sendTelegram` itself
+  // already no-ops cheaply when neither channel is configured — so a
+  // push-only operator (no Telegram bot/user-client credentials, but
+  // ≥1 subscribed browser) still needs these subscriptions live to get
+  // notified at all. Early-returning here used to skip installing them
+  // entirely, silencing push for every push-only bridge.
   const hasBot = envConfig() !== null;
   const hasUser = isUserClientConfigured();
-  if (!hasBot && !hasUser) return;
   state.installed = true;
   state.unsubscribers.push(subscribeMetaAll(onMetaChange));
   state.unsubscribers.push(subscribeAllPermissions(onPermission));

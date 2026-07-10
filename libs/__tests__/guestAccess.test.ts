@@ -99,6 +99,18 @@ describe("authorizeGuestRequest — deny by default", () => {
     }
   });
 
+  it("rejects web push subscribe/vapid for a guest, even with all grants (operator-only — sendPushToAll broadcasts across ALL tasks)", () => {
+    const denied = [
+      ["GET", "/api/push/vapid"],
+      ["POST", "/api/push/subscribe"],
+    ];
+    for (const [m, p] of denied) {
+      const r = authorizeGuestRequest(m, p, scope(ALL), inTask);
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe("not in guest allowlist");
+    }
+  });
+
   it("rejects an unknown sub-path under the guest's own task", () => {
     expect(authorizeGuestRequest("POST", "/api/tasks/t_1/clear", scope(ALL), inTask).ok).toBe(false);
     expect(authorizeGuestRequest("DELETE", "/api/tasks/t_1", scope(ALL), inTask).ok).toBe(false);
