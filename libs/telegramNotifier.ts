@@ -27,7 +27,8 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { subscribeMetaAll, type MetaChangeEvent } from "./meta";
+import { subscribeMetaAll, readMeta, type MetaChangeEvent } from "./meta";
+import { computeGateStatus, renderGateStatusLine, type GateStatus } from "./gateStatus";
 import { subscribeAllPermissions, type PendingRequest } from "./permissionStore";
 import {
   getManifestTelegramSettings,
@@ -399,10 +400,18 @@ function onMetaChange(ev: MetaChangeEvent): void {
     if (ev.run.role === "coordinator") {
       const summary = readSummaryMd(ev.taskId);
       if (summary) {
+        // Task 6: fold the aggregated gate status (verify / claim /
+        // style / semantic / confidence, latest-attempt-per-chain) into
+        // the same Ready-for-review ping so the operator sees red/green
+        // without opening the UI. Best-effort — a missing/corrupt
+        // meta.json degrades to no gate line, never blocks the message.
+        const taskMeta = readMeta(join(SESSIONS_DIR, ev.taskId));
+        const gateStatus: GateStatus | undefined = taskMeta ? computeGateStatus(taskMeta) : undefined;
         void sendTelegram(renderCoordinatorSummaryMessage({
           taskId: ev.taskId,
           summary,
           status: next,
+          gateStatus,
         }));
         return;
       }
@@ -517,6 +526,10 @@ export function renderCoordinatorSummaryMessage(args: {
   taskId: string;
   summary: string;
   status: "done" | "failed";
+  /** Task 6: aggregated gate status, when the caller has it. Optional —
+   *  omitted entirely (no "Gates:" line) when the caller couldn't read
+   *  meta.json, and skipped when no gates were configured. */
+  gateStatus?: GateStatus;
 }): string {
   const lines = args.summary.split(/\r?\n/);
   const firstLine = (lines[0] ?? "").trim();
@@ -540,7 +553,10 @@ export function renderCoordinatorSummaryMessage(args: {
     : args.summary;
   const escapedBody = escapeMarkdownV2(body);
 
-  return `${headerLine}\n\n${escapedBody}${link}`;
+  const gateLine = args.gateStatus ? renderGateStatusLine(args.gateStatus) : "";
+  const gateBlock = gateLine ? `\n\n${escapeMarkdownV2(gateLine)}` : "";
+
+  return `${headerLine}\n\n${escapedBody}${gateBlock}${link}`;
 }
 
 /**

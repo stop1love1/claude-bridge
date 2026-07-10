@@ -13,8 +13,12 @@ export interface SlashCommandsItemDto {
 // imports `from "@/libs/client/types"` keep working.
 import type { Task, TaskStatus, TaskSection } from "../tasks";
 import type { RunStatus } from "../runStatus";
+// `libs/gateStatus.ts` is runtime-agnostic (no node:fs / server-only
+// imports) so it's safe to import type-only here — erased at build
+// time, never pulled into the client bundle.
+import type { GateStatus, GateStatusEntry, GateVerdict } from "../gateStatus";
 
-export type { Task, TaskStatus, TaskSection, RunStatus };
+export type { Task, TaskStatus, TaskSection, RunStatus, GateStatus, GateStatusEntry, GateVerdict };
 
 export interface Run {
   sessionId: string;

@@ -15,6 +15,7 @@ import type {
   TunnelInstallResult,
   TunnelAutoStart,
   UsageSnapshot,
+  GateStatus,
 } from "./types";
 import type { ShareView, ShareGrants, ShareGit } from "../shareStore";
 import type {
@@ -63,7 +64,7 @@ export const api = {
     ),
   meta: (id: string) => req<Meta>(`/tasks/${id}/meta`),
   allMeta: () => req<Record<string, Meta>>("/tasks/meta"),
-  summary: (id: string) => req<{ summary: string }>(`/tasks/${id}/summary`),
+  summary: (id: string) => req<{ summary: string; gateStatus?: GateStatus }>(`/tasks/${id}/summary`),
   runPrompt: (taskId: string, sessionId: string) =>
     req<{ prompt: string }>(`/tasks/${taskId}/runs/${sessionId}/prompt`),
   continueTask: (id: string) =>

@@ -29,6 +29,7 @@ import { AgentTree } from "./AgentTree";
 import { PlanReviewCard } from "./PlanReviewCard";
 import { CommitReviewCard } from "./CommitReviewCard";
 import { LivePreview } from "./LivePreview";
+import { GateStatusBadges } from "./GateStatusBadges";
 import { Button } from "./ui/button";
 
 interface TaskDetailProps {
@@ -224,6 +225,10 @@ function TaskDetailInner({
         <div className="mb-4">
           <LivePreview taskId={task.id} mode="operator" />
         </div>
+        {/* Task 6 — red/green gate badge row, sourced from the summary
+            API's computed gateStatus (verify/claim/style/semantic/
+            confidence, latest attempt per retry chain). */}
+        <GateStatusBadges taskId={task.id} refreshKey={meta?.runs?.length} />
         <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
           <Button
             onClick={copyId}
