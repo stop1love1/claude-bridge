@@ -38,9 +38,11 @@ import {
   updateTask,
   deleteTask,
 } from "./tasksStore";
-import { readMeta, applyManyRuns } from "./meta";
+import { readMeta, applyManyRuns, readIntake, setIntake } from "./meta";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { spawnCoordinatorForTask } from "./coordinator";
+import { continueCoordinator } from "./planGateLifecycle";
+import { readPlanGateConfig } from "./planGateConfig";
 import { resumeClaude } from "./spawn";
 import { killChild } from "./spawnRegistry";
 import { autoDetectApps, loadApps } from "./apps";
@@ -351,6 +353,25 @@ export const COMMANDS: CommandDef[] = [
     name: "refresh",
     description: "Re-run scope detection — usage: /refresh <id>",
     handler: async (args) => commandRefreshScope(args[0]),
+  },
+  // ─── Plan gate ─────────────────────────────────────────────────────
+  {
+    name: "plan",
+    description: "Show plan intake status/summary/questions — usage: /plan <id>",
+    handler: async (args) => commandPlanShow(args[0]),
+  },
+  {
+    name: "approve",
+    description: "Approve the current plan — usage: /approve <id>",
+    handler: async (args) => commandPlanApprove(args[0]),
+  },
+  {
+    name: "replan",
+    description: "Request plan changes with a note — usage: /replan <id> <note>",
+    handler: async (_args, rawTail) => {
+      const { id, rest } = splitIdAndRest(rawTail);
+      return commandPlanReplan(id, rest);
+    },
   },
   // ─── Permissions ───────────────────────────────────────────────────
   {
@@ -813,6 +834,103 @@ async function commandRefreshScope(idArg: string | undefined): Promise<string> {
       ? `Top repo: \`${escapeMarkdownV2(top.name)}\` \\(score ${top.score}\\)`
       : "Top repo: \\(none\\)",
   ].join("\n");
+}
+
+// ─── Plan gate ─────────────────────────────────────────────────────────
+//
+// Mirror the exact state machine of `app/api/tasks/[id]/plan/approve/
+// route.ts` — same libs (`readIntake` / `setIntake` / `continueCoordinator`
+// / `readPlanGateConfig`), called directly rather than over HTTP. Kept as
+// three small handlers (not a single `/plan-action` dispatcher) so each
+// has an unambiguous Telegram usage string.
+
+/** Split "<id> <rest of the text>" on the first whitespace run. */
+function splitIdAndRest(rawTail: string): { id: string | undefined; rest: string | undefined } {
+  const trimmed = rawTail.trim();
+  if (!trimmed) return { id: undefined, rest: undefined };
+  const sp = trimmed.search(/\s/);
+  if (sp === -1) return { id: trimmed, rest: undefined };
+  const rest = trimmed.slice(sp + 1).trim();
+  return { id: trimmed.slice(0, sp), rest: rest.length > 0 ? rest : undefined };
+}
+
+export async function commandPlanShow(idArg: string | undefined): Promise<string> {
+  if (!idArg) return "Usage: `/plan t_YYYYMMDD_NNN`";
+  if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
+  const dir = join(SESSIONS_DIR, idArg);
+  const meta = readMeta(dir);
+  if (!meta) return `Task not found: \`${idArg}\``;
+  const intake = readIntake(dir);
+  if (!intake || intake.status === "none") {
+    return `⚠️ No plan to act on for \`${idArg}\``;
+  }
+  const cfg = readPlanGateConfig();
+  const lines = [
+    `📋 Plan for \`${idArg}\``,
+    `Status: \`${escapeMarkdownV2(intake.status)}\` · Rounds: ${intake.rounds}/${cfg.maxClarifyRounds}`,
+  ];
+  if (intake.summary) {
+    lines.push("", `Summary: ${escapeMarkdownV2(truncate(intake.summary, 800))}`);
+  }
+  if (intake.questions.length > 0) {
+    lines.push("", "Questions:");
+    for (const q of intake.questions) {
+      lines.push(`- ${escapeMarkdownV2(q.text)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export async function commandPlanApprove(idArg: string | undefined): Promise<string> {
+  if (!idArg) return "Usage: `/approve t_YYYYMMDD_NNN`";
+  if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
+  const dir = join(SESSIONS_DIR, idArg);
+  const meta = readMeta(dir);
+  if (!meta) return `Task not found: \`${idArg}\``;
+  const intake = readIntake(dir);
+  if (!intake || intake.status === "none") {
+    return `⚠️ No plan to act on for \`${idArg}\``;
+  }
+  // Idempotent: already approved → no-op, same as the HTTP route.
+  if (intake.status === "approved") {
+    return `✅ Plan already approved for \`${idArg}\``;
+  }
+  const nowIso = new Date().toISOString();
+  await setIntake(dir, {
+    status: "approved",
+    approvedBy: { kind: "operator", label: "telegram", at: nowIso },
+  });
+  await continueCoordinator(idArg, dir, intake.summary);
+  return `✅ Plan approved for \`${idArg}\``;
+}
+
+export async function commandPlanReplan(
+  idArg: string | undefined,
+  note: string | undefined,
+): Promise<string> {
+  if (!idArg || !note) {
+    return "Usage: `/replan t_YYYYMMDD_NNN <note>`";
+  }
+  if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
+  const dir = join(SESSIONS_DIR, idArg);
+  const meta = readMeta(dir);
+  if (!meta) return `Task not found: \`${idArg}\``;
+  const intake = readIntake(dir);
+  if (!intake || intake.status === "none") {
+    return `⚠️ No plan to act on for \`${idArg}\``;
+  }
+  // Enforce maxClarifyRounds the same way the HTTP route does — past the
+  // cap the operator must approve or reject the current plan instead of
+  // looping /replan forever.
+  const cfg = readPlanGateConfig();
+  if (intake.rounds >= cfg.maxClarifyRounds) {
+    return `🚫 \`${idArg}\`: re-planning is capped at ${cfg.maxClarifyRounds} round(s) — approve or reject the current plan`;
+  }
+  const rec = await setIntake(dir, { status: "planning", rounds: intake.rounds + 1 });
+  // `replan:true` flips the coordinator message to "re-plan" (gate stays
+  // closed) instead of "gate is now open" — matches the approve route.
+  await continueCoordinator(idArg, dir, `Operator feedback: ${note}`, { replan: true });
+  return `🔁 Re-plan requested for \`${idArg}\` \\(round ${rec?.rounds ?? intake.rounds + 1}/${cfg.maxClarifyRounds}\\)`;
 }
 
 /**

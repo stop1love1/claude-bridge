@@ -440,7 +440,16 @@ export interface MetaChangeEvent {
      * moment the nudge fired (status may still be `running` from the
      * deferred flip).
      */
-    | "coordinator-nudge";
+    | "coordinator-nudge"
+    /**
+     * Intent & Planning Gate: a task's intake just transitioned INTO
+     * `awaiting-approval` (planner produced a needs-decision verdict, or
+     * a clear plan the submitter can't self-approve). Emitted by
+     * `planGateLifecycle.resolvePlanGateAfterPlanner` via
+     * `emitIntakeAwaitingApproval` below. `taskTitle` is included so the
+     * Telegram notifier doesn't have to round-trip `readMeta`.
+     */
+    | "intake-awaiting-approval";
   sessionId?: string;
   run?: Run;
   prevStatus?: RunStatus;
@@ -648,6 +657,27 @@ export function emitTaskSection(args: {
     nextSection: args.nextSection,
     taskTitle: args.taskTitle,
     taskChecked: args.taskChecked,
+  });
+}
+
+/**
+ * Fire an `intake-awaiting-approval` event when a task's plan-gate
+ * intake transitions into `awaiting-approval` (see
+ * `planGateLifecycle.resolvePlanGateAfterPlanner`). The Telegram
+ * notifier subscribes via `subscribeMetaAll` and pings the operator so
+ * they know to run `/plan` / `/approve` / `/replan`. Purely a
+ * notification — callers must already have written the new intake
+ * status to disk (via `setIntake`) before invoking this.
+ */
+export function emitIntakeAwaitingApproval(args: {
+  taskId: string;
+  taskTitle: string;
+}): void {
+  const dir = join(SESSIONS_DIR, args.taskId);
+  emit(dir, {
+    taskId: args.taskId,
+    kind: "intake-awaiting-approval",
+    taskTitle: args.taskTitle,
   });
 }
 

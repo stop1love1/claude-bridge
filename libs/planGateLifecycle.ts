@@ -10,7 +10,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readMeta, readIntake, setIntake } from "./meta";
+import { readMeta, readIntake, setIntake, emitIntakeAwaitingApproval } from "./meta";
 import { deriveGateVerdict, type GateVerdict, type IntakeStatus } from "./planGate";
 
 export function computeNextIntakeStatus(args: {
@@ -72,6 +72,12 @@ export async function resolvePlanGateAfterPlanner(args: {
 
     if (next === "approved") {
       await continueCoordinator(args.taskId, args.sessionsDir, derived.summary);
+    } else {
+      // awaiting-approval: ping the operator (Telegram notifier) rather
+      // than silently parking the plan — they need to /plan · /approve
+      // · /replan from wherever they're triaging.
+      const title = readMeta(args.sessionsDir)?.taskTitle ?? args.taskId;
+      emitIntakeAwaitingApproval({ taskId: args.taskId, taskTitle: title });
     }
   } catch (err) {
     console.error("[plan-gate] resolvePlanGateAfterPlanner failed:", err);

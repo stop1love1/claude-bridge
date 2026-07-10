@@ -442,6 +442,20 @@ function onMetaChange(ev: MetaChangeEvent): void {
     void sendTelegram(text);
     return;
   }
+  // Intent & Planning Gate: a plan just landed in awaiting-approval —
+  // ping the operator so they know to /plan · /approve · /replan.
+  if (ev.kind === "intake-awaiting-approval") {
+    if (!shouldNotifyIntakeAwaitingApproval(level)) return;
+    const dedupeKey = `intake-awaiting:${ev.taskId}`;
+    if (!shouldSend(dedupeKey)) return;
+    const text =
+      renderPlanAwaitingApprovalMessage({
+        taskId: ev.taskId,
+        taskTitle: ev.taskTitle ?? "",
+      }) + renderTaskLink(ev.taskId);
+    void sendTelegram(text);
+    return;
+  }
 }
 
 /**
@@ -524,6 +538,39 @@ export function renderCoordinatorSummaryMessage(args: {
   const escapedBody = escapeMarkdownV2(body);
 
   return `${headerLine}\n\n${escapedBody}${link}`;
+}
+
+/**
+ * Decide whether an `intake-awaiting-approval` event should ping
+ * Telegram. Per the brief: send at `normal`+ (i.e. everything except
+ * `minimal` — a plan stuck waiting for a human is exactly the kind of
+ * "needs your attention" event `minimal` is meant to still surface via
+ * `BLOCKED`-style section moves, but the gate doesn't move the task's
+ * *section*, so we gate it on notificationLevel directly instead).
+ */
+function shouldNotifyIntakeAwaitingApproval(level: TelegramNotificationLevel): boolean {
+  return level !== "minimal";
+}
+
+/**
+ * Render the "plan ready for review" ping sent when a task's intake
+ * transitions into `awaiting-approval` (see
+ * `planGateLifecycle.resolvePlanGateAfterPlanner` /
+ * `emitIntakeAwaitingApproval`). The three commands are wrapped in
+ * backticks (MarkdownV2 code spans) so the task id's underscores and
+ * the literal `<note>` placeholder don't need full reserved-char
+ * escaping — only `` ` `` / `\` matter inside a code span.
+ */
+export function renderPlanAwaitingApprovalMessage(args: {
+  taskId: string;
+  taskTitle: string;
+}): string {
+  const id = escapeMarkdownV2(args.taskId);
+  const title = escapeMarkdownV2(args.taskTitle.trim() || "(untitled)");
+  return (
+    `📋 *Plan ready for review* — ${title}\n` +
+    `\`/plan ${id}\` · \`/approve ${id}\` · \`/replan ${id} <note>\``
+  );
 }
 
 function sectionIcon(section: string): string {
