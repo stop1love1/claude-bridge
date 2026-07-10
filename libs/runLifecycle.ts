@@ -909,6 +909,22 @@ async function postExitFlow(args: {
 }
 
 /**
+ * Outcome of `performWorktreeMergeBack`. `stage` names the FIRST step
+ * that failed: `merge` means the worktree branch never landed in the
+ * base branch (nothing shipped); `integration` / `push` mean the merge
+ * DID land but a follow-up step failed. Callers that must not release
+ * held work until the merge itself succeeded (the confidence review
+ * route's `ship`) key off `stage === "merge"`. postExitFlow ignores
+ * the return value entirely — every failure is already logged /
+ * stamped internally, preserving its pre-extraction behavior.
+ */
+export interface WorktreeMergeBackResult {
+  ok: boolean;
+  stage?: "merge" | "integration" | "push";
+  detail?: string;
+}
+
+/**
  * P4/F1 — merge a worktree run's branch back into its base branch,
  * remove the worktree, run the worktree-mode integration pass
  * (auto-merge / pull-request), and push the live tree. Extracted out
@@ -920,7 +936,8 @@ async function postExitFlow(args: {
  * The merge respects whatever auto-commit already did inside the
  * worktree; the worktree pruner mops up anything left behind on a
  * crash. Fail-soft throughout: failures are logged / stamped via
- * `markMergeNotPushed`, never thrown.
+ * `markMergeNotPushed` and surfaced in the returned
+ * `WorktreeMergeBackResult` — never thrown.
  */
 export async function performWorktreeMergeBack(params: {
   app: App;
@@ -930,9 +947,18 @@ export async function performWorktreeMergeBack(params: {
   t: string;
   dir: string;
   message: string;
-}): Promise<void> {
+}): Promise<WorktreeMergeBackResult> {
   const { app, run, tid, title, t, dir, message } = params;
-  if (!run.worktreePath) return;
+  if (!run.worktreePath) return { ok: true };
+  // Integration failure is fail-soft (the push pass still runs, same
+  // as pre-extraction), so we record the first failure and keep going
+  // instead of returning early — except merge failure, which aborts
+  // the remaining steps exactly like the old `wm.ok` guards did.
+  let firstFailure: WorktreeMergeBackResult | null = null;
+  // Tracks how far we got so a crash mid-flight reports the stage it
+  // died in. A crash still in `merge` means the caller must assume
+  // nothing landed in the base branch.
+  let stage: "merge" | "integration" | "push" = "merge";
   try {
     const wm = await mergeAndRemoveWorktree({
       appPath: app.path,
@@ -944,9 +970,10 @@ export async function performWorktreeMergeBack(params: {
     });
     if (!wm.ok) {
       logWarn("worktree", `cleanup: ${wm.message} — ${wm.error ?? ""}`, { tag: t });
-    } else {
-      logInfo("worktree", `cleanup: ${wm.message}`, { tag: t });
+      return { ok: false, stage: "merge", detail: `${wm.message}${wm.error ? ` — ${wm.error}` : ""}` };
     }
+    logInfo("worktree", `cleanup: ${wm.message}`, { tag: t });
+    stage = "integration";
     // Worktree integration: after the worktree branch merged into
     // `baseBranch`, branch on integrationMode. Auto-merge runs the
     // local fast-forward into mergeTargetBranch BEFORE the autoPush
@@ -957,7 +984,6 @@ export async function performWorktreeMergeBack(params: {
     // baseBranch and autoPush still pushes that.
     const baseBranch = run.worktreeBaseBranch ?? null;
     if (
-      wm.ok &&
       baseBranch &&
       app.git.integrationMode !== "none" &&
       app.git.mergeTargetBranch.trim().length > 0
@@ -976,6 +1002,7 @@ export async function performWorktreeMergeBack(params: {
           logInfo("auto-merge", m.message, { tag: t });
         } else {
           logWarn("auto-merge", `${m.message} — ${m.error ?? ""}`, { tag: t });
+          firstFailure ??= { ok: false, stage: "integration", detail: `${m.message}${m.error ? ` — ${m.error}` : ""}` };
         }
       } else if (app.git.integrationMode === "pull-request") {
         const d = await runDevopsAgent({
@@ -991,16 +1018,18 @@ export async function performWorktreeMergeBack(params: {
           logInfo("pull-request", `${d.status} — ${d.reason}`, { tag: t, url: d.url ?? null });
         } else {
           logWarn("pull-request", `${d.status} — ${d.reason}`, { tag: t });
+          firstFailure ??= { ok: false, stage: "integration", detail: `${d.status} — ${d.reason}` };
         }
       }
     }
+    stage = "push";
     // P4/F1 — push the live tree's current branch after a successful
     // merge so `autoPush=true` reaches the merged result, not the
     // throwaway worktree branch we suppressed above. Calling
     // `autoCommitAndPush` with autoCommit=false short-circuits at
     // the "no staged changes" branch, which forwards to `tryPush`
     // when autoPush is on — exactly what we need.
-    if (wm.ok && app.git.autoPush) {
+    if (app.git.autoPush) {
       const r = await autoCommitAndPush(
         app.path,
         { ...app.git, autoCommit: false, autoPush: true },
@@ -1020,11 +1049,18 @@ export async function performWorktreeMergeBack(params: {
           `MERGE-NO-PUSH: worktree merge landed locally but push failed: ${r.message}`,
           r.error,
         );
+        firstFailure ??= { ok: false, stage: "push", detail: `${r.message}${r.error ? ` — ${r.error}` : ""}` };
       }
     }
   } catch (err) {
     logError("worktree", "cleanup crashed", err, { tag: t });
+    firstFailure ??= {
+      ok: false,
+      stage,
+      detail: `crashed during ${stage}: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
+  return firstFailure ?? { ok: true };
 }
 
 /**

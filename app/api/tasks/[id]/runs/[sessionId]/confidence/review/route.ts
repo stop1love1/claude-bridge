@@ -13,10 +13,15 @@
  *                           before the hold — `ship` performs the deferred
  *                           merge-back via `performWorktreeMergeBack`, the
  *                           SAME code path postExitFlow uses for an unheld
- *                           worktree run, so it merges into the base
- *                           branch, runs worktree-mode integration, and
- *                           pushes the live tree exactly like the normal
- *                           flow would have.
+ *                           worktree run (merge into base, worktree-mode
+ *                           integration, live-tree push). If the MERGE
+ *                           stage fails (e.g. conflict), the hold is NOT
+ *                           cleared — the response reports the failure so
+ *                           the operator can resolve and retry ship.
+ *                           Integration/push failures after a landed
+ *                           merge DO clear the hold but are surfaced in
+ *                           the response (and, for push failures, via
+ *                           `mergeNotPushed` on the run).
  *   - `action: "dismiss"` → just clear the hold (operator reviewed, will
  *                           ship later via the per-run commit UI). For a
  *                           worktree run this leaves the worktree PARKED
@@ -89,27 +94,43 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return NextResponse.json({ error: "worktree no longer exists" }, { status: 404 });
     }
     const message = `[${id}] ${meta.taskTitle} (operator-approved after low-confidence review)`;
-    try {
-      await performWorktreeMergeBack({
-        app,
-        run,
-        tid: id,
-        title: meta.taskTitle,
-        t: `confidence-ship:${sessionId.slice(0, 8)}`,
-        dir,
-        message,
-      });
-      pushResult = {
-        ok: true,
-        message: "worktree merge-back replayed (merge, worktree integration, live-tree push — see server logs for step-by-step detail)",
-        error: null,
-      };
-    } catch (err) {
+    // No try/catch: performWorktreeMergeBack is fail-soft by contract —
+    // it never throws, it reports failures via its status result.
+    const mb = await performWorktreeMergeBack({
+      app,
+      run,
+      tid: id,
+      title: meta.taskTitle,
+      t: `confidence-ship:${sessionId.slice(0, 8)}`,
+      dir,
+      message,
+    });
+    if (!mb.ok && mb.stage === "merge") {
+      // The worktree branch never landed in the base branch — clearing
+      // the hold here would be irreversible (a retry would 409 on "run
+      // is not held" while nothing shipped). Keep `heldAt` intact and
+      // report the failure so the operator can resolve + retry ship.
       return NextResponse.json(
-        { error: "ship failed", detail: safeErrorMessage(err, "unknown") },
-        { status: 500 },
+        {
+          ok: false,
+          action,
+          error: "merge-back failed — hold retained, resolve and retry ship",
+          stage: mb.stage,
+          detail: mb.detail ?? null,
+          confidence: run.confidence,
+          push: null,
+          integration: null,
+        },
+        { status: 409 },
       );
     }
+    pushResult = {
+      ok: mb.ok,
+      message: mb.ok
+        ? "worktree merge-back completed (merge, worktree integration, live-tree push)"
+        : `worktree merge-back partially failed at ${mb.stage ?? "unknown"} stage (merge landed): ${mb.detail ?? "see server logs"}`,
+      error: mb.ok ? null : mb.detail ?? null,
+    };
   } else if (action === "ship") {
     const app = getApp(run.repo);
     const cwd = app && existsSync(app.path) ? app.path : null;

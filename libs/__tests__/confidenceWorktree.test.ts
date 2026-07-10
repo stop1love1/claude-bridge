@@ -205,7 +205,7 @@ describe("performWorktreeMergeBack", () => {
     return meta!.runs.find((r) => r.sessionId === SID)!;
   }
 
-  it("merges, runs worktree-mode integration, and pushes the live tree on success", async () => {
+  it("merges, runs worktree-mode integration, pushes the live tree, and reports ok:true", async () => {
     const { performWorktreeMergeBack } = await import("../runLifecycle");
     const run = await seedRun();
 
@@ -213,7 +213,7 @@ describe("performWorktreeMergeBack", () => {
     mergeIntoTargetBranchMock.mockResolvedValue({ ok: true, message: "merged into release" });
     autoCommitAndPushMock.mockResolvedValue({ ok: true, message: "pushed" });
 
-    await performWorktreeMergeBack({
+    const result = await performWorktreeMergeBack({
       app: REAL_APP,
       run,
       tid: "t_20260710_001",
@@ -223,6 +223,7 @@ describe("performWorktreeMergeBack", () => {
       message: "[t_20260710_001] test task",
     });
 
+    expect(result.ok).toBe(true);
     expect(mergeAndRemoveWorktreeMock).toHaveBeenCalledWith({
       appPath: "/tmp/fake-app",
       handle: { path: run.worktreePath, branch: run.worktreeBranch, baseBranch: run.worktreeBaseBranch },
@@ -241,13 +242,13 @@ describe("performWorktreeMergeBack", () => {
     );
   });
 
-  it("skips integration + push when the worktree merge itself fails", async () => {
+  it("reports {ok:false, stage:'merge'} and skips integration + push when the worktree merge fails", async () => {
     const { performWorktreeMergeBack } = await import("../runLifecycle");
     const run = await seedRun();
 
     mergeAndRemoveWorktreeMock.mockResolvedValue({ ok: false, message: "merge conflict", error: "CONFLICT" });
 
-    await performWorktreeMergeBack({
+    const result = await performWorktreeMergeBack({
       app: REAL_APP,
       run,
       tid: "t_20260710_001",
@@ -257,11 +258,38 @@ describe("performWorktreeMergeBack", () => {
       message: "[t_20260710_001] test task",
     });
 
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("merge");
+    expect(result.detail).toContain("merge conflict");
     expect(mergeIntoTargetBranchMock).not.toHaveBeenCalled();
     expect(autoCommitAndPushMock).not.toHaveBeenCalled();
   });
 
-  it("stamps mergeNotPushed on the run when the merge lands but the live-tree push fails", async () => {
+  it("reports {ok:false, stage:'merge'} when mergeAndRemoveWorktree itself throws (crash path, never rethrows)", async () => {
+    const { performWorktreeMergeBack } = await import("../runLifecycle");
+    const run = await seedRun();
+
+    mergeAndRemoveWorktreeMock.mockRejectedValue(new Error("git exploded"));
+
+    const result = await performWorktreeMergeBack({
+      app: REAL_APP,
+      run,
+      tid: "t_20260710_001",
+      title: "test task",
+      t: "test-tag",
+      dir: tmp,
+      message: "[t_20260710_001] test task",
+    });
+
+    // Fail-soft contract preserved for the postExitFlow caller (no
+    // throw), but the failure must surface in the status so the review
+    // route can keep the hold.
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("merge");
+    expect(result.detail).toContain("git exploded");
+  });
+
+  it("reports {ok:false, stage:'push'} + stamps mergeNotPushed when the merge lands but the live-tree push fails", async () => {
     const { performWorktreeMergeBack } = await import("../runLifecycle");
     const { readMeta } = await import("../meta");
     const run = await seedRun();
@@ -269,7 +297,7 @@ describe("performWorktreeMergeBack", () => {
     mergeAndRemoveWorktreeMock.mockResolvedValue({ ok: true, message: "merged wt into base; removed" });
     autoCommitAndPushMock.mockResolvedValue({ ok: false, message: "push failed", error: "auth error" });
 
-    await performWorktreeMergeBack({
+    const result = await performWorktreeMergeBack({
       app: { ...REAL_APP, git: { ...REAL_APP.git, integrationMode: "none" as const, mergeTargetBranch: "" } },
       run,
       tid: "t_20260710_001",
@@ -279,16 +307,44 @@ describe("performWorktreeMergeBack", () => {
       message: "[t_20260710_001] test task",
     });
 
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("push");
     const updated = readMeta(tmp)?.runs.find((r) => r.sessionId === SID);
     expect(updated?.mergeNotPushed?.message).toContain("MERGE-NO-PUSH:");
     expect(updated?.mergeNotPushed?.error).toBe("auth error");
   });
 
-  it("is a no-op when the run has no worktreePath (defensive guard)", async () => {
+  it("reports {ok:false, stage:'integration'} when the merge lands but integration fails (push still runs)", async () => {
     const { performWorktreeMergeBack } = await import("../runLifecycle");
     const run = await seedRun();
 
-    await performWorktreeMergeBack({
+    mergeAndRemoveWorktreeMock.mockResolvedValue({ ok: true, message: "merged wt into base; removed" });
+    mergeIntoTargetBranchMock.mockResolvedValue({ ok: false, message: "target merge conflict", error: "CONFLICT" });
+    autoCommitAndPushMock.mockResolvedValue({ ok: true, message: "pushed" });
+
+    const result = await performWorktreeMergeBack({
+      app: REAL_APP,
+      run,
+      tid: "t_20260710_001",
+      title: "test task",
+      t: "test-tag",
+      dir: tmp,
+      message: "[t_20260710_001] test task",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("integration");
+    expect(result.detail).toContain("target merge conflict");
+    // Integration failure is fail-soft: the live-tree push still runs
+    // (HEAD ends up back on baseBranch; pushing it is the v1 behavior).
+    expect(autoCommitAndPushMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a no-op (ok:true) when the run has no worktreePath (defensive guard)", async () => {
+    const { performWorktreeMergeBack } = await import("../runLifecycle");
+    const run = await seedRun();
+
+    const result = await performWorktreeMergeBack({
       app: REAL_APP,
       run: { ...run, worktreePath: null },
       tid: "t_20260710_001",
@@ -298,6 +354,7 @@ describe("performWorktreeMergeBack", () => {
       message: "[t_20260710_001] test task",
     });
 
+    expect(result.ok).toBe(true);
     expect(mergeAndRemoveWorktreeMock).not.toHaveBeenCalled();
   });
 });

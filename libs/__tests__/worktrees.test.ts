@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,18 @@ import {
 import type { AppGitSettings } from "../apps";
 import { gitInit } from "./helpers/git";
 import { mktmp } from "./helpers/fs";
+
+// Point SESSIONS_DIR at a per-run temp dir so the pruner's
+// active/held-session scan (collectActiveSessionIds) reads test-owned
+// meta.json files instead of the real bridge sessions folder. All other
+// paths exports stay real.
+vi.mock("../paths", async () => {
+  const actual = await vi.importActual<typeof import("../paths")>("../paths");
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir: osTmpdir } = await import("node:os");
+  const { join: pathJoin } = await import("node:path");
+  return { ...actual, SESSIONS_DIR: mkdtempSync(pathJoin(osTmpdir(), "wt-sessions-")) };
+});
 
 const SETTINGS: AppGitSettings = {
   branchMode: "auto-create",
@@ -242,5 +254,70 @@ integration("createWorktreeForRun + removeWorktree (real git)", () => {
     });
     expect(removed).toBe(0);
     expect(existsSync(handle!.path)).toBe(true);
+  });
+
+  it("pruneStaleWorktrees keeps a HELD worktree (confidence.heldAt, unreviewed) past TTL, reaps it once reviewed", async () => {
+    // Task 7: a low-confidence worktree run held via `holdWorktree`
+    // parks its worktree for operator review. The run's status is
+    // already `done` (the gates flipped it before confidence scoring),
+    // so the queued/running exemption alone would let the TTL pruner
+    // reap the parked worktree out from under the pending review —
+    // after which `ship` 404s forever while `heldAt` is stuck.
+    const sid = "88888888-8888-8888-8888-888888888888";
+    const handle = await createWorktreeForRun({
+      appPath,
+      settings: SETTINGS,
+      taskId: "t_test_held",
+      sessionId: sid,
+    });
+    expect(handle).not.toBeNull();
+
+    const { SESSIONS_DIR } = await import("../paths");
+    const { createMeta, appendRun, updateRun } = await import("../meta");
+    const taskDir = join(SESSIONS_DIR, "t_test_held");
+    createMeta(taskDir, {
+      taskId: "t_test_held",
+      taskTitle: "held task",
+      taskBody: "held body",
+      taskStatus: "doing",
+      taskSection: "DOING",
+      taskChecked: false,
+      createdAt: "2026-07-10T10:00:00Z",
+    });
+    await appendRun(taskDir, {
+      sessionId: sid,
+      role: "coder",
+      repo: "real-app",
+      status: "done", // gates already flipped it — NOT queued/running
+      startedAt: "2026-07-10T10:00:01Z",
+      endedAt: "2026-07-10T10:00:02Z",
+      worktreePath: handle!.path,
+      worktreeBranch: handle!.branch,
+      worktreeBaseBranch: handle!.baseBranch,
+      confidence: { score: 50, band: "low", heldAt: "2026-07-10T10:00:03Z", reviewedBy: null },
+    });
+
+    try {
+      // Cutoff in the future (staleAfterMs < 0) → everything is "past
+      // TTL". The held run's worktree must survive anyway.
+      await pruneStaleWorktrees({ appPath, staleAfterMs: -1000 });
+      expect(existsSync(handle!.path)).toBe(true);
+
+      // Operator resolves the hold (dismiss clears heldAt + stamps
+      // reviewedBy) → the exemption lapses and the pruner may reap.
+      await updateRun(taskDir, sid, {
+        confidence: {
+          score: 50,
+          band: "low",
+          heldAt: null,
+          reviewedBy: { label: "operator", at: "2026-07-11T10:00:00Z" },
+        },
+      });
+      const removed = await pruneStaleWorktrees({ appPath, staleAfterMs: -1000 });
+      expect(removed).toBeGreaterThanOrEqual(1);
+      expect(existsSync(handle!.path)).toBe(false);
+    } finally {
+      try { rmSync(taskDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   });
 });

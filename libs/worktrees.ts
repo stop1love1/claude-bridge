@@ -407,11 +407,20 @@ async function mergeAndRemoveWorktreeLocked(args: {
 }
 
 /**
- * Walk every task's meta.json and collect sessionIds whose run is
- * still queued/running. The pruner uses this to skip worktrees of
- * in-flight children — without it, a long-running spawn whose
- * top-level mtime aged past TTL would get reaped under the running
- * agent, eating its WIP.
+ * Walk every task's meta.json and collect sessionIds whose worktree
+ * must NOT be reaped:
+ *
+ *   - runs still queued/running — a long-running spawn whose top-level
+ *     mtime aged past TTL would otherwise get reaped under the running
+ *     agent, eating its WIP;
+ *   - runs HELD for low-confidence review (Task 7 `holdWorktree`:
+ *     `confidence.heldAt` set, `reviewedBy` not yet stamped). Those
+ *     runs are already `done` status-wise (the gates flipped them
+ *     before scoring), but the parked worktree is the payload the
+ *     operator's `ship` action merges — reaping it past TTL would
+ *     leave `ship` 404ing forever with `heldAt` stuck. Once the
+ *     operator ships or dismisses (`reviewedBy` stamped), the
+ *     exemption lapses and normal TTL pruning resumes.
  *
  * Failure-soft: a corrupt meta.json is treated as "no active runs"
  * for that task; we never want a single bad file to disable pruning
@@ -436,7 +445,9 @@ function collectActiveSessionIds(): Set<string> {
     }
     if (!meta) continue;
     for (const r of meta.runs) {
-      if (r.status === "queued" || r.status === "running") {
+      const inFlight = r.status === "queued" || r.status === "running";
+      const heldForReview = !!r.confidence?.heldAt && !r.confidence.reviewedBy;
+      if (inFlight || heldForReview) {
         out.add(r.sessionId);
       }
     }
