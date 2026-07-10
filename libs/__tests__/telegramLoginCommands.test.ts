@@ -126,7 +126,7 @@ describe("/approvelogin", () => {
     expect(getPendingLogin(entry.id)?.status).toBe("approved");
   });
 
-  it("returns 'no longer pending' when re-approving an already-answered entry via a full-id lookup", async () => {
+  it("reports 'no pending login matching' when re-approving an already-answered entry", async () => {
     const { createPendingLogin, answerPendingLogin } = await import("../loginApprovals");
     const entry = createPendingLogin(sampleArgs);
     answerPendingLogin(entry.id, "approved");
@@ -218,8 +218,11 @@ describe("renderPendingLoginMessage", () => {
     const out = renderPendingLoginMessage(entry);
     expect(out).toContain("New device login pending");
     expect(out).toContain("iPhone");
-    // IP dots are MarkdownV2-escaped (`\.`) by `escapeMarkdownV2`.
-    expect(out).toMatch(/198\\?\.51\\?\.100\\?\.7/);
+    // The IP is attacker-influenced text headed for the Bot API in
+    // MarkdownV2 mode — assert the dots come out ESCAPED (a literal
+    // `\.` in the output) so a regression in `escapeMarkdownV2` (or a
+    // call site dropping the escaping) fails this test.
+    expect(out).toContain("198\\.51\\.100\\.7");
     expect(out).toContain("/approvelogin");
     expect(out).toContain(entry.id.slice(0, 8));
   });
