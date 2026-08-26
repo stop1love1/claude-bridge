@@ -6,12 +6,13 @@ import { join } from "node:path";
 import {
   createWorktreeForRun,
   inheritWorktreeFields,
+  mergeAndRemoveWorktree,
   pruneStaleWorktrees,
   removeWorktree,
   worktreePathFor,
 } from "../worktrees";
 import type { AppGitSettings } from "../apps";
-import { gitInit } from "./helpers/git";
+import { git, gitInit } from "./helpers/git";
 import { mktmp } from "./helpers/fs";
 
 // Point SESSIONS_DIR at a per-run temp dir so the pruner's
@@ -319,5 +320,42 @@ integration("createWorktreeForRun + removeWorktree (real git)", () => {
     } finally {
       try { rmSync(taskDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
+  });
+
+  it("aborts the merge and leaves the live tree clean when merge-back conflicts", async () => {
+    // Set up: base branch with a file; worktree branch edits line 1;
+    // live tree commits a conflicting edit to line 1 on the base branch.
+    const handle = await createWorktreeForRun({
+      appPath,
+      settings: SETTINGS,
+      taskId: "t_test_conflict",
+      sessionId: "99999999-9999-9999-9999-999999999999",
+    });
+    expect(handle).not.toBeNull();
+    expect(handle!.baseBranch).not.toBeNull();
+
+    // Worktree side: edit README.md and commit onto the spawn branch.
+    writeFileSync(join(handle!.path, "README.md"), "# worktree edit\n");
+    execFileSync("git", ["add", "."], { cwd: handle!.path, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "worktree edit"], { cwd: handle!.path, stdio: "ignore" });
+
+    // Live tree side: check out the base branch and commit a conflicting
+    // edit to the same line, so the merge-back is guaranteed to conflict.
+    execFileSync("git", ["checkout", handle!.baseBranch!], { cwd: appPath, stdio: "ignore" });
+    writeFileSync(join(appPath, "README.md"), "# live edit\n");
+    execFileSync("git", ["add", "."], { cwd: appPath, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "live edit"], { cwd: appPath, stdio: "ignore" });
+
+    const res = await mergeAndRemoveWorktree({ appPath, handle: handle! });
+
+    expect(res.ok).toBe(false);
+    // The live tree must NOT be left mid-merge.
+    const status = git(appPath, "status", "--porcelain");
+    expect(status.trim()).toBe("");
+    const mergeHead = existsSync(join(appPath, ".git", "MERGE_HEAD"));
+    expect(mergeHead).toBe(false);
+    // The worktree is the only copy of the unmerged work — it must
+    // still be there for the operator to find.
+    expect(existsSync(handle!.path)).toBe(true);
   });
 });

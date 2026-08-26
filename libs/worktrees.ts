@@ -388,9 +388,15 @@ async function mergeAndRemoveWorktreeLocked(args: {
     handle.branch,
   ]);
   if (!merge.ok) {
+    // Conflict (or any other failure): abort so the LIVE tree isn't left
+    // mid-merge with MERGE_HEAD set — that wedges every later task
+    // against this app at its dirty-check (audit C6). Mirrors
+    // mergeIntoTargetBranchLocked in gitOps.ts. The worktree is left in
+    // place, so no work is lost.
+    await runGit(appPath, ["merge", "--abort"]);
     return {
       ok: false,
-      message: `merge of ${handle.branch} into ${handle.baseBranch} failed`,
+      message: `merge of ${handle.branch} into ${handle.baseBranch} failed (aborted; worktree kept at ${handle.path})`,
       error: merge.stderr,
     };
   }
