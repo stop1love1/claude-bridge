@@ -61,6 +61,27 @@ describe("deriveGateVerdict", () => {
     expect(r.verdict).toBe("clear");
   });
 
+  it("returns unknown when intake.json is present but schema-invalid and plan.md is empty", () => {
+    // Same hole as the null-intake case, through a different door (caught
+    // on review): a present-but-unrecognized intake.json (`{}`, or any
+    // object whose verdict doesn't match "clear"/"needs-decision") plus an
+    // empty plan.md carries no usable signal either — must not read as
+    // "clear".
+    const r = deriveGateVerdict({ intakeJson: {}, planMd: "" });
+    expect(r.verdict).toBe("unknown");
+  });
+
+  it("keeps a recognized verdict even when plan.md is empty", () => {
+    // Guards against the broadened "unknown" check swallowing a
+    // legitimate case: a real intake.json verdict is authoritative on its
+    // own and must win regardless of plan.md content.
+    const r = deriveGateVerdict({
+      intakeJson: { verdict: "clear", questions: [] },
+      planMd: "",
+    });
+    expect(r.verdict).toBe("clear");
+  });
+
   it("ignores an invalid json verdict and falls back", () => {
     const r = deriveGateVerdict({
       intakeJson: { verdict: "garbage", questions: [] },

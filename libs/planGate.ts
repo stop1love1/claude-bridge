@@ -199,11 +199,17 @@ export function deriveGateVerdict(out: PlannerOutput): DerivedVerdict {
   }
   // Fallback: parse plan.md.
   const planMd = out.planMd ?? "";
-  // A planner that exits 0 without writing intake.json OR a non-empty
-  // plan.md violated its contract — that is NOT evidence of "no open
-  // questions". Failing open here auto-approved tasks with no plan at
-  // all (audit H5). Route it to a human instead.
-  if (!j && !planMd) {
+  // Reaching this line already means intake.json carries no recognized
+  // verdict — it's absent, unparseable, OR present-but-schema-invalid
+  // (e.g. `{}`, `{"notes":"..."}`), since the `if` above returns early
+  // for the one case that's usable. So the only remaining question is
+  // whether plan.md picks up the slack. A planner that exits 0 with
+  // neither a recognized intake.json verdict NOR a non-empty plan.md
+  // violated its contract — that is NOT evidence of "no open questions".
+  // Failing open here auto-approved tasks with no plan content at all
+  // (audit H5, and a schema-invalid-but-present intake.json is the same
+  // hole through a different door — caught on review). Route to a human.
+  if (!planMd) {
     return { verdict: "unknown", summary: null, questions: [] };
   }
   const questions = planMd ? parsePlanQuestions(planMd) : [];
