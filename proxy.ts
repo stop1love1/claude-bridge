@@ -13,6 +13,7 @@ import { checkCsrf } from "@/libs/csrf";
 import { DEMO_MODE } from "@/libs/demoMode";
 import { findValidDevice, getShare, isShareUsable } from "@/libs/shareStore";
 import { authorizeGuestRequest, sessionBelongsToTask } from "@/libs/guestAccess";
+import { PEER_ADDR_HEADER, normalizePeerAddr } from "@/libs/peerAddr";
 
 /**
  * Paths the demo-mode gate redirects to `/`. Anything here is part of
@@ -166,26 +167,27 @@ export function proxy(req: NextRequest) {
   // coordinator curl-backs) connecting to `localhost:<port>` directly.
   //
   // "Via proxy" detection uses TWO signals together:
-  //   1. The raw `Host` header. A direct local hit shows
-  //      `Host: localhost:7780`; a tunneled request shows the public
-  //      hostname (`Host: abc.ngrok.io`) — that rewrite is the
-  //      defining mark of "transited a proxy".
+  //   1. The TCP peer address, NOT the `Host` header. The header is
+  //      client-supplied — a non-browser caller can send
+  //      `Host: localhost` with no forwarding headers and forge "same
+  //      host" to unlock this bypass on every route. `libs/setupToken.ts`
+  //      documents this exact attack against `/api/auth/setup`, which
+  //      was migrated off Host-based checks for the same reason; this
+  //      check hadn't been (audit H2). `scripts/bridge-http-server.ts`
+  //      stamps the real `req.socket.remoteAddress` onto
+  //      `PEER_ADDR_HEADER` before handing the request to Next —
+  //      deleting any inbound copy first, so it can't be forged either.
   //   2. Genuine proxy-chain headers (`x-forwarded-for`, `x-real-ip`,
   //      RFC 7239 `forwarded`). These mark a real upstream client.
   //      `x-forwarded-host` is deliberately NOT in this list: Next.js
   //      16 injects it on direct local requests too, so it can't
   //      distinguish a real proxy from a same-process request and
   //      relying on it broke every legitimate child agent.
-  const hostHeader = (req.headers.get("host") || "").toLowerCase();
-  const hostHostname = hostHeader.split(":")[0] ?? "";
-  const isLoopbackHost =
-    hostHostname === "localhost" ||
-    hostHostname === "127.0.0.1" ||
-    hostHostname === "[::1]" ||
-    hostHostname === "::1";
+  const peerAddr = normalizePeerAddr(req.headers.get(PEER_ADDR_HEADER) || "");
+  const isLoopbackPeer = peerAddr === "127.0.0.1" || peerAddr === "::1";
   const internalToken = req.headers.get(INTERNAL_TOKEN_HEADER);
   const viaProxy =
-    !isLoopbackHost ||
+    !isLoopbackPeer ||
     !!req.headers.get("x-forwarded-for") ||
     !!req.headers.get("x-real-ip") ||
     !!req.headers.get("forwarded");

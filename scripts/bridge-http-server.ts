@@ -19,37 +19,12 @@ import pty, { type IPty } from "node-pty";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { DEMO_MODE } from "../libs/demoMode";
 import { execLocked, filterPtyStdinChunk } from "../libs/appExecGuard";
-import { verifyRequestAuthOrInternal } from "../libs/auth";
-import { consumePtyWsTicket } from "../libs/ptyWsTickets";
+import { INTERNAL_TOKEN_HEADER } from "../libs/auth";
+import { authorizePtyUpgrade } from "../libs/ptyWsAuth";
 import { resolveAppFromRouteSegment } from "../libs/apps";
+import { PEER_ADDR_HEADER } from "../libs/peerAddr";
 
 const PTY_PATH = "/api/apps/ws-pty";
-
-function cookiesFromHeader(header: string | undefined): {
-  get(name: string): { value: string } | undefined;
-} {
-  const map = new Map<string, string>();
-  if (header) {
-    for (const part of header.split(";")) {
-      const idx = part.indexOf("=");
-      if (idx === -1) continue;
-      const k = part.slice(0, idx).trim();
-      let v = part.slice(idx + 1).trim();
-      try {
-        v = decodeURIComponent(v);
-      } catch {
-        /* keep raw */
-      }
-      if (k) map.set(k, v);
-    }
-  }
-  return {
-    get(name: string) {
-      const v = map.get(name);
-      return v !== undefined ? { value: v } : undefined;
-    },
-  };
-}
 
 function headerGet(req: IncomingMessage, name: string): string | null {
   const v = req.headers[name.toLowerCase()];
@@ -204,6 +179,14 @@ async function main() {
   process.env.BRIDGE_PTY_READY = "1";
 
   const server = createServer((req, res) => {
+    // Stamp the REAL peer address for proxy.ts's same-host gate. Delete
+    // any client-supplied value first: this header is server-authored
+    // and must never be attacker-controlled (audit H2) — otherwise a
+    // remote caller could just set PEER_ADDR_HEADER itself and forge
+    // the same "same host" bypass the old Host-header check allowed.
+    delete req.headers[PEER_ADDR_HEADER];
+    const peer = req.socket.remoteAddress;
+    if (peer) req.headers[PEER_ADDR_HEADER] = peer;
     const parsed = parseUrl(req.url || "", true);
     void handle(req, res, parsed);
   });
@@ -232,36 +215,32 @@ async function main() {
       return;
     }
 
-    // The internal token is accepted ONLY via the request header, never a
-    // query parameter — query strings leak into access logs, browser
-    // history, and referer headers. Header-less clients (browsers, which
-    // can't set WS upgrade headers) use the one-time `?ticket=` path below.
-    let session = verifyRequestAuthOrInternal({
-      cookies: cookiesFromHeader(req.headers.cookie),
-      headers: {
-        get(name: string) {
-          return headerGet(req, name);
-        },
-      },
+    // Cookie or one-time ticket only — the raw internal token is
+    // deliberately NOT accepted here (see authorizePtyUpgrade's header
+    // comment, audit C5). This listener runs on raw node:http and never
+    // passes through proxy.ts's same-host gate, so honouring the token
+    // would hand an interactive shell to anyone holding it — and every
+    // spawned child carries it in its env. The ticket is accepted ONLY
+    // via the query string (it's single-use and short-lived, unlike the
+    // token) since WS upgrade requests from the browser can't set custom
+    // headers.
+    const rawTicket =
+      typeof q.ticket === "string"
+        ? q.ticket
+        : Array.isArray(q.ticket)
+          ? q.ticket[0]
+          : undefined;
+    const authz = authorizePtyUpgrade({
+      cookieHeader: req.headers.cookie,
+      internalTokenHeader: headerGet(req, INTERNAL_TOKEN_HEADER) ?? undefined,
+      ticket: rawTicket,
     });
-    if (!session) {
-      const rawTicket =
-        typeof q.ticket === "string"
-          ? q.ticket
-          : Array.isArray(q.ticket)
-            ? q.ticket[0]
-            : undefined;
-      const consumed = consumePtyWsTicket(rawTicket);
-      if (consumed.ok) {
-        session = { sub: consumed.sub, exp: Number.MAX_SAFE_INTEGER };
-      }
-    }
-    if (!session) {
+    if (!authz.ok) {
       rejectUpgrade(
         socket,
         401,
         "Unauthorized",
-        `no session or ticket (cookie header ${req.headers.cookie ? "present" : "missing"}; use same host as login, e.g. localhost vs 127.0.0.1, or POST /api/apps/pty-ws-ticket then pass ?ticket= on the WS URL)`,
+        `${authz.reason} (cookie header ${req.headers.cookie ? "present" : "missing"}; the internal token is no longer accepted on this path — non-cookie clients must POST /api/apps/pty-ws-ticket first and pass ?ticket= on the WS URL)`,
       );
       return;
     }
