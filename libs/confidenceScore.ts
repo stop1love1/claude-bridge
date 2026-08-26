@@ -27,6 +27,15 @@ export interface ConfidenceResult {
 const UNMATCHED_CLAIM_PENALTY = 4;
 const UNMATCHED_CLAIM_CAP = 12;
 
+/** A gate that threw produced NO judgement at all — strictly worse than
+ *  an explicit `"skipped"`, which is a recorded decision. Two crashed
+ *  gates must drop the run out of the `high` band so it is held for
+ *  review; one alone should not (audit C2/C3). See the crash branches
+ *  in libs/runLifecycle.ts, which write this verdict. */
+const CRASHED_VERIFIER_PENALTY = 15;
+const CRASHED_SEMANTIC_PENALTY = 20;
+const CRASHED_STYLE_PENALTY = 10;
+
 function bandFor(score: number): ConfidenceBand {
   if (score >= 80) return "high";
   if (score >= 60) return "medium";
@@ -35,8 +44,11 @@ function bandFor(score: number): ConfidenceBand {
 
 /**
  * Compute a 0..100 confidence score. Starts at 100 and subtracts a penalty
- * per weak signal. Gates that didn't run (`undefined`) contribute 0 unless
- * their *absence* itself is a missing-check signal (verifier / semantic).
+ * per weak signal. Gates that didn't run (`undefined`) contribute 0 — that
+ * covers legitimate opt-outs (e.g. semantic verification disabled for an
+ * app) where absence carries no signal. A gate that *ran and threw* is
+ * distinct: Task 1 records that as an explicit `"crashed"` verdict, which
+ * this function penalizes below, ahead of the milder verdicts.
  */
 export function computeConfidence(run: Run): ConfidenceResult {
   const b: ConfidenceBreakdown = { verify: 0, verifier: 0, style: 0, semantic: 0, panelSplit: 0 };
@@ -48,7 +60,8 @@ export function computeConfidence(run: Run): ConfidenceResult {
   // Claim-vs-diff verifier (honesty check).
   const v = run.verifier;
   if (v) {
-    if (v.verdict === "drift") b.verifier -= 10;
+    if (v.verdict === "crashed") b.verifier -= CRASHED_VERIFIER_PENALTY;
+    else if (v.verdict === "drift") b.verifier -= 10;
     else if (v.verdict === "broken") b.verifier -= 25;
     else if (v.verdict === "skipped") b.verifier -= 5;
     const unmatched = Array.isArray(v.unmatchedClaims) ? v.unmatchedClaims.length : 0;
@@ -58,14 +71,16 @@ export function computeConfidence(run: Run): ConfidenceResult {
   // Style critic.
   const s = run.styleCritic;
   if (s) {
-    if (s.verdict === "drift") b.style -= 8;
+    if (s.verdict === "crashed") b.style -= CRASHED_STYLE_PENALTY;
+    else if (s.verdict === "drift") b.style -= 8;
     else if (s.verdict === "alien") b.style -= 25;
   }
 
   // Semantic panel (B1).
   const sv = run.semanticVerifier;
   if (sv) {
-    if (sv.verdict === "drift") b.semantic -= 15;
+    if (sv.verdict === "crashed") b.semantic -= CRASHED_SEMANTIC_PENALTY;
+    else if (sv.verdict === "drift") b.semantic -= 15;
     else if (sv.verdict === "broken") b.semantic -= 40;
     else if (sv.verdict === "skipped") b.semantic -= 8;
     // Split panel: votes present but not unanimous → lower confidence even

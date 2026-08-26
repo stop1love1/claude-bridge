@@ -76,6 +76,38 @@ describe("computeConfidence", () => {
     expect(c.score).toBe(0);
     expect(c.band).toBe("low");
   });
+
+  it("penalizes a crashed gate far more than an explicit skip", () => {
+    const skipped = computeConfidence(run({
+      verify: { steps: [], passed: true, startedAt: "", endedAt: "" },
+      verifier: { verdict: "skipped", reason: "", claimedFiles: [], actualFiles: [], unmatchedClaims: [], unclaimedActual: [], durationMs: 1 },
+      semanticVerifier: { verdict: "skipped", reason: "", concerns: [], durationMs: 1 },
+    }));
+    const crashed = computeConfidence(run({
+      verify: { steps: [], passed: true, startedAt: "", endedAt: "" },
+      verifier: { verdict: "crashed", reason: "", claimedFiles: [], actualFiles: [], unmatchedClaims: [], unclaimedActual: [], durationMs: 1 },
+      semanticVerifier: { verdict: "crashed", reason: "", concerns: [], durationMs: 1 },
+    }));
+
+    expect(crashed.score).toBeLessThan(skipped.score);
+  });
+
+  it("a run whose two judge gates both crashed is not high confidence", () => {
+    const crashed = computeConfidence(run({
+      verify: { steps: [], passed: true, startedAt: "", endedAt: "" },
+      verifier: { verdict: "crashed", reason: "", claimedFiles: [], actualFiles: [], unmatchedClaims: [], unclaimedActual: [], durationMs: 1 },
+      semanticVerifier: { verdict: "crashed", reason: "", concerns: [], durationMs: 1 },
+    }));
+    expect(crashed.band).not.toBe("high");
+  });
+
+  it("an opted-out semantic gate (undefined) is still unpenalized", () => {
+    const optedOut = computeConfidence(run({
+      verify: { steps: [], passed: true, startedAt: "", endedAt: "" },
+      verifier: { verdict: "pass", reason: "", claimedFiles: [], actualFiles: [], unmatchedClaims: [], unclaimedActual: [], durationMs: 1 },
+    }));
+    expect(optedOut.breakdown.semantic).toBe(0);
+  });
 });
 
 describe("shouldHoldOutward", () => {
