@@ -46,7 +46,7 @@ import {
 } from "./gitOps";
 import { mergeAndRemoveWorktree } from "./worktrees";
 import { runDevopsAgent } from "./devops";
-import { escalateGateBlock } from "./gateEscalation";
+import { escalateGateBlock, type EscalationGate } from "./gateEscalation";
 import { logError, logInfo, logWarn } from "./log";
 // Type-only imports — runtime side resolves via lazy `require` inside
 // the post-exit flow to break the import cycle (verifyChain.ts,
@@ -111,6 +111,52 @@ async function attachGateResult<F extends GateField>(
     patch.endedAt = new Date().toISOString();
   }
   await updateRun(dir, runSessionId, patch);
+}
+
+/**
+ * Shared crash-branch sequence for the four post-exit gates whose
+ * checker can throw (preflight, claim, style, semantic) — extracted
+ * after review flagged the identical five-step sequence (log, flip
+ * status, persist a "crashed" marker, escalate, block) being copied
+ * verbatim into all four call sites. That is exactly the failure mode
+ * `attachGateResult` above already exists to prevent — see its own doc
+ * comment: a transcription slip on the next hand-duplicated copy. This
+ * is that same pattern's 5th copy, so it gets the same treatment.
+ *
+ * `runVerifyChainGate`'s own crash branch is intentionally NOT routed
+ * through this — it carries extra retry/finalVerify logic none of the
+ * other four gates have, so folding it in would be a bigger change
+ * than a transcription (see the fix-review report for this task).
+ *
+ * Callers own everything that varies per gate: the log scope, which
+ * meta.json field + fully-typed result to persist, the
+ * `EscalationGate` label, and the reason text. `attachGateResult`
+ * already flips `running → done` internally (guarded on current
+ * status) as part of writing the field, so this does NOT also call
+ * `updateRun` itself — a second guarded flip here would just be a
+ * redundant no-op write.
+ */
+async function blockOnGateCrash<F extends GateField>(
+  ctx: PostExitContext,
+  opts: {
+    logScope: string;
+    field: F;
+    gateResult: Run[F];
+    gate: EscalationGate;
+    reason: string;
+  },
+): Promise<"blocked"> {
+  const { dir, tid, t, run } = ctx;
+  logWarn(opts.logScope, "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
+  await attachGateResult(dir, run.sessionId, opts.field, opts.gateResult);
+  await escalateGateBlock({
+    taskId: tid,
+    sessionsDir: dir,
+    gate: opts.gate,
+    reason: opts.reason,
+    retryScheduled: false,
+  });
+  return "blocked";
 }
 
 /**
@@ -344,31 +390,22 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
   // meta.json field of its own — the crash marker piggybacks on
   // `verifier`, the same slot the normal fail path below already uses.
   if (preflightCrashed) {
-    logWarn("preflight", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
-    await updateRun(
-      dir,
-      run.sessionId,
-      { status: "done", endedAt: new Date().toISOString() },
-      (r) => r.status === "running",
-    );
-    await attachGateResult(dir, run.sessionId, "verifier", {
-      verdict: "crashed",
-      reason: "preflight crashed — inconclusive",
-      claimedFiles: [],
-      actualFiles: [],
-      unmatchedClaims: [],
-      unclaimedActual: [],
-      durationMs: 0,
-      retryScheduled: false,
-    });
-    await escalateGateBlock({
-      taskId: tid,
-      sessionsDir: dir,
+    return await blockOnGateCrash(ctx, {
+      logScope: "preflight",
+      field: "verifier",
+      gateResult: {
+        verdict: "crashed",
+        reason: "preflight crashed — inconclusive",
+        claimedFiles: [],
+        actualFiles: [],
+        unmatchedClaims: [],
+        unclaimedActual: [],
+        durationMs: 0,
+        retryScheduled: false,
+      },
       gate: "preflight",
       reason: "preflight crashed — inconclusive",
-      retryScheduled: false,
     });
-    return "blocked";
   }
 
   if (!preflightResult || preflightResult.verdict !== "fail") return "proceed";
@@ -454,31 +491,22 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
   // the commit gate; block instead, same as the other three gates and
   // runVerifyChainGate above.
   if (claimCrashed) {
-    logWarn("verifier", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
-    await updateRun(
-      dir,
-      run.sessionId,
-      { status: "done", endedAt: new Date().toISOString() },
-      (r) => r.status === "running",
-    );
-    await attachGateResult(dir, run.sessionId, "verifier", {
-      verdict: "crashed",
-      reason: "claim verifier crashed — inconclusive",
-      claimedFiles: [],
-      actualFiles: [],
-      unmatchedClaims: [],
-      unclaimedActual: [],
-      durationMs: 0,
-      retryScheduled: false,
-    });
-    await escalateGateBlock({
-      taskId: tid,
-      sessionsDir: dir,
+    return await blockOnGateCrash(ctx, {
+      logScope: "verifier",
+      field: "verifier",
+      gateResult: {
+        verdict: "crashed",
+        reason: "claim verifier crashed — inconclusive",
+        claimedFiles: [],
+        actualFiles: [],
+        unmatchedClaims: [],
+        unclaimedActual: [],
+        durationMs: 0,
+        retryScheduled: false,
+      },
       gate: "claim",
       reason: "claim verifier crashed — inconclusive",
-      retryScheduled: false,
     });
-    return "blocked";
   }
 
   // Decide retry BEFORE writing meta — same combined-patch pattern
@@ -573,28 +601,19 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
   // the commit gate; block instead, same as the other three gates and
   // runVerifyChainGate above.
   if (styleCrashed) {
-    logWarn("style-critic", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
-    await updateRun(
-      dir,
-      run.sessionId,
-      { status: "done", endedAt: new Date().toISOString() },
-      (r) => r.status === "running",
-    );
-    await attachGateResult(dir, run.sessionId, "styleCritic", {
-      verdict: "crashed",
-      reason: "style critic crashed — inconclusive",
-      issues: [],
-      durationMs: 0,
-      retryScheduled: false,
-    });
-    await escalateGateBlock({
-      taskId: tid,
-      sessionsDir: dir,
+    return await blockOnGateCrash(ctx, {
+      logScope: "style-critic",
+      field: "styleCritic",
+      gateResult: {
+        verdict: "crashed",
+        reason: "style critic crashed — inconclusive",
+        issues: [],
+        durationMs: 0,
+        retryScheduled: false,
+      },
       gate: "style",
       reason: "style critic crashed — inconclusive",
-      retryScheduled: false,
     });
-    return "blocked";
   }
 
   const needsStyleRetry =
@@ -689,28 +708,19 @@ async function runSemanticVerifierGate(
   // "proceed" would silently release the commit gate; block instead,
   // same as the other three gates and runVerifyChainGate above.
   if (semanticCrashed) {
-    logWarn("semantic-verifier", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
-    await updateRun(
-      dir,
-      run.sessionId,
-      { status: "done", endedAt: new Date().toISOString() },
-      (r) => r.status === "running",
-    );
-    await attachGateResult(dir, run.sessionId, "semanticVerifier", {
-      verdict: "crashed",
-      reason: "semantic verifier crashed — inconclusive",
-      concerns: [],
-      durationMs: 0,
-      retryScheduled: false,
-    });
-    await escalateGateBlock({
-      taskId: tid,
-      sessionsDir: dir,
+    return await blockOnGateCrash(ctx, {
+      logScope: "semantic-verifier",
+      field: "semanticVerifier",
+      gateResult: {
+        verdict: "crashed",
+        reason: "semantic verifier crashed — inconclusive",
+        concerns: [],
+        durationMs: 0,
+        retryScheduled: false,
+      },
       gate: "semantic",
       reason: "semantic verifier crashed — inconclusive",
-      retryScheduled: false,
     });
-    return "blocked";
   }
 
   const needsSemanticRetry =
