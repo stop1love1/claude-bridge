@@ -22,7 +22,7 @@ import { execLocked, filterPtyStdinChunk } from "../libs/appExecGuard";
 import { INTERNAL_TOKEN_HEADER } from "../libs/auth";
 import { authorizePtyUpgrade } from "../libs/ptyWsAuth";
 import { resolveAppFromRouteSegment } from "../libs/apps";
-import { PEER_ADDR_HEADER } from "../libs/peerAddr";
+import { CLIENT_FORWARDED_FOR_HEADER, PEER_ADDR_HEADER } from "../libs/peerAddr";
 
 const PTY_PATH = "/api/apps/ws-pty";
 
@@ -187,6 +187,23 @@ async function main() {
     delete req.headers[PEER_ADDR_HEADER];
     const peer = req.socket.remoteAddress;
     if (peer) req.headers[PEER_ADDR_HEADER] = peer;
+
+    // Snapshot the CLIENT's own `x-forwarded-for` before Next gets a
+    // chance to touch it. Next's `base-server.js` unconditionally runs
+    // `req.headers['x-forwarded-for'] ??= req.socket.remoteAddress` on
+    // every request — so by the time `proxy.ts` runs, the raw header
+    // is present on 100% of requests and can no longer distinguish a
+    // real proxy hop from Next's own default-fill. This must happen
+    // BEFORE `handle()` is called (Next's fill only kicks in once its
+    // own request handling starts). Delete any inbound copy for the
+    // same reason as `PEER_ADDR_HEADER`: this is our record of what
+    // arrived on the wire, not something the client gets to dictate.
+    delete req.headers[CLIENT_FORWARDED_FOR_HEADER];
+    const clientXff = req.headers["x-forwarded-for"];
+    if (typeof clientXff === "string" && clientXff) {
+      req.headers[CLIENT_FORWARDED_FOR_HEADER] = clientXff;
+    }
+
     const parsed = parseUrl(req.url || "", true);
     void handle(req, res, parsed);
   });

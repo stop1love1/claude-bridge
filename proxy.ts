@@ -2,7 +2,6 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   COOKIE_NAME,
   INTERNAL_TOKEN_HEADER,
-  constantTimeStringEqual,
   findTrustedDevice,
   loadAuthConfig,
   touchTrustedDevice,
@@ -13,7 +12,8 @@ import { checkCsrf } from "@/libs/csrf";
 import { DEMO_MODE } from "@/libs/demoMode";
 import { findValidDevice, getShare, isShareUsable } from "@/libs/shareStore";
 import { authorizeGuestRequest, sessionBelongsToTask } from "@/libs/guestAccess";
-import { PEER_ADDR_HEADER, normalizePeerAddr } from "@/libs/peerAddr";
+import { CLIENT_FORWARDED_FOR_HEADER, PEER_ADDR_HEADER } from "@/libs/peerAddr";
+import { evaluateInternalTokenGate } from "@/libs/internalTokenGate";
 
 /**
  * Paths the demo-mode gate redirects to `/`. Anything here is part of
@@ -165,8 +165,10 @@ export function proxy(req: NextRequest) {
   // Internal bypass for child agents. The token is a per-install secret
   // shared only with locally-spawned children (`agents/permission-hook.cjs`,
   // coordinator curl-backs) connecting to `localhost:<port>` directly.
-  //
-  // "Via proxy" detection uses TWO signals together:
+  // The actual gate decision lives in `libs/internalTokenGate.ts` (pure,
+  // unit-tested — see `libs/__tests__/internalTokenGate.test.ts`) so
+  // this file only has to marshal headers into it. Two same-host
+  // signals feed the gate:
   //   1. The TCP peer address, NOT the `Host` header. The header is
   //      client-supplied — a non-browser caller can send
   //      `Host: localhost` with no forwarding headers and forge "same
@@ -177,26 +179,35 @@ export function proxy(req: NextRequest) {
   //      stamps the real `req.socket.remoteAddress` onto
   //      `PEER_ADDR_HEADER` before handing the request to Next —
   //      deleting any inbound copy first, so it can't be forged either.
-  //   2. Genuine proxy-chain headers (`x-forwarded-for`, `x-real-ip`,
-  //      RFC 7239 `forwarded`). These mark a real upstream client.
-  //      `x-forwarded-host` is deliberately NOT in this list: Next.js
-  //      16 injects it on direct local requests too, so it can't
-  //      distinguish a real proxy from a same-process request and
-  //      relying on it broke every legitimate child agent.
-  const peerAddr = normalizePeerAddr(req.headers.get(PEER_ADDR_HEADER) || "");
-  const isLoopbackPeer = peerAddr === "127.0.0.1" || peerAddr === "::1";
+  //   2. Genuine proxy-chain headers. `x-real-ip` and RFC 7239
+  //      `forwarded` are read straight off the request — Next doesn't
+  //      touch either. `x-forwarded-for` is NOT read directly: Next's
+  //      `base-server.js` unconditionally runs `req.headers['x-forwarded-
+  //      for'] ??= req.socket.remoteAddress` on every request it
+  //      handles, so by the time middleware runs, that header is
+  //      present on 100% of requests — including a direct same-host
+  //      call with no proxy anywhere in the picture. Reading it
+  //      directly would make `viaProxy` unconditionally true and kill
+  //      the bypass for every legitimate child (this shipped broken —
+  //      see the header comment on `CLIENT_FORWARDED_FOR_HEADER` in
+  //      `libs/peerAddr.ts`). Instead we read `CLIENT_FORWARDED_FOR_
+  //      HEADER`, which `bridge-http-server.ts` stamps from the
+  //      client's OWN `x-forwarded-for` before Next's default-fill can
+  //      run. `x-forwarded-host` is never read here either, for the
+  //      same reason — Next injects it on direct local requests too,
+  //      so it can't distinguish a real proxy from a same-process
+  //      request; this bug is that exact trap on a header nobody had
+  //      checked for it yet.
   const internalToken = req.headers.get(INTERNAL_TOKEN_HEADER);
-  const viaProxy =
-    !isLoopbackPeer ||
-    !!req.headers.get("x-forwarded-for") ||
-    !!req.headers.get("x-real-ip") ||
-    !!req.headers.get("forwarded");
-  if (
-    internalToken &&
-    !viaProxy &&
-    cfg.internalToken &&
-    constantTimeStringEqual(internalToken, cfg.internalToken)
-  ) {
+  const bypass = evaluateInternalTokenGate({
+    peerAddr: req.headers.get(PEER_ADDR_HEADER),
+    clientForwardedFor: req.headers.get(CLIENT_FORWARDED_FOR_HEADER),
+    xRealIp: req.headers.get("x-real-ip"),
+    forwarded: req.headers.get("forwarded"),
+    internalToken,
+    configuredInternalToken: cfg.internalToken,
+  });
+  if (bypass) {
     return NextResponse.next();
   }
 
