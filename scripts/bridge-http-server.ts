@@ -22,7 +22,7 @@ import { execLocked, filterPtyStdinChunk } from "../libs/appExecGuard";
 import { INTERNAL_TOKEN_HEADER } from "../libs/auth";
 import { authorizePtyUpgrade } from "../libs/ptyWsAuth";
 import { resolveAppFromRouteSegment } from "../libs/apps";
-import { CLIENT_FORWARDED_FOR_HEADER, PEER_ADDR_HEADER } from "../libs/peerAddr";
+import { stampServerAuthoredHeaders } from "../libs/peerAddr";
 
 const PTY_PATH = "/api/apps/ws-pty";
 
@@ -179,36 +179,26 @@ async function main() {
   process.env.BRIDGE_PTY_READY = "1";
 
   const server = createServer((req, res) => {
-    // Stamp the REAL peer address for proxy.ts's same-host gate. Delete
-    // any client-supplied value first: this header is server-authored
-    // and must never be attacker-controlled (audit H2) — otherwise a
-    // remote caller could just set PEER_ADDR_HEADER itself and forge
-    // the same "same host" bypass the old Host-header check allowed.
-    delete req.headers[PEER_ADDR_HEADER];
-    const peer = req.socket.remoteAddress;
-    if (peer) req.headers[PEER_ADDR_HEADER] = peer;
-
-    // Snapshot the CLIENT's own `x-forwarded-for` before Next gets a
-    // chance to touch it. Next's `base-server.js` unconditionally runs
-    // `req.headers['x-forwarded-for'] ??= req.socket.remoteAddress` on
-    // every request — so by the time `proxy.ts` runs, the raw header
-    // is present on 100% of requests and can no longer distinguish a
-    // real proxy hop from Next's own default-fill. This must happen
-    // BEFORE `handle()` is called (Next's fill only kicks in once its
-    // own request handling starts). Delete any inbound copy for the
-    // same reason as `PEER_ADDR_HEADER`: this is our record of what
-    // arrived on the wire, not something the client gets to dictate.
-    delete req.headers[CLIENT_FORWARDED_FOR_HEADER];
-    const clientXff = req.headers["x-forwarded-for"];
-    if (typeof clientXff === "string" && clientXff) {
-      req.headers[CLIENT_FORWARDED_FOR_HEADER] = clientXff;
-    }
-
+    // Stamp the server-authored same-host signals proxy.ts's internal-
+    // token gate relies on (PEER_ADDR_HEADER, CLIENT_FORWARDED_FOR_HEADER)
+    // — deleting any client-supplied copy of either first. See
+    // `stampServerAuthoredHeaders`'s doc comment in libs/peerAddr.ts for
+    // why this has to happen here, before `handle()` runs, and why it's
+    // pulled into its own function rather than left inline (audit H2).
+    stampServerAuthoredHeaders(req);
     const parsed = parseUrl(req.url || "", true);
     void handle(req, res, parsed);
   });
 
   server.on("upgrade", (req, socket, head) => {
+    // NOTE: deliberately no `stampServerAuthoredHeaders(req)` call here.
+    // `authorizePtyUpgrade` (below) never reads PEER_ADDR_HEADER,
+    // CLIENT_FORWARDED_FOR_HEADER, or the internal token, so there is no
+    // signal here for a spoof to corrupt. Safe ONLY because this upgrade
+    // path never reaches `proxy.ts` / Next middleware (`ptyWss.handleUpgrade`
+    // below bypasses `handle()` entirely) — a future upgrade handler that
+    // DOES delegate to Next middleware would need the same stamp this
+    // callback applies, or it inherits H2 all over again.
     const pathname = parseUrl(req.url || "", true).pathname || "";
     if (pathname !== PTY_PATH) {
       void nextUpgrade(req, socket, head);

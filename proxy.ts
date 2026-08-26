@@ -167,8 +167,9 @@ export function proxy(req: NextRequest) {
   // coordinator curl-backs) connecting to `localhost:<port>` directly.
   // The actual gate decision lives in `libs/internalTokenGate.ts` (pure,
   // unit-tested — see `libs/__tests__/internalTokenGate.test.ts`) so
-  // this file only has to marshal headers into it. Two same-host
-  // signals feed the gate:
+  // this file only has to marshal headers into it. Three same-host
+  // signals feed the gate (full algebra + rationale for each is in that
+  // file's doc comments — this is the short version):
   //   1. The TCP peer address, NOT the `Host` header. The header is
   //      client-supplied — a non-browser caller can send
   //      `Host: localhost` with no forwarding headers and forge "same
@@ -198,12 +199,28 @@ export function proxy(req: NextRequest) {
   //      so it can't distinguish a real proxy from a same-process
   //      request; this bug is that exact trap on a header nobody had
   //      checked for it yet.
+  //   3. `Host`, as an ADDITIONAL OR-ed restriction (never a
+  //      replacement for #1 — see `isExpectedLocalHost`'s doc comment
+  //      in `libs/internalTokenGate.ts`). `libs/tunnels.ts` spawns
+  //      localtunnel/ngrok on the SAME machine as the bridge, so a
+  //      request through the operator's own public tunnel has a
+  //      LOOPBACK peer — signal #1 alone can't distinguish that from a
+  //      direct local call, and whether signal #2 catches it depends on
+  //      the tunnel provider's undocumented header behavior. The tunnel
+  //      DOES forward the public hostname as `Host`, so this closes
+  //      that gap without reopening H2: adding a term to an OR only
+  //      makes `viaProxy` MORE often true, so a `Host` spoof (an
+  //      attacker's only lever here) can decline to add a restriction
+  //      but can never remove one — #1 alone still gates every case
+  //      H2 exploited.
   const internalToken = req.headers.get(INTERNAL_TOKEN_HEADER);
   const bypass = evaluateInternalTokenGate({
     peerAddr: req.headers.get(PEER_ADDR_HEADER),
     clientForwardedFor: req.headers.get(CLIENT_FORWARDED_FOR_HEADER),
     xRealIp: req.headers.get("x-real-ip"),
     forwarded: req.headers.get("forwarded"),
+    hostHeader: req.headers.get("host"),
+    expectedBridgeHost: process.env.BRIDGE_HOST ?? null,
     internalToken,
     configuredInternalToken: cfg.internalToken,
   });
