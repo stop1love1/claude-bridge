@@ -172,7 +172,10 @@ async function blockOnGateCrash<F extends GateField>(
  *
  * Exported (Task 8 / H6) so the confidence review route's live-tree
  * `ship` branch can stamp the same marker its worktree sibling does
- * when the push it triggers is rejected.
+ * when the combined commit+push it triggers fails. That caller can't
+ * promise "the merge landed" the way the two call sites below can —
+ * see its own comment and the field doc on `Run.mergeNotPushed` for
+ * why its message uses a different prefix.
  */
 export async function markMergeNotPushed(
   dir: string,

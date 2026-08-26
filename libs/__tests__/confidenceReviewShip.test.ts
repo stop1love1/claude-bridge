@@ -9,6 +9,12 @@
  * actual route handler (not a proxy/helper) because the bug lives in
  * its control flow, not in any extracted pure function.
  *
+ * Review follow-up: the first fix kept the hold correctly but mislabeled
+ * every failure as a push failure ("commit landed but push failed"),
+ * even though `autoCommitAndPush` here runs autoCommit+autoPush as one
+ * combined step whose result can't be attributed to a specific git
+ * sub-step. The second test below pins the corrected, honest wording.
+ *
  * Everything I/O-ish except `../meta` is mocked (git ops, app lookup,
  * devops, auth, csrf) — `../meta` is left real so the assertions read
  * the actual on-disk effect of `markMergeNotPushed` / `updateRun`,
@@ -170,7 +176,7 @@ describe("confidence review route — live-tree ship (H6)", () => {
     await seedHeldRun();
     autoCommitAndPushMock.mockResolvedValue({
       ok: false,
-      message: "push rejected",
+      message: "git push failed",
       error: "non-fast-forward",
     });
 
@@ -180,8 +186,43 @@ describe("confidence review route — live-tree ship (H6)", () => {
     const { readMeta } = await import("../meta");
     const run = readMeta(taskDir())?.runs.find((r) => r.sessionId === SID);
     expect(run?.confidence?.heldAt).toBeTruthy();
-    expect(run?.mergeNotPushed?.message).toContain("MERGE-NO-PUSH:");
+    expect(run?.mergeNotPushed?.message).toContain("SHIP-INCOMPLETE:");
     expect(run?.mergeNotPushed?.error).toBe("non-fast-forward");
+  });
+
+  // Review follow-up: autoCommitAndPush runs autoCommit:true + autoPush:true
+  // as ONE combined step here (unlike the worktree branch's push-only call),
+  // so a rejected result can equally mean `git add`/`git commit` never
+  // landed. The route must not tell the operator "push failed" / "commit
+  // landed" for a failure it can't actually attribute to a specific git
+  // sub-step — that claim would be wrong exactly as often as the original
+  // heldAt-clearing bug was.
+  it("does not claim a specific git sub-step failed when the underlying failure is a commit, not a push", async () => {
+    await seedHeldRun();
+    autoCommitAndPushMock.mockResolvedValue({
+      ok: false,
+      message: "git commit failed",
+      error: "fatal: nothing to commit, working tree clean",
+    });
+
+    const res = await ship();
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    // "push" alone (§stage was hardcoded "push" pre-fix) would misreport
+    // this specific case, where the underlying git message says "commit".
+    expect(body.stage).not.toBe("push");
+    expect(body.error).not.toMatch(/push failed/i);
+
+    const { readMeta } = await import("../meta");
+    const run = readMeta(taskDir())?.runs.find((r) => r.sessionId === SID);
+    expect(run?.confidence?.heldAt).toBeTruthy();
+    expect(run?.mergeNotPushed?.message).toContain("SHIP-INCOMPLETE:");
+    // The old wording ("commit landed but push failed") is exactly the
+    // false claim under test here — assert it's gone.
+    expect(run?.mergeNotPushed?.message).not.toMatch(/commit landed/i);
+    expect(run?.mergeNotPushed?.message).not.toMatch(/push failed:/i);
+    // The real, unattributed git message must still reach the operator.
+    expect(run?.mergeNotPushed?.message).toContain("git commit failed");
   });
 
   it("clears the hold when the push succeeds (control case)", async () => {

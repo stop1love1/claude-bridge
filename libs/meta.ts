@@ -144,9 +144,18 @@ export interface Run {
    * "succeeded".
    */
   mergeNotPushed?: {
-    /** Operator-facing message (already starts with `MERGE-NO-PUSH:`). */
+    /**
+     * Operator-facing message. The two writers that know the local
+     * merge genuinely landed (worktree push-stage, non-worktree
+     * auto-merge) prefix it `MERGE-NO-PUSH:`. The confidence review
+     * route's live-tree `ship` path stamps this field too, but its
+     * combined commit+push call can fail before anything lands — its
+     * underlying git helper doesn't report which sub-step failed — so
+     * it uses a `SHIP-INCOMPLETE:` prefix instead of claiming a merge
+     * that may not have happened.
+     */
     message: string;
-    /** Raw git stderr from the failed push, or null. */
+    /** Raw git stderr from the failed step, or null. */
     error: string | null;
     /** ISO timestamp when the failure was recorded. */
     at: string;

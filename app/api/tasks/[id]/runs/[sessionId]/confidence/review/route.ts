@@ -150,18 +150,29 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         // would render the gate green over code that never left this
         // machine. Mirror the worktree branch above: stamp the marker,
         // keep the hold, and report the failure instead of clearing it.
+        //
+        // Review follow-up: unlike the worktree branch's push (which
+        // runs autoCommit:false against an already-merged, already-clean
+        // tree, so a failure there can ONLY be the push), this call is
+        // autoCommit:true + autoPush:true as one combined step.
+        // autoCommitAndPushLocked's GitOpResult doesn't say which git
+        // sub-step failed — "not a git repo", `git add -A`, `git commit`,
+        // and `git push` all come back through the same {ok:false,
+        // message, error} shape (see gitOps.ts) — so neither the stamped
+        // marker nor this response may claim "push failed" specifically;
+        // that would be as wrong as clearing the hold was.
         await markMergeNotPushed(
           dir,
           sessionId,
-          `MERGE-NO-PUSH: live-tree commit landed but push failed: ${r.message}`,
+          `SHIP-INCOMPLETE: live-tree ship (commit and/or push) failed: ${r.message}`,
           r.error,
         );
         return NextResponse.json(
           {
             ok: false,
             action,
-            error: "push failed — hold retained, resolve and retry ship",
-            stage: "push",
+            error: "ship failed — hold retained, resolve and retry ship",
+            stage: "commit-or-push",
             detail: r.error ?? r.message,
             confidence: run.confidence,
             push: { ok: false, message: r.message, error: r.error ?? null },

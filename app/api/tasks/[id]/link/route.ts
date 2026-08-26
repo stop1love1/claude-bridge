@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
 import { appendRun, readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
-import { isBackwardStatusTransition } from "@/libs/runStatus";
+import { isBackwardStatusTransition, type RunStatus } from "@/libs/runStatus";
 import { isValidTaskId } from "@/libs/tasks";
 import {
   badRequest,
@@ -21,7 +21,12 @@ interface LinkBody {
   sessionId: string;
   role: string;
   repo: string;
-  status?: "queued" | "running" | "done" | "failed" | "stale";
+  // Was a hand-duplicated literal union missing "cancelled" (Task 4
+  // added it to RUN_STATUSES without updating this field — runtime
+  // validation via isValidRunStatus already accepted it, but the type
+  // lied about its own domain). Using RunStatus directly keeps this
+  // in permanent sync with libs/runStatus.ts.
+  status?: RunStatus;
   /**
    * Coordinator session id that spawned this child. Required for
    * non-coordinator roles so the agent tree can render parent/child
