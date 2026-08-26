@@ -36,7 +36,7 @@ import { join } from "node:path";
 import { DEFAULT_GIT_SETTINGS, getApp } from "@/libs/apps";
 import { autoCommitAndPush, mergeIntoTargetBranch, readCurrentBranch } from "@/libs/gitOps";
 import { runDevopsAgent } from "@/libs/devops";
-import { performWorktreeMergeBack } from "@/libs/runLifecycle";
+import { markMergeNotPushed, performWorktreeMergeBack } from "@/libs/runLifecycle";
 import { readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
@@ -144,6 +144,32 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         { ...(app?.git ?? DEFAULT_GIT_SETTINGS), autoCommit: true, autoPush: true },
         message,
       );
+      if (!r.ok) {
+        // H6: autoCommitAndPush REJECTING (not throwing) must not fall
+        // through to the unconditional heldAt:null clear below — that
+        // would render the gate green over code that never left this
+        // machine. Mirror the worktree branch above: stamp the marker,
+        // keep the hold, and report the failure instead of clearing it.
+        await markMergeNotPushed(
+          dir,
+          sessionId,
+          `MERGE-NO-PUSH: live-tree commit landed but push failed: ${r.message}`,
+          r.error,
+        );
+        return NextResponse.json(
+          {
+            ok: false,
+            action,
+            error: "push failed — hold retained, resolve and retry ship",
+            stage: "push",
+            detail: r.error ?? r.message,
+            confidence: run.confidence,
+            push: { ok: false, message: r.message, error: r.error ?? null },
+            integration: null,
+          },
+          { status: 409 },
+        );
+      }
       pushResult = { ok: r.ok, message: r.message, error: r.error ?? null };
     } catch (err) {
       return NextResponse.json(

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { join } from "node:path";
 import { appendRun, readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
+import { isBackwardStatusTransition } from "@/libs/runStatus";
 import { isValidTaskId } from "@/libs/tasks";
 import {
   badRequest,
@@ -100,11 +101,22 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     // Existing-row branch: ONLY patch the fields the child supplied.
     // Never overwrite startedAt / parentSessionId / worktreePath that
     // the bridge set when it pre-registered the run via /agents.
-    await updateRun(dir, body.sessionId, {
-      role: body.role,
-      repo: body.repo,
-      ...(body.status ? { status: body.status } : {}),
-    });
+    //
+    // Precondition: a late self-register (e.g. a child's curl arriving
+    // after the process already exited and another writer flipped the
+    // row to done/failed/cancelled/stale) must not resurrect it back to
+    // running/queued — that produces a zombie row the coordinator waits
+    // on and the reaper won't touch for its full cutoff (audit H4).
+    await updateRun(
+      dir,
+      body.sessionId,
+      {
+        role: body.role,
+        repo: body.repo,
+        ...(body.status ? { status: body.status } : {}),
+      },
+      (r) => !body.status || !isBackwardStatusTransition(r.status, body.status),
+    );
   } else {
     // Refuse to land a child run that has no parent: it would orphan
     // forever in the agent tree. Coordinators are the one role that

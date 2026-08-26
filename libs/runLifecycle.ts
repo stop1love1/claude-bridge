@@ -169,8 +169,12 @@ async function blockOnGateCrash<F extends GateField>(
  * Defensive against missing fields and write failures — if the patch
  * can't land for any reason, we just log; the work is still on disk
  * and the operator can recover by hand.
+ *
+ * Exported (Task 8 / H6) so the confidence review route's live-tree
+ * `ship` branch can stamp the same marker its worktree sibling does
+ * when the push it triggers is rejected.
  */
-async function markMergeNotPushed(
+export async function markMergeNotPushed(
   dir: string,
   runSessionId: string,
   message: string,

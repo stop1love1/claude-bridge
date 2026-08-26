@@ -26,3 +26,15 @@ export function isValidRunStatus(s: unknown): s is RunStatus {
     typeof s === "string" && (RUN_STATUSES as readonly string[]).includes(s)
   );
 }
+
+const TERMINAL: readonly RunStatus[] = ["done", "failed", "cancelled", "stale"];
+
+/**
+ * A late writer must never move a row that already reached a terminal
+ * state back to an active one. The link route accepted exactly that
+ * from a child's self-register curl, producing a zombie row no process
+ * backed and the reaper wouldn't touch for hours (audit H4).
+ */
+export function isBackwardStatusTransition(from: RunStatus, to: RunStatus): boolean {
+  return TERMINAL.includes(from) && (to === "running" || to === "queued");
+}
