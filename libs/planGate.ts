@@ -12,7 +12,12 @@ export type IntakeStatus =
   | "approved"
   | "error";
 
-export type GateVerdict = "clear" | "needs-decision";
+/**
+ * "unknown" is distinct from "clear": it means the planner produced no
+ * usable artifact at all (no intake.json, no non-empty plan.md) — NOT
+ * that it looked and found no open questions. See `deriveGateVerdict`.
+ */
+export type GateVerdict = "clear" | "needs-decision" | "unknown";
 
 export interface IntakeQuestion {
   id: string;
@@ -192,8 +197,15 @@ export function deriveGateVerdict(out: PlannerOutput): DerivedVerdict {
       questions,
     };
   }
-  // Fallback: parse plan.md. Fail open to "clear" when nothing parses.
+  // Fallback: parse plan.md.
   const planMd = out.planMd ?? "";
+  // A planner that exits 0 without writing intake.json OR a non-empty
+  // plan.md violated its contract — that is NOT evidence of "no open
+  // questions". Failing open here auto-approved tasks with no plan at
+  // all (audit H5). Route it to a human instead.
+  if (!j && !planMd) {
+    return { verdict: "unknown", summary: null, questions: [] };
+  }
   const questions = planMd ? parsePlanQuestions(planMd) : [];
   return {
     verdict: questions.length > 0 ? "needs-decision" : "clear",

@@ -45,8 +45,19 @@ describe("deriveGateVerdict", () => {
     expect(r.questions).toEqual([]);
   });
 
-  it("fails open to clear when nothing is parseable", () => {
-    const r = deriveGateVerdict({ intakeJson: null, planMd: null });
+  it("returns unknown (not clear) when no artifact was produced at all", () => {
+    // Audit H5: a planner that exits 0 without writing intake.json or a
+    // non-empty plan.md was previously read as "no open questions" and
+    // auto-approved. "Nothing parseable" must fail closed, not open.
+    const r = deriveGateVerdict({ intakeJson: null, planMd: "" });
+    expect(r.verdict).toBe("unknown");
+  });
+
+  it("still returns clear when the planner explicitly recorded zero questions", () => {
+    const r = deriveGateVerdict({
+      intakeJson: { questions: [] },
+      planMd: "# Plan\n\nProceed.",
+    });
     expect(r.verdict).toBe("clear");
   });
 

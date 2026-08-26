@@ -17,6 +17,12 @@ export function computeNextIntakeStatus(args: {
   verdict: GateVerdict;
   submitterCanApprove: boolean;
 }): Extract<IntakeStatus, "approved" | "awaiting-approval"> {
+  // Single allow-list condition, not a switch: "clear" + self-approve is
+  // the only path to auto-approval. Both "needs-decision" and "unknown"
+  // (no artifact produced at all — audit H5) fall through to the deny
+  // default below regardless of submitterCanApprove. Keep this an
+  // if/return-default shape, not a switch/case per verdict — a switch
+  // missing a case here would silently re-open the fail-open hole.
   if (args.verdict === "clear" && args.submitterCanApprove) return "approved";
   return "awaiting-approval";
 }

@@ -12,4 +12,10 @@ describe("computeNextIntakeStatus", () => {
     expect(computeNextIntakeStatus({ verdict: "needs-decision", submitterCanApprove: true })).toBe("awaiting-approval");
     expect(computeNextIntakeStatus({ verdict: "needs-decision", submitterCanApprove: false })).toBe("awaiting-approval");
   });
+  it("does not auto-approve an operator task when the planner wrote nothing (unknown verdict)", () => {
+    // Audit H5: "unknown" must route to a human regardless of who submitted
+    // the task — it is not evidence of a clean, reviewable plan.
+    expect(computeNextIntakeStatus({ verdict: "unknown", submitterCanApprove: true })).toBe("awaiting-approval");
+    expect(computeNextIntakeStatus({ verdict: "unknown", submitterCanApprove: false })).toBe("awaiting-approval");
+  });
 });

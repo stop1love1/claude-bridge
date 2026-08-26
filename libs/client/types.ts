@@ -82,7 +82,11 @@ export interface IntakeQuestion {
 }
 export interface TaskIntake {
   status: IntakeStatus;
-  verdict: "clear" | "needs-decision" | null;
+  // "unknown" mirrors server GateVerdict (libs/planGate.ts): the planner
+  // produced no usable artifact at all, distinct from "clear" (it looked
+  // and found nothing to ask). Kept in sync manually — this type doesn't
+  // import GateVerdict to avoid pulling server-only code into the bundle.
+  verdict: "clear" | "needs-decision" | "unknown" | null;
   summary: string | null;
   questions: IntakeQuestion[];
 }
