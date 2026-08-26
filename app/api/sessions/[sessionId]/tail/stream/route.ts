@@ -1,9 +1,15 @@
 import type { NextRequest } from "next/server";
 import { existsSync, watch, type FSWatcher } from "node:fs";
+import { join } from "node:path";
 import { resolveSessionFile, tailJsonl } from "@/libs/sessions";
 import { isAlive, subscribeSession, type PartialEvent, type StatusEvent } from "@/libs/sessionEvents";
 import { isRegisteredRepoPath } from "@/libs/sessionAccess";
 import { acquireSseSlot } from "@/libs/sseLimit";
+import { verifyRequestActor } from "@/libs/auth";
+import { readMeta } from "@/libs/meta";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { guestBoundRepoValue } from "@/libs/guestSessionRepo";
 
 export const dynamic = "force-dynamic";
 
@@ -140,13 +146,35 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const repoPath = searchParams.get("repo");
   const since = Number(searchParams.get("since") ?? 0) || 0;
 
+  // C4 follow-up (task 6 review, defence in depth) — same fix as the
+  // REST /tail route (see its comment + guestSessionRepo.ts): `?repo=`
+  // is checked only against "is this SOME registered app", never
+  // against the session's actual owner, so a guest could otherwise
+  // stream any of their task's session ids through a different app's
+  // project dir. Discard the query value for a guest and use the repo
+  // recorded on the session's own run instead; operators keep today's
+  // query-driven behaviour (needed for "free chat" sessions with no
+  // owning run).
+  const actor = verifyRequestActor(req);
+  let effectiveRepoPath = repoPath;
+  if (actor?.kind === "guest") {
+    const ownerMeta = readMeta(join(SESSIONS_DIR, actor.taskId));
+    const sessionRepo = ownerMeta?.runs.find((r) => r.sessionId === sessionId)?.repo ?? null;
+    const sessionRepoPath = sessionRepo ? resolveRepoCwd(readBridgeMd(), BRIDGE_ROOT, sessionRepo) : null;
+    effectiveRepoPath = guestBoundRepoValue({
+      actorKind: "guest",
+      callerValue: repoPath,
+      sessionValue: sessionRepoPath,
+    });
+  }
+
   // Whitelist repo against registered apps (and the bridge root) before
   // hitting resolveSessionFile. Otherwise an authed cookie could tail
   // JSONL files for unrelated Claude Code projects under ~/.claude/projects/.
-  if (!isRegisteredRepoPath(repoPath)) {
+  if (!isRegisteredRepoPath(effectiveRepoPath)) {
     return new Response("invalid session repo", { status: 400 });
   }
-  const file = resolveSessionFile(repoPath, sessionId);
+  const file = resolveSessionFile(effectiveRepoPath, sessionId);
   if (!file) {
     return new Response("invalid session repo", { status: 400 });
   }
@@ -156,7 +184,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!releaseSlot) {
     return new Response("too many concurrent streams", { status: 429 });
   }
-  const bufferKey = `${repoPath}::${sessionId}`;
+  // Keyed by the resolved path, not the raw query value — for a guest
+  // those two can legitimately differ (see above), and keying by the
+  // untrusted query value would let a guest pick which cache bucket
+  // their session's replay lands in.
+  const bufferKey = `${effectiveRepoPath}::${sessionId}`;
   const buffer = getBuffer(bufferKey);
 
   const encoder = new TextEncoder();

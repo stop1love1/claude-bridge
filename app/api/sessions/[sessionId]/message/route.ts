@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRepoCwd } from "@/libs/repos";
-import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
+import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/spawn";
 import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
 import { projectDirFor } from "@/libs/sessions";
@@ -12,6 +12,9 @@ import { badRequest, isValidEffort, isValidSessionId, isValidUserPermissionMode 
 import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
 import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
 import { isValidAppName } from "@/libs/apps";
+import { verifyRequestActor } from "@/libs/auth";
+import { readMeta } from "@/libs/meta";
+import { guestBoundRepoValue } from "@/libs/guestSessionRepo";
 import { scrubPaths, serverError } from "@/libs/errorResponse";
 import { ok } from "@/libs/apiResponse";
 import { isAlive } from "@/libs/sessionEvents";
@@ -72,7 +75,10 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  * Body: { message: string, repo: string, settings?: ChatSettings }
  *   - repo: folder name of the repo that owns this session (one of the
  *     entries in BRIDGE.md, or the bridge folder itself); used as cwd
- *     so --resume finds the session.
+ *     so --resume finds the session. For a task-share GUEST this value
+ *     is validated for shape only and then discarded — see the C4
+ *     follow-up comment below for why the actual cwd for a guest always
+ *     comes from the session's own recorded run instead.
  *   - settings: optional per-turn overrides for permission-mode / effort
  *     / model, mirroring the picker shown in the composer.
  *
@@ -101,8 +107,39 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return badRequest("invalid settings.effort");
   }
 
+  // C4 follow-up (task 6 review): this route is reachable by a
+  // task-share guest via the weaker `sendMessage` grant
+  // (libs/guestAccess.ts) — no `spawnAgent` grant required, and unlike
+  // the agents route, no plan-gate at all. `body.repo` used to be
+  // trusted as-is for `cwd`, so a guest could steer the "create-on-
+  // first-send" branch below into spawning a brand-new agent in ANY
+  // registered app — the exact escape task 6 closed on the agents
+  // route, just through this second door. `checkSession: true` on the
+  // guest allowlist rule for this path already proves `sessionId` is a
+  // run of the guest's OWN task, so that run's own recorded `repo` is
+  // the only value a guest's request may act on: `body.repo` is
+  // discarded outright for a guest, not merely checked, so a stale or
+  // forged value can't steer anything. Operators can message "free
+  // chat" sessions with no owning task/run at all, so their existing
+  // body.repo-driven behaviour is unchanged (see guestSessionRepo.ts).
+  const actor = verifyRequestActor(req);
+  // Read straight off `actor.taskId` (the share's own authenticated
+  // claim) rather than reverse-indexing sessionId → task via
+  // `findTaskBySessionId` — the guest already proved which task they
+  // hold a share for; no need to trust a second lookup to agree.
+  let sessionRepo: string | null = null;
+  if (actor?.kind === "guest") {
+    const ownerMeta = readMeta(join(SESSIONS_DIR, actor.taskId));
+    sessionRepo = ownerMeta?.runs.find((r) => r.sessionId === sessionId)?.repo ?? null;
+  }
+  const effectiveRepo = guestBoundRepoValue({
+    actorKind: actor?.kind === "guest" ? "guest" : "operator",
+    callerValue: repo ?? null,
+    sessionValue: sessionRepo,
+  });
+
   const md = readBridgeMd();
-  const cwd = resolveRepoCwd(md, BRIDGE_ROOT, repo!);
+  const cwd = effectiveRepo ? resolveRepoCwd(md, BRIDGE_ROOT, effectiveRepo) : null;
   // L4: don't echo the rejected `repo` value back. A 400 reply is
   // enough — including the input string makes log-poisoning easier
   // and offers nothing useful to a legitimate caller.

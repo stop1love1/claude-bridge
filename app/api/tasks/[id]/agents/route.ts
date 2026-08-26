@@ -394,6 +394,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // allows — no pin means no bound to enforce.
   if (
     !guestMayTargetRepo({
+      // A null `actor` (no/invalid session) folds to "operator" here,
+      // same as the plan-gate ternaries below (:424, :439) — this route
+      // is never reachable unauthenticated in the first place (the
+      // proxy's auth gate runs first), so "not proven guest" is the
+      // only case this local ternary ever needs to distinguish.
       actorKind: actor?.kind === "guest" ? "guest" : "operator",
       repo,
       taskApp: meta.taskApp ?? null,
