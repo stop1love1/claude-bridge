@@ -212,9 +212,15 @@ export interface RunVerifyStep {
  *   - `skipped`  — verifier didn't run because preconditions weren't
  *                  met (no report file, no git repo, role is itself a
  *                  retry, etc.). NOT a failure — commit proceeds.
+ *   - `crashed`  — the checker itself threw (infra failure, not a
+ *                  verdict about the diff). Blocks the commit exactly
+ *                  like `broken` — an infra crash is inconclusive, not
+ *                  a pass. Also written by `runPreflightGate` on its
+ *                  own crash (preflight has no dedicated meta.json
+ *                  field and piggybacks on this one — see runLifecycle.ts).
  */
 export interface RunVerifier {
-  verdict: "pass" | "drift" | "broken" | "skipped";
+  verdict: "pass" | "drift" | "broken" | "skipped" | "crashed";
   /** One-line human reason behind the verdict. */
   reason: string;
   /** File paths the child's report listed under `## Changed files`. */
@@ -249,9 +255,14 @@ export interface RunVerifier {
  *                 (style-retry) follow-up; commit is blocked.
  *   - `skipped` — gate didn't run (critic crashed, verdict file missing,
  *                 role exempt). Commit proceeds untouched.
+ *   - `crashed` — the checker itself threw (infra failure, not a
+ *                 verdict about the diff). Distinct from `skipped`:
+ *                 `skipped` means the gate legitimately didn't apply;
+ *                 `crashed` means it should have run and didn't
+ *                 complete. Blocks the commit like `alien`.
  */
 export interface RunStyleCritic {
-  verdict: "match" | "drift" | "alien" | "skipped";
+  verdict: "match" | "drift" | "alien" | "skipped" | "crashed";
   reason: string;
   /** Specific deviations the critic flagged (max ~10 surfaced). */
   issues: string[];
@@ -280,9 +291,14 @@ export interface RunStyleCritic {
  *   - `broken`  — clearly does not accomplish the task. Triggers a
  *                 `-svretry` follow-up; commit blocked.
  *   - `skipped` — gate didn't run. Commit proceeds untouched.
+ *   - `crashed` — the checker itself threw (infra failure, not a
+ *                 verdict on the change). Distinct from `skipped`:
+ *                 `skipped` means the gate legitimately didn't apply;
+ *                 `crashed` means it should have run and didn't
+ *                 complete. Blocks the commit like `broken`.
  */
 export interface RunSemanticVerifier {
-  verdict: "pass" | "drift" | "broken" | "skipped";
+  verdict: "pass" | "drift" | "broken" | "skipped" | "crashed";
   reason: string;
   /** Specific gaps the verifier identified (max ~10 surfaced). */
   concerns: string[];

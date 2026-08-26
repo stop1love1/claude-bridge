@@ -712,4 +712,110 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
     const calls = await driveExit();
     expect(calls).toHaveLength(0);
   });
+
+  // Task 1 (bridge-audit-fixes, C2): a gate whose CHECKER throws — not
+  // "ran and returned a fail verdict" — must not be indistinguishable
+  // from a pass. Mirrors the verify-crash test above for the other
+  // four gates. `git.autoCommit: true` makes the autoCommitAndPush
+  // assertion meaningful: REAL_APP defaults it to false, which would
+  // make "not called" trivially true regardless of whether the crash
+  // branch actually blocks anything.
+  it("preflight crash blocks the commit and escalates", async () => {
+    seedRequireCache({
+      preflightCheck: {
+        runPreflight: () => { throw new Error("boom"); },
+      },
+    });
+    const gitOps = await import("../gitOps");
+    vi.mocked(gitOps.autoCommitAndPush).mockClear();
+
+    const calls = await driveExit({ git: { ...REAL_APP.git, autoCommit: true } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "preflight", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("crashed");
+    expect(gitOps.autoCommitAndPush).not.toHaveBeenCalled();
+
+    // Preflight has no dedicated meta.json field — it piggybacks the
+    // crash marker onto `verifier`, the same slot its normal fail path
+    // already uses (see runPreflightGate's `finalVerifier`).
+    const { readMeta } = await import("../meta");
+    const meta = readMeta(tmp);
+    const run = meta?.runs.find((r) => r.sessionId === SID);
+    expect(run?.verifier?.verdict).toBe("crashed");
+  });
+
+  it("claim crash blocks the commit and escalates", async () => {
+    seedRequireCache({
+      verifier: {
+        runVerifier: async () => { throw new Error("boom"); },
+      },
+    });
+    const gitOps = await import("../gitOps");
+    vi.mocked(gitOps.autoCommitAndPush).mockClear();
+
+    const calls = await driveExit({ git: { ...REAL_APP.git, autoCommit: true } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "claim", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("crashed");
+    expect(gitOps.autoCommitAndPush).not.toHaveBeenCalled();
+  });
+
+  it("style crash blocks the commit and escalates", async () => {
+    seedRequireCache({
+      styleCritic: {
+        runStyleCritic: async () => { throw new Error("boom"); },
+      },
+    });
+    const gitOps = await import("../gitOps");
+    vi.mocked(gitOps.autoCommitAndPush).mockClear();
+
+    const calls = await driveExit({
+      git: { ...REAL_APP.git, autoCommit: true },
+      quality: { critic: true, verifier: false },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "style", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("crashed");
+    expect(gitOps.autoCommitAndPush).not.toHaveBeenCalled();
+  });
+
+  it("semantic crash blocks the commit and escalates", async () => {
+    seedRequireCache({
+      semanticVerifier: {
+        runSemanticVerifier: async () => { throw new Error("boom"); },
+      },
+    });
+    const gitOps = await import("../gitOps");
+    vi.mocked(gitOps.autoCommitAndPush).mockClear();
+
+    const calls = await driveExit({
+      git: { ...REAL_APP.git, autoCommit: true },
+      quality: { critic: false, verifier: true },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toMatchObject({ gate: "semantic", retryScheduled: false });
+    expect((calls[0][0] as { reason: string }).reason).toContain("crashed");
+    expect(gitOps.autoCommitAndPush).not.toHaveBeenCalled();
+  });
+
+  it("records an explicit crashed verdict so the score can see it (semantic)", async () => {
+    // Task 2 (confidence scoring) reads this field — absence is
+    // ambiguous (an app can legitimately opt out of the semantic gate),
+    // but an explicit "crashed" verdict is not.
+    seedRequireCache({
+      semanticVerifier: {
+        runSemanticVerifier: async () => { throw new Error("panel exploded"); },
+      },
+    });
+    await driveExit({ quality: { critic: false, verifier: true } });
+
+    const { readMeta } = await import("../meta");
+    const meta = readMeta(tmp);
+    const run = meta?.runs.find((r) => r.sessionId === SID);
+    expect(run?.semanticVerifier?.verdict).toBe("crashed");
+  });
 });

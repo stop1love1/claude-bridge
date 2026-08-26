@@ -325,6 +325,7 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
     }
   }
   let preflightResult: Preflight.PreflightResult | null = null;
+  let preflightCrashed = false;
   try {
     preflightResult = pf.runPreflight({
       finishedRun: run,
@@ -332,6 +333,42 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
     });
   } catch (err) {
     logError("preflight", "crashed", err, { tag: t });
+    preflightResult = null;
+    preflightCrashed = true;
+  }
+
+  // The checker itself threw — not "ran and produced a fail verdict"
+  // but no signal at all. Treating that as "proceed" would silently
+  // release the commit gate; block instead, same as the other three
+  // gates and runVerifyChainGate above. Preflight has no dedicated
+  // meta.json field of its own — the crash marker piggybacks on
+  // `verifier`, the same slot the normal fail path below already uses.
+  if (preflightCrashed) {
+    logWarn("preflight", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
+    await updateRun(
+      dir,
+      run.sessionId,
+      { status: "done", endedAt: new Date().toISOString() },
+      (r) => r.status === "running",
+    );
+    await attachGateResult(dir, run.sessionId, "verifier", {
+      verdict: "crashed",
+      reason: "preflight crashed — inconclusive",
+      claimedFiles: [],
+      actualFiles: [],
+      unmatchedClaims: [],
+      unclaimedActual: [],
+      durationMs: 0,
+      retryScheduled: false,
+    });
+    await escalateGateBlock({
+      taskId: tid,
+      sessionsDir: dir,
+      gate: "preflight",
+      reason: "preflight crashed — inconclusive",
+      retryScheduled: false,
+    });
+    return "blocked";
   }
 
   if (!preflightResult || preflightResult.verdict !== "fail") return "proceed";
@@ -398,6 +435,7 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
 
   const vfn = loadVerifier();
   let verifierResult: RunVerifier | null = null;
+  let claimCrashed = false;
   try {
     verifierResult = await vfn.runVerifier({
       // P4: claim-vs-diff has to run where the diff exists.
@@ -408,6 +446,39 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
   } catch (err) {
     logError("verifier", "crashed", err, { tag: t });
     verifierResult = null;
+    claimCrashed = true;
+  }
+
+  // The checker itself threw — no signal on whether the claimed files
+  // match the diff. Treating that as "proceed" would silently release
+  // the commit gate; block instead, same as the other three gates and
+  // runVerifyChainGate above.
+  if (claimCrashed) {
+    logWarn("verifier", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
+    await updateRun(
+      dir,
+      run.sessionId,
+      { status: "done", endedAt: new Date().toISOString() },
+      (r) => r.status === "running",
+    );
+    await attachGateResult(dir, run.sessionId, "verifier", {
+      verdict: "crashed",
+      reason: "claim verifier crashed — inconclusive",
+      claimedFiles: [],
+      actualFiles: [],
+      unmatchedClaims: [],
+      unclaimedActual: [],
+      durationMs: 0,
+      retryScheduled: false,
+    });
+    await escalateGateBlock({
+      taskId: tid,
+      sessionsDir: dir,
+      gate: "claim",
+      reason: "claim verifier crashed — inconclusive",
+      retryScheduled: false,
+    });
+    return "blocked";
   }
 
   // Decide retry BEFORE writing meta — same combined-patch pattern
@@ -479,6 +550,7 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
 
   const sc = loadStyleCritic();
   let criticResult: RunStyleCritic | null = null;
+  let styleCrashed = false;
   try {
     criticResult = await sc.runStyleCritic({
       // P4: gate runs in the same worktree the coder did so it sees
@@ -493,6 +565,36 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
   } catch (err) {
     logError("style-critic", "crashed", err, { tag: t });
     criticResult = null;
+    styleCrashed = true;
+  }
+
+  // The checker itself threw — no signal on whether the diff fits
+  // house style. Treating that as "proceed" would silently release
+  // the commit gate; block instead, same as the other three gates and
+  // runVerifyChainGate above.
+  if (styleCrashed) {
+    logWarn("style-critic", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
+    await updateRun(
+      dir,
+      run.sessionId,
+      { status: "done", endedAt: new Date().toISOString() },
+      (r) => r.status === "running",
+    );
+    await attachGateResult(dir, run.sessionId, "styleCritic", {
+      verdict: "crashed",
+      reason: "style critic crashed — inconclusive",
+      issues: [],
+      durationMs: 0,
+      retryScheduled: false,
+    });
+    await escalateGateBlock({
+      taskId: tid,
+      sessionsDir: dir,
+      gate: "style",
+      reason: "style critic crashed — inconclusive",
+      retryScheduled: false,
+    });
+    return "blocked";
   }
 
   const needsStyleRetry =
@@ -567,6 +669,7 @@ async function runSemanticVerifierGate(
 
   const sv = loadSemanticVerifier();
   let semanticResult: RunSemanticVerifier | null = null;
+  let semanticCrashed = false;
   try {
     semanticResult = await sv.runSemanticVerifier({
       appPath: run.worktreePath ?? app.path,
@@ -578,6 +681,36 @@ async function runSemanticVerifierGate(
   } catch (err) {
     logError("semantic-verifier", "crashed", err, { tag: t });
     semanticResult = null;
+    semanticCrashed = true;
+  }
+
+  // The checker (or the whole judge panel) itself threw — no signal on
+  // whether the change accomplishes the task body. Treating that as
+  // "proceed" would silently release the commit gate; block instead,
+  // same as the other three gates and runVerifyChainGate above.
+  if (semanticCrashed) {
+    logWarn("semantic-verifier", "crashed — blocking auto-commit (operator must verify manually)", { tag: t });
+    await updateRun(
+      dir,
+      run.sessionId,
+      { status: "done", endedAt: new Date().toISOString() },
+      (r) => r.status === "running",
+    );
+    await attachGateResult(dir, run.sessionId, "semanticVerifier", {
+      verdict: "crashed",
+      reason: "semantic verifier crashed — inconclusive",
+      concerns: [],
+      durationMs: 0,
+      retryScheduled: false,
+    });
+    await escalateGateBlock({
+      taskId: tid,
+      sessionsDir: dir,
+      gate: "semantic",
+      reason: "semantic verifier crashed — inconclusive",
+      retryScheduled: false,
+    });
+    return "blocked";
   }
 
   const needsSemanticRetry =
