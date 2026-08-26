@@ -11,13 +11,13 @@
  *
  * This module subscribes once at server boot to the global meta-change
  * stream. Whenever a run transitions to a terminal state (`done` /
- * `failed` / `stale`), we ask: was this run a coordinator's child? Are
- * all of that coordinator's children now terminal? Is the coordinator
- * process currently idle (no live claude subprocess attached)? If yes
- * to all three, we resume the coordinator with a short prompt and a
- * one-shot summary of which children settled. Same fan-out path as the
- * `/api/tasks/<id>/continue` button — just triggered by the bridge
- * instead of the user.
+ * `failed` / `cancelled` / `stale`), we ask: was this run a
+ * coordinator's child? Are all of that coordinator's children now
+ * terminal? Is the coordinator process currently idle (no live claude
+ * subprocess attached)? If yes to all three, we resume the coordinator
+ * with a short prompt and a one-shot summary of which children settled.
+ * Same fan-out path as the `/api/tasks/<id>/continue` button — just
+ * triggered by the bridge instead of the user.
  *
  * Guards:
  *   - skip when the finished run has no `parentSessionId` (bridge-spawned
@@ -175,7 +175,11 @@ const state: NudgeState = G.__bridgeCoordinatorNudge ?? {
 G.__bridgeCoordinatorNudge = state;
 
 function isTerminal(s: RunStatus): boolean {
-  return s === "done" || s === "failed" || s === "stale";
+  // `cancelled` (operator Stop, audit C1) must count as terminal too —
+  // otherwise a stopped child's `!isTerminal` check never flips, and
+  // every "are all children settled" gate below waits forever for a
+  // process that is already dead.
+  return s === "done" || s === "failed" || s === "cancelled" || s === "stale";
 }
 
 /**

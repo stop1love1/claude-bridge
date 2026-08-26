@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type { Run } from "../meta";
 
 /**
  * `readFailedSessionContext` resolves the jsonl path through
@@ -127,5 +128,73 @@ describe("readFailedSessionContext (streaming tail reader)", () => {
       lastAssistantText: "",
       recentToolUses: [],
     });
+  });
+});
+
+/**
+ * C1: a run the operator explicitly stopped (Stop button / kill route)
+ * must never be picked up by auto-retry — that would silently undo the
+ * human's Stop and spend another turn `--resume`-ing the exact session
+ * they just killed. `isEligibleForRetry` resolves its meta.json through
+ * `SESSIONS_DIR`, which is captured from `process.cwd()` at module load,
+ * so we mock `process.cwd()` (same pattern as gateEscalation.test.ts /
+ * promptStore.test.ts) on top of the outer `beforeEach`'s homedir mock
+ * (which already keeps `getApp()` from reading the real bridge.json) and
+ * re-import fresh per test.
+ */
+describe("isEligibleForRetry (cancelled short-circuits auto-retry, C1)", () => {
+  const TASK_ID = "t_20260826_001";
+
+  beforeEach(() => {
+    vi.spyOn(process, "cwd").mockReturnValue(tempHome);
+  });
+
+  async function seedTaskMeta(): Promise<void> {
+    const { createMeta } = await import("../meta");
+    const { SESSIONS_DIR } = await import("../paths");
+    createMeta(join(SESSIONS_DIR, TASK_ID), {
+      taskId: TASK_ID,
+      taskTitle: "fixture task",
+      taskBody: "fixture body",
+      taskStatus: "doing",
+      taskSection: "DOING",
+      taskChecked: false,
+      createdAt: "2026-08-26T09:00:00.000Z",
+    });
+  }
+
+  // Satisfies every OTHER precondition `isEligibleForRetry` checks (a
+  // parent session + an untouched per-gate/per-task retry budget) so
+  // the "genuinely failed" case below reaches the real eligible path
+  // instead of passing for the wrong reason (e.g. failing the "no
+  // parent" check first, which would pass even if the cancelled guard
+  // were broken).
+  function makeRun(overrides: Partial<Run>): Run {
+    return {
+      sessionId: VALID_SID,
+      role: "coder",
+      repo: "childretry-fixture-app",
+      status: "failed",
+      startedAt: "2026-08-26T10:00:00.000Z",
+      endedAt: "2026-08-26T10:05:00.000Z",
+      parentSessionId: "parent-1",
+      ...overrides,
+    };
+  }
+
+  it("does not schedule a retry for a run the operator cancelled", async () => {
+    await seedTaskMeta();
+    const { isEligibleForRetry } = await import("../childRetry");
+    const run = makeRun({ status: "cancelled", role: "coder", parentSessionId: "parent-1" });
+    const result = isEligibleForRetry(TASK_ID, run);
+    expect("nextAttempt" in result).toBe(false);
+  });
+
+  it("still schedules a retry for a run that genuinely failed", async () => {
+    await seedTaskMeta();
+    const { isEligibleForRetry } = await import("../childRetry");
+    const run = makeRun({ status: "failed", role: "coder", parentSessionId: "parent-1" });
+    const result = isEligibleForRetry(TASK_ID, run);
+    expect("nextAttempt" in result).toBe(true);
   });
 });

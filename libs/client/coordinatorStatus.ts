@@ -9,8 +9,8 @@
  *
  * This helper returns true iff:
  *   - the coordinator's run is in a terminal state (done / failed /
- *     stale) — a literal RUNNING coordinator already conveys activity
- *     and doesn't need the derived badge
+ *     cancelled / stale) — a literal RUNNING coordinator already
+ *     conveys activity and doesn't need the derived badge
  *   - AND there's at least one OTHER run in `runs[]` that's still
  *     queued / running — i.e. orchestration is in flight via a child
  *     even though the coordinator's process has stepped out
@@ -23,7 +23,7 @@
  */
 import type { Run, RunStatus } from "./types";
 
-const TERMINAL: ReadonlySet<RunStatus> = new Set(["done", "failed", "stale"]);
+const TERMINAL: ReadonlySet<RunStatus> = new Set(["done", "failed", "cancelled", "stale"]);
 
 export function isCoordinatorOrchestrating(args: {
   coordinator: Run;

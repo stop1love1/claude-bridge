@@ -44,10 +44,15 @@ interface ScheduleArgs {
  * Delegates to `retryLadder.checkEligibility(gate="crash")`, so the
  * per-app `retry.crash` budget governs attempt count.
  */
-function isEligibleForRetry(
+export function isEligibleForRetry(
   taskId: string,
   failedRun: Run,
 ): { nextAttempt: number } | { reason: string } {
+  // A run the operator cancelled must never be resumed — that would
+  // undo an explicit human decision and spend another turn on the path
+  // they just rejected. Mirrors the existing speculativeOutcome ===
+  // "lost" short-circuit below.
+  if (failedRun.status === "cancelled") return { reason: "cancelled by operator" };
   const sessionsDir = join(SESSIONS_DIR, taskId);
   const meta = readMeta(sessionsDir);
   if (!meta) return { reason: "meta.json missing" };

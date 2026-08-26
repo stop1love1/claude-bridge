@@ -173,18 +173,21 @@ function TaskDetailInner({
   const hasRuns = runs.length > 0;
   const owner = runs.find((r) => r.role === "coordinator") ?? null;
   // Most recent coordinator run drives the Continue button: only show
-  // it when the user stopped the coordinator mid-way (killed) or the
-  // process died unexpectedly (reaper marks it stale). Hide when the
-  // coordinator is queued / running / cleanly done.
+  // it when the user stopped the coordinator mid-way (killed / cancelled
+  // via Stop) or the process died unexpectedly (crashed, or the reaper
+  // marks it stale). Hide when the coordinator is queued / running /
+  // cleanly done.
   const lastCoordinator = [...runs].reverse().find((r) => r.role === "coordinator") ?? null;
   const canContinue = !!lastCoordinator
-    && (lastCoordinator.status === "failed" || lastCoordinator.status === "stale");
+    && (lastCoordinator.status === "failed"
+      || lastCoordinator.status === "stale"
+      || lastCoordinator.status === "cancelled");
 
   const handleKill = async (run: Run) => {
     if (!task) return;
     const ok = await confirm({
       title: `Kill ${run.role}?`,
-      description: `Stops session ${run.sessionId.slice(0, 8)}… (SIGTERM, then SIGKILL after 3s).\nThe run is flipped to failed in meta.json.`,
+      description: `Stops session ${run.sessionId.slice(0, 8)}… (SIGTERM, then SIGKILL after 3s).\nThe run is flipped to cancelled in meta.json.`,
       confirmLabel: "Kill",
       destructive: true,
     });

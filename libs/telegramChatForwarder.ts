@@ -300,9 +300,16 @@ function handleSpawned(taskId: string, run: Run): void {
 
 function handleTransition(run: Run): void {
   // Any terminal status drains the buffer and detaches. We tear down on
-  // both done AND failed so a crashed coordinator still gets its tail
-  // text forwarded (sometimes the most useful signal).
-  if (run.status === "done" || run.status === "failed" || run.status === "stale") {
+  // done, failed, cancelled (operator Stop, audit C1), AND stale so a
+  // crashed — or stopped — coordinator still gets its tail text
+  // forwarded (sometimes the most useful signal), and so the buffer
+  // doesn't leak forever for a session that will never transition again.
+  if (
+    run.status === "done" ||
+    run.status === "failed" ||
+    run.status === "cancelled" ||
+    run.status === "stale"
+  ) {
     closeBuffer(run.sessionId, "exit");
   }
 }

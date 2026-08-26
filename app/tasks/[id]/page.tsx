@@ -211,6 +211,7 @@ function TaskPageInner() {
       spawned: applyMetaFromEvent,
       done: applyMetaFromEvent,
       failed: applyMetaFromEvent,
+      cancelled: applyMetaFromEvent,
       stale: applyMetaFromEvent,
       updated: applyMetaFromEvent,
       retried: applyMetaFromEvent,

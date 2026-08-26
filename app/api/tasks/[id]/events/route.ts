@@ -160,11 +160,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         if (ev.kind === "transition") {
           // We only care about terminal transitions out of `running`.
           // The initial appendRun is the spawn event; never re-emit
-          // "running" here.
+          // "running" here. `cancelled` (audit C1 — operator Stop) is
+          // terminal too; without it here, the client never learns the
+          // run left `running` and the row keeps pulsing until the next
+          // unrelated poll/event happens to refresh it.
           const next = ev.run?.status;
           if (
             ev.prevStatus === "running" &&
-            (next === "done" || next === "failed" || next === "stale")
+            (next === "done" || next === "failed" || next === "cancelled" || next === "stale")
           ) {
             sendWithMeta(next, { sessionId: ev.sessionId, run: ev.run, prevStatus: ev.prevStatus });
           }

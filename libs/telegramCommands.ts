@@ -640,12 +640,14 @@ async function commandKill(idArg: string | undefined): Promise<string> {
     if (killChild(r.sessionId)) killed += 1;
   }
   // Also flip the meta rows so the UI doesn't keep showing them as
-  // running while the OS-level kill propagates.
+  // running while the OS-level kill propagates. `cancelled`, not
+  // `failed` — this is an operator-initiated /kill, not a crash, and
+  // `failed` would trip auto-retry, undoing the kill (audit C1).
   await applyManyRuns(
     join(SESSIONS_DIR, idArg),
     running.map((r) => ({
       sessionId: r.sessionId,
-      patch: { status: "failed", endedAt: new Date().toISOString() },
+      patch: { status: "cancelled", endedAt: new Date().toISOString() },
     })),
   );
   return `🛑 Killed ${killed} of ${running.length} session\\(s\\) for \`${idArg}\``;

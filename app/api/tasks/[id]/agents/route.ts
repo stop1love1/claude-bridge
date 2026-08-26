@@ -1353,19 +1353,22 @@ async function handleResume(args: {
     }
 
     // Pick the most recent completed prior run. `done` ranks above
-    // `failed` so we don't accidentally resume the failure when a
-    // successful turn followed it (rare; the post-exit gates can flip
-    // status mid-flight). Among same-status candidates, the latest
-    // endedAt wins.
+    // `failed`/`cancelled` so we don't accidentally resume the failure
+    // (or the stopped attempt) when a successful turn followed it (rare;
+    // the post-exit gates can flip status mid-flight). `cancelled` is
+    // included alongside `failed` — an operator-stopped child (audit C1)
+    // is exactly the case an operator later wants to resume via this
+    // same-triple auto-match, same as it always was when kills wrote
+    // `failed`. Among same-status candidates, the latest endedAt wins.
     const completed = runs.filter(
-      (r) => matchTriple(r) && (r.status === "done" || r.status === "failed"),
+      (r) => matchTriple(r) && (r.status === "done" || r.status === "failed" || r.status === "cancelled"),
     );
     if (completed.length === 0) {
       return NextResponse.json(
         {
           error: "no prior run to resume",
           reason:
-            "resume requires a completed (done/failed) prior child for the same parentSessionId, role, and repo; none was found in this task. Pass `priorSessionId` to resume a specific session under a different role label.",
+            "resume requires a completed (done/failed/cancelled) prior child for the same parentSessionId, role, and repo; none was found in this task. Pass `priorSessionId` to resume a specific session under a different role label.",
           role,
           repo,
           parentSessionId,

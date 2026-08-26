@@ -40,5 +40,8 @@ export const RUN_STATUS_PILL: Record<RunStatus, StatusPill> = {
   running: { label: "running", cls: "bg-warning/20 text-warning", pulse: true },
   done: { label: "done", cls: "bg-success/20 text-success", pulse: false },
   failed: { label: "failed", cls: "bg-destructive/20 text-destructive", pulse: false },
+  // Neutral, not alarming — an operator-initiated Stop is an expected
+  // outcome, not an error. Same muted token as `stale`.
+  cancelled: { label: "cancelled", cls: "bg-fg-dim/20 text-fg-dim", pulse: false },
   stale: { label: "stale", cls: "bg-fg-dim/20 text-fg-dim", pulse: false },
 };

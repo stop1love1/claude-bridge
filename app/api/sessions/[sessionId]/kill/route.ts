@@ -18,7 +18,7 @@ type Ctx = { params: Promise<{ sessionId: string }> };
  * "stop" button in the chat composer hits this.
  *
  * Works for both task-linked runs (we patch meta.json's run row to
- * `failed` if it was still `running`) and free/orphan sessions
+ * `cancelled` if it was still `running`) and free/orphan sessions
  * (no meta.json scan needed). SIGTERM, escalates to SIGKILL after
  * 3s — see `spawnRegistry.killChild`.
  *
@@ -52,8 +52,10 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
   }
 
   // Best-effort: if this session is linked to a task, flip its run
-  // entry to `failed`. Free/orphan sessions don't have a meta.json,
-  // and that's fine — we just skip.
+  // entry to `cancelled` — distinct from `failed` so this operator-
+  // initiated Stop doesn't read as a crash and doesn't trip auto-retry
+  // (audit C1). Free/orphan sessions don't have a meta.json, and
+  // that's fine — we just skip.
   if (existsSync(SESSIONS_DIR)) {
     for (const taskId of readdirSync(SESSIONS_DIR)) {
       const dir = join(SESSIONS_DIR, taskId);
@@ -64,7 +66,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       await updateRun(
         dir,
         sessionId,
-        { status: "failed", endedAt: new Date().toISOString() },
+        { status: "cancelled", endedAt: new Date().toISOString() },
         (r) => r.status === "running",
       );
       break;

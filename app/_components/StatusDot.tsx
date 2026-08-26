@@ -5,6 +5,9 @@ const COLOR: Record<RunStatus, string> = {
   running: "bg-warning animate-pulse",
   done: "bg-success",
   failed: "bg-destructive",
+  // Neutral, not alarming — an operator-initiated Stop is an expected
+  // outcome, not an error. Same muted token as `queued`.
+  cancelled: "bg-fg-dim",
   stale: "bg-info",
 };
 

@@ -12,6 +12,10 @@ export const RUN_STATUSES = [
   "running",
   "done",
   "failed",
+  // Terminal, and deliberately distinct from `failed`: a human stopped
+  // this run. Retry eligibility short-circuits on it so the Stop button
+  // is not silently undone by auto-retry (audit C1).
+  "cancelled",
   "stale",
 ] as const;
 

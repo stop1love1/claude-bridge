@@ -297,6 +297,14 @@ async function advancePipeline(taskId: string): Promise<void> {
     const stage = p.stages[p.stageIndex];
     const stageName = stage?.name ?? `stage ${p.stageIndex + 1}`;
 
+    if (run.status === "cancelled") {
+      // The operator stopped this stage's run — do NOT fall through to
+      // the "done" branch below and silently advance the pipeline as if
+      // it had succeeded (audit C1: a cancelled run is not a success).
+      await blockPipeline(taskId, `stage "${stageName}" was cancelled by the operator`);
+      return;
+    }
+
     if (run.status === "failed" || run.status === "stale") {
       await blockPipeline(taskId, `stage "${stageName}" failed (retries exhausted)`);
       return;
@@ -351,7 +359,7 @@ function scheduleEval(taskId: string): void {
 function onMetaChange(ev: MetaChangeEvent): void {
   if (ev.kind !== "transition") return;
   const status = ev.run?.status;
-  if (status !== "done" && status !== "failed" && status !== "stale") return;
+  if (status !== "done" && status !== "failed" && status !== "cancelled" && status !== "stale") return;
   if (!isLockHolder()) return; // only the singleton advances pipelines
   scheduleEval(ev.taskId);
 }
