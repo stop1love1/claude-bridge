@@ -10,6 +10,7 @@ import { readPlanGateConfig } from "@/libs/planGateConfig";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { ensureSystemPromptFile } from "@/libs/systemPrompt";
 import { resolveRepoCwd, resolveRepos } from "@/libs/repos";
+import { guestMayTargetRepo } from "@/libs/guestRepoBinding";
 import { resumeClaude, spawnFreeSession } from "@/libs/spawn";
 import { wireRunLifecycle, spawnCoordinatorForTask } from "@/libs/coordinator";
 import { getApp, type AppGitSettings } from "@/libs/apps";
@@ -377,6 +378,31 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     autoDetected = true;
     autoDetectReason = `${detectedScope?.source ?? "heuristic"}: ${top.reason}`;
     autoDetectScore = top.score;
+  }
+
+  // C4: a task-share guest's `spawnAgent` grant is scoped to the share's
+  // taskId only (libs/guestAccess.ts) — it never inspects `body.repo`,
+  // so an unchecked `repo` here would resolve to ANY app registered in
+  // bridge.json, not just the one the guest's task is pinned to, and the
+  // resulting session would then be readable via the task-scoped tail
+  // route (sessionBelongsToTask only checks task membership, not repo).
+  // Must run before `resolveRepoCwd` below is used for any side effect —
+  // this covers BOTH the spawn path (continues past this point) and the
+  // resume path (`handleResume` is invoked further down with this same
+  // already-checked `repo`/`repoCwd`, and never re-resolves a repo of
+  // its own). An unpinned task (`meta.taskApp` null) denies rather than
+  // allows — no pin means no bound to enforce.
+  if (
+    !guestMayTargetRepo({
+      actorKind: actor?.kind === "guest" ? "guest" : "operator",
+      repo,
+      taskApp: meta.taskApp ?? null,
+    })
+  ) {
+    return NextResponse.json(
+      { error: "guest may only target this task's app" },
+      { status: 403 },
+    );
   }
 
   const repoCwd = resolveRepoCwd(md, BRIDGE_ROOT, repo);
