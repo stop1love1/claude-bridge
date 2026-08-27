@@ -74,6 +74,23 @@ vi.mock("../spawn", () => ({
   },
 }));
 
+const writeSessionSettingsShouldThrow = vi.hoisted(() => ({ value: false }));
+
+vi.mock("../permissionSettings", async () => {
+  const actual = await vi.importActual<typeof import("../permissionSettings")>(
+    "../permissionSettings",
+  );
+  return {
+    ...actual,
+    writeSessionSettings: (file: string) => {
+      if (writeSessionSettingsShouldThrow.value) {
+        throw new Error("EACCES: simulated permission-store write failure");
+      }
+      return actual.writeSessionSettings(file);
+    },
+  };
+});
+
 const FAKE_APP = {
   name: "fake-resume-app",
   rawPath: "fake-resume-app",
@@ -132,6 +149,7 @@ async function postAgents(body: Record<string, unknown>) {
 describe("agents route resume — repo reservation acquisition (Important 4)", () => {
   afterEach(() => {
     resumedChildren.length = 0;
+    writeSessionSettingsShouldThrow.value = false;
     try { rmSync(taskDir(), { recursive: true, force: true }); } catch { }
   });
 
@@ -214,5 +232,75 @@ describe("agents route resume — repo reservation acquisition (Important 4)", (
     expect(resumedChildren).toHaveLength(0);
 
     releaseRepoReservation("fake-resume-app", "other-holder");
+  });
+
+  it("releases the reservation when writeSessionSettings throws between acquire and resumeClaude", async () => {
+    const { createMeta, appendRun, readMeta } = await import("../meta");
+    const { currentReservation } = await import("../repoReservation");
+
+    createMeta(taskDir(), HEADER);
+    const priorSid = "99999999-1111-1111-1111-111111111111";
+    await appendRun(taskDir(), {
+      sessionId: priorSid,
+      role: "coder",
+      repo: "fake-resume-app",
+      status: "failed",
+      startedAt: "2026-08-27T10:00:01Z",
+      endedAt: "2026-08-27T10:00:02Z",
+    });
+
+    writeSessionSettingsShouldThrow.value = true;
+    const resumeRes = await postAgents({
+      role: "coder",
+      repo: "fake-resume-app",
+      prompt: "keep going",
+      mode: "resume",
+      priorSessionId: priorSid,
+    });
+    expect(resumeRes.status).toBe(500);
+
+    expect(resumedChildren).toHaveLength(0);
+    expect(currentReservation("fake-resume-app")).toBeNull();
+
+    const meta = readMeta(taskDir());
+    const run = meta?.runs.find((r) => r.sessionId === priorSid);
+    expect(run?.status).toBe("failed");
+  });
+
+  it("reports the PRE-claim priorStatus/priorEndedAt/priorRole in the 201 body, not the post-claim aliased values", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { currentReservation, releaseRepoReservation } = await import(
+      "../repoReservation"
+    );
+
+    createMeta(taskDir(), HEADER);
+    const priorSid = "22223333-4444-5555-6666-777788889999";
+    await appendRun(taskDir(), {
+      sessionId: priorSid,
+      role: "coder",
+      repo: "fake-resume-app",
+      status: "done",
+      startedAt: "2026-08-27T09:00:00Z",
+      endedAt: "2026-08-27T09:05:00Z",
+    });
+
+    const resumeRes = await postAgents({
+      role: "reviewer",
+      repo: "fake-resume-app",
+      prompt: "review it now",
+      mode: "resume",
+      priorSessionId: priorSid,
+    });
+    expect(resumeRes.status).toBe(201);
+    const body = await resumeRes.json();
+
+    // If these read the post-claim (aliased) run instead of a pre-claim snapshot, they'd
+    // report status:"running", endedAt:null, and priorRole:"reviewer" — the wrong answer.
+    expect(body.priorRole).toBe("coder");
+    expect(body.priorStatus).toBe("done");
+    expect(body.priorEndedAt).toBe("2026-08-27T09:05:00Z");
+    expect(currentReservation("fake-resume-app")?.sessionId).toBe(priorSid);
+
+    releaseRepoReservation("fake-resume-app", priorSid);
   });
 });

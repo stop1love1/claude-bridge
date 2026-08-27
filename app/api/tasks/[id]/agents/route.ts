@@ -1093,18 +1093,18 @@ async function handleResume(args: {
     resumeReserved = true;
   }
 
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(prior.sessionId));
-
-  const resumePrompt = buildResumePrompt({
-    taskId,
-    role,
-    repo,
-    parentSessionId,
-    coordinatorBody: prompt,
-  });
-
   let child;
   try {
+    const settingsPath = writeSessionSettings(freeSessionSettingsPath(prior.sessionId));
+
+    const resumePrompt = buildResumePrompt({
+      taskId,
+      role,
+      repo,
+      parentSessionId,
+      coordinatorBody: prompt,
+    });
+
     child = resumeClaude(
       spawnCwd,
       prior.sessionId,
@@ -1140,9 +1140,9 @@ async function handleResume(args: {
       action: "resumed",
       repo,
       role,
-      priorRole: priorRoleChanged ? prior.role : undefined,
-      priorStatus: prior.status,
-      priorEndedAt: prior.endedAt,
+      priorRole: priorRoleChanged ? priorRoleSnapshot : undefined,
+      priorStatus: priorStatusSnapshot,
+      priorEndedAt: priorEndedAtSnapshot,
       cwd: spawnCwd,
     },
     { status: 201 },

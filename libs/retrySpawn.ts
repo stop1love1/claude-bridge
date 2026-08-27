@@ -5,6 +5,7 @@ import { readMeta, updateRun, type Run } from "./meta";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { resumeClaude } from "./spawn";
+import { acquireRepoReservation, releaseRepoReservation } from "./repoReservation";
 import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import {
@@ -104,6 +105,17 @@ export async function spawnRetry(
     return null;
   }
 
+  if (app && !finishedRun.worktreePath) {
+    const reservation = acquireRepoReservation(finishedRun.repo, sessionId);
+    if (!reservation.ok) {
+      console.warn(
+        `${logLabel} could not reserve ${finishedRun.repo} for retry (held by ${reservation.heldBy}) — proceeding anyway`,
+        taskId,
+        sessionId,
+      );
+    }
+  }
+
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
   let child;
@@ -124,6 +136,7 @@ export async function spawnRetry(
       });
     } catch {
     }
+    releaseRepoReservation(finishedRun.repo, sessionId);
     return null;
   }
 
@@ -135,6 +148,7 @@ export async function spawnRetry(
       taskId,
       sessionId,
     );
+    releaseRepoReservation(finishedRun.repo, sessionId);
     return null;
   }
 

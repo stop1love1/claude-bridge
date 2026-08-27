@@ -52,11 +52,17 @@ vi.mock("../contextAttach", () => ({ attachReferences: () => [] }));
 vi.mock("../recentDirection", () => ({ buildRecentDirection: async () => null }));
 vi.mock("../styleStore", () => ({ ensureFreshStyleFingerprint: () => null }));
 
-vi.mock("../symbolStore", () => ({
-  ensureFreshSymbolIndex: () => {
-    throw new Error("symbol index boom — simulated crash before appendRunIfNotDuplicate");
-  },
-}));
+const capturedHolderAtThrow = vi.hoisted(() => ({ value: undefined as string | null | undefined }));
+
+vi.mock("../symbolStore", async () => {
+  const { currentReservation } = await import("../repoReservation");
+  return {
+    ensureFreshSymbolIndex: () => {
+      capturedHolderAtThrow.value = currentReservation("fake-throw-app")?.sessionId ?? null;
+      throw new Error("symbol index boom — simulated crash before appendRunIfNotDuplicate");
+    },
+  };
+});
 
 const FAKE_APP = {
   name: "fake-throw-app",
@@ -111,6 +117,7 @@ describe("agents route dispatch — reservation release on an unexpected pre-wir
     const { createMeta } = await import("../meta");
     const { currentReservation } = await import("../repoReservation");
 
+    capturedHolderAtThrow.value = undefined;
     createMeta(taskDir(), HEADER);
 
     const { POST } = await import("@/app/api/tasks/[id]/agents/route");
@@ -132,6 +139,11 @@ describe("agents route dispatch — reservation release on an unexpected pre-wir
       threw = true;
     }
     expect(threw).toBe(true);
+
+    // Pin that the reservation was genuinely held at the moment of the crash — otherwise
+    // a future refactor that moved the acquire later could make this test pass vacuously.
+    expect(capturedHolderAtThrow.value).not.toBeUndefined();
+    expect(capturedHolderAtThrow.value).not.toBeNull();
 
     expect(currentReservation("fake-throw-app")).toBeNull();
   });
