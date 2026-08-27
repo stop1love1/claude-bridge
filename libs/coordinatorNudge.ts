@@ -79,6 +79,7 @@ export function shouldFinalizeDeferredCoordinator(args: {
   runs: Run[];
   isAlive: (sessionId: string) => boolean;
   summaryMissing?: boolean;
+  summaryStale?: boolean;
 }): boolean {
   const coord = args.runs.find(
     (r) => r.sessionId === args.parentSessionId && r.role === "coordinator",
@@ -86,6 +87,7 @@ export function shouldFinalizeDeferredCoordinator(args: {
   if (!coord || coord.status !== "running") return false;
   if (args.isAlive(args.parentSessionId)) return false;
   if (args.summaryMissing === true) return false;
+  if (args.summaryStale === true) return false;
   return args.runs.every(
     (r) =>
       r.sessionId === args.parentSessionId ||
@@ -319,6 +321,7 @@ async function evaluateAndNudge(
       runs: meta.runs,
       isAlive,
       summaryMissing,
+      summaryStale,
     })
   ) {
     try {

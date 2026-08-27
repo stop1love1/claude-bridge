@@ -507,6 +507,36 @@ describe("shouldFinalizeDeferredCoordinator (2b deferred-DONE finalizer)", () =>
       }),
     ).toBe(true);
   });
+
+  it("does not finalize a coordinator whose summary is stale", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "done"),
+        ],
+        isAlive: NEVER_ALIVE,
+        summaryMissing: false,
+        summaryStale: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("still finalizes when the summary is present and fresh", () => {
+    expect(
+      shouldFinalizeDeferredCoordinator({
+        parentSessionId: COORD_SID,
+        runs: [
+          coordinator({ status: "running", endedAt: null }),
+          child(CHILD_A_SID, "done"),
+        ],
+        isAlive: NEVER_ALIVE,
+        summaryMissing: false,
+        summaryStale: false,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("shouldMarkCoordinatorSummaryBlocked", () => {
