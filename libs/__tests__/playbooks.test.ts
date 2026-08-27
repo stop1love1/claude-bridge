@@ -12,8 +12,6 @@ describe("playbooks", () => {
 
   beforeEach(() => {
     tmpRoot = mktmp();
-    // Spy on process.cwd() (no real chdir) so the freshly re-imported
-    // paths.ts resolves BRIDGE_LOGIC_DIR against our temp fixture.
     vi.spyOn(process, "cwd").mockReturnValue(tmpRoot);
     vi.resetModules();
   });

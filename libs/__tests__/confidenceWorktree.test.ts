@@ -1,22 +1,3 @@
-/**
- * Task 7 — opt-in confidence hold for worktree runs (`holdWorktree`).
- *
- * Three layers, matching the brief:
- *
- *   A. `shouldHoldOutward` + `confidenceConfig` — pure/config unit tests
- *      (the brief's Step 1 cases verbatim).
- *   B. `performWorktreeMergeBack` — the function extracted out of
- *      `runLifecycle.ts`'s inline worktree merge-back block so the
- *      confidence review route's `ship` action can replay it. Exercised
- *      directly against a REAL meta.json (mocking only the git-touching
- *      deps: worktrees / gitOps / devops) so `markMergeNotPushed`'s
- *      `updateRun` call is exercised for real.
- *   C. `postExitFlow` (via the public `wireRunLifecycle` entrypoint) —
- *      confirms the runLifecycle wiring itself: a held worktree run
- *      skips the merge-back and keeps the worktree alive, while the
- *      default (`holdWorktree` absent/false) preserves the pre-Task-7
- *      behavior of always merging back regardless of score.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import {
@@ -38,9 +19,6 @@ import {
 } from "../confidenceConfig";
 import type { App } from "../apps";
 
-// ---------------------------------------------------------------------
-// A. shouldHoldOutward + confidenceConfig — pure / config unit tests
-// ---------------------------------------------------------------------
 
 describe("shouldHoldOutward — holdWorktree opt-in (Task 7)", () => {
   it("holds a low-score worktree run when holdWorktree:true (brief Step 1, case 1)", () => {
@@ -115,9 +93,6 @@ describe("confidenceConfig — holdWorktree round-trip (brief Step 1, case 3)", 
   });
 });
 
-// ---------------------------------------------------------------------
-// B. performWorktreeMergeBack — the extracted merge-back function
-// ---------------------------------------------------------------------
 
 const mergeAndRemoveWorktreeMock = vi.fn();
 vi.mock("../worktrees", () => ({
@@ -175,7 +150,7 @@ describe("performWorktreeMergeBack", () => {
     tmp = mkdtempSync(join(tmpdir(), "confidence-worktree-"));
   });
   afterEach(() => {
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(tmp, { recursive: true, force: true }); } catch { }
   });
 
   async function seedRun() {
@@ -231,9 +206,6 @@ describe("performWorktreeMergeBack", () => {
     expect(mergeIntoTargetBranchMock).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: "/tmp/fake-app", sourceBranch: "main", targetBranch: "release", push: false }),
     );
-    // Local worktree commit already happened before this function runs
-    // (postExitFlow's own commit pass) — this function only does the
-    // live-tree push, so exactly one autoCommitAndPush call here.
     expect(autoCommitAndPushMock).toHaveBeenCalledTimes(1);
     expect(autoCommitAndPushMock).toHaveBeenCalledWith(
       "/tmp/fake-app",
@@ -281,9 +253,6 @@ describe("performWorktreeMergeBack", () => {
       message: "[t_20260710_001] test task",
     });
 
-    // Fail-soft contract preserved for the postExitFlow caller (no
-    // throw), but the failure must surface in the status so the review
-    // route can keep the hold.
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("merge");
     expect(result.detail).toContain("git exploded");
@@ -335,8 +304,6 @@ describe("performWorktreeMergeBack", () => {
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("integration");
     expect(result.detail).toContain("target merge conflict");
-    // Integration failure is fail-soft: the live-tree push still runs
-    // (HEAD ends up back on baseBranch; pushing it is the v1 behavior).
     expect(autoCommitAndPushMock).toHaveBeenCalledTimes(1);
   });
 
@@ -359,18 +326,7 @@ describe("performWorktreeMergeBack", () => {
   });
 });
 
-// ---------------------------------------------------------------------
-// C. postExitFlow (via wireRunLifecycle) — the runLifecycle hold wiring
-// ---------------------------------------------------------------------
 
-/**
- * Same lazy-`require()` seeding trick as runLifecycle.test.ts: the
- * post-exit pipeline resolves its five gate modules via `require("./x")`
- * at call time (not static `import`) to break an import cycle, so
- * `vi.mock` can't intercept them — we have to seed Node's CJS module
- * cache directly. All fakes proceed cleanly except where a test
- * overrides one to inject a low (but non-blocking) confidence signal.
- */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Module = require("node:module") as typeof import("node:module") & {
   _resolveFilename: (
@@ -487,9 +443,6 @@ describe("postExitFlow — worktree confidence hold wiring", () => {
     createdAt: "2026-07-10T10:00:00Z",
   };
 
-  // Confidence config file save/restore, same pattern as
-  // confidenceConfig.test.ts — this exercises the REAL confidenceConfig
-  // module (not mocked) so the integration is genuine end to end.
   const { CONFIG_FILE } = _internal;
   let savedConfig: string | null = null;
 
@@ -502,13 +455,6 @@ describe("postExitFlow — worktree confidence hold wiring", () => {
     getAppMock.mockReset();
     tmp = mkdtempSync(join(tmpdir(), "confidence-worktree-flow-"));
     seedRequireCache({
-      // Non-blocking but score-lowering verdicts: verifier "pass" with
-      // unmatched claims (doesn't trigger a retry — only drift/broken
-      // do) and a split semantic panel with an overall "drift" verdict
-      // (only "broken" blocks). Together: -12 (unmatched, capped) -15
-      // (semantic drift) -10 (panel split) = score 63, comfortably
-      // below the default threshold of 70 without tripping any gate's
-      // block-and-retry branch.
       verifier: {
         runVerifier: async () => ({
           verdict: "pass",
@@ -540,7 +486,7 @@ describe("postExitFlow — worktree confidence hold wiring", () => {
     _resetForTests();
   });
   afterEach(() => {
-    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(tmp, { recursive: true, force: true }); } catch { }
     Module._resolveFilename = originalResolve;
     if (savedConfig !== null) writeFileSync(CONFIG_FILE, savedConfig, "utf8");
     else if (existsSync(CONFIG_FILE)) rmSync(CONFIG_FILE, { force: true });
@@ -601,7 +547,6 @@ describe("postExitFlow — worktree confidence hold wiring", () => {
     expect(run?.confidence?.heldAt).toBeTruthy();
     expect(run?.confidence?.reviewedBy ?? null).toBeNull();
     expect(run?.confidence?.score).toBeLessThan(70);
-    // The worktree is left in place for review — field untouched.
     expect(run?.worktreePath).toBe("/tmp/fake-app/.worktrees/" + SID);
     expect(run?.status).toBe("done");
   });
@@ -618,8 +563,6 @@ describe("postExitFlow — worktree confidence hold wiring", () => {
   });
 
   it("holdWorktree absent (config default) + low score → still merges back immediately", async () => {
-    // No writeConfidenceConfig call at all — exercises the on-disk
-    // DEFAULTS path (holdWorktree defaults to false).
     const run = await driveExit({});
 
     expect(mergeAndRemoveWorktreeMock).toHaveBeenCalledTimes(1);

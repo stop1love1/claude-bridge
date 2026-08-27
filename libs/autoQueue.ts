@@ -1,27 +1,3 @@
-/**
- * Auto-queue — autonomous TODO dispatch.
- *
- * Off by default (`{enabled:false, maxConcurrent:1}`): zero behavior
- * change until an operator opts in via Settings. When enabled, the
- * scheduler's 30s tick (`libs/scheduler.ts`) calls `autoQueueTick()` on
- * the process-lock holder only. Each tick:
- *
- *   1. Count "active" coordinator runs (status `running` OR `queued`,
- *      role `coordinator`) across ALL tasks — `queued` is included so a
- *      coordinator that was just spawned this tick, but hasn't reached
- *      `running` yet (see the `appendRun` → spawn → `updateRun` sequence
- *      in `spawnCoordinatorForTask`), still counts against the cap and
- *      prevents a double-dispatch on the very next tick.
- *   2. If that count is under `maxConcurrent`, pick the OLDEST `TODO`
- *      task with zero runs and no intake in progress (`intakeStatus`
- *      absent or `"none"` — a task mid-planning/awaiting-approval must
- *      not be yanked into autonomous dispatch).
- *   3. Spawn a coordinator for it via `spawnCoordinatorForTask` — the
- *      same path `/retry` uses — which flips the task TODO → DOING
- *      through the normal `appendRun`/`updateRun` lifecycle.
- *
- * One spawn per tick, maximum. Never touches BLOCKED/DOING/DONE tasks.
- */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_STATE_DIR, SESSIONS_DIR } from "./paths";
@@ -82,7 +58,6 @@ export function writeAutoQueueConfig(patch: Partial<AutoQueueConfig>): AutoQueue
   return { ...state.data };
 }
 
-/** Test-only: reset to defaults without touching disk. */
 export function _resetForTests(): void {
   state.data = { ...DEFAULTS };
   state.loaded = true;
@@ -90,17 +65,7 @@ export function _resetForTests(): void {
 
 export const _internal = { CONFIG_FILE };
 
-// ── Pure decision logic (unit-tested) ───────────────────────────────────
 
-/**
- * Oldest `TODO` task with zero runs and no intake in progress. Stable
- * order by task id — `t_YYYYMMDD_NNN` is lexicographically sortable, so
- * a plain string sort is chronological. `runCountById` supplies the run
- * count per task id (from `meta.runs.length`); tasks missing from the
- * map are treated as having zero runs (shouldn't happen in practice —
- * every task has a meta.json — but fails safe rather than throwing).
- * Returns `null` when nothing qualifies.
- */
 export function pickNextTodoTask(tasks: Task[], runCountById: Map<string, number>): Task | null {
   const eligible = tasks.filter((t) => {
     if (t.section !== "TODO") return false;
@@ -114,14 +79,7 @@ export function pickNextTodoTask(tasks: Task[], runCountById: Map<string, number
   return eligible[0];
 }
 
-// ── Tick ─────────────────────────────────────────────────────────────
 
-/**
- * Scheduler entry point — call once per tick from the process-lock
- * holder (see `libs/scheduler.ts`). No-ops immediately when auto-queue
- * is disabled (the default), so wiring this into the tick is inert
- * until an operator flips the setting on.
- */
 export async function autoQueueTick(): Promise<void> {
   const cfg = readAutoQueueConfig();
   if (!cfg.enabled) return;

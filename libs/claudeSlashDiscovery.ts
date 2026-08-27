@@ -8,7 +8,6 @@ export interface DiscoveredSlashCommand {
   slug: string;
   description: string | null;
   source: SlashDiscoverySource;
-  /** Relative label for tooltip (paths are host-local). */
   relPath?: string;
 }
 
@@ -29,7 +28,6 @@ async function pathIsDir(path: string): Promise<boolean> {
   }
 }
 
-/** Parses fields from YAML frontmatter block at top of SKILL.md. */
 function parseSkillYaml(content: string): { name?: string; description?: string } {
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
   if (!fm) return {};
@@ -121,17 +119,11 @@ async function collectSkillsDirs(
         relPath,
       });
     } catch {
-      /* skip */
     }
   }
   return out;
 }
 
-/**
- * Slash definitions from `.claude/commands/*.md` and
- * `.claude/skills/<name>/SKILL.md` for the given repo (same discovery as Claude Code).
- * Later paths win on duplicate slug (skills override commands, same as Claude Code).
- */
 export async function discoverProjectSlashCommands(
   repoRoot: string,
 ): Promise<DiscoveredSlashCommand[]> {
@@ -151,7 +143,6 @@ export async function discoverProjectSlashCommands(
   return [...map.values()].sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-/** Personal `~/.claude/commands` and `~/.claude/skills` (cross-project). */
 export async function discoverUserSlashCommands(): Promise<DiscoveredSlashCommand[]> {
   const root = homedir();
   const base = join(root, ".claude");

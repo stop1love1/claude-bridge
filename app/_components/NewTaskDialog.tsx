@@ -38,15 +38,6 @@ interface DialogProps {
   openRef?: React.MutableRefObject<(() => void) | null>;
 }
 
-/**
- * Outer just owns the `open` flag and the trigger button. The
- * dialog body lives in `NewTaskDialogBody`, which only mounts while
- * `open === true` — that gives us:
- *   - Fresh `useState` initialisers each open (no reset effect).
- *   - `useState(() => allTemplates())` runs only on the client (no
- *     SSR localStorage access, no hydration mismatch, no
- *     `setTemplates` in an effect).
- */
 export function NewTaskDialog({
   apps,
   repos = [],
@@ -105,10 +96,6 @@ function NewTaskDialogBody({
   const [effort, setEffort] = useState<EffortLevel | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  // Lazy initialiser — runs once on mount, which here means the
-  // moment the dialog opens. `allTemplates()` reads localStorage
-  // directly; safe because this component only mounts on the
-  // client.
   const [templates, setTemplates] = useState<TaskTemplate[]>(() => allTemplates());
   const [savingTpl, setSavingTpl] = useState(false);
   const [tplLabel, setTplLabel] = useState("");

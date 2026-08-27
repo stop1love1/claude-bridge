@@ -14,18 +14,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * Re-run detection for a task and overwrite the cached scope. Use after
- * editing the task body, or when the operator wants to retry an LLM
- * upgrade that timed out.
- *
- * Honors the configured `detect.source`:
- *   - `auto`      → tries LLM, falls back to heuristic on error
- *   - `llm`       → LLM only; falls back with `confidence: "low"` on err
- *   - `heuristic` → pure local detection
- *
- * Returns `{ scope }` on success.
- */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");

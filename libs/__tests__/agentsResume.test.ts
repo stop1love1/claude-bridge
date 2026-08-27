@@ -25,16 +25,12 @@ describe("buildResumePrompt", () => {
 
   it("explicitly forbids re-POSTing status:done", () => {
     const out = buildResumePrompt(baseOpts);
-    // Negative phrasing — same contract as the spawn path's
-    // childPrompt.ts. Resume must not race wireRunLifecycle either.
     expect(out).toContain('Do not re-POST `status:"done"`');
     expect(out).toMatch(/lifecycle hook flips your run/i);
   });
 
   it("tells the child NOT to re-emit task body / repo profile / etc", () => {
     const out = buildResumePrompt(baseOpts);
-    // The whole point of resume is saving the preamble — the child has
-    // it in their transcript already.
     expect(out).toMatch(/already in this session's transcript/i);
     expect(out).toMatch(/do NOT re-read or re-emit/i);
   });
@@ -68,10 +64,6 @@ describe("buildResumePrompt", () => {
   });
 
   it("is materially shorter than the full child prompt scaffolding", () => {
-    // Sanity check on the cost-savings premise. The resume prompt's
-    // overhead (everything except the operator brief itself) should
-    // stay under ~1.5 KB so the savings vs `buildChildPrompt` (~5 KB
-    // preamble + repo context + helpers + pinned files) is real.
     const out = buildResumePrompt({ ...baseOpts, coordinatorBody: "" });
     expect(out.length).toBeLessThan(1500);
   });

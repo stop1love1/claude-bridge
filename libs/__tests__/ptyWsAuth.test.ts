@@ -3,13 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/**
- * Runs against a temp `~/.claude/bridge.json` (same pattern as
- * `auth.test.ts`) so these tests never touch the operator's real
- * credentials, and so `authorizePtyUpgrade` — which internally calls
- * `verifyRequestAuth` / `consumePtyWsTicket` — sees a config it
- * controls.
- */
 
 let tempHome: string;
 let originalHome: string | undefined;
@@ -49,7 +42,6 @@ afterEach(() => {
   try {
     rmSync(tempHome, { recursive: true, force: true });
   } catch {
-    /* best-effort cleanup */
   }
 });
 

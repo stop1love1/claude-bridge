@@ -19,17 +19,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/** Build the public share link for a freshly-created share. */
 export function shareUrl(id: string, token: string): string {
   return `${getPublicBridgeUrl()}/share/${encodeURIComponent(id)}/${encodeURIComponent(token)}`;
 }
 
-/**
- * GET /api/share?taskId=<id>
- *
- * List shares (optionally for one task). Operator-only — gated by the
- * proxy (this path is NOT in the matcher's guest/public exclusion).
- */
 export function GET(req: NextRequest) {
   const taskId = new URL(req.url).searchParams.get("taskId") ?? undefined;
   const shares = listShares(taskId ?? undefined).map(toShareView);
@@ -68,7 +61,6 @@ function parseGit(g: Partial<ShareGit> | undefined): ShareGit {
   };
 }
 
-/** Optional non-negative integer, else null. */
 function parseMaybeMs(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(v);
@@ -76,11 +68,6 @@ function parseMaybeMs(v: unknown): number | null {
   return Math.floor(n);
 }
 
-/**
- * POST /api/share — create a share for a task. Returns the persisted
- * (UI-safe) record plus the link, which carries the only copy of the
- * raw token (never recoverable afterward).
- */
 export async function POST(req: NextRequest) {
   const denied = checkRateLimit("share:create:ip", getClientIp(req.headers), 30, 60_000);
   if (denied) {

@@ -4,11 +4,6 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
 import * as React from "react";
 import { cn } from "@/libs/cn";
 
-/**
- * shadcn-style AlertDialog adapted to the bridge's theme tokens
- * (`--bg`, `--bg-elev`, `--border-strong`, `--accent`, `--danger`, etc.).
- * Animation is driven by Radix `data-state` attributes.
- */
 
 export const AlertDialog = AlertDialogPrimitive.Root;
 export const AlertDialogTrigger = AlertDialogPrimitive.Trigger;

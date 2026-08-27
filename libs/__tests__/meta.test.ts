@@ -78,19 +78,9 @@ describe("meta.ts", () => {
     const meta = readMeta(dir);
     expect(meta!.runs).toHaveLength(2);
     expect(meta!.runs[0].parentSessionId).toBe("coordinator-1");
-    // Legacy / pre-Phase-B runs have no parentSessionId field at all —
-    // older meta.json files on disk must keep type-checking.
     expect(meta!.runs[1].parentSessionId).toBeUndefined();
   });
 
-  // CRIT-2: regression test for the lost-run race that motivated the
-  // per-task async mutex around appendRun/updateRun. Without the lock,
-  // two concurrent appendRun calls would both observe the same
-  // pre-mutation file, append their run to a copy, and race the
-  // atomic rename — last-rename-wins, dropping the other run silently.
-  //
-  // 50 is enough to make the race lose roughly half the runs reliably
-  // when the lock is removed; with the lock all 50 must land.
   it("loses no runs under 50 concurrent appendRun calls (CRIT-2)", async () => {
     const dir = join(tmp, "t_20260424_concurrent");
     createMeta(dir, { ...HEADER, taskId: "t_20260424_concurrent" });
@@ -112,15 +102,10 @@ describe("meta.ts", () => {
 
     const meta = readMeta(dir);
     expect(meta!.runs).toHaveLength(N);
-    // Every id we asked for should be present — order isn't guaranteed
-    // since the lock serializes them but Promise.all resolves arbitrarily.
     const present = new Set(meta!.runs.map((r) => r.sessionId));
     for (const id of ids) expect(present.has(id)).toBe(true);
   });
 
-  // Same race, mixed reads/writes: appendRun racing updateRun on the
-  // same dir. The lock must serialize so the update lands AFTER the
-  // append it targets and the final state contains both rows.
   it("serializes appendRun + updateRun on the same dir", async () => {
     const dir = join(tmp, "t_20260424_mixed");
     createMeta(dir, { ...HEADER, taskId: "t_20260424_mixed" });
@@ -153,9 +138,6 @@ describe("meta.ts", () => {
     expect(next!.status).toBe("running");
   });
 
-  // H6: applyManyRuns batches N patches into one read-modify-write
-  // under the lock. Verifies all patches land and unknown sessionIds
-  // are silently skipped.
   it("applyManyRuns patches multiple runs in one write (H6)", async () => {
     const dir = join(tmp, "t_20260424_batch");
     createMeta(dir, { ...HEADER, taskId: "t_20260424_batch" });
@@ -173,7 +155,7 @@ describe("meta.ts", () => {
     const result = await applyManyRuns(dir, [
       { sessionId: "a", patch: { status: "failed", endedAt: "2026-04-24T12:00:00Z" } },
       { sessionId: "b", patch: { status: "done", endedAt: "2026-04-24T12:00:00Z" } },
-      { sessionId: "ghost", patch: { status: "failed" } }, // unknown — skip
+      { sessionId: "ghost", patch: { status: "failed" } },
     ]);
 
     expect(result).not.toBeNull();
@@ -181,14 +163,10 @@ describe("meta.ts", () => {
     const byId = Object.fromEntries(meta!.runs.map((r) => [r.sessionId, r]));
     expect(byId.a.status).toBe("failed");
     expect(byId.b.status).toBe("done");
-    expect(byId.c.status).toBe("running"); // untouched
-    expect(meta!.runs).toHaveLength(3); // ghost wasn't appended
+    expect(byId.c.status).toBe("running");
+    expect(meta!.runs).toHaveLength(3);
   });
 
-  // H7: removeSessionFromTask drops the run row through the lock and
-  // atomic writer (replaces the raw writeFileSync the DELETE handler
-  // used to do). Returns true on remove, false when the session
-  // wasn't linked to this task.
   it("removeSessionFromTask filters runs under the lock (H7)", async () => {
     const dir = join(tmp, "t_20260424_remove");
     createMeta(dir, { ...HEADER, taskId: "t_20260424_remove" });
@@ -219,12 +197,6 @@ describe("meta.ts", () => {
     expect(meta!.runs.map((r) => r.sessionId)).toEqual(["keep"]);
   });
 
-  // Review nit: applyManyRuns should skip a patch whose status (and
-  // every other field) already matches the on-disk run — that
-  // happens when the reaper's outer readMeta saw `running` but
-  // another writer flipped the run to `failed` between the read and
-  // our locked re-read. We must not emit a spurious `"updated"` SSE
-  // event or rewrite identical bytes.
   it("applyManyRuns skips no-op patches (review nit)", async () => {
     const dir = join(tmp, "t_20260424_noop");
     createMeta(dir, { ...HEADER, taskId: "t_20260424_noop" });
@@ -240,8 +212,6 @@ describe("meta.ts", () => {
     const events: MetaChangeEvent[] = [];
     const off = subscribeMeta("t_20260424_noop", (ev) => events.push(ev));
     try {
-      // Patch matches current state exactly — should be a no-op:
-      // no events emitted, file untouched.
       await applyManyRuns(dir, [
         {
           sessionId: "already-failed",

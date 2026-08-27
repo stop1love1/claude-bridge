@@ -1,93 +1,29 @@
-/**
- * LLM-driven commit message generator.
- *
- * Shells out to `claude -p` inside the working tree to read the actual
- * diff and produce a Conventional-Commits-formatted message with body.
- *
- * Why `claude -p` (CLI) over the Anthropic SDK — same reasoning as
- * `libs/detect/llm.ts`: no extra dep, same auth path, works on Windows.
- *
- * Failure modes (timeout, non-zero exit, malformed output, empty diff)
- * all resolve to `null`. Callers (`/api/apps/<name>/commit/suggest` and
- * `/api/tasks/<id>/runs/<sid>/commit/suggest`) fall back to the local
- * heuristic generator on null so the operator's "auto-generate" button
- * still produces SOMETHING even when claude is unavailable.
- *
- * Output format the model MUST follow:
- *
- *   <type>(<scope>): <subject ≤72 chars>
- *
- *   <body line 1 — what + why>
- *   <body line 2 — optional context>
- *   …
- *
- * No code fences, no headings, no trailing chatter.
- */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { treeKill } from "./processKill";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
-/**
- * Hard ceiling on how long an interactive "auto-generate" click can
- * block the UI. 45s leaves a generous margin over a typical 10-30s
- * spawn + diff-read pass without making the user think the button hung.
- */
 const COMMIT_MSG_TIMEOUT_MS = 45_000;
 const STDOUT_CAP_BYTES = 32 * 1024;
 const STDERR_CAP_BYTES = 4 * 1024;
 
-/** Subject line cap; commits longer than this get truncated to the cap. */
 const SUBJECT_CAP_CHARS = 72;
-/** Number of subject-line chars the model is told to aim for. */
 const SUBJECT_TARGET_CHARS = 60;
 
 export interface GenerateCommitMessageOptions {
-  /** Working tree path — must be a git repo with uncommitted changes. */
   cwd: string;
-  /**
-   * Optional context line the model can use to ground the subject.
-   * Pass the task title for run-scoped commits; leave empty for raw
-   * app-scoped invocations.
-   */
   taskTitle?: string;
-  /**
-   * Optional per-invocation timeout override (ms). Falls back to
-   * `COMMIT_MSG_TIMEOUT_MS` when omitted.
-   */
   timeoutMs?: number;
-  /**
-   * Compact `git status`-style summary of the changed files, computed by
-   * the caller (`collectChanges`). When present it's embedded in the
-   * prompt so the model sees the change set without a Bash round-trip.
-   */
   nameStatus?: string;
-  /**
-   * Truncated unified diff of the tracked changes. Embedding it is the
-   * single biggest lever on SEMANTIC quality — the model reads real
-   * hunks instead of inferring intent from filenames (or skipping the
-   * `git diff` Bash call entirely and guessing).
-   */
   diff?: string;
-  /** True when `diff` was cut short — the model is told it may read more. */
   diffTruncated?: boolean;
 }
 
 export interface GenerateCommitMessageResult {
-  /** Final message ready to drop into the commit composer. */
   message: string;
-  /**
-   * `llm` when the model produced + parser accepted; `null` when the
-   * caller should fall back. Future telemetry can grep this field.
-   */
   source: "llm";
 }
 
-/**
- * Corrective nudge appended to the retry prompt. Cheaper than dropping
- * to the file-list heuristic: when the first pass came back malformed or
- * mechanical, one focused reminder usually fixes it.
- */
 const CORRECTIVE_SUFFIX = [
   "",
   "---",
@@ -95,14 +31,8 @@ const CORRECTIVE_SUFFIX = [
   "Re-read the diff above and write the SEMANTIC change — the behavior, contract, or invariant that shifted. Output ONLY the corrected commit message, nothing else.",
 ].join("\n");
 
-/** Cap a retry's timeout so two attempts can't blow the latency budget. */
 const RETRY_TIMEOUT_MS = 30_000;
 
-/**
- * One generation attempt. Returns the parsed message, or `null` when the
- * spawn failed, the output didn't parse, or it came back file-list-shaped
- * (the caller decides whether to retry / fall back).
- */
 async function attempt(
   opts: GenerateCommitMessageOptions,
   corrective: boolean,
@@ -119,12 +49,6 @@ async function attempt(
   return { message: parsed, source: "llm" };
 }
 
-/**
- * Public entry. Runs up to two passes: a normal one, then — if it failed
- * to parse or came back mechanical — a single corrective retry. Returns
- * `null` on any failure so the caller falls back to the heuristic
- * generator. Never throws.
- */
 export async function generateCommitMessageWithLLM(
   opts: GenerateCommitMessageOptions,
 ): Promise<GenerateCommitMessageResult | null> {
@@ -132,7 +56,6 @@ export async function generateCommitMessageWithLLM(
     if (!existsSync(opts.cwd)) return null;
     const first = await attempt(opts, false);
     if (first) return first;
-    // Corrective retry — the first pass was malformed or file-list-shaped.
     return await attempt(opts, true);
   } catch (err) {
     console.warn("[commit-message] generate crashed (non-fatal)", err);
@@ -140,26 +63,6 @@ export async function generateCommitMessageWithLLM(
   }
 }
 
-/**
- * Build the prompt the model gets. Tuned for **semantic** commits —
- * the recurring failure mode in this repo was the model emitting
- * file-list-shaped messages like `chore: update 5 files` or
- * paraphrasing the task title without ever reading the implementation.
- * The instructions push hard in three directions:
- *
- *   1. Read the actual code that changed (not just the filenames),
- *      so the subject reflects the BEHAVIOR delta, not the noun list.
- *   2. Pick `<type>` from what the change DOES at runtime, not from
- *      surface heuristics like "I see new files therefore feat".
- *   3. Body explains WHY + observable effect — what users / callers
- *      experience differently — instead of restating the diff.
- *
- * Few-shot examples anchor "good" vs "bad" so the model has a target
- * shape, not just rules. Keep the prompt long enough to hit the
- * semantic bar but short enough that it doesn't bloat per-commit
- * latency / cost — the model reads the diff itself via Bash; we
- * shouldn't pre-quote it here.
- */
 export function buildPrompt(opts: GenerateCommitMessageOptions): string {
   const lines: string[] = [];
   lines.push(
@@ -175,11 +78,6 @@ export function buildPrompt(opts: GenerateCommitMessageOptions): string {
     "",
   );
 
-  // Embed the diff inline when the caller computed it. This is what
-  // makes the message SEMANTIC: the model reads the actual hunks here
-  // instead of relying on its own (often skipped) `git diff` Bash call.
-  // The investigation steps above stay as a fallback for anything not
-  // shown (untracked file bodies, truncated tail).
   if ((opts.nameStatus && opts.nameStatus.trim()) || (opts.diff && opts.diff.trim())) {
     lines.push(
       "The change set is provided below — read it and describe what it DOES. The `git` commands above are optional; use them only to read more than what's shown (an untracked file's body, or a truncated section).",
@@ -262,11 +160,6 @@ export function buildPrompt(opts: GenerateCommitMessageOptions): string {
   return lines.join("\n");
 }
 
-/**
- * Spawn `claude -p <prompt>` inside `cwd` with the Bash tool enabled
- * so the model can read the diff. Returns the raw stdout (capped) or
- * `null` on any failure (timeout, non-zero exit, spawn error).
- */
 function runClaude(
   prompt: string,
   cwd: string,
@@ -277,11 +170,6 @@ function runClaude(
     let stderr = "";
     let settled = false;
 
-    // Feed the prompt via stdin, NEVER as a positional CLI arg. On Windows
-    // `CLAUDE_BIN` is typically a `claude.cmd` shim, so an arg routed
-    // through cmd.exe can be broken / injected by `"`, `&`, `|` in the
-    // prompt (the prompt embeds the untrusted task title), and a large
-    // diff would blow the ~32 KB command-line limit. stdin sidesteps both.
     const child = spawn(
       CLAUDE_BIN,
       ["-p", "--permission-mode", "bypassPermissions"],
@@ -291,7 +179,7 @@ function runClaude(
         windowsHide: true,
       },
     );
-    child.stdin.on("error", () => { /* EPIPE if claude exits early — ignored */ });
+    child.stdin.on("error", () => { });
     child.stdin.write(prompt, "utf8");
     child.stdin.end();
 
@@ -312,9 +200,6 @@ function runClaude(
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
       if (stdout.length > STDOUT_CAP_BYTES) {
-        // Keep the tail — claude -p ends its assistant turn at the
-        // very end of stdout, and the parser scrubs preamble lines
-        // anyway.
         stdout = stdout.slice(-STDOUT_CAP_BYTES);
       }
     });
@@ -346,38 +231,19 @@ const VALID_TYPES: ReadonlySet<string> = new Set([
   "perf", "style", "build", "ci",
 ]);
 
-/**
- * Pull the actual commit message out of `claude -p` stdout. The model
- * is told to emit ONLY the message, but defensive against:
- *   - leading / trailing blank lines
- *   - accidental code fences ```` ``` ```` wrapping the whole thing
- *   - leading markdown headings (`# Commit message`)
- *   - trailing `> ` quotes
- *   - the model accidentally adding a Co-Authored-By trailer
- *
- * Returns `null` when the output doesn't even look like a commit
- * message (first non-blank line missing `<type>: ` or `<type>(<scope>): `
- * prefix) so the caller falls back to heuristic.
- */
 export function parseLLMResponse(raw: string): string | null {
   if (!raw || raw.trim().length === 0) return null;
   let text = raw;
 
-  // Strip a single outermost code fence if the model wrapped the
-  // message in one. Both ``` and ```anything (e.g. ```text) handled.
   const fenceMatch = text.match(/^\s*```[^\n]*\n([\s\S]*?)\n```\s*$/);
   if (fenceMatch) text = fenceMatch[1];
 
-  // Drop leading lines that look like preamble / headings.
   const rawLines = text.split(/\r?\n/);
   let i = 0;
   while (i < rawLines.length) {
     const l = rawLines[i];
     if (l.trim().length === 0) { i++; continue; }
-    // Markdown heading? Skip.
     if (/^#+\s/.test(l)) { i++; continue; }
-    // "Here's the commit message:" preamble? Skip lines that don't
-    // start with a Conventional Commits type, up to a small limit.
     if (i < 4 && !looksLikeHeader(l)) { i++; continue; }
     break;
   }
@@ -386,20 +252,15 @@ export function parseLLMResponse(raw: string): string | null {
   const headerLine = rawLines[i];
   if (!looksLikeHeader(headerLine)) return null;
 
-  // Subject cap — prefer a word boundary near the cap so we don't slice
-  // mid-word; fall back to a hard cut for a single very long token.
   let subject = headerLine.trim();
   if (subject.length > SUBJECT_CAP_CHARS) {
-    const hard = SUBJECT_CAP_CHARS - 1; // leave room for the ellipsis
+    const hard = SUBJECT_CAP_CHARS - 1;
     let cut = subject.slice(0, hard);
     const lastSpace = cut.lastIndexOf(" ");
     if (lastSpace > 0 && lastSpace >= hard - 16) cut = cut.slice(0, lastSpace);
     subject = cut.replace(/[\s,;:_–-]+$/, "") + "…";
   }
 
-  // Body: everything after the header, with leading/trailing blank
-  // lines collapsed. Drop any Co-Authored-By trailer the model
-  // sneaked in — the bridge adds its own.
   const bodyLines: string[] = [];
   for (let j = i + 1; j < rawLines.length; j++) {
     const l = rawLines[j];
@@ -408,7 +269,6 @@ export function parseLLMResponse(raw: string): string | null {
     bodyLines.push(l);
   }
 
-  // Trim leading + trailing blanks; collapse multiple blanks in body.
   while (bodyLines.length > 0 && bodyLines[0].trim().length === 0) bodyLines.shift();
   while (bodyLines.length > 0 && bodyLines[bodyLines.length - 1].trim().length === 0) bodyLines.pop();
   const body = collapseBlankRuns(bodyLines).join("\n").trim();
@@ -416,27 +276,13 @@ export function parseLLMResponse(raw: string): string | null {
   return body.length > 0 ? `${subject}\n\n${body}` : subject;
 }
 
-/**
- * Detect a "file-list-shaped" message — the recurring failure mode where
- * the model describes mechanics (which files moved) instead of the
- * semantic change. Used by the generator to REJECT such output and try
- * one corrective pass before falling back to the heuristic. Conservative
- * on purpose: it must not flag a legitimate semantic message.
- *
- *   bad: `chore: update 5 files`
- *   bad: `chore: update config.ts`          (generic verb + bare filename)
- *   bad: a body that is only `- update X.ts` / `- add Y/z` bullets
- */
 export function isFileListShaped(message: string): boolean {
   const lines = message.split(/\r?\n/);
   const subject = (lines[0] ?? "").trim();
-  // "update N files" / "3 files changed" anywhere in the subject.
   if (/\b\d+\s+files?\b/i.test(subject)) return true;
-  // Generic verb + a single bare filename as the entire object.
   if (/^[a-z]+(\([^)]*\))?:\s*(update|change|modify|edit|touch)\s+[\w./-]+\.\w+\s*$/i.test(subject)) {
     return true;
   }
-  // Body made up entirely of file-operation bullets.
   const body = lines.slice(1).map((l) => l.trim()).filter((l) => l.length > 0);
   if (body.length >= 2) {
     const fileOp = /^[-*]\s*(add|update|remove|delete|rename|modify|change|create|touch|copy)\b.*[\/.]\w+/i;
@@ -445,13 +291,11 @@ export function isFileListShaped(message: string): boolean {
   return false;
 }
 
-/** True iff the line looks like `<type>(<scope>): subject` or `<type>: subject`. */
 function looksLikeHeader(line: string): boolean {
   const m = /^([a-z]+)(?:\([^)]+\))?:\s+\S/.exec(line.trim());
   return !!m && VALID_TYPES.has(m[1]);
 }
 
-/** Collapse runs of 2+ blank lines down to a single blank line. */
 function collapseBlankRuns(lines: string[]): string[] {
   const out: string[] = [];
   let lastBlank = false;

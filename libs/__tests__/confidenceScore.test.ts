@@ -44,7 +44,6 @@ describe("computeConfidence", () => {
       styleCritic: { verdict: "drift", reason: "", issues: [], durationMs: 1 },
       semanticVerifier: { verdict: "drift", reason: "", concerns: [], durationMs: 1 },
     }));
-    // -8 (style drift) -15 (semantic drift) = 77
     expect(c.score).toBe(77);
     expect(c.band).toBe("medium");
   });
@@ -62,7 +61,6 @@ describe("computeConfidence", () => {
       verifier: { verdict: "pass", reason: "", claimedFiles: [], actualFiles: [],
         unmatchedClaims: ["a", "b", "c", "d", "e"], unclaimedActual: [], durationMs: 1 },
     }));
-    // cap -12 for unmatchedClaims
     expect(c.score).toBe(88);
   });
 

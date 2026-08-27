@@ -17,8 +17,6 @@ import {
 
 const { WORKFLOWS_FILE } = _internal;
 
-// workflowStore binds its file to the real `.bridge-state` dir; snapshot
-// and restore so a developer's live workflows aren't disturbed by the suite.
 let saved: string | null = null;
 
 beforeEach(() => {
@@ -46,9 +44,9 @@ describe("workflow CRUD (stages)", () => {
     expect(wf.stages).toHaveLength(3);
     expect(wf.stages.map((s) => s.name)).toEqual(["Code", "Test", "Review"]);
     expect(wf.stages.every((s) => s.id.startsWith("st_"))).toBe(true);
-    expect(wf.stages[0].verify).toBe(true); // defaults true
+    expect(wf.stages[0].verify).toBe(true);
     expect(wf.stages[2].verify).toBe(false);
-    expect(wf.schedule).toBeNull(); // manual by default
+    expect(wf.schedule).toBeNull();
     expect(wf.nextRunAt).toBeNull();
     expect(listWorkflows()).toHaveLength(1);
   });
@@ -117,7 +115,6 @@ describe("workflow CRUD (stages)", () => {
     const after = getWorkflow(wf.id)!;
     expect(after.lastRunAt).not.toBeNull();
     expect(after.history[0]).toBe("t_20260530_001");
-    // manual workflow → no schedule → nextRunAt stays null
     expect(after.nextRunAt).toBeNull();
   });
 

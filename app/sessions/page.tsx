@@ -27,18 +27,12 @@ function SessionsPageInner() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [query, setQuery] = useState("");
-  // Mobile (< md) shows ONE pane at a time via the tab bar — same UX
-  // as task-detail. Desktop keeps both panes side-by-side, so this
-  // only matters on phones. Read via useSearchParams (not
-  // window.location) so server and client agree during hydration.
   const [mobileTab, setMobileTab] = useState<"browser" | "chat">(() =>
     search.get("sid") ? "chat" : "browser",
   );
 
   const newSessionRef = useRef<(() => void) | null>(null);
 
-  // The active run is reconstructed from URL params on every render so a
-  // reload (or a copy-pasted URL) lands the user on the same session.
   const activeRun = useMemo<ActiveRun | null>(() => {
     const sid = search.get("sid");
     const repoName = search.get("repo");
@@ -82,16 +76,11 @@ function SessionsPageInner() {
 
   useEffect(() => {
     api.repos().then(setRepos).catch(() => {});
-    // Schedule the setState-bearing fetch as a microtask so we don't
-    // call it synchronously inside the effect body (which the React
-    // 19 hooks linter flags as a cascading-render risk).
     void Promise.resolve().then(refreshSessions);
   }, [refreshSessions]);
 
   useEffect(() => {
     if (!visible) return;
-    // Fire immediately on tab-becomes-visible so returning users see
-    // fresh data instead of waiting up to a poll interval.
     void Promise.resolve().then(refreshSessions);
     const h = setInterval(refreshSessions, 5_000);
     return () => clearInterval(h);
@@ -111,8 +100,6 @@ function SessionsPageInner() {
         role: "orphan",
         repo: s.repo,
       });
-      // Mobile: jump to the chat tab so the user sees their selection
-      // immediately. Desktop keeps both panes visible so no-op there.
       setMobileTab("chat");
     },
     [repos, router, setActiveRun],
@@ -131,9 +118,6 @@ function SessionsPageInner() {
       destructive: true,
     });
     if (!ok) return;
-    // Run deletes in parallel — each hits a different .jsonl on disk so
-    // there's no contention. allSettled so a single failure doesn't
-    // strand the rest of the batch.
     const results = await Promise.allSettled(
       list.map((s) => api.deleteSession(s.sessionId, s.repo)),
     );
@@ -153,11 +137,6 @@ function SessionsPageInner() {
   }, [activeRun, refreshSessions, toast, confirm, setActiveRun]);
 
   const handleCreate = useCallback(({ repo }: { repo: string }) => {
-    // Generate the session UUID client-side and jump straight into an
-    // empty SessionLog. The actual `claude` spawn is deferred until
-    // the user types their first message — the /api/sessions/<id>/message
-    // route detects the missing .jsonl and starts a fresh session at
-    // that UUID instead of resuming. No server round-trip needed here.
     const repoEntry = repos.find((x) => x.name === repo);
     if (!repoEntry) { toast("error", `unknown repo: ${repo}`); return; }
     const sessionId = (typeof crypto !== "undefined" && "randomUUID" in crypto)
@@ -187,9 +166,7 @@ function SessionsPageInner() {
         }}
       />
 
-      {/* Mobile-only tab bar — same UX as /tasks/[id]: pick which pane
-          fills the viewport. On md+ both panes render side-by-side and
-          this bar is hidden. */}
+      {}
       <div className="md:hidden shrink-0 flex border-b border-border bg-card">
         <button
           type="button"
@@ -218,9 +195,7 @@ function SessionsPageInner() {
       </div>
 
       <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
-        {/* Both panes stay mounted (display:none vs flex) so search
-            input, scroll position, and SessionLog state survive a tab
-            switch. */}
+        {}
         <div
           className={`flex-1 min-h-0 md:flex-none md:flex ${
             mobileTab === "browser" ? "flex" : "hidden md:flex"

@@ -49,19 +49,10 @@ function getSR(): SRCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-// Browser-API capability detection via `useSyncExternalStore` so the
-// hydration flip from "false" (SSR / first paint) to "true / false"
-// (real client value) doesn't need a `useState + setState in effect`
-// pair that the React 19 hooks linter rejects.
 function noopSubscribe() { return () => {}; }
 function getSupportedClient(): boolean { return !!getSR(); }
 function getSupportedServer(): boolean { return false; }
 
-/**
- * Browser-side voice input using the Web Speech API. No server roundtrip,
- * no extra deps. Streams interim transcripts via `onTranscript` so the
- * textarea grows as you talk; final commit lands when recognition ends.
- */
 export function MicButton({
   lang,
   onTranscript,
@@ -78,26 +69,17 @@ export function MicButton({
   const [blocked, setBlocked] = useState(false);
   const [hasInputDevice, setHasInputDevice] = useState(true);
   const ref = useRef<SpeechRecognition | null>(null);
-  // Lazy default — `navigator` is undefined during SSR, so resolve only
-  // on the client. The lazy initializer ensures this runs once on mount,
-  // not on every render.
   const [defaultLang] = useState(() =>
     typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US",
   );
   const effectiveLang = lang ?? defaultLang;
 
-  // Cleanup any in-flight recognition on unmount. (Browser API
-  // detection moved to `useSyncExternalStore` above.)
   useEffect(() => {
-    return () => { try { ref.current?.abort(); } catch { /* noop */ } };
+    return () => { try { ref.current?.abort(); } catch { } };
   }, []);
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
-    // Override the built-in `permissions` property rather than intersect:
-    // the DOM `Permissions.query` is overloaded and returns the wider
-    // `PermissionStatus` (which has a required `name` field), making
-    // assignments to `PermissionStatusLike` fail typechecking.
     const nav = navigator as Omit<Navigator, "permissions"> & {
       permissions?: PermissionsLike;
       mediaDevices?: MediaDevices;
@@ -113,7 +95,6 @@ export function MicButton({
         const hasMic = devices.some((d) => d.kind === "audioinput");
         setHasInputDevice(hasMic);
       } catch {
-        // If the browser blocks device enumeration details, keep enabled.
         if (!cancelled) setHasInputDevice(true);
       }
     };
@@ -125,7 +106,6 @@ export function MicButton({
     const bindPermission = async () => {
       if (!nav.permissions?.query) return;
       try {
-        // TS DOM lib doesn't include "microphone" in all targets.
         permStatus = await nav.permissions.query({ name: "microphone" });
         if (cancelled) return;
         setBlocked(permStatus.state === "denied");
@@ -133,7 +113,6 @@ export function MicButton({
           setBlocked(permStatus?.state === "denied");
         };
       } catch {
-        // Ignore unsupported Permissions API browsers.
       }
     };
     void bindPermission();
@@ -152,7 +131,6 @@ export function MicButton({
       ref.current?.stop();
       return;
     }
-    // Let users retry after they re-enable mic permission in browser UI.
     setBlocked(false);
     const r = new SR();
     r.continuous = true;
@@ -175,7 +153,6 @@ export function MicButton({
     };
     r.onerror = (e) => {
       const err = (e as SpeechRecognitionErrorEvent).error ?? "";
-      // Permission-denied states should show a "mic blocked" affordance.
       if (
         err === "not-allowed" ||
         err === "service-not-allowed" ||
@@ -193,7 +170,6 @@ export function MicButton({
       setRecording(true);
       setBlocked(false);
     } catch {
-      /* already started / transient */
     }
   }, [recording, effectiveLang, onTranscript]);
 

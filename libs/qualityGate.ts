@@ -1,26 +1,3 @@
-/**
- * P2b-2 — shared runner for agent-driven quality gates.
- *
- * Both the style critic (`libs/styleCritic.ts`) and the semantic verifier
- * (`libs/semanticVerifier.ts`) follow the same shape:
- *
- *   1. Skip if preconditions aren't met (role is a retry, app missing,
- *      playbook missing, etc.) — return a `skipped` verdict.
- *   2. Build the gate's child prompt via `buildChildPrompt` with all the
- *      standard sections (House style, Available helpers, Pinned context,
- *      …) so the agent has the same ground-truth context the coder had.
- *   3. Append a tracked run to meta.json (so the UI shows it as a child
- *      of the coder's parentSessionId).
- *   4. Spawn the agent in the app's cwd via `spawnFreeSession`, await
- *      exit with a hard timeout, read the JSON verdict file the agent
- *      wrote, return the parsed payload.
- *   5. Manually flip the gate's run status (no `wireRunLifecycle`
- *      attached — that would recursively spawn another gate on the gate
- *      itself, and the gate is a read-only role anyway).
- *
- * The two callers differ only in playbook role name, verdict file name,
- * and verdict shape. The `runAgentGate` helper takes those as args.
- */
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -42,22 +19,11 @@ import {
 } from "./permissionSettings";
 import { SESSIONS_DIR } from "./paths";
 
-/** Cap how long any quality gate may run. 10 min matches the verify
- * chain default — any gate that goes longer is almost certainly stuck. */
 export const GATE_TIMEOUT_MS = 10 * 60 * 1000;
 
-/** Magic exit codes our wait helper synthesizes for non-`exit` outcomes. */
 const EXIT_TIMEOUT = -2;
 const EXIT_SPAWN_ERR = -3;
 
-/**
- * Wait for a child process to exit. Resolves with the OS exit code on a
- * clean exit, `EXIT_TIMEOUT` after `timeoutMs`, or `EXIT_SPAWN_ERR` if
- * the child fired `error` before exiting (binary missing, etc.).
- *
- * Always settles exactly once. Listeners are removed on settlement so
- * the child can be GC'd cleanly.
- */
 export function waitForChildExit(
   child: ChildProcess,
   timeoutMs: number = GATE_TIMEOUT_MS,
@@ -77,18 +43,13 @@ export function waitForChildExit(
     child.once("exit", onExit);
     child.once("error", onError);
     const timer = setTimeout(() => {
-      try { child.kill(); } catch { /* already dead */ }
+      try { child.kill(); } catch { }
       settle(EXIT_TIMEOUT);
     }, timeoutMs);
     if (typeof timer.unref === "function") timer.unref();
   });
 }
 
-/**
- * Read the verdict JSON the gate agent wrote and JSON.parse it. Returns
- * `null` for any failure (file missing, non-JSON, parse error). The
- * caller validates shape — this helper keeps disk I/O concerns isolated.
- */
 export function readVerdictFile(path: string): unknown {
   if (!existsSync(path)) return null;
   try {
@@ -100,28 +61,15 @@ export function readVerdictFile(path: string): unknown {
 }
 
 export interface AgentGateOptions {
-  /** Absolute cwd of the target app — the gate spawns here. */
   appPath: string;
   taskId: string;
-  /** The just-finished run we're judging. */
   finishedRun: Run;
-  /** Coordinator session id — for the gate's `parentSessionId`. Falls back to the run's parent. */
   taskTitle: string;
   taskBody: string;
-  /** Role label (and playbook filename) for the gate agent. */
   role: string;
-  /**
-   * Display label written to meta.json's run row (defaults to `role`).
-   * Lets a panel tag each judge with its lens (e.g.
-   * `semantic-verifier-correctness`) for the agent tree while still
-   * loading the shared `semantic-verifier` playbook via `role`.
-   */
   runRole?: string;
-  /** One-line brief the bridge passes as the gate's task-specific body. */
   briefBody: string;
-  /** Filename (under `sessions/<task>/`) where the gate must drop its verdict JSON. */
   verdictFileName: string;
-  /** Hard timeout for the gate spawn. Defaults to GATE_TIMEOUT_MS. */
   timeoutMs?: number;
 }
 
@@ -129,26 +77,11 @@ export type AgentGateOutcome =
   | { kind: "spawned"; sessionId: string; verdict: unknown }
   | { kind: "skipped"; reason: string; sessionId?: string };
 
-/**
- * Run an agent-driven quality gate end-to-end. Returns either:
- *
- *   - `{ kind: "spawned", sessionId, verdict }` — gate completed cleanly,
- *     verdict is whatever JSON the agent dropped (caller validates).
- *   - `{ kind: "skipped", reason, sessionId? }` — preconditions failed
- *     OR the gate spawn / exec itself failed. The caller writes the
- *     `skipped` verdict to the parent run's meta. `sessionId` is only
- *     present when we got far enough to register a run for the gate.
- */
 export async function runAgentGate(
   opts: AgentGateOptions,
 ): Promise<AgentGateOutcome> {
   const sessionsDir = join(SESSIONS_DIR, opts.taskId);
 
-  // Coordinator never produces a diff we can judge — skip.
-  // Retry runs are NOT skipped here; the whole point of letting the
-  // gates re-run is to confirm the fix actually addresses the issue.
-  // Runaway loop prevention lives in `checkEligibility` (per-gate
-  // budget + per-task ceiling) inside each gate's retry spawner.
   if (opts.finishedRun.role === "coordinator") {
     return {
       kind: "skipped",
@@ -169,9 +102,6 @@ export async function runAgentGate(
     };
   }
 
-  // Load the standard context bundle the coder saw — keeps the gate's
-  // judgment grounded in the same ground truth (House style + Available
-  // helpers + Pinned context, etc.).
   const houseRules = loadHouseRules(app.path);
   const memoryEntries = topMemoryEntries(app.path);
   const symbolIndex = ensureFreshSymbolIndex(
@@ -204,10 +134,6 @@ export async function runAgentGate(
     memoryEntries,
   });
 
-  // Track the gate run BEFORE spawning so a spawn failure leaves a
-  // visible `failed` row instead of an orphan child. Parented to the
-  // SAME coordinator the coder was — the gate is its sibling, not its
-  // descendant, so the AgentTree can render it cleanly.
   await appendRun(sessionsDir, {
     sessionId,
     role: opts.runRole ?? opts.role,
@@ -234,16 +160,10 @@ export async function runAgentGate(
       endedAt: new Date().toISOString(),
     });
     const reason = `${opts.role} spawn failed: ${(e as Error).message}`;
-    // Infra failure, not a legit precondition skip — the gate never
-    // got to judge the diff, so the caller silently proceeding would
-    // hide a real problem. Notify only; the section stays untouched
-    // since a spawn hiccup isn't evidence the shipped work is bad.
     await notifyGateInfraSkip({ taskId: opts.taskId, gate: opts.role, detail: reason });
     return { kind: "skipped", reason, sessionId };
   }
 
-  // Manually manage exit — wireRunLifecycle would recursively trigger
-  // postExitFlow on the gate itself.
   const exitCode = await waitForChildExit(
     childHandle.child,
     opts.timeoutMs ?? GATE_TIMEOUT_MS,
@@ -261,9 +181,6 @@ export async function runAgentGate(
         : exitCode === EXIT_SPAWN_ERR
           ? `${opts.role} spawn errored before exit`
           : `${opts.role} exited with code ${exitCode}`;
-    // Infra failure (timeout / spawn error / non-zero exit) — same
-    // "gate never got to judge" reasoning as the spawn-failure branch
-    // above.
     await notifyGateInfraSkip({ taskId: opts.taskId, gate: opts.role, detail: reason });
     return { kind: "skipped", reason, sessionId };
   }
@@ -272,8 +189,6 @@ export async function runAgentGate(
   const verdict = readVerdictFile(verdictPath);
   if (verdict === null) {
     const reason = `${opts.role} did not write \`${opts.verdictFileName}\``;
-    // The agent exited 0 but produced no parseable verdict — an infra/
-    // contract failure on the gate's side, not a legit skip.
     await notifyGateInfraSkip({ taskId: opts.taskId, gate: opts.role, detail: reason });
     return { kind: "skipped", reason, sessionId };
   }

@@ -1,18 +1,3 @@
-/**
- * P3b / B4 — recent-direction window.
- *
- * Heuristic: pick a "touched dir" from the task body (using the same
- * scored-symbol approach as `contextAttach`), then run `git log
- * --stat -10 -- <dir>` against the app's working tree. The output
- * tells the agent what's been actively changing in that area —
- * which is far more representative of "where the project is going"
- * than the static symbol index alone.
- *
- * Pure auto-injection: no LLM call, bounded by a 3s git timeout
- * inherited from the agents-route's existing git pre-warm. Returns
- * `null` when no dir scored above threshold or git fails — the
- * caller skips the section in that case.
- */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname } from "node:path";
@@ -25,26 +10,11 @@ const GIT_TIMEOUT_MS = 3000;
 const LOG_LINE_CAP = 30;
 
 export interface RecentDirection {
-  /** App-relative dir, posix-style separators. */
   dir: string;
-  /** Raw `git log --stat -10` stdout, capped at LOG_LINE_CAP lines. */
   log: string;
-  /** Whether the log was truncated to the line cap. */
   truncated: boolean;
 }
 
-/**
- * Pick a single "touched dir" from the task body. Strategy:
- *   1. Score symbol-index files against task tokens (same path as
- *      contextAttach picks reference files).
- *   2. Take the top-scoring file's parent dir as the focus area.
- *   3. If two top files live in different dirs, prefer the deeper
- *      one (it's more specific) — or fall back to their common
- *      ancestor when the depth is the same.
- *
- * Returns `null` when no file scored above threshold; the caller
- * then skips the recent-direction section entirely.
- */
 export function pickTouchedDir(
   taskBody: string,
   symbolIndex: SymbolIndex | null,
@@ -60,12 +30,6 @@ export function pickTouchedDir(
   return dir;
 }
 
-/**
- * Run `git log --stat -10 -- <dir>` in the app cwd. Fails soft to
- * `null` on non-git tree, missing binary, or timeout — the caller
- * just skips the section. We use `execFile` (no shell) so the same
- * call works under bash and PowerShell parents on Windows.
- */
 export async function gitLogForDir(
   appCwd: string,
   dir: string,
@@ -95,11 +59,6 @@ export interface BuildRecentDirectionOptions {
   symbolIndex: SymbolIndex | null;
 }
 
-/**
- * Top-level entry. Picks a focus dir, runs git log, returns the
- * capped result. Returns `null` when there's nothing useful to
- * surface — do not render an empty section.
- */
 export async function buildRecentDirection(
   opts: BuildRecentDirectionOptions,
 ): Promise<RecentDirection | null> {

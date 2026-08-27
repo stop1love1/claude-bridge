@@ -38,17 +38,6 @@ interface BulkResultItemFailed {
 
 type BulkResultItem = BulkResultItemAdded | BulkResultItemFailed;
 
-/**
- * Accept a list of `{name, path, description}` and try to register
- * each one. Returns a per-item outcome so the auto-detect modal can
- * tell the operator exactly which entries succeeded / failed (e.g. a
- * folder name collision after the suggester picked a slug that
- * another tab raced into the registry first).
- *
- * The endpoint is best-effort: a duplicate-name on item 3 doesn't
- * prevent items 4..N from being attempted. The frontend renders the
- * mixed result.
- */
 export async function POST(req: NextRequest) {
   let body: BulkAddBody;
   try {

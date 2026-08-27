@@ -1,22 +1,3 @@
-/**
- * P2b-2 — agent-driven style critic.
- *
- * Spawned in `coordinator.ts:postExitFlow` AFTER the inline claim-vs-
- * diff verifier passes, only when the target app has opted in via
- * `bridge.json.apps[].quality.critic = true`. Judges whether the diff
- * "looks like it belongs" in this codebase based on the auto-detected
- * fingerprint, the symbol index, pinned files, and house-rules.
- *
- *   verdict = match    → commit proceeds
- *   verdict = drift    → commit proceeds, surfaced in meta for review
- *   verdict = alien    → block commit, spawn `<role>-stretry` retry
- *   verdict = skipped  → preconditions not met (no playbook, gate
- *                        crashed, no verdict file) — commit proceeds
- *
- * Distinct from the inline verifier (`libs/verifier.ts`) which checks
- * claim-vs-diff HONESTY without an LLM spawn. The critic is opt-in and
- * costs ~30-100K tokens per task on top of the coder.
- */
 import { type Run, type RunStyleCritic } from "./meta";
 import { runAgentGate, type AgentGateOutcome } from "./qualityGate";
 import { runGatePanel, aggregatePanel, type PanelLens, type PanelVote } from "./judgePanel";
@@ -29,7 +10,6 @@ export const STYLE_CRITIC_RETRY_SUFFIX = "-stretry";
 const VERDICT_FILE = "style-critic-verdict.json";
 const ISSUES_CAP = 10;
 
-/** B1-style panel lenses for the style critic. */
 export const STYLE_LENSES: PanelLens[] = [
   {
     key: "conventions",
@@ -45,8 +25,6 @@ export const STYLE_LENSES: PanelLens[] = [
   },
 ];
 
-/** Map style verdicts onto the generic panel scale (and back) so the shared
- *  `aggregatePanel` majority logic can be reused. match≈pass, alien≈broken. */
 function styleToGeneric(v: "match" | "drift" | "alien"): PanelVote["verdict"] {
   return v === "match" ? "pass" : v === "alien" ? "broken" : "drift";
 }
@@ -55,12 +33,9 @@ function genericToStyle(v: "pass" | "drift" | "broken" | "skipped"): RunStyleCri
 }
 
 export interface RunStyleCriticOptions {
-  /** Absolute cwd of the target app — the critic spawns here. */
   appPath: string;
   taskId: string;
-  /** The coder run we're judging. */
   finishedRun: Run;
-  /** Original task header — surfaced into the critic's prompt. */
   taskTitle: string;
   taskBody: string;
 }
@@ -71,12 +46,6 @@ const BRIEF_BODY = [
   "Write the verdict file before exiting. The bridge reads it directly to decide whether to gate the commit.",
 ].join("\n");
 
-/**
- * Validate + coerce the agent-supplied JSON. Defensive against an LLM
- * that wrote an extra field, missed a required one, or hallucinated a
- * verdict outside the allowed enum. Returns `null` when the payload is
- * unusable; the caller maps that to a `skipped` verdict.
- */
 export function parseCriticVerdict(
   raw: unknown,
 ): { verdict: "match" | "drift" | "alien"; reason: string; issues: string[] } | null {
@@ -100,13 +69,6 @@ export function parseCriticVerdict(
   return { verdict: v, reason, issues };
 }
 
-/**
- * Top-level entry: spawn the critic agent against the freshly-finished
- * run, wait for it, parse its verdict, and return the populated
- * `RunStyleCritic` ready for `updateRun`. Always returns a verdict
- * (never `null`) — `skipped` covers every fail-soft path so meta.json
- * has an auditable record either way.
- */
 export async function runStyleCritic(
   opts: RunStyleCriticOptions,
 ): Promise<RunStyleCritic> {
@@ -125,7 +87,6 @@ export async function runStyleCritic(
   const app = getApp(opts.finishedRun.repo);
   const panelSize = app ? resolveCriticPanelSize(app) : 3;
 
-  // Single-critic path (panelSize === 1) — the pre-panel behavior.
   if (panelSize === 1) {
     const outcome: AgentGateOutcome = await runAgentGate({
       appPath: opts.appPath,
@@ -154,7 +115,6 @@ export async function runStyleCritic(
     };
   }
 
-  // Panel path: one critic per lens, majority rule (alien ≈ broken).
   const lenses = STYLE_LENSES.slice(0, panelSize);
   const results = await runGatePanel({
     appPath: opts.appPath,
@@ -192,11 +152,6 @@ export async function runStyleCritic(
   };
 }
 
-/**
- * Render the retry-context block prepended to a `-stretry` prompt.
- * Same heading as the verify-/claim-retry blocks so the model's
- * "what failed last time" contract is uniform.
- */
 export function renderStyleRetryContextBlock(critic: RunStyleCritic): string {
   const lines: string[] = [
     "## Auto-retry context — what failed last time",
@@ -221,11 +176,6 @@ export function renderStyleRetryContextBlock(critic: RunStyleCritic): string {
   return lines.join("\n");
 }
 
-/**
- * Eligibility for style-critic retry. Delegates to the central ladder:
- * counts existing `-stretry*` siblings against `app.retry.style`
- * (default 1).
- */
 export function isEligibleForStyleCriticRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
@@ -239,12 +189,6 @@ export function isEligibleForStyleCriticRetry(args: {
   }).eligible;
 }
 
-/**
- * Spawn the style-retry. Mirrors `verifier.spawnClaimRetry` — direct
- * `spawnFreeSession` so we don't bounce through HTTP, `wireRunLifecycle`
- * for the new run so its lifecycle re-enters `postExitFlow` (which will
- * re-run verify chain → preflight → inline verifier → critic in order).
- */
 export async function spawnStyleCriticRetry(args: {
   taskId: string;
   finishedRun: Run;

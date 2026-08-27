@@ -63,7 +63,6 @@ describe("AppQuality serialize/parse", () => {
           {
             name: "app-x",
             path: "../app-x",
-            // critic should be dropped (non-true), verifier kept
             quality: { critic: 1, verifier: true, unknown: "noise" },
           },
         ],
@@ -95,10 +94,8 @@ describe("applyRecommendedPreset", () => {
       git: { ...DEFAULT_GIT_SETTINGS, branchMode: "fixed", fixedBranch: "main" },
     });
     const result = applyRecommendedPreset(app);
-    // Operator-set, non-default values are preserved.
     expect(result.git.branchMode).toBe("fixed");
     expect(result.git.fixedBranch).toBe("main");
-    // Fields still at their DEFAULT_GIT_SETTINGS value get the recommended value.
     expect(result.git.autoCommit).toBe(true);
     expect(result.git.autoPush).toBe(false);
     expect(result.git.worktreeMode).toBe("disabled");

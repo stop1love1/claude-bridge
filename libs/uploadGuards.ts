@@ -1,95 +1,25 @@
-/**
- * Upload safety helpers for `POST /api/sessions/[sessionId]/upload`.
- *
- * The bridge stages user-uploaded files at `<bridge>/.uploads/<sessionId>/`
- * and hands the absolute path back to the chat composer; the model
- * (Claude) can then `Read` or `Bash` against that path. That trust
- * boundary means:
- *
- *   1. We must never accept an executable extension. Even though the
- *      bridge itself doesn't execute uploads, a careless `Bash` tool
- *      call by the model would. Block the standard Windows + POSIX
- *      executable / scriptable extensions.
- *   2. Windows reserved device names (`CON`, `NUL`, `COM1`, …) cannot
- *      be created at all — and on legacy stacks they short-circuit to
- *      hardware. Reject them up-front.
- *   3. A trailing dot or space on Windows is silently stripped by the
- *      filesystem, opening trivial bypass tricks (`evil.exe.` is saved
- *      as `evil.exe`). Strip leading/trailing `.` and ` ` ourselves.
- *   4. The resolved write target must stay inside the upload dir.
- *
- * All helpers operate on the **already-sanitized** filename (Windows-
- * illegal chars replaced with `_`). The route runs that replacement
- * before calling us so the extension check matches the file actually
- * written to disk.
- */
 
 import { resolve, sep } from "node:path";
 
-/**
- * 25 MB ceiling on `Content-Length` / `file.size`. Big enough for
- * screenshots and small documents; small enough that a hostile client
- * can't OOM the bridge by streaming gigabytes through `formData()`.
- */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
-/**
- * Lower-case extension blocklist (with leading `.`). Matches the
- * sanitized filename's last `.<ext>` segment, case-insensitive. This
- * is intentionally inclusive — a `.dll` upload is uncommon enough that
- * blocking it is fine, and a hostile chain (`Read` → exec via shim)
- * isn't worth the convenience.
- *
- * Beyond direct executables, we also block formats that are technically
- * "documents" but execute scripts when opened (`.html`, `.svg`,
- * `.htm`), or that mount as drives / register handlers on Windows
- * (`.iso`, `.img`, `.vhd`, `.url`, `.appx`). The bridge stages uploads
- * and then exposes their absolute paths to the model — anything that
- * could trigger code execution if the model `Read`s/serves the file
- * is unsafe to land on disk.
- */
 export const BLOCKED_EXTENSIONS: ReadonlySet<string> = new Set([
-  // Windows native executables / installers
   ".exe", ".bat", ".cmd", ".com", ".scr", ".msi", ".msp",
   ".dll", ".sys", ".lnk", ".url",
-  // Windows shortcut / installer variants that run code on open.
   ".appx", ".appxbundle", ".msu", ".msix", ".msixbundle",
-  // Windows registry edits (double-click → applies). Reject up front.
   ".reg",
-  // PowerShell / VBScript / WScript / HTA
   ".ps1", ".psm1", ".psd1",
   ".vbs", ".vbe", ".wsf", ".wsh", ".hta", ".chm",
-  // JavaScript-on-disk variants (browser-side `.js` is fine; Windows'
-  // wscript will execute it, so refuse to land it on disk).
   ".js", ".jse",
-  // Java bytecode containers — `java -jar` executes; `.class` may be
-  // loaded by an existing JVM workflow. Both are out.
   ".jar", ".class",
-  // POSIX shells
   ".sh", ".bash", ".zsh", ".ksh", ".fish",
-  // Interpreted-script source the model could run via Bash on any OS
-  // (`python exploit.py`, `node x.mjs`, `ruby x.rb`, …). The bridge
-  // exposes upload paths to the model; a careless tool call executes them.
-  // NB: `.ts`/`.tsx` are deliberately NOT here — they need a transpiler to
-  // run and are first-class content for a coding tool (see test).
   ".py", ".pyw", ".pyc", ".pyo",
   ".rb", ".pl", ".pm", ".php", ".phar",
   ".mjs", ".cjs", ".lua",
-  // Disk images that mount as a drive on Windows / macOS, exposing
-  // arbitrary contents (autorun hooks, signed installers, etc.).
   ".iso", ".img", ".vhd", ".vhdx",
-  // Active web content. SVG can carry inline `<script>`; HTML hosted
-  // out of `.uploads/` would run in the bridge's same-origin context
-  // if ever served as static. XHTML, XML and SHTML are XSS vectors
-  // for the same reason.
   ".html", ".htm", ".xhtml", ".shtml", ".svg", ".svgz", ".mhtml",
 ]);
 
-/**
- * Windows reserved device names (case-insensitive). Match against the
- * filename's stem — i.e. the part before the first dot — because
- * `CON.txt` is reserved on Windows just like `CON`.
- */
 const RESERVED_DEVICE_NAMES: ReadonlySet<string> = new Set([
   "con", "prn", "aux", "nul",
   "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
@@ -106,40 +36,19 @@ export type UploadGuardReason =
   | "reserved-name"
   | "outside-upload-dir";
 
-/**
- * Strip illegal Windows characters and surrounding `.` / spaces from a
- * raw filename. Returns the empty string when nothing salvageable
- * remains; the caller turns that into `400 file required`.
- *
- * Mirrors the historical regex (`[\\/:*?"<>|]` → `_`) so older paths
- * already on disk continue to round-trip; the only added behavior is
- * the leading/trailing `.` / ` ` strip.
- */
 export function sanitizeUploadName(raw: string): string {
   if (typeof raw !== "string") return "";
-  // Replace Windows-illegal chars with `_` (same as the route did
-  // before this helper existed).
   let cleaned = raw.replace(/[\\/:*?"<>|]/g, "_");
-  // Drop leading/trailing dots and spaces — Windows silently strips
-  // these and lets `evil.exe.` masquerade as `evil.exe`.
   cleaned = cleaned.replace(/^[.\s]+|[.\s]+$/g, "");
   return cleaned;
 }
 
-/**
- * Extract the lower-case extension (with leading dot) from a filename,
- * or empty string if none. Uses the LAST dot so `archive.tar.gz` → `.gz`.
- */
 export function extractExtension(name: string): string {
   const idx = name.lastIndexOf(".");
-  if (idx <= 0) return ""; // no dot, or leading dot only (`.bashrc` → no ext)
+  if (idx <= 0) return "";
   return name.slice(idx).toLowerCase();
 }
 
-/**
- * Stem of the filename, lower-cased, used to detect reserved device
- * names. `archive.tar.gz` → `archive`; `CON.txt` → `con`.
- */
 function extractStem(name: string): string {
   const idx = name.indexOf(".");
   return (idx === -1 ? name : name.slice(0, idx)).toLowerCase();
@@ -154,13 +63,6 @@ export function isReservedDeviceName(name: string): boolean {
   return RESERVED_DEVICE_NAMES.has(extractStem(name));
 }
 
-/**
- * Single-shot validator: sanitize `raw`, then run every check in
- * order. Caller maps the failure reason onto an HTTP status.
- *
- * Path containment is checked separately via `assertInsideUploadDir`
- * because it requires the resolved upload directory.
- */
 export function validateUploadName(raw: string): UploadGuardResult {
   const sanitized = sanitizeUploadName(raw);
   if (sanitized.length === 0) return { ok: false, reason: "empty-name" };
@@ -177,19 +79,12 @@ export function validateUploadName(raw: string): UploadGuardResult {
   return { ok: true, sanitized };
 }
 
-/**
- * Final defense-in-depth check on the resolved write path. Even with a
- * sanitized name, paranoia says: `path.resolve(dir, name).startsWith(dir + sep)`
- * has to hold, otherwise refuse the write. Catches any future regression
- * where the sanitization is loosened (e.g. someone re-allows `..` in names).
- */
 export function assertInsideUploadDir(
   uploadDir: string,
   candidatePath: string,
 ): boolean {
   const resolvedDir = resolve(uploadDir);
   const resolvedCandidate = resolve(candidatePath);
-  // Append `sep` so `/uploads/abc` doesn't accept `/uploads/abc-evil`.
   return (
     resolvedCandidate === resolvedDir ||
     resolvedCandidate.startsWith(resolvedDir + sep)

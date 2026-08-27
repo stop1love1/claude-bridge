@@ -32,7 +32,7 @@ describe("intake meta helpers", () => {
     createMeta(dir, header());
     const rec = await setIntake(dir, { status: "planning" });
     expect(rec?.status).toBe("planning");
-    expect(rec?.rounds).toBe(0); // inherited from defaultIntake
+    expect(rec?.rounds).toBe(0);
     expect(readIntake(dir)?.status).toBe("planning");
   });
 

@@ -1,22 +1,3 @@
-/**
- * P2 — verify chain runner + auto-retry on verify failure.
- *
- * After a child agent exits cleanly, the lifecycle hook (`coordinator.ts:
- * succeedRun`) calls `runVerifyChain` against the configured commands in
- * `app.verify`. Steps run sequentially in canonical order
- * (`format → lint → typecheck → test → build`); the chain stops on the
- * first failing step. The full per-step result is persisted onto the
- * `Run.verify` field via a single `updateRun` call (combined with the
- * status flip to dodge the read-modify-write race documented in
- * `meta.ts`).
- *
- * On failure, `spawnVerifyRetry` mirrors the `childRetry.ts` direct-spawn
- * pattern: same parent (the coordinator) so attempts render as siblings,
- * a distinct `-vretry` role suffix so the retry budget never collides
- * with the crash-retry path's `-retry` suffix, and the raw failing
- * step's stdout+stderr injected at the top of the prompt so the model
- * sees the ground-truth error before re-reading the original brief.
- */
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { type App, type AppVerify } from "./apps";
 import { type Run, type RunVerify, type RunVerifyStep } from "./meta";
@@ -27,7 +8,6 @@ import {
   isAnyRetryRole,
 } from "./retryLadder";
 
-/** Canonical order — matches the `## Verify commands` section in childPrompt. */
 const STEP_ORDER: RunVerifyStep["name"][] = [
   "format",
   "lint",
@@ -45,15 +25,9 @@ export interface RunVerifyChainOptions {
   verify: AppVerify;
   timeoutMs?: number;
   outputCapBytes?: number;
-  /** Optional hook for callers that want per-step start/end notifications. */
   onStep?: (phase: "start" | "end", step: RunVerifyStep) => void;
 }
 
-/**
- * True iff the AppVerify object has at least one non-empty command.
- * Avoids running the chain (and writing an empty `verify` field) when
- * the app hasn't opted in.
- */
 export function hasAnyVerifyCommand(v: AppVerify | null | undefined): boolean {
   if (!v) return false;
   return STEP_ORDER.some((name) => {
@@ -62,11 +36,6 @@ export function hasAnyVerifyCommand(v: AppVerify | null | undefined): boolean {
   });
 }
 
-/**
- * Execute every configured verify step in canonical order, stopping on
- * first failure. Steps with no command in the AppVerify config are
- * silently skipped (no entry in the result, keeping meta.json terse).
- */
 export async function runVerifyChain(
   opts: RunVerifyChainOptions,
 ): Promise<RunVerify> {
@@ -103,19 +72,11 @@ export async function runVerifyChain(
     steps.push(finished);
     opts.onStep?.("end", finished);
 
-    // Stop on first failing step — downstream steps would only add
-    // noise and burn time on a tree that's already broken.
     if (!finished.ok) break;
   }
 
   return {
     steps,
-    // Empty step list means the app configured no commands — that's
-    // "nothing to verify, nothing failed", not a failure. Callers that
-    // need to gate on "did we actually run any checks?" should branch
-    // on `steps.length`. The live commit-gate path in coordinator.ts
-    // is already protected by `hasAnyVerifyCommand` upstream so this
-    // never matters there, but direct callers shouldn't be surprised.
     passed: steps.every((s) => s.ok),
     startedAt,
     endedAt: new Date().toISOString(),
@@ -125,23 +86,9 @@ export async function runVerifyChain(
 interface ExecResult {
   exitCode: number | null;
   durationMs: number;
-  /** Combined stdout + stderr, capped + with truncation marker on overflow. */
   output: string;
 }
 
-/**
- * Run a single shell command, capturing combined stdout+stderr capped at
- * `outputCap` bytes. Uses `spawn(..., { shell: true })` so user-supplied
- * commands like `bun test --reporter=verbose` work unmodified across
- * platforms — Node delegates to `cmd /c` on Windows and `sh -c` on POSIX.
- *
- * Hard timeout uses `treeKill` so the entire process subtree is reaped
- * on Windows (where `child.kill()` only terminates `cmd.exe`, leaving
- * grandchildren like `bun test` running). The previous AbortController
- * approach orphaned grandchildren — see `libs/processKill.ts` for the
- * platform-specific reasoning. After SIGTERM we schedule a SIGKILL
- * backstop in case the runner ignores polite termination.
- */
 const KILL_GRACE_MS = 2000;
 
 function execStep(
@@ -152,11 +99,6 @@ function execStep(
 ): Promise<ExecResult> {
   return new Promise<ExecResult>((resolve) => {
     const start = Date.now();
-    // Defensive sanity check: reject NUL bytes and embedded newlines
-    // before they reach the shell. Real verify commands are single-line
-    // (`bun test`, `pnpm lint`, …); a multi-line value almost always
-    // means a paste accident — and on Windows in particular, a stray
-    // newline can re-enter `cmd.exe` parsing in surprising ways.
     if (cmd.includes("\0") || cmd.includes("\n") || cmd.includes("\r")) {
       resolve({
         exitCode: null,
@@ -197,7 +139,6 @@ function execStep(
       if (Buffer.byteLength(text, "utf8") <= remaining) {
         collected += text;
       } else {
-        // Trim at a UTF-8 safe boundary by re-encoding the slice.
         const buf = Buffer.from(text, "utf8").subarray(0, remaining);
         collected += buf.toString("utf8");
         truncated = true;
@@ -211,8 +152,6 @@ function execStep(
     const timer = setTimeout(() => {
       timedOut = true;
       treeKill(child, "SIGTERM");
-      // Grandchildren that ignore SIGTERM (rare but possible — long
-      // teardown hooks, swallow handlers) get a hard SIGKILL.
       killBackstop = setTimeout(() => treeKill(child, "SIGKILL"), KILL_GRACE_MS);
       if (typeof killBackstop.unref === "function") killBackstop.unref();
     }, timeoutMs);
@@ -240,23 +179,10 @@ function execStep(
   });
 }
 
-/**
- * True iff the run is a retry already (any flavour). Now defers to
- * `retryLadder.isAnyRetryRole` so numbered suffixes (e.g. `-vretry2`)
- * are detected too. Kept exported under its old name because every
- * other retry module imports it from here.
- */
 export function isAlreadyRetryRun(role: string): boolean {
   return isAnyRetryRole(role);
 }
 
-/**
- * Render the retry-context block that gets prepended to the original
- * prompt. Mirrors `childRetry.renderRetryContextBlock` shape (same
- * `## Auto-retry context — what failed last time` heading) so the model
- * has consistent contract regardless of whether the retry was triggered
- * by a crash or a verify failure.
- */
 export function renderVerifyRetryContextBlock(verify: RunVerify): string {
   const failedStep = verify.steps.find((s) => !s.ok);
   const passed = verify.steps.filter((s) => s.ok).map((s) => s.name);
@@ -301,15 +227,6 @@ export function renderVerifyRetryContextBlock(verify: RunVerify): string {
   return lines.join("\n");
 }
 
-/**
- * Spawn a verify-retry by resuming the failed run's Claude session
- * (`claude --resume <sid>`). The agent already has the original brief
- * and prior turn's tool calls in its `.jsonl`, so the retry only sends
- * the strategy prefix + verify-failure context as the new user turn.
- * Same row in meta.json mutates: role gets the `-vretry` suffix,
- * status flips back to running, retryAttempt records the attempt
- * number. Shared spawn boilerplate lives in `libs/retrySpawn.ts`.
- */
 export async function spawnVerifyRetry(args: {
   taskId: string;
   finishedRun: Run;
@@ -324,15 +241,6 @@ export async function spawnVerifyRetry(args: {
   });
 }
 
-/**
- * Eligibility for verify-driven retry. Delegates to the central ladder:
- * counts existing `-vretry*` siblings against the per-app budget
- * (`app.retry.verify`, default 1). Same-gate retries chain up to the
- * cap; cross-gate retries (e.g. a `-cretry` run) are blocked.
- *
- * Crash-retry siblings (`-retry`) DO NOT count toward this budget —
- * the gates are independent.
- */
 export function isEligibleForVerifyRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
@@ -346,17 +254,8 @@ export function isEligibleForVerifyRetry(args: {
   }).eligible;
 }
 
-/**
- * Re-export for callers that want the suffix string without re-stating
- * the magic constant. Rare — most code should use the helpers above.
- */
 export const VERIFY_RETRY_SUFFIX = VRETRY_SUFFIX;
 
-/**
- * Pull the configured verify shape off an App. Trivial wrapper, but it
- * makes the callsite in coordinator.ts read cleanly and gives us a
- * single seam to inject mocks in tests.
- */
 export function verifyConfigOf(app: App | null): AppVerify | null {
   return app?.verify ?? null;
 }

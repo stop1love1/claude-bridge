@@ -1,11 +1,3 @@
-/**
- * Live App Preview (Epic C) — per-app preview URL store. Backed by
- * `.bridge-state/previews.json` (`{ [appName]: { url } }`). The operator
- * sets a reachable URL of the running app; the bridge embeds it in an
- * iframe on the task / share page. Same globalThis + atomic-write pattern
- * as the other bridge-state stores.
- * See docs/superpowers/specs/2026-06-04-live-preview-design.md.
- */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_STATE_DIR } from "./paths";
@@ -45,7 +37,6 @@ function persist(): void {
   writeJsonAtomic(PREVIEWS_FILE, state.data);
 }
 
-/** Only http(s) URLs may be embedded — blocks `javascript:` / `data:` injection. */
 export function isValidPreviewUrl(url: string): boolean {
   if (!/^https?:\/\//i.test(url)) return false;
   try {
@@ -61,10 +52,6 @@ export function getPreviewUrl(appName: string): string | null {
   return state.data.previews[appName]?.url ?? null;
 }
 
-/**
- * Set (or clear, on empty) the preview URL for an app. Returns the stored
- * URL (or null when cleared), or throws on an invalid non-empty URL.
- */
 export function setPreviewUrl(appName: string, url: string | null): string | null {
   load();
   const trimmed = (url ?? "").trim();
@@ -86,7 +73,6 @@ export function listPreviews(): Record<string, string> {
   return Object.fromEntries(Object.entries(state.data.previews).map(([k, v]) => [k, v.url]));
 }
 
-/** Test-only: reset the in-memory store without touching disk. */
 export function _resetForTests(): void {
   state.data = { previews: {} };
   state.loaded = true;

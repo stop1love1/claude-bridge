@@ -43,10 +43,6 @@ function Dashboard() {
     [router, searchParams],
   );
   const [tasks, setTasks] = useState<Task[]>([]);
-  // `true` until the first `refreshTasks()` settles. Without this, an
-  // empty initial array flashes the EmptyState ("No tasks yet") for a
-  // few hundred ms before real data arrives — the skeleton smooths
-  // that out and reads as "fetching" rather than "you have nothing".
   const [tasksLoading, setTasksLoading] = useState(true);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [apps, setApps] = useState<App[]>([]);
@@ -70,20 +66,19 @@ function Dashboard() {
       const [a, r] = await Promise.all([api.apps(), api.repos()]);
       setApps(a);
       setRepos(r);
-    } catch { /* registry may not exist yet — ignore */ }
+    } catch { }
   }, []);
 
   const refreshAllMeta = useCallback(async () => {
     try {
       const all = await api.allMeta();
       setMetaByTask(new Map(Object.entries(all)));
-    } catch { /* ignore transient */ }
+    } catch { }
   }, []);
 
-  // Sessions are only loaded for the command palette; lazy load.
   const refreshSessions = useCallback(async () => {
     try { setSessions(await api.allSessions()); }
-    catch { /* palette will show whatever it has */ }
+    catch { }
   }, []);
 
   const [visible, setVisible] = useState(
@@ -95,31 +90,16 @@ function Dashboard() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
-  // Mount-time fetches are deferred to a microtask so the setState
-  // calls inside `refreshTasks` / `refreshApps` happen *after* the
-  // effect body returns, satisfying `react-hooks/set-state-in-effect`.
   useEffect(() => { void Promise.resolve().then(refreshTasks); }, [refreshTasks]);
   useEffect(() => { void Promise.resolve().then(refreshApps); }, [refreshApps]);
 
   useEffect(() => {
     if (!visible) return;
-    // Fire immediately on tab-becomes-visible so a user returning after
-    // 5+ minutes sees fresh data instead of waiting for the next tick.
     void Promise.resolve().then(refreshTasks);
     const h = setInterval(refreshTasks, 15_000);
     return () => clearInterval(h);
   }, [visible, refreshTasks]);
 
-  // Meta poll cadence: fast when at least one task is `running` (live
-  // status pill matters), slow otherwise. The TaskDetail page has its
-  // own per-task SSE so it doesn't depend on this for live updates.
-  //
-  // We deliberately do NOT depend on `metaByTask` here — that would
-  // re-run the effect every time `refreshAllMeta` lands new data,
-  // which would clear+recreate the interval AND re-fire the immediate
-  // `refreshAllMeta()` call at the top of the effect. A ref lets each
-  // tick read the latest "any running?" state without forcing a
-  // dependency on the changing data.
   const metaByTaskRef = useRef(metaByTask);
   useEffect(() => { metaByTaskRef.current = metaByTask; }, [metaByTask]);
 
@@ -142,7 +122,6 @@ function Dashboard() {
     return () => { if (h) clearTimeout(h); };
   }, [visible, tasks.length, refreshAllMeta]);
 
-  // Only fetch sessions when the palette opens — saves disk scans on idle.
   useEffect(() => {
     if (paletteOpen) void Promise.resolve().then(refreshSessions);
   }, [paletteOpen, refreshSessions]);
@@ -184,11 +163,6 @@ function Dashboard() {
     const sessionsLine = runCount > 0
       ? `Also removes ${runCount} linked Claude session${runCount === 1 ? "" : "s"} from ~/.claude/projects/.`
       : "Also removes sessions/" + id + "/ metadata.";
-    // Async-confirm pattern (S4.6): the dialog keeps a spinner up while
-    // the DELETE round-trip and refresh fan-out runs, instead of
-    // closing optimistically and leaving the user staring at a stale
-    // grid for a beat. On error we toast immediately and re-throw so
-    // the dialog stays open and the user can retry.
     await confirm({
       title: `Delete task ${id}?`,
       description: t ? `"${t.title}"\n\n${sessionsLine}` : sessionsLine,
@@ -238,9 +212,6 @@ function Dashboard() {
 
   const handleMoveTask = useCallback(
     async (id: string, section: import("@/libs/client/types").TaskSection) => {
-      // Optimistic update so the card visibly snaps into the new column
-      // before the network round-trip lands; refreshTasks() reconciles
-      // a few hundred ms later.
       setTasks((prev) =>
         prev.map((t) =>
           t.id === id
@@ -260,7 +231,6 @@ function Dashboard() {
         await refreshTasks();
         await refreshAllMeta();
       } catch (e) {
-        // Roll back by re-fetching the canonical state.
         await refreshTasks();
         toast("error", (e as Error).message);
       }
@@ -334,9 +304,7 @@ function Dashboard() {
         }}
       />
 
-      {/* Page sub-toolbar — search, filter, and CTAs that used to live
-          in the global header. Wraps to a second row on narrow viewports
-          so nothing gets pushed off-screen. */}
+      {}
       <div className="shrink-0 px-2 sm:px-3 py-2 border-b border-border bg-background flex items-center gap-1.5 sm:gap-2 flex-wrap">
         <Input
           type="search"

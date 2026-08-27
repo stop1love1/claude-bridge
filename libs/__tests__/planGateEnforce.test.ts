@@ -1,14 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { evaluatePlanGate } from "../planGate";
 
-// Mirrors the gateApplies computation the agents route performs.
 function gateApplies(cfgOperatorEnabled: boolean, actorKind: "operator" | "guest"): boolean {
   return cfgOperatorEnabled || actorKind === "guest";
 }
 
 describe("agents-route gate decision", () => {
   it("guest mutating spawn on an unplanned task is blocked and kicks planning", () => {
-    const applies = gateApplies(false, "guest"); // operator gate OFF, but guest always on
+    const applies = gateApplies(false, "guest");
     const d = evaluatePlanGate({ role: "coder", intakeStatus: "none", gateApplies: applies });
     expect(applies).toBe(true);
     expect(d.allowed).toBe(false);

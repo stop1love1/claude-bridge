@@ -9,8 +9,6 @@ import {
 
 const { CONFIG_FILE } = _internal;
 
-// planGateConfig binds its file to the real `.bridge-state` dir; snapshot
-// and restore so a developer's live gate config isn't disturbed by the suite.
 let saved: string | null = null;
 
 beforeEach(() => {

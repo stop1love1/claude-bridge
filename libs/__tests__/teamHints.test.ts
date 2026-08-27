@@ -107,7 +107,6 @@ describe("buildTeamHint — UX/UI on FE-stack repo", () => {
       detectedScope: scope([{ name: "web", score: 90 }]),
       profiles: { web: profile({ name: "web", stack: ["react"] }) },
     });
-    // "form" should not match inside "format" — no UX hits → null
     expect(hint).toBeNull();
   });
 

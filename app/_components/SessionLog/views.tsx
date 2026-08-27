@@ -1,19 +1,5 @@
 "use client";
 
-/**
- * Leaf view components extracted from `SessionLog.tsx`.
- *
- * Each component here is self-contained: it receives all data via
- * props and owns only local state (a disclosure toggle, a verb
- * rotator, an image-dimension cache). They share no closure with the
- * outer `SessionLogInner`, so moving them into a sibling module is a
- * pure cut/paste — the parent imports + uses them exactly the same
- * way it always has.
- *
- * The `LogRow` orchestrator that composes these views stays in the
- * main file because it depends on the parent's repo / sessionId
- * resolution and the `toolNames` Map identity-comparison memo.
- */
 
 import { memo, useEffect, useRef, useState } from "react";
 import { Highlight, themes, type Language } from "prism-react-renderer";
@@ -49,20 +35,6 @@ import {
   type ParsedAttachment,
 } from "./helpers";
 
-/**
- * Render assistant text as full GitHub-flavoured markdown: code fences,
- * inline code, headings, lists, blockquotes, tables, links, bold/italic,
- * strikethrough, task lists. Tailwind classes are scoped per-element so
- * the output matches the dark chrome of the rest of the chat.
- */
-/**
- * Recursively flatten a React children tree into a plain string.
- * react-markdown hands the `<code>` renderer a children prop that
- * is already pre-tokenized — sometimes a string, sometimes nested
- * `<span>`s for highlight injection from upstream plugins. Prism
- * needs the raw text, so we walk the tree and concatenate every
- * leaf string node.
- */
 function childrenToText(node: React.ReactNode): string {
   if (node == null || node === false || node === true) return "";
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -74,16 +46,6 @@ function childrenToText(node: React.ReactNode): string {
   return "";
 }
 
-/**
- * Prism-coloured code block. We map a small whitelist of language
- * tags to prism-react-renderer's supported languages — anything
- * unrecognised falls back to `tsx` (the common case in our reports),
- * which still renders cleanly because Prism tokenisers are lenient.
- *
- * Theme `vsDark` matches the bridge's dark surface; for light mode
- * we'd swap to `github`, but the bridge UI is dark-first so a single
- * theme keeps the bundle smaller.
- */
 const LANG_ALIAS: Record<string, Language> = {
   ts: "tsx", typescript: "tsx", tsx: "tsx",
   js: "jsx", javascript: "jsx", jsx: "jsx",
@@ -157,10 +119,6 @@ const MD_COMPONENTS = {
   ),
   hr: () => <hr className="my-2 border-border" />,
   a: ({ href, ...p }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
-    // react-markdown does NOT sanitize hrefs. Assistant/tool text can be
-    // attacker-influenced (prompt injection via repo content or a tool
-    // result), so a `[x](javascript:…)` link would execute on click.
-    // Allow only http(s)/mailto; neutralise everything else.
     const safe = href && /^(https?:|mailto:)/i.test(href) ? href : undefined;
     return (
       <a
@@ -194,17 +152,8 @@ const MD_COMPONENTS = {
   ),
   code: (props: React.HTMLAttributes<HTMLElement>) => {
     const { className, children, ...rest } = props;
-    // react-markdown v10 dropped the `inline` prop, so we have to
-    // distinguish ourselves: fenced code blocks (``` ... ```) come
-    // through with a `language-foo` class set by the parser; inline
-    // backticks never do. The `pre` wrapper provides block layout, so
-    // we just need to style the <code> inside.
     const lang = /language-([\w-]+)/.exec(className ?? "")?.[1];
     if (!lang) {
-      // `[overflow-wrap:anywhere]` lets long unbreakable paths
-      // (e.g. `apps/center/app/[locale]/finance/...tsx`) break at any
-      // character so they wrap inside the message bubble instead of
-      // shoving the chat scroll area wider than the mobile viewport.
       return (
         <code
           className="px-1 py-px rounded bg-secondary border border-border text-[11px] font-mono wrap-anywhere"
@@ -214,17 +163,10 @@ const MD_COMPONENTS = {
         </code>
       );
     }
-    // Fenced block: hand off to <HighlightedCode> for prism token
-    // colouring. Keep the language label header so the user still
-    // sees the language at a glance.
     const text = childrenToText(children).replace(/\n$/, "");
     return <HighlightedCode lang={lang} text={text} />;
   },
   pre: (p: React.HTMLAttributes<HTMLPreElement>) => {
-    // When the child is our <HighlightedCode>, it brings its own
-    // <pre>; render a passthrough fragment so we don't end up with
-    // nested <pre> elements (invalid HTML, breaks layout). Detect by
-    // peeking at the child's type.
     const child = (p.children as React.ReactElement | undefined);
     const isHighlighted =
       child && typeof child === "object" && "type" in child &&
@@ -237,19 +179,12 @@ const MD_COMPONENTS = {
       />
     );
   },
-  // Task list checkboxes from remark-gfm.
   input: (p: React.InputHTMLAttributes<HTMLInputElement>) =>
     p.type === "checkbox"
       ? <input className="mr-1 align-middle" disabled {...p} />
       : <input {...p} />,
 };
 
-/**
- * Memoized so streaming token deltas don't remount the full
- * remark-gfm + react-markdown pipeline on every partial update —
- * `StreamingAssistantRow` re-renders per token but the rendered text
- * only grows incrementally.
- */
 export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
@@ -258,10 +193,6 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
   );
 });
 
-/**
- * Pretty-print a thinking-block duration:
- *   0.7 → "<1s", 12 → "12s", 130 → "2m 10s".
- */
 export function formatThoughtSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
   if (seconds < 1) return "<1s";
@@ -346,14 +277,6 @@ export function BashToolUseView({ block }: { block: ContentBlock }) {
   );
 }
 
-/**
- * Dedicated renderer for `TodoWrite` tool calls. The model uses this
- * tool to publish its evolving plan; rendering the JSON dump (which the
- * generic ToolUseView would do) buries the signal. Mirroring the
- * Claude Code CLI: list each todo with its status icon, swap to the
- * `activeForm` for whichever item is `in_progress`, strike through
- * completed items.
- */
 export function TodoWriteView({ block }: { block: ContentBlock }) {
   const input = (block.input ?? {}) as Record<string, unknown>;
   const rawTodos = Array.isArray(input.todos) ? input.todos : [];
@@ -375,9 +298,6 @@ export function TodoWriteView({ block }: { block: ContentBlock }) {
         {todos.map((t, i) => {
           const inProgress = t.status === "in_progress";
           const done = t.status === "completed";
-          // Use the present-continuous "activeForm" for the row that's
-          // currently running, the imperative "content" for everyone
-          // else — same convention Claude Code itself uses.
           const text = inProgress
             ? (t.activeForm || t.content)
             : t.content;
@@ -404,13 +324,6 @@ export function TodoWriteView({ block }: { block: ContentBlock }) {
   );
 }
 
-/**
- * Dedicated renderer for `Skill` tool calls. Skills (superpowers, claude-md,
- * etc.) are first-class enough in Claude Code that the CLI shows them as
- * "Using <skill> to <purpose>" rather than a generic Wrench row. Mirror
- * that — pull the skill name out of the input and surface it with a
- * Sparkles icon so it stands apart from Bash / Read / Edit calls.
- */
 export function SkillToolUseView({ block }: { block: ContentBlock }) {
   const input = (block.input ?? {}) as Record<string, unknown>;
   const skillName = typeof input.skill === "string" ? input.skill : "(unknown)";
@@ -431,7 +344,6 @@ export function SkillToolUseView({ block }: { block: ContentBlock }) {
   );
 }
 
-/** Radio (single-select) / checkbox (multi-select) indicator dot. */
 function ChoiceMark({ selected, multi }: { selected: boolean; multi: boolean }) {
   return (
     <span
@@ -451,18 +363,6 @@ function ChoiceMark({ selected, multi }: { selected: boolean; multi: boolean }) 
   );
 }
 
-/**
- * Interactive renderer for the `AskUserQuestion` tool. Mirrors the
- * Claude Code IDE card: multiple questions become tabs (one per
- * `header`); each shows its options as radio (single) / checkbox
- * (multi) rows with label + description, plus a free-text "Other…".
- *
- * Click-to-send: the headless child can't field the question itself
- * (the tool errors past in `-p` and the turn ends), so submitting routes
- * the chosen answers back through the same composer send path as the
- * next user message (`onAnswer`). Only the most-recent unanswered
- * question is interactive (`canAnswer`); historical ones render read-only.
- */
 export function AskUserQuestionView({
   block,
   canAnswer,
@@ -482,8 +382,6 @@ export function AskUserQuestionView({
   const [dismissed, setDismissed] = useState(false);
 
   if (!questions) {
-    // Malformed / partial payload — degrade to a labeled JSON blob so the
-    // transcript still shows *something* rather than crashing.
     return (
       <div className="my-1 text-[11px]">
         <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -543,7 +441,7 @@ export function AskUserQuestionView({
 
   return (
     <div className="my-1.5 rounded-lg border border-border bg-card/60 overflow-hidden text-left">
-      {/* Header: tabs (one per question) or a single label, + dismiss. */}
+      {}
       <div className="flex items-start gap-2 border-b border-border px-2.5 pt-2">
         <MessageCircleQuestion size={13} className="text-info shrink-0 mt-0.5 mb-2" />
         {questions.length > 1 ? (
@@ -587,7 +485,7 @@ export function AskUserQuestionView({
         )}
       </div>
 
-      {/* Body: active question text + its options. */}
+      {}
       <div className="px-3 py-2.5">
         {q.question && (
           <p className="mb-2 text-[12.5px] font-medium text-foreground leading-snug">{q.question}</p>
@@ -620,7 +518,7 @@ export function AskUserQuestionView({
             );
           })}
 
-          {/* Free-text "Other" — matches the native card's always-available option. */}
+          {}
           <div
             className={cn(
               "rounded-md border px-2.5 py-1.5 transition-colors",
@@ -654,7 +552,7 @@ export function AskUserQuestionView({
         </div>
       </div>
 
-      {/* Footer: submit + progress, or a closed-state note. */}
+      {}
       <div className="flex items-center gap-2 border-t border-border px-3 py-2">
         {interactive ? (
           <>
@@ -782,7 +680,6 @@ export function ToolResultView({ block, suppress, repo }: { block: ContentBlock;
   const rawText = stringifyResult(block.content);
   const text = stripSystemTags(rawText);
   const images = extractImagePaths(text);
-  // If the entire result is just system-tag scaffolding, hide the row.
   if (!text && images.length === 0) return null;
   const lines = text.split("\n");
   const preview = lines.slice(0, 2).join("\n");
@@ -815,35 +712,20 @@ export function ToolResultView({ block, suppress, repo }: { block: ContentBlock;
   );
 }
 
-// Filler verbs we cycle through while the model is "thinking" (no tool
-// running) — Claude Code's CLI uses a similar pool to keep the spinner
-// from feeling stuck. Picked deliberately upbeat / non-corporate.
 const THINKING_VERBS = [
   "Thinking", "Wrangling", "Pondering", "Brewing", "Cooking",
   "Crunching", "Plotting", "Spinning", "Untangling", "Mulling",
 ];
 
-/**
- * Status row above the composer. Mirrors the bottom-line indicator
- * the Claude Code CLI puts in its terminal screen — "Thinking…",
- * "Wrangling…", "Running: <bash description>". When `kind: "idle"`
- * the row collapses (returns null) so the composer doesn't flicker.
- */
 export function ActivityRow({
   activity,
 }: {
   activity: { kind: "thinking" | "running" | "idle"; label?: string };
 }) {
   const [verbIdx, setVerbIdx] = useState(0);
-  // Wall-clock seconds since the current activity started — same spinner
-  // counter the Claude Code CLI shows beside its verb. Reset whenever the
-  // activity kind flips so a thinking→running transition restarts the
-  // count instead of carrying the prior interval over.
   const [elapsed, setElapsed] = useState(0);
   const startedAtRef = useRef<number | null>(null);
 
-  // Rotate the filler verb every 2.4s while in thinking state. We don't
-  // rotate during "running" — the task description is the actual signal.
   useEffect(() => {
     if (activity.kind !== "thinking") return;
     const t = setInterval(() => {
@@ -855,9 +737,6 @@ export function ActivityRow({
   useEffect(() => {
     if (activity.kind === "idle") {
       startedAtRef.current = null;
-      // Defer through a microtask so the React Compiler doesn't flag
-      // this as a synchronous "setState in effect" cascade — same
-      // visible result, no scheduling change for the user.
       void Promise.resolve().then(() => setElapsed(0));
       return;
     }
@@ -874,13 +753,11 @@ export function ActivityRow({
   const isThinking = activity.kind === "thinking";
   const verb = isThinking ? THINKING_VERBS[verbIdx] : (activity.label || "task");
   const icon = isThinking ? (
-    // gray dot, subtle pulse
     <span
       className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/70 animate-pulse"
       aria-hidden="true"
     />
   ) : (
-    // amber asterisk for an active tool / Bash run
     <Asterisk size={11} className="text-warning animate-pulse" aria-hidden="true" />
   );
   return (
@@ -896,23 +773,9 @@ export function ActivityRow({
   );
 }
 
-/**
- * Live-streaming assistant row. Mirrors the visual weight of a normal
- * assistant TextBlockView but appends a blinking caret so the reader
- * can tell at a glance that text is still being typed in. Markdown is
- * applied to the partial buffer too — most replies are markdown, and
- * react-markdown handles unterminated fences / links gracefully.
- */
 export function StreamingAssistantRow({ text }: { text: string }) {
-  // Same scaffolding-tag suppression as the settled `TextBlockView`.
-  // Streaming text may be mid-tag (e.g. just `<task-no…`) — strip what
-  // we can and fall through; the final settled message will be cleaned
-  // again with the now-complete buffer.
   const cleaned = stripSystemTags(text);
   if (!cleaned.trim()) {
-    // Render only the caret while the buffer is pure scaffolding so the
-    // user sees the assistant is still typing without staring at raw
-    // protocol bytes.
     return (
       <div className="my-2 space-y-1">
         <div className="leading-relaxed">
@@ -942,11 +805,6 @@ export function TextBlockView({ text, role }: { text: string; role: "user" | "as
   if (role === "user") {
     return <div className="whitespace-pre-wrap wrap-break-word">{text}</div>;
   }
-  // Assistants sometimes echo bridge scaffolding (e.g.
-  // `<task-notification><task-id>…</task-id>…</task-notification>` when
-  // they paraphrase a Monitor event the bridge fed them). Strip those
-  // before handing to MarkdownText so the user sees prose, not the
-  // protocol envelope. Only well-known tag names are stripped.
   const cleaned = stripSystemTags(text);
   if (!cleaned.trim()) return null;
   return (
@@ -956,17 +814,8 @@ export function TextBlockView({ text, role }: { text: string; role: "user" | "as
   );
 }
 
-/**
- * Render a base64 image content block (Anthropic vision input). Same look
- * as `AttachmentChip` so a paste / IDE-attached screenshot is visually
- * indistinguishable from a composer-uploaded one. Click to open full
- * size in a new tab.
- */
 export function InlineImage({ src }: { src: { mediaType: string; data: string } }) {
   const url = `data:${src.mediaType};base64,${src.data}`;
-  // Read natural dimensions on load so the chip can label the image
-  // `544×395` like Slack / Discord attachments. base64 inflates ~33%
-  // so payload bytes ≈ data.length * 0.75.
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   const approxKb = Math.round((src.data.length * 0.75) / 1024);
   const ext = src.mediaType.replace(/^image\//, "").toLowerCase();
@@ -996,13 +845,9 @@ export function InlineImage({ src }: { src: { mediaType: string; data: string } 
           </span>
         </button>
       </DialogTrigger>
-      {/* `max-w-[min(92vw,1200px)]` overrides DialogContent's default
-          `max-w-lg` so a screenshot can use the full viewport. `p-2`
-          tightens the chrome so the image is the focus, not the frame. */}
+      {}
       <DialogContent className="max-w-[min(92vw,1200px)] p-2 gap-2">
-        {/* Radix requires a DialogTitle on every DialogContent for screen
-            readers. The visual chrome is already obvious (image + caption),
-            so hide the title visually with `sr-only`. */}
+        {}
         <DialogTitle className="sr-only">image.{ext} preview</DialogTitle>
         <a
           href={url}

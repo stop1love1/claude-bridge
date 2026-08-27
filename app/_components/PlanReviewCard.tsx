@@ -5,17 +5,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TaskIntake } from "@/libs/client/types";
 
-/**
- * Intent & Planning Gate — shared plan-review card for the operator task
- * page and the guest share page. `intake` is fed live from the parent's
- * meta (which already streams over SSE), so this card never opens its own
- * EventSource; it only fetches the plan markdown when the intake changes.
- *
- * Renders nothing unless the gate is mid-flight (`planning` /
- * `awaiting-approval` / `error`). Approve / request-changes / reject
- * buttons appear only when `canApprove` is true; otherwise the card is
- * read-only with a "waiting for the owner" note.
- */
 export function PlanReviewCard({
   taskId,
   intake,
@@ -34,8 +23,6 @@ export function PlanReviewCard({
   const status = intake?.status;
   const active = status === "planning" || status === "awaiting-approval" || status === "error";
 
-  // Fetch the plan markdown whenever the gate is active. Re-runs when the
-  // status changes (parent SSE drives `intake`), so a refined plan reloads.
   const lastFetchKey = useRef<string>("");
   useEffect(() => {
     if (!active) return;
@@ -49,7 +36,7 @@ export function PlanReviewCard({
         if (!r.ok) return;
         const j = (await r.json()) as { planMarkdown: string | null };
         if (!ac.signal.aborted) setPlanMd(j.planMarkdown);
-      } catch { /* ignore */ }
+      } catch { }
     })();
     return () => ac.abort();
   }, [taskId, status, active, intake?.questions?.length]);
@@ -70,7 +57,6 @@ export function PlanReviewCard({
         }),
       });
       if (!r.ok) {
-        // e.g. 409 when re-planning hits maxClarifyRounds.
         const j = (await r.json().catch(() => null)) as { reason?: string; error?: string } | null;
         setActErr(j?.reason ?? j?.error ?? `request failed (${r.status})`);
         return;

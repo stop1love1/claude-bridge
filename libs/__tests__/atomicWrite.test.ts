@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { }
 });
 
 describe("writeStringAtomic", () => {
@@ -59,19 +59,13 @@ describe("writeStringAtomic", () => {
   });
 
   it("cleans up the tmp file when rename fails and re-throws", () => {
-    // Force rename to fail by making the destination a non-empty
-    // directory: rename(file, non-empty-dir) is rejected on every
-    // platform with EISDIR / ENOTEMPTY / EPERM. We don't care which
-    // — only that the helper unlinks the staged tmp before re-throwing.
     const target = join(tmp, "occupied");
     mkdirSync(target);
     writeFileSync(join(target, "child.txt"), "blocker");
 
     expect(() => writeStringAtomic(target, "x")).toThrowError();
-    // No leaked .tmp file in the parent directory.
     const stale = readdirSync(tmp).filter((n) => n.endsWith(".tmp"));
     expect(stale).toEqual([]);
-    // The original directory is untouched.
     expect(existsSync(join(target, "child.txt"))).toBe(true);
   });
 
@@ -81,12 +75,8 @@ describe("writeStringAtomic", () => {
       Promise.resolve().then(() => writeStringAtomic(target, `payload-${i}`)),
     );
     await Promise.all(writers);
-    // Last-writer wins; we don't care which value lands, only that the
-    // file exists and matches one of the candidates (i.e., no half-
-    // written or empty file).
     const final = readFileSync(target, "utf8");
     expect(final).toMatch(/^payload-\d+$/);
-    // No leftover tmp files.
     const stale = readdirSync(tmp).filter((n) => n.endsWith(".tmp"));
     expect(stale).toEqual([]);
   });

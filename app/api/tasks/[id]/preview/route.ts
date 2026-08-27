@@ -11,7 +11,6 @@ import { checkCsrf } from "@/libs/csrf";
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Resolve the task's primary app: pinned `taskApp`, else the first non-coordinator run's repo. */
 function primaryApp(sessionsDir: string): string | null {
   const meta = readMeta(sessionsDir);
   if (!meta) return null;
@@ -34,7 +33,6 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   if (!csrf.ok) {
     return NextResponse.json({ error: "csrf check failed", reason: csrf.reason ?? null }, { status: 403 });
   }
-  // Operator-only — a guest can view (with the grant) but never set the URL.
   const actor = verifyRequestActor(req);
   if (actor?.kind !== "operator") {
     return NextResponse.json({ error: "operator only" }, { status: 403 });

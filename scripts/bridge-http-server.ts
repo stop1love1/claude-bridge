@@ -1,14 +1,3 @@
-/**
- * Programmatic Next.js HTTP server with a WebSocket upgrade path for
- * interactive app PTYs (`node-pty` + `@xterm/xterm` in the browser).
- *
- * Non-PTY upgrades are delegated to `next.getUpgradeHandler()` so dev
- * HMR / Turbopack keep working. Started via `package.json` `dev` / `start`
- * (see `bun scripts/run.ts … node --import tsx ./scripts/bridge-http-server.ts`).
- *
- * Requires **Node.js** (not Bun) at runtime: `node-pty` ships native
- * bindings built for the Node ABI.
- */
 import { createServer, type IncomingMessage } from "node:http";
 import { parse as parseUrl } from "node:url";
 import type { Duplex } from "node:stream";
@@ -92,7 +81,6 @@ function attachPty(ws: InstanceType<typeof WebSocket>, cwd: string) {
     try {
       ws.close(1011, "pty spawn failed");
     } catch {
-      /* ignore */
     }
     return;
   }
@@ -111,7 +99,6 @@ function attachPty(ws: InstanceType<typeof WebSocket>, cwd: string) {
     try {
       ws.close();
     } catch {
-      /* ignore */
     }
   });
 
@@ -129,7 +116,6 @@ function attachPty(ws: InstanceType<typeof WebSocket>, cwd: string) {
       try {
         child.write(msg.d);
       } catch {
-        /* pty may be dead */
       }
       return;
     }
@@ -139,7 +125,6 @@ function attachPty(ws: InstanceType<typeof WebSocket>, cwd: string) {
       try {
         child.resize(cols, rows);
       } catch {
-        /* ignore */
       }
     }
   });
@@ -148,17 +133,12 @@ function attachPty(ws: InstanceType<typeof WebSocket>, cwd: string) {
     try {
       child.kill();
     } catch {
-      /* ignore */
     }
   });
 }
 
 async function main() {
   const dev = process.env.NODE_ENV !== "production";
-  // Never use `process.env.HOSTNAME` for HTTP bind: on Windows (Git Bash,
-  // cmd, PowerShell) it is always the computer name. Node then listens on
-  // that host's resolved address, not loopback — `http://localhost:PORT`
-  // connection-refuses while `http://<PC-NAME>:PORT` works.
   const hostname =
     process.env.BRIDGE_HOST?.trim() ||
     process.env.HOST?.trim() ||
@@ -172,33 +152,15 @@ async function main() {
 
   const ptyWss = new WebSocketServer({ noServer: true });
 
-  // Marker the API route checks. Set BEFORE the handler attaches so the
-  // ticket route can warn the client when it's mis-served by plain
-  // `next dev` (which has no `/api/apps/ws-pty` upgrade handler — the
-  // browser then sees a hung handshake = WebSocket close 1006).
   process.env.BRIDGE_PTY_READY = "1";
 
   const server = createServer((req, res) => {
-    // Stamp the server-authored same-host signals proxy.ts's internal-
-    // token gate relies on (PEER_ADDR_HEADER, CLIENT_FORWARDED_FOR_HEADER)
-    // — deleting any client-supplied copy of either first. See
-    // `stampServerAuthoredHeaders`'s doc comment in libs/peerAddr.ts for
-    // why this has to happen here, before `handle()` runs, and why it's
-    // pulled into its own function rather than left inline (audit H2).
     stampServerAuthoredHeaders(req);
     const parsed = parseUrl(req.url || "", true);
     void handle(req, res, parsed);
   });
 
   server.on("upgrade", (req, socket, head) => {
-    // NOTE: deliberately no `stampServerAuthoredHeaders(req)` call here.
-    // `authorizePtyUpgrade` (below) never reads PEER_ADDR_HEADER,
-    // CLIENT_FORWARDED_FOR_HEADER, or the internal token, so there is no
-    // signal here for a spoof to corrupt. Safe ONLY because this upgrade
-    // path never reaches `proxy.ts` / Next middleware (`ptyWss.handleUpgrade`
-    // below bypasses `handle()` entirely) — a future upgrade handler that
-    // DOES delegate to Next middleware would need the same stamp this
-    // callback applies, or it inherits H2 all over again.
     const pathname = parseUrl(req.url || "", true).pathname || "";
     if (pathname !== PTY_PATH) {
       void nextUpgrade(req, socket, head);
@@ -222,15 +184,6 @@ async function main() {
       return;
     }
 
-    // Cookie or one-time ticket only — the raw internal token is
-    // deliberately NOT accepted here (see authorizePtyUpgrade's header
-    // comment, audit C5). This listener runs on raw node:http and never
-    // passes through proxy.ts's same-host gate, so honouring the token
-    // would hand an interactive shell to anyone holding it — and every
-    // spawned child carries it in its env. The ticket is accepted ONLY
-    // via the query string (it's single-use and short-lived, unlike the
-    // token) since WS upgrade requests from the browser can't set custom
-    // headers.
     const rawTicket =
       typeof q.ticket === "string"
         ? q.ticket
@@ -271,7 +224,6 @@ async function main() {
           try {
             ws.close(1011, "attach failed");
           } catch {
-            /* ignore */
           }
         }
       });

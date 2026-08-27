@@ -1,26 +1,3 @@
-/**
- * Dev-time public tunnel registry.
- *
- * Spawns a tunnel client for an operator-chosen port (localtunnel or
- * ngrok), parses the resulting public URL out of stdout, and tracks
- * the live ChildProcess so the UI can list / stop them. State is
- * in-memory only — `killAllTunnels()` runs on bridge shutdown so
- * nothing leaks past the parent process.
- *
- * Stashed on `globalThis` for the same reason as `spawnRegistry.ts` —
- * Next.js dev HMR otherwise drops the Map when this module is reloaded.
- *
- * Provider notes:
- *
- *   - **localtunnel**: invoked via `bunx localtunnel --port <p>`. Free,
- *     no signup, but slow + has an interstitial warning page on first
- *     visit per IP. URL: `*.loca.lt`.
- *   - **ngrok**: invoked via the operator's installed `ngrok` binary
- *     (Windows location auto-detected if not on PATH). Faster + no
- *     interstitial, but needs an authtoken from ngrok.com which we
- *     persist in `bridge.json#tunnels.ngrok.authtoken`. URL: typically
- *     `*.ngrok-free.app` on the free plan.
- */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
@@ -41,7 +18,6 @@ export interface TunnelEntry {
   id: string;
   port: number;
   label?: string;
-  /** Operator-requested sticky subdomain (localtunnel only). */
   subdomain?: string;
   provider: TunnelProvider;
   status: TunnelStatus;
@@ -49,7 +25,6 @@ export interface TunnelEntry {
   error?: string;
   startedAt: string;
   endedAt?: string;
-  /** Last ~50 lines of combined stdout/stderr for debugging in the UI. */
   log: string[];
 }
 
@@ -63,18 +38,8 @@ G.__bridgeTunnels = reg;
 
 const MAX_LOG_LINES = 50;
 const MAX_CONCURRENT = 8;
-// Cap on retained-history (stopped/error) entries so a long-lived
-// bridge that opens and closes many tunnels doesn't accumulate
-// `reg.tunnels` entries forever. Live (starting/running) entries are
-// never counted against this — they're bounded by MAX_CONCURRENT.
 const MAX_HISTORY_ENTRIES = 20;
 
-/**
- * Evict the oldest stopped/error tunnels until at most
- * MAX_HISTORY_ENTRIES remain. Live tunnels are preserved regardless
- * of count. Called whenever we add a new tunnel or when an existing
- * one transitions to a terminal state.
- */
 function pruneTunnelHistory(): void {
   const stopped: Array<[string, { entry: TunnelEntry; child: ChildProcess }]> = [];
   for (const [id, slot] of reg.tunnels) {
@@ -83,9 +48,6 @@ function pruneTunnelHistory(): void {
     }
   }
   if (stopped.length <= MAX_HISTORY_ENTRIES) return;
-  // Oldest endedAt first; falling back to startedAt for entries that
-  // somehow lost their endedAt timestamp (shouldn't happen but cheap
-  // belt-and-suspenders for an eviction routine).
   stopped.sort(([, a], [, b]) => {
     const ae = a.entry.endedAt ?? a.entry.startedAt;
     const be = b.entry.endedAt ?? b.entry.startedAt;
@@ -97,34 +59,11 @@ function pruneTunnelHistory(): void {
   }
 }
 
-/**
- * URL extraction patterns. Both providers print the public URL on
- * stdout shortly after start, but ngrok also writes its structured
- * log (success AND error) to stderr in non-TTY mode. A bare-URL match
- * would flip status="running" on lines like
- *   `lvl=eror msg="failed to start tunnel" url=https://...`
- * even though the tunnel never came up.
- *
- * Each pattern below is anchored on the success-context cue so an
- * error line that happens to contain the URL doesn't qualify:
- *   - localtunnel: `your url is: https://shaggy-radios-watch.loca.lt`
- *   - ngrok:       `... msg="started tunnel" ... url=https://abc.ngrok-free.app`
- *
- * The captured URL is in group 1 (the success cue is matched but
- * discarded). Bare-URL extraction for diagnostic logging stays in
- * `pushLog` — only the status flip is gated.
- */
 const URL_RES: Record<TunnelProvider, RegExp> = {
   localtunnel: /your url is:\s+(https?:\/\/[a-z0-9-]+\.loca\.lt)/i,
   ngrok: /msg="?started tunnel"?[^\n]*?url=(https?:\/\/[a-z0-9-]+\.ngrok[a-z0-9.-]*)/i,
 };
 
-/**
- * Pure helper: extract the public URL from a single log line, but
- * ONLY when the line carries the provider-specific success cue. Use
- * this in tests to lock in the false-positive guard without spawning
- * a real provider process.
- */
 export function extractTunnelUrl(
   provider: TunnelProvider,
   line: string,
@@ -134,28 +73,10 @@ export function extractTunnelUrl(
   return m && m[1] ? m[1] : null;
 }
 
-/**
- * The port the bridge itself listens on. A tiny wrapper around the
- * shared `BRIDGE_PORT` constant (`libs/paths.ts`) so the "is this
- * tunnel exposing the bridge?" check below reads as one named concept
- * rather than an inline env lookup.
- */
 function resolveBridgePort(): number {
   return BRIDGE_PORT;
 }
 
-/**
- * Fired the moment a tunnel entry's status flips to "running" (called
- * from both the stdout and stderr URL-match sites in `startTunnel`).
- * When the tunnel is exposing the bridge's own port, its public URL
- * becomes the operator-facing `bridge.json#publicUrl` automatically —
- * so Telegram links / share links resolve through the tunnel instead of
- * `localhost`. Tunnels for any other port (e.g. a Next dev server on
- * 3000) never touch `publicUrl`.
- *
- * Wrapped in try/catch: a `bridge.json` write failure must never crash
- * the stdout/stderr line parser mid-stream.
- */
 function onTunnelRunning(entry: TunnelEntry): void {
   if (!entry.url || entry.port !== resolveBridgePort()) return;
   try {
@@ -165,14 +86,6 @@ function onTunnelRunning(entry: TunnelEntry): void {
   }
 }
 
-/**
- * Fired when a tunnel entry transitions to a terminal state via an
- * explicit operator action (`stopTunnel`, `removeTunnel`,
- * `killAllTunnels`). If the manifest's `publicUrl` still equals this
- * entry's URL, clear it — the bridge is no longer reachable there. If
- * the operator has since pointed `publicUrl` somewhere else, leave it
- * alone (don't clobber a manual override with a stale clear).
- */
 function onTunnelStopped(entry: TunnelEntry): void {
   if (!entry.url) return;
   try {
@@ -216,24 +129,9 @@ export interface StartOptions {
   port: number;
   provider: TunnelProvider;
   label?: string;
-  /**
-   * Sticky subdomain. localtunnel honors `--subdomain <s>` and gives back
-   * `https://<s>.loca.lt` (errors out if taken). ngrok free silently
-   * ignores custom subdomains, so we only forward this when the
-   * provider is localtunnel.
-   */
   subdomain?: string;
 }
 
-/**
- * Subdomains: 4-63 chars, ASCII-lowercase + digits + hyphen, no edge dashes.
- *
- * Length is checked separately so a 4-char subdomain like `abcd` doesn't
- * trip a regex that requires the body to have ≥2 chars. The previous
- * pattern (`^[a-z0-9](?:[a-z0-9-]{2,61}[a-z0-9])$`) had a non-optional
- * inner group, so it rejected anything 4 chars or shorter — contradicting
- * the user-facing "4–63" message.
- */
 const SUBDOMAIN_BODY_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 export function isValidSubdomain(s: string): boolean {
@@ -287,12 +185,6 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
   if (opts.label && opts.label.trim()) entry.label = opts.label.trim().slice(0, 80);
   if (subdomain) entry.subdomain = subdomain;
 
-  // `shell: true` is required only for `bunx`, which on Windows lives
-  // as a .cmd shim that Node's direct exec path can't run. For ngrok
-  // we pass an absolute path resolved up front, so `shell: false`
-  // works everywhere AND avoids quoting bugs when the path itself
-  // contains spaces (e.g. `C:\Program Files\ngrok\ngrok.exe` once
-  // ngrok ships an MSI installer there).
   const child = spawn(command, args, {
     stdio: ["ignore", "pipe", "pipe"],
     shell: useShell,
@@ -321,10 +213,6 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
     for (const line of chunk.split(/\r?\n/)) {
       if (!line) continue;
       pushLog(entry, `[stderr] ${line}`);
-      // ngrok writes its structured success log to stderr too — accept
-      // matches only when the regex includes the success cue (group 1
-      // is the URL). Pure error lines that mention the URL no longer
-      // flip status="running".
       const m = matchUrl.exec(line);
       if (m && m[1] && !entry.url) {
         entry.url = m[1];
@@ -348,30 +236,13 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
     }
     entry.endedAt = new Date().toISOString();
     pushLog(entry, `[exit] code=${code ?? "null"} signal=${signal ?? "null"}`);
-    // The process died on its own (crash, external kill) — exactly the
-    // unattended failure mode auto-start makes likely. If this tunnel's
-    // URL is still serving as the bridge's publicUrl, clear it so links
-    // don't keep pointing at a dead origin. Idempotent for the explicit
-    // stop paths (stopTunnel already cleared it before SIGTERM landed).
     onTunnelStopped(entry);
-    // Cap retained history so a long-running bridge with frequent
-    // tunnel restarts doesn't accumulate the full set forever.
     pruneTunnelHistory();
   });
 
   return publicView(entry);
 }
 
-/**
- * Resolve the per-provider command + args + env that `startTunnel`
- * passes to `spawn`. Kept separate so unit-testing the matrix doesn't
- * have to spin up real subprocesses.
- *
- * `useShell` is provider-specific: `bunx` is a Windows .cmd shim
- * (needs `shell: true` for cmd to find PATHEXT); `ngrok` is an
- * absolute path we resolved ourselves (so `shell: false` is safe AND
- * preferred — it survives spaces in the path without quoting tricks).
- */
 function buildSpawnArgs(
   provider: TunnelProvider,
   port: number,
@@ -387,11 +258,6 @@ function buildSpawnArgs(
       useShell: true,
     };
   }
-  // ngrok: prefer absolute path so a fresh winget install is reachable
-  // without restarting the bridge (winget shims live under
-  // `%LocalAppData%\Microsoft\WinGet\Links` which the bridge process's
-  // PATH snapshot may pre-date). Fall back to bare `ngrok` if we can't
-  // resolve — the spawn will ENOENT and the UI surfaces the error.
   const resolved = findNgrokExecutable() ?? "ngrok";
   const token = getNgrokAuthtoken();
   if (!token) {
@@ -401,13 +267,8 @@ function buildSpawnArgs(
   }
   return {
     command: resolved,
-    // `--log=stdout` routes ngrok's structured logs to stdout so we
-    // can regex out the URL line. Default behavior is a TTY dashboard
-    // that doesn't print the URL plainly.
     args: ["http", String(port), "--log=stdout"],
     env: { ...process.env, NGROK_AUTHTOKEN: token },
-    // Absolute path resolved up-front — `shell: false` avoids
-    // word-splitting spaces in `C:\Program Files\...`.
     useShell: resolved === "ngrok",
   };
 }
@@ -434,26 +295,11 @@ export function stopTunnel(id: string): boolean {
 export function removeTunnel(id: string): boolean {
   const slot = reg.tunnels.get(id);
   if (!slot) return false;
-  // Covers the case where the process ended on its own (crash / clean
-  // exit) without ever going through `stopTunnel` — the operator's
-  // "Remove" click is the first chance to notice the publicUrl is
-  // stale and clear it.
   onTunnelStopped(slot.entry);
   reg.tunnels.delete(id);
   return true;
 }
 
-/**
- * Kill every live tunnel synchronously enough for a Ctrl-C / shutdown
- * path. SIGTERM first; the OS reaps the child as the parent exits.
- * Idempotent — safe to call from multiple signal handlers.
- *
- * Registered eagerly from `instrumentation.ts` so the handler exists
- * before any tunnel is spawned. (Lazy `process.once(...)` from inside
- * `startTunnel` was a footgun: a SIGINT delivered before the first
- * tunnel was started would leave no handler in place, and HMR could
- * trap a stale closure on subsequent reloads.)
- */
 export function killAllTunnels(): void {
   for (const slot of reg.tunnels.values()) {
     if (slot.entry.status === "starting" || slot.entry.status === "running") {
@@ -465,14 +311,6 @@ export function killAllTunnels(): void {
   }
 }
 
-/**
- * Called once at boot (`instrumentation.ts`, after shutdown handlers
- * are registered) to auto-spawn a tunnel when the operator has opted in
- * via the Tunnels page's "Auto-start on boot" toggle
- * (`bridge.json#tunnels.autoStart`). No-op when unset/disabled. Never
- * throws — a misconfigured provider (e.g. ngrok with no authtoken saved
- * yet) must not block the rest of the boot sequence.
- */
 export async function maybeAutoStartTunnel(): Promise<void> {
   let cfg: ReturnType<typeof getTunnelAutoStart>;
   try {
@@ -489,33 +327,16 @@ export async function maybeAutoStartTunnel(): Promise<void> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Provider detection — `GET /api/tunnels/providers` reads this to render the
-// "ngrok needs install / needs authtoken / ready" status block.
-// -----------------------------------------------------------------------------
 
 export interface ProviderStatus {
   provider: TunnelProvider;
-  /** Binary is installed and runnable (always true for localtunnel — bunx is bundled). */
   installed: boolean;
-  /** Resolved version string when the binary responds to `--version` / `version`. */
   version?: string;
-  /** True for ngrok when an authtoken is persisted in `bridge.json`. */
   authtokenSet?: boolean;
-  /** True when this host can offer a one-click install (Windows + winget). */
   installable: boolean;
-  /** Human-readable hint surfaced in the UI when the provider isn't ready. */
   hint?: string;
 }
 
-/**
- * Cache `detectProviders()` for a handful of seconds. The Tunnels page
- * polls `/api/tunnels/providers` every 1–4 seconds; without a cache
- * each poll spawned `where.exe ngrok` + `ngrok version` synchronously
- * (each up to 5s timeout), blocking the event loop. Cleared whenever
- * the ngrok authtoken changes (see `setNgrokAuthtoken`) so a UI save
- * is reflected on the next request.
- */
 const PROVIDER_CACHE_TTL_MS = 5000;
 let providerCache: { value: ProviderStatus[]; expires: number } | null = null;
 
@@ -531,17 +352,8 @@ function invalidateProviderCache(): void {
   providerCache = null;
 }
 
-// Manifest writes from outside this module (auth.ts saving credentials,
-// apps.ts editing settings) don't move the ngrok binary, so they
-// don't need to bust the provider cache. We invalidate it on
-// authtoken-write paths inline below — that's the only field that
-// affects the `authtokenSet` boolean.
 
 function detectLocaltunnel(): ProviderStatus {
-  // localtunnel runs via `bunx`, which ships with Bun (the runtime
-  // already required by package.json). We don't probe — the cost
-  // (npm metadata fetch on first run) isn't worth surfacing per page
-  // load.
   return {
     provider: "localtunnel",
     installed: true,
@@ -582,20 +394,6 @@ function detectNgrok(): ProviderStatus {
   };
 }
 
-/**
- * Best-effort ngrok binary lookup. Tries PATH first, then platform-
- * specific install locations so a fresh install in the same session
- * is usable immediately without restarting the bridge.
- *
- * Lookup order:
- *   1. `where.exe` / `which ngrok` — covers any user-installed binary.
- *   2. Windows: `%LocalAppData%\Microsoft\WinGet\Links\ngrok.exe`
- *      (winget shim) → `%ProgramFiles%\ngrok\ngrok.exe`.
- *   3. macOS: `/opt/homebrew/bin/ngrok` (Apple Silicon) →
- *      `/usr/local/bin/ngrok` (Intel) — the two brew prefixes.
- *   4. POSIX (mac/Linux): `~/.claude/bin/ngrok` — where our tarball
- *      installer extracts when no package manager is available.
- */
 function findNgrokExecutable(): string | null {
   const probe =
     process.platform === "win32"
@@ -623,20 +421,6 @@ function findNgrokExecutable(): string | null {
   return null;
 }
 
-// -----------------------------------------------------------------------------
-// One-click ngrok installer (cross-platform)
-//
-// Strategy per OS:
-//   - Windows  → `winget install Ngrok.Ngrok`
-//   - macOS    → `brew install ngrok/ngrok/ngrok` if brew is on PATH,
-//                otherwise download the official zip and extract to
-//                `~/.claude/bin/ngrok`.
-//   - Linux    → download the official tarball, extract to
-//                `~/.claude/bin/ngrok`, chmod +x.
-//
-// `installerPlan()` is the single source of truth for both `detectNgrok`'s
-// status hint and `installNgrok`'s dispatch.
-// -----------------------------------------------------------------------------
 
 export interface InstallResult {
   ok: boolean;
@@ -650,7 +434,6 @@ type InstallerPlan =
   | { kind: "download"; url: string; archive: "zip" | "tgz"; hint: string }
   | { kind: "manual"; hint: string };
 
-/** Map Node's `process.arch` to ngrok's release-asset suffix. */
 function mapArch(a: string): "amd64" | "arm64" | "386" | "arm" | null {
   if (a === "x64") return "amd64";
   if (a === "arm64") return "arm64";
@@ -715,12 +498,6 @@ function installerPlan(): InstallerPlan {
   };
 }
 
-/**
- * Run a long-running install command and resolve with the combined
- * stdout/stderr log. Caps at `timeoutMs` so a stalled download doesn't
- * tie up the API request indefinitely. Never throws — failure surfaces
- * via `ok: false` so the route can render the log.
- */
 function runInstaller(
   command: string,
   args: string[],
@@ -754,11 +531,6 @@ function runInstaller(
 }
 
 async function installViaDownload(url: string, archive: "zip" | "tgz"): Promise<InstallResult> {
-  // curl ships by default on macOS, modern Linux distros, and Windows
-  // 10+ (1803). For minimal containers / older Windows we surface a
-  // clear hint instead of letting `runInstaller` fail with a vague
-  // ENOENT — operators on those hosts should fall back to manual
-  // download from ngrok.com.
   if (!commandExists("curl")) {
     return {
       ok: false,
@@ -792,7 +564,7 @@ async function installViaDownload(url: string, archive: "zip" | "tgz"): Promise<
   if (process.platform !== "win32") {
     spawnSync("chmod", ["+x", join(dir, "ngrok")]);
   }
-  try { unlinkSync(archivePath); } catch { /* ignore — best-effort cleanup */ }
+  try { unlinkSync(archivePath); } catch { }
 
   invalidateProviderCache();
   const status = detectNgrok();
@@ -800,11 +572,6 @@ async function installViaDownload(url: string, archive: "zip" | "tgz"): Promise<
   return { ok: status.installed, status, log: combinedLog };
 }
 
-/**
- * Install ngrok using whichever channel `installerPlan()` selects for
- * the current OS. Always returns — failures resolve `ok: false` with
- * a log payload so the UI can show what went wrong.
- */
 export async function installNgrok(): Promise<InstallResult> {
   const plan = installerPlan();
   if (plan.kind === "manual") {
@@ -835,21 +602,11 @@ export async function installNgrok(): Promise<InstallResult> {
   return await installViaDownload(plan.url, plan.archive);
 }
 
-// -----------------------------------------------------------------------------
-// ngrok authtoken — persisted in `bridge.json#tunnels.ngrok.authtoken`
-// via the shared bridgeManifest helper. Single source of truth for IO
-// avoids the historical race where this module had its own atomic-write
-// path that didn't invalidate auth.ts's authCache (and vice versa).
-// -----------------------------------------------------------------------------
 
 interface TunnelManifestSection {
   ngrok?: { authtoken?: string };
 }
 
-// Drop the cached provider snapshot whenever bridge.json is rewritten
-// from anywhere — most writes don't move the binary, but a save from
-// `setNgrokAuthtoken()` flips `authtokenSet` and a quick subsequent
-// detectProviders() must reflect that.
 onBridgeManifestWrite(invalidateProviderCache);
 
 export function getNgrokAuthtoken(): string {
@@ -859,11 +616,6 @@ export function getNgrokAuthtoken(): string {
   return typeof t === "string" ? t.trim() : "";
 }
 
-/**
- * Persist (or clear with `""`) the ngrok authtoken. Tokens have a
- * stable shape — `\d+_[A-Za-z0-9]+` — so a paste from the dashboard
- * normalizes by stripping whitespace and that's about it.
- */
 export function setNgrokAuthtoken(input: string): string {
   const trimmed = (input ?? "").trim();
   updateBridgeManifest((m) => {

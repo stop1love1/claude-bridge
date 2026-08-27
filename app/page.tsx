@@ -88,14 +88,6 @@ const STRUCTURED_DATA = {
 };
 
 export default async function HomePage() {
-  // Already-authed operators see `/apps` as their real home — the
-  // landing page is for first-time visitors / logged-out sessions only.
-  // Mirrors the proxy.ts cookie + trusted-device check so a revoked
-  // device isn't treated as logged in here.
-  //
-  // Demo deployments skip the auth-redirect entirely: `/apps` doesn't
-  // function there, so we always render the landing page regardless of
-  // any stale cookie a visitor might be carrying.
   if (!DEMO_MODE) {
     const cfg = loadAuthConfig();
     if (cfg) {

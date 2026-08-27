@@ -1,20 +1,9 @@
-/**
- * Single source of truth for run lifecycle status.
- *
- * Lives in its own file (not `validate.ts`, not `meta.ts`, not
- * `client/types.ts`) so both server modules AND the client bundle can
- * import it without dragging in `next/server` (validate.ts) or the
- * server-only meta-write machinery (meta.ts). Keep this file dep-free.
- */
 
 export const RUN_STATUSES = [
   "queued",
   "running",
   "done",
   "failed",
-  // Terminal, and deliberately distinct from `failed`: a human stopped
-  // this run. Retry eligibility short-circuits on it so the Stop button
-  // is not silently undone by auto-retry (audit C1).
   "cancelled",
   "stale",
 ] as const;
@@ -29,12 +18,6 @@ export function isValidRunStatus(s: unknown): s is RunStatus {
 
 const TERMINAL: readonly RunStatus[] = ["done", "failed", "cancelled", "stale"];
 
-/**
- * A late writer must never move a row that already reached a terminal
- * state back to an active one. The link route accepted exactly that
- * from a child's self-register curl, producing a zombie row no process
- * backed and the reaper wouldn't touch for hours (audit H4).
- */
 export function isBackwardStatusTransition(from: RunStatus, to: RunStatus): boolean {
   return TERMINAL.includes(from) && (to === "running" || to === "queued");
 }

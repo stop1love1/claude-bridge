@@ -83,7 +83,6 @@ describe("tokenize", () => {
 
   it("drops stopwords + short tokens + numerics", () => {
     const out = tokenize("Add the new login page for users");
-    // "add", "the", "for", "page" are stopwords
     expect(out).toContain("login");
     expect(out).toContain("new");
     expect(out).toContain("users");
@@ -95,7 +94,6 @@ describe("tokenize", () => {
 
   it("tokenizes a Vietnamese task body", () => {
     const out = tokenize("Thêm trang đăng nhập cho học viên");
-    // "them", "trang" are stopwords; rest survives
     expect(out).toContain("dang");
     expect(out).toContain("nhap");
     expect(out).toContain("hoc");
@@ -154,7 +152,6 @@ describe("heuristicDetector", () => {
       repos: ["app-api", "app-web"],
       profiles: { "app-api": apiProfile, "app-web": webProfile },
     });
-    // "man hinh" / "dang nhap" / "hoc vien" route to FE
     expect(scope.repos[0].name).toBe("app-web");
   });
 
@@ -255,7 +252,6 @@ describe("renderDetectedScope", () => {
       profiles: { "app-api": apiProfile },
     });
     const md = renderDetectedScope(scope);
-    // We expect no Features / Entities subheadings when those are empty.
     if (scope.features.length === 0) expect(md).not.toMatch(/### Features/);
     if (scope.entities.length === 0) expect(md).not.toMatch(/### Entities/);
     if (scope.files.length === 0) expect(md).not.toMatch(/### Files/);
@@ -293,12 +289,6 @@ describe("hashTaskBody", () => {
   });
 });
 
-// Migrated from the deleted `libs/repoHeuristic.ts` shim + its test file
-// (`libs/__tests__/repoHeuristic.test.ts`). `classifyRepoRoles` and the
-// sync `detectScopeSync` core aren't exercised elsewhere in this file
-// (the `heuristicDetector` suite above only drives the async wrapper),
-// so those cases are kept here against the real detect-layer exports
-// instead of being dropped.
 describe("classifyRepoRoles", () => {
   const orchestrationProfile = makeProfile({
     name: "claude-bridge",

@@ -28,7 +28,6 @@ describe("parseApps", () => {
     });
     const apps = parseApps(md);
     expect(apps.length).toBe(2);
-    // Sorted alphabetically by name.
     expect(apps[0].name).toBe("app-api");
     expect(apps[0].description).toBe("Backend NestJS API");
     expect(apps[1].name).toBe("app-web");
@@ -57,9 +56,6 @@ describe("parseApps", () => {
 
 describe("serializeApps + round-trip", () => {
   it("round-trips through serialize → parse", () => {
-    // Use a relative rawPath so the platform-specific `resolve` in
-    // parseApps lands on the same value on POSIX and Windows (it
-    // resolves against BRIDGE_ROOT, which is `process.cwd()` here).
     const apps: App[] = [
       {
         name: "app-api",
@@ -123,8 +119,6 @@ describe("serializeApps + round-trip", () => {
     expect(parsed.apps[0].name).toBe("app-web");
     expect(parsed.apps[0].path).toBe("../app-web");
     expect(parsed.apps[0]).not.toHaveProperty("description");
-    // Default git settings should be omitted from the serialized blob
-    // so existing bridge.json files stay untouched on round-trip.
     expect(parsed.apps[0]).not.toHaveProperty("git");
   });
 
@@ -169,8 +163,6 @@ describe("serializeApps + round-trip", () => {
   });
 
   it("round-trips mergeTargetBranch and infers autoCommit from it", () => {
-    // Operator wants auto-merge into `main`. autoCommit must be promoted
-    // automatically (you can't merge an uncommitted work branch).
     const apps: App[] = [
       {
         name: "release-svc",
@@ -201,9 +193,6 @@ describe("serializeApps + round-trip", () => {
     expect(parsed[0].git.mergeTargetBranch).toBe("main");
     expect(parsed[0].git.autoCommit).toBe(true);
     expect(parsed[0].git.integrationMode).toBe("auto-merge");
-    // Legacy: a manifest with `mergeTargetBranch` but no `integrationMode`
-    // (older bridge releases) is auto-promoted to `auto-merge` so the
-    // operator's prior behavior carries forward across upgrades.
     const fromLegacy = parseApps(JSON.stringify({
       version: 1,
       apps: [{
@@ -218,8 +207,6 @@ describe("serializeApps + round-trip", () => {
   });
 
   it("round-trips integrationMode=pull-request and forces autoPush", () => {
-    // pull-request mode requires the head branch on the remote, so the
-    // normalize layer pins autoPush=true regardless of input.
     const fromManifest = parseApps(JSON.stringify({
       version: 1,
       apps: [{
@@ -229,7 +216,6 @@ describe("serializeApps + round-trip", () => {
           branchMode: "auto-create",
           mergeTargetBranch: "main",
           integrationMode: "pull-request",
-          // Note: autoPush deliberately omitted — normalize must promote.
         },
       }],
     }));
@@ -237,8 +223,6 @@ describe("serializeApps + round-trip", () => {
     expect(fromManifest[0].git.autoCommit).toBe(true);
     expect(fromManifest[0].git.autoPush).toBe(true);
     expect(fromManifest[0].git.mergeTargetBranch).toBe("main");
-    // Round-trip through serialize: terse output keeps the mode, drops
-    // defaults.
     const json = serializeApps(fromManifest);
     const reparsed = parseApps(json);
     expect(reparsed[0].git.integrationMode).toBe("pull-request");
@@ -246,8 +230,6 @@ describe("serializeApps + round-trip", () => {
   });
 
   it("demotes integrationMode to none when mergeTargetBranch is empty", () => {
-    // Malformed config (mode set but target empty) is normalized to
-    // `none` so the coordinator never tries to integrate against ''.
     const parsed = parseApps(JSON.stringify({
       version: 1,
       apps: [{

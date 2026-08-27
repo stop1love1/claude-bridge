@@ -18,17 +18,6 @@ interface PerRunUsage extends SessionUsage {
   repo: string;
 }
 
-/**
- * Aggregate token usage for every run of a task.
- *
- *   GET /api/tasks/<id>/usage
- *
- * Walks each run's `~/.claude/projects/<slug>/<sessionId>.jsonl`,
- * sums the assistant `message.usage` blocks, and returns both the
- * per-run breakdown and the task-level total. Missing JSONLs (e.g. a
- * session that was deleted from disk) contribute zeros instead of
- * failing the whole request.
- */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");

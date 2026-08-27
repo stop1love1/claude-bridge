@@ -23,66 +23,16 @@ interface SetupBody {
   email?: string;
   password?: string;
   confirmPassword?: string;
-  /** Friendly label saved with the auto-trusted device for this setup. */
   label?: string;
-  /**
-   * One-time token minted at server boot when no `auth` block exists
-   * in `bridge.json` and printed to the operator's terminal. Required
-   * because the previous Host-header check is spoofable when the
-   * bridge is bound to a non-loopback interface.
-   */
   setupToken?: string;
 }
 
-/** Header equivalent of `setupToken` so CLI / curl callers can avoid JSON. */
 const SETUP_TOKEN_HEADER = "x-bridge-setup-token";
 
-/**
- * POST /api/auth/setup
- *
- * First-run setup endpoint. Creates the operator's email + password
- * credentials AND signs them in (sets `bridge_session` cookie with
- * `trust: true`) so the redirect after setup lands on `/` already
- * authenticated — no second login round-trip.
- *
- * Hard refusals:
- *   1. `auth` block already exists in `bridge.json` → 409. Re-running
- *      setup from the UI would let any visitor reset the password,
- *      which is exactly the race the original implementation called
- *      out as a security hole. Operator MUST use the CLI
- *      (`bun scripts/set-password.ts`) to rotate a forgotten password.
- *   2. Caller didn't echo back the one-time setup token printed in the
- *      bridge boot banner → 401. Replaces the previous Host-header
- *      check (spoofable when the bridge binds to a non-loopback
- *      interface). The Host check stays as defense-in-depth.
- *   3. Request's `Host` header isn't a loopback hostname → 403.
- *      Defense-in-depth only; the token is the real gate now.
- *
- * On success returns `{ ok: true, user: { email } }` and unlinks the
- * setup token file so the endpoint becomes inert until the next boot
- * (which only mints a fresh token if no auth has been configured —
- * i.e., never, after a successful first run).
- */
 export async function POST(req: NextRequest) {
-  // /api/auth/* is excluded from the proxy matcher, so the proxy's
-  // demo-mode 503 never runs. A demo deployment that allowed setup
-  // would let a stranger create credentials on a host that was never
-  // meant to actually run agents.
   if (DEMO_MODE) {
     return NextResponse.json({ error: "demo mode" }, { status: 503 });
   }
-  // Rate-limit BEFORE any work — a LAN attacker who can reach the
-  // bridge port and spoof `Host: localhost` would otherwise get
-  // unconstrained guesses at the 32-byte setup token.
-  //
-  // Cap is intentionally generous (50 / 10 min) because when
-  // BRIDGE_TRUSTED_PROXY is unset, getClientIp() returns the literal
-  // "unknown" sentinel — every caller shares one bucket. A tight cap
-  // would let any clumsy operator (or a single misbehaving browser tab)
-  // lock out their own setup. The token itself is 32 bytes of base64url,
-  // so even 50/10min is computationally infeasible to brute force; the
-  // limiter exists to keep the endpoint cheap, not to substitute for
-  // the token's entropy.
   const ip = getClientIp(req.headers);
   const denied = checkRateLimit("auth:setup", ip, 50, 10 * 60_000);
   if (denied) {
@@ -127,11 +77,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
 
-  // Token gate runs BEFORE we look at credentials so a wrong-token
-  // request can't be used to brute-force the email field's existence
-  // (timing or otherwise). Accept the token from either the JSON body
-  // or `x-bridge-setup-token` header so curl / CLI callers don't have
-  // to wrap it in a JSON object.
   const providedToken =
     (typeof body.setupToken === "string" ? body.setupToken.trim() : "") ||
     (req.headers.get(SETUP_TOKEN_HEADER) ?? "").trim();
@@ -166,21 +111,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // setOperatorCredentials writes the auth block + generates the
-  // signing secret + internal token if absent.
   await setOperatorCredentials(email, password);
-  // Token has done its job — unlink so a leak / file copy after this
-  // point can't replay setup. clearSetupToken is idempotent and the
-  // 409 / `isAuthConfigured` gate above already protects against a
-  // duplicate setup, but defense-in-depth is cheap.
   clearSetupToken();
 
-  // Auto-trust this device + sign a 30-day cookie so the operator
-  // doesn't have to log in again immediately after setting the
-  // password.
   const cfg = loadAuthConfig();
   if (!cfg) {
-    // Should never happen — `setOperatorCredentials` just wrote the file.
     return NextResponse.json(
       { error: "internal error: auth config not loadable after setup" },
       { status: 500 },
@@ -196,22 +131,6 @@ export async function POST(req: NextRequest) {
   return res;
 }
 
-/**
- * Defense-in-depth check: is the `Host` header a loopback hostname?
- *
- * The Host header is set by the client (not by the underlying TCP
- * connection), so a LAN visitor could send `Host: localhost` and
- * pass this gate trivially when the bridge is bound to `0.0.0.0`.
- * That's exactly why the real gate is now the boot-banner setup
- * token — see `libs/setupToken.ts`. Keeping the Host check costs
- * nothing and blocks the trivial case where someone navigated to
- * `http://<lan-ip>:7777/login` without bothering to forge headers.
- *
- * NOTE: `0.0.0.0` is NOT a loopback address (it's the wildcard bind
- * address). We deliberately omit it from the accept list so a request
- * that explicitly arrived through the public interface can't pretend
- * to be local just because the operator happened to bind there.
- */
 function isLoopbackRequest(req: NextRequest): boolean {
   const host = req.headers.get("host") ?? "";
   if (!host) return false;

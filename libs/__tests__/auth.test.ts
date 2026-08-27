@@ -3,12 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/**
- * Auth tests run against a temp `~/.claude/bridge.json` so the operator's
- * real credentials are never touched. We point `homedir()` at a fresh
- * temp dir per test, write a synthetic auth config, then re-import the
- * auth module so it picks up the redirected dir.
- */
 
 let tempHome: string;
 let originalHome: string | undefined;
@@ -36,7 +30,6 @@ afterEach(() => {
   try {
     rmSync(tempHome, { recursive: true, force: true });
   } catch {
-    /* best-effort cleanup */
   }
 });
 
@@ -80,7 +73,6 @@ describe("constantTimeStringEqual", () => {
   it("handles multibyte UTF-8 without crashing", async () => {
     const { constantTimeStringEqual } = await import("../auth");
     expect(constantTimeStringEqual("café", "café")).toBe(true);
-    // Same Unicode length, different byte length — must reject.
     expect(constantTimeStringEqual("café", "cafe")).toBe(false);
   });
 });
@@ -179,7 +171,6 @@ describe("verifyRequestAuthOrInternal — internal token path", () => {
   });
 
   it("rejects when auth is not configured at all", async () => {
-    // No bridge.json written.
     const { verifyRequestAuthOrInternal } = await import("../auth");
     expect(
       verifyRequestAuthOrInternal(fakeReq({ internalHeader: "anything" })),
@@ -197,8 +188,6 @@ describe("verifyRequestAuthOrInternal — internal token path", () => {
       },
     });
     const { verifyRequestAuthOrInternal } = await import("../auth");
-    // Empty token plus empty header must NOT authenticate — that would
-    // be a default-allow trap on misconfigured installs.
     expect(
       verifyRequestAuthOrInternal(fakeReq({ internalHeader: "" })),
     ).toBeNull();

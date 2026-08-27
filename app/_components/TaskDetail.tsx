@@ -40,19 +40,9 @@ interface TaskDetailProps {
   onSelectRun: (run: Run) => void;
   onDelete: () => Promise<void>;
   onToggleComplete: (next: boolean) => Promise<void>;
-  /**
-   * Per-child live status (Thinking… / Running: <tool>) sourced from
-   * the per-task SSE `child-status` event. Optional — undefined / empty
-   * map renders the tree exactly as before. Keys are sessionIds.
-   */
   liveStatusBySession?: Map<string, { kind: string; label?: string }>;
 }
 
-// Outer keys the inner by task.id so switching between tasks
-// remounts the inner — title / body / usage state is reinitialised
-// from the new task without the reset effect that React 19's
-// `set-state-in-effect` rule (correctly) flags as a derived-state
-// anti-pattern.
 export function TaskDetail(props: TaskDetailProps) {
   return (
     <TaskDetailInner
@@ -87,16 +77,12 @@ function TaskDetailInner({
     return map;
   }, [repos]);
 
-  // Refetch token totals whenever the run roster changes (a new run
-  // landed, an existing one transitioned). Lightweight (one route hit)
-  // and the route reads each .jsonl off disk so we always reflect what
-  // claude actually billed.
   useEffect(() => {
     if (!task?.id) return;
     const ac = new AbortController();
     api.taskUsage(task.id, { signal: ac.signal })
       .then((r) => { if (!ac.signal.aborted) setUsage(r.total); })
-      .catch(() => { /* 404 ok if meta hasn't landed yet, or aborted */ });
+      .catch(() => { });
     return () => ac.abort();
   }, [task?.id, meta?.runs?.length, meta?.runs]);
 
@@ -172,11 +158,6 @@ function TaskDetailInner({
   const runs = meta?.runs ?? [];
   const hasRuns = runs.length > 0;
   const owner = runs.find((r) => r.role === "coordinator") ?? null;
-  // Most recent coordinator run drives the Continue button: only show
-  // it when the user stopped the coordinator mid-way (killed / cancelled
-  // via Stop) or the process died unexpectedly (crashed, or the reaper
-  // marks it stale). Hide when the coordinator is queued / running /
-  // cleanly done.
   const lastCoordinator = [...runs].reverse().find((r) => r.role === "coordinator") ?? null;
   const canContinue = !!lastCoordinator
     && (lastCoordinator.status === "failed"
@@ -220,17 +201,15 @@ function TaskDetailInner({
   return (
     <section className="flex-1 min-w-0 overflow-y-auto border-r border-border">
       <div className="p-4 sm:p-6 max-w-3xl mx-auto">
-        {/* Intent & Planning Gate — operator always may approve. */}
+        {}
         <PlanReviewCard taskId={task.id} intake={meta?.intake} canApprove />
-        {/* Reliability (B2) — low-confidence runs held for operator review. */}
+        {}
         <CommitReviewCard taskId={task.id} runs={meta?.runs ?? []} />
-        {/* Live app preview (Epic C) — operator sets the URL inline. */}
+        {}
         <div className="mb-4">
           <LivePreview taskId={task.id} mode="operator" />
         </div>
-        {/* Task 6 — red/green gate badge row, sourced from the summary
-            API's computed gateStatus (verify/claim/style/semantic/
-            confidence, latest attempt per retry chain). */}
+        {}
         <GateStatusBadges taskId={task.id} refreshKey={meta?.runs?.length} />
         <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
           <Button
@@ -365,11 +344,6 @@ function TaskDetailInner({
 
         {owner && (() => {
           const ownerBranch = branchByRepo[owner.repo] ?? null;
-          // Derived "orchestrating" state: coordinator's process exited
-          // but at least one child it spawned is still queued/running.
-          // Reads better than a literal "DONE" badge while children are
-          // visibly mid-task in the AgentTree below — see
-          // libs/client/coordinatorStatus.ts for the full rationale.
           const orchestrating = isCoordinatorOrchestrating({
             coordinator: owner,
             runs,

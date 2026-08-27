@@ -3,14 +3,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-/**
- * `forwardChatImportantPatterns` lives in `~/.claude/bridge.json`.
- * Each test redirects `homedir()` to a temp dir, writes a synthetic
- * manifest, then re-imports `apps` so the settings getter reads our
- * fixture. We test the public surface (`getManifestTelegramSettings`,
- * `setManifestTelegramSettings`) so the normalizer's invariants are
- * locked in independently of where the import path lands.
- */
 
 let tempHome: string;
 
@@ -28,7 +20,6 @@ afterEach(() => {
   try {
     rmSync(tempHome, { recursive: true, force: true });
   } catch {
-    /* best-effort */
   }
 });
 
@@ -57,7 +48,7 @@ describe("forwardChatImportantPatterns getter normalization", () => {
         chatId: "c",
         forwardChatImportantPatterns: [
           "  NEEDS-DECISION  ",
-          "needs-decision", // case-insensitive dedupe
+          "needs-decision",
           "ESCALATE",
           "",
           "ESCALATE",
@@ -141,8 +132,6 @@ describe("forwardChatImportantPatterns persistence", () => {
       chatId: "c",
       forwardChatImportantPatterns: ["NEEDS-DECISION", "BLOCKED", "READY FOR REVIEW"],
     });
-    // Read raw bridge.json to confirm we didn't persist the noisy
-    // default — operators with stock prompts should see a tidy file.
     const fs = await import("node:fs");
     const raw = JSON.parse(
       fs.readFileSync(join(tempHome, ".claude", "bridge.json"), "utf8"),

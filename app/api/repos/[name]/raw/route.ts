@@ -29,21 +29,6 @@ function isInside(root: string, target: string): boolean {
 
 type Ctx = { params: Promise<{ name: string }> };
 
-/**
- * Serves an image file from inside a registered/known repo so the chat
- * UI can preview screenshots that a tool call (Read / Bash output)
- * referenced by relative path.
- *
- *   GET /api/repos/<name>/raw?path=<relative-or-absolute-path>
- *
- * Safety:
- *   - Repo must resolve via `resolveRepoCwd` (registered or sibling).
- *   - Resolved target must stay strictly inside the repo root.
- *   - Only image extensions are served (defensive — `nosniff` in
- *     headers stops the browser from running anything else even if a
- *     bug widened this list).
- *   - 8 MiB hard cap.
- */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { name } = await ctx.params;
   if (!isValidAppName(name)) return new Response("invalid app name", { status: 400 });
@@ -55,14 +40,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw || raw.includes("\0")) return new Response("invalid path", { status: 400 });
 
-  // Accept either an absolute path (already inside the repo) or a path
-  // relative to the repo root. Normalize to absolute and verify
-  // containment before any disk access.
-  //
-  // The `turbopackIgnore` hints tell Turbopack's NFT analyzer that
-  // these `resolve()` calls aren't import paths — `raw` is a runtime
-  // query param, not a module specifier — so the build doesn't trace
-  // the entire repo into the route's bundle.
   const target = isAbsolute(raw)
     ? resolve(/* turbopackIgnore: true */ raw)
     : resolve(/* turbopackIgnore: true */ repoCwd, raw);

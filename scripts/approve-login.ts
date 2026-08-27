@@ -1,25 +1,3 @@
-/**
- * Approve / deny a pending device login from the terminal.
- *
- *   bun scripts/approve-login.ts <pendingId>            # approve
- *   bun scripts/approve-login.ts <pendingId> --deny     # deny
- *
- * Why this exists: the device-approval flow in `app/_components/
- * LoginApprovalDialog.tsx` only fires for browser tabs that already
- * have a valid session cookie. If you're between machines (lost the
- * trusted device, or simply not at it), this CLI lets you tap the
- * approve path from any terminal that can read the local
- * `~/.claude/bridge.json` — same security boundary as `set-password.ts`
- * and `telegram-login.ts`.
- *
- * The script reads `auth.internalToken` from bridge.json and posts to
- * `POST /api/auth/approvals/<id>` with `x-bridge-internal-token`. The
- * approvals route accepts that header as auth (`verifyRequestAuthOrInternal`).
- *
- * The bridge MUST be running (we hit its HTTP API). If you stopped it
- * before approving, the in-memory pending entry is gone — log in again
- * to get a fresh pendingId.
- */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -71,13 +49,6 @@ if (!token) {
   process.exit(1);
 }
 
-// Resolve the bridge's HTTP origin. Order:
-//   1. BRIDGE_URL env (operator override / remote host)
-//   2. bridge.json#runtime.url (live server writes this on startup —
-//      lets the CLI find dev OR prod port without env juggling)
-//   3. PORT / BRIDGE_PORT env (last-ditch — only useful when the
-//      bridge hasn't booted yet)
-//   4. localhost:7777 (the documented dev default)
 const envOrigin = process.env.BRIDGE_URL?.trim();
 const runtimeUrl = cfg.runtime?.url?.trim();
 const fallbackPort =

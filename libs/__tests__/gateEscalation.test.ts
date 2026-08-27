@@ -3,14 +3,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/**
- * `escalateGateBlock` PATCHes the task section through `tasksStore.ts`,
- * which resolves its target dir via `SESSIONS_DIR` (captured at module
- * load from `process.cwd()`). Point `process.cwd()` at a fresh temp dir
- * BEFORE each dynamic import so the PATCH lands in our fixture instead
- * of the real bridge `sessions/` folder — same pattern as
- * `promptStore.test.ts` / `coordinatorNudge.test.ts`.
- */
 function mktmp(): string {
   return mkdtempSync(join(tmpdir(), "bridge-gateescalation-"));
 }
@@ -113,7 +105,6 @@ describe("escalateGateBlock", () => {
 
   it("never throws even when the task doesn't exist (updateTask returns null)", async () => {
     const { escalateGateBlock } = await import("../gateEscalation");
-    // No createMeta call — `dir` has no meta.json.
     await expect(
       escalateGateBlock({
         taskId: TASK_ID,
@@ -123,7 +114,6 @@ describe("escalateGateBlock", () => {
         retryScheduled: false,
       }),
     ).resolves.toBeUndefined();
-    // Notify still fires even though the section PATCH was a no-op.
     expect(sendTelegramRaw).toHaveBeenCalledTimes(1);
   });
 });

@@ -5,7 +5,6 @@ import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
-/** Operator-only config for auto-queue (autonomous TODO dispatch). */
 export function GET() {
   return NextResponse.json(readAutoQueueConfig());
 }

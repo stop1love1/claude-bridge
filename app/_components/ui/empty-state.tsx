@@ -1,12 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/libs/cn";
 
-/**
- * Standardized empty placeholder for "no data yet" panels — used by
- * the TaskGrid, SessionsBrowser, and AppsPage so the visual language
- * stays consistent. Pass an icon, a one-line title, an optional hint,
- * and an optional CTA element rendered below.
- */
 export function EmptyState({
   icon: Icon,
   title,

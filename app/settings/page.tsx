@@ -40,12 +40,6 @@ const DETECT_OPTIONS: { value: DetectSource; label: string; hint: string }[] = [
   },
 ];
 
-/**
- * Coerce the user-typed forward-chat min-length input into a valid
- * integer in the [0, 5000] range. Empty / NaN inputs default to 40 to
- * match the bridge's server-side default — that way "save with the
- * field blank" still produces sane behavior.
- */
 function clampMinChars(input: string): number {
   const n = Number(input);
   if (!Number.isFinite(n)) return 40;
@@ -55,17 +49,6 @@ function clampMinChars(input: string): number {
   return i;
 }
 
-/**
- * Bridge-wide settings page. Currently houses:
- *
- *   - **Telegram notifier** — bot token + chat id for the lifecycle
- *     event forwarder. Persists to `bridge.json.telegram`.
- *   - **Detection layer** — `auto`/`llm`/`heuristic` toggle that drives
- *     `lib/detect`. Persists to `bridge.json.detect.source`.
- *
- * Both sections write to the same `~/.claude/bridge.json` so the file
- * is the single source of truth for per-machine bridge configuration.
- */
 function SettingsPage() {
   return (
     <div className="flex flex-col h-screen">
@@ -211,12 +194,6 @@ function PublicUrlSection() {
   );
 }
 
-/**
- * Task 9: browser Web Push opt-in. Separate from the Telegram sections
- * below — this is a per-device subscription (no bridge.json config to
- * load/save), so the whole section is just the hook's live state plus
- * a single action button.
- */
 function PushNotificationsSection() {
   const { state, busy, error, supported, subscribe, unsubscribe } = usePushSubscribe();
 
@@ -730,9 +707,6 @@ function TelegramSettingsSection() {
   const submit = async () => {
     setSaving(true);
     try {
-      // Empty token field = keep the existing one (don't blank it).
-      // Empty chat id field = blank it (chat ids aren't sensitive
-      // enough to need the "leave blank to keep" UX).
       const patch: {
         botToken?: string;
         chatId?: string;
@@ -1015,11 +989,6 @@ function TelegramUserSection() {
   const submit = async () => {
     setSaving(true);
     try {
-      // Empty apiHash / session = keep existing (these are sensitive,
-      // require the operator to type a new value to overwrite).
-      // Empty apiId field = keep existing too, but only when there's
-      // already one saved; otherwise we need it to be > 0 to enable
-      // the user-client at all.
       const patch: {
         apiId?: number;
         apiHash?: string;
@@ -1232,7 +1201,6 @@ interface TrustedDeviceRow {
   createdAt: string;
   lastSeenAt: string;
   expiresAt: string;
-  /** True when this row matches the cookie the operator is signed in with. */
   isCurrent?: boolean;
 }
 
@@ -1268,10 +1236,6 @@ function TrustedDevicesSection() {
   }, [toast]);
 
   const revoke = async (id: string) => {
-    // Defensive: the trash button is already hidden for the current
-    // device, but a stale list could still let one slip through.
-    // Refusing here matches the server-side guard so the UX is
-    // consistent regardless of which path raced.
     const target = devices.find((d) => d.id === id);
     if (target?.isCurrent) {
       toast(
@@ -1341,10 +1305,6 @@ function TrustedDevicesSection() {
                 </div>
               </div>
               {d.isCurrent ? null : (
-                // Suppress the trash entirely for the current device — clicking
-                // it would either 400 (server guard) or, before that landed,
-                // kick off a /login → / reload loop. The "This device" badge
-                // beside the label is enough to signal why no trash icon.
                 <Button
                   variant="ghost"
                   size="iconSm"

@@ -60,7 +60,6 @@ describe("decideNudge", () => {
   it("skips when no coordinator row exists for the given parentSessionId", () => {
     const decision = decideNudge({
       parentSessionId: COORD_SID,
-      // No coordinator row in runs[]
       runs: [child(CHILD_A_SID, "done")],
       isAlive: NEVER_ALIVE,
       lastNudgeAt: null,
@@ -112,7 +111,7 @@ describe("decideNudge", () => {
       runs: [coordinator(), child(CHILD_A_SID, "done")],
       isAlive: NEVER_ALIVE,
       lastNudgeAt: 999_000,
-      now: 1_000_000, // 1s after — well within the 5s debounce
+      now: 1_000_000,
     });
     expect(decision).toEqual({ kind: "skip", reason: "debounced" });
   });
@@ -123,7 +122,7 @@ describe("decideNudge", () => {
       runs: [coordinator(), child(CHILD_A_SID, "done")],
       isAlive: NEVER_ALIVE,
       lastNudgeAt: 999_000,
-      now: 999_000 + 5_001, // 1ms past the 5s window
+      now: 999_000 + 5_001,
     });
     expect(decision.kind).toBe("nudge");
   });
@@ -145,7 +144,6 @@ describe("decideNudge", () => {
       runs: [
         coordinator(),
         child(CHILD_A_SID, "done"),
-        // This one belongs to some other coordinator — must be ignored.
         child(CHILD_B_SID, "running", { parentSessionId: "other-coord" }),
       ],
       isAlive: NEVER_ALIVE,
@@ -193,7 +191,7 @@ describe("decideNudge — summary-aware branches", () => {
       lastNudgeAt: null,
       now: 1_000_000,
       summaryMissing: true,
-      summaryNudgeAttempts: 3, // == SUMMARY_NUDGE_MAX_ATTEMPTS
+      summaryNudgeAttempts: 3,
     });
     expect(decision).toEqual({
       kind: "skip",
@@ -202,9 +200,6 @@ describe("decideNudge — summary-aware branches", () => {
   });
 
   it("treats absent summaryMissing as `true` for back-compat with legacy callers", () => {
-    // Older tests / callers that don't thread the flag through must
-    // keep the original "always try to nudge once conditions are met"
-    // behavior so we don't silently regress a working bridge.
     const decision = decideNudge({
       parentSessionId: COORD_SID,
       runs: [coordinator(), child(CHILD_A_SID, "done")],
@@ -216,11 +211,6 @@ describe("decideNudge — summary-aware branches", () => {
   });
 
   it("nudges when summary is present but STALE (round-2 children finished after round-1 summary)", () => {
-    // The bug this guards: coordinator finishes round 1, writes
-    // summary.md, exits. User asks for more work via chat, coordinator
-    // resumes, spawns round-2 children. They finish — but the old skip
-    // ("summary already written") would suppress the nudge and the
-    // coordinator stays silent until the user pings manually.
     const decision = decideNudge({
       parentSessionId: COORD_SID,
       runs: [coordinator(), child(CHILD_A_SID, "done")],
@@ -235,9 +225,6 @@ describe("decideNudge — summary-aware branches", () => {
   });
 
   it("still skips when summary is fresh (NOT stale) — round 1 close path", () => {
-    // Counterpart to the stale test: when summary covers the latest
-    // child exit, no nudge fires. Keeps the round-1 finalize path
-    // working and prevents spurious wake-ups.
     const decision = decideNudge({
       parentSessionId: COORD_SID,
       runs: [coordinator(), child(CHILD_A_SID, "done")],
@@ -251,8 +238,6 @@ describe("decideNudge — summary-aware branches", () => {
   });
 
   it("stale summary still respects the SUMMARY_NUDGE_MAX_ATTEMPTS cap", () => {
-    // A coordinator that keeps producing stale summaries would loop
-    // forever without this guard. Same cap as the missing-summary case.
     const decision = decideNudge({
       parentSessionId: COORD_SID,
       runs: [coordinator(), child(CHILD_A_SID, "done")],
@@ -275,12 +260,6 @@ describe("isSummaryMissing", () => {
   let originalCwd: string;
 
   beforeEach(() => {
-    // `isSummaryMissing` resolves the path through `SESSIONS_DIR`, which
-    // is evaluated at module load from `process.cwd()`. Chdir into a
-    // fresh temp dir THEN `vi.resetModules()` so the re-import re-runs
-    // `paths.ts` against the new cwd. Without the reset the module
-    // would stay pinned to the workspace root and the writes below
-    // would land in a path the function never looks at.
     originalCwd = process.cwd();
     tempSessionsRoot = mkdtempSync(join(tmpdir(), "bridge-summary-"));
     process.chdir(tempSessionsRoot);
@@ -293,7 +272,6 @@ describe("isSummaryMissing", () => {
     try {
       rmSync(tempSessionsRoot, { recursive: true, force: true });
     } catch {
-      /* best-effort */
     }
   });
 
@@ -339,8 +317,6 @@ describe("isSummaryStale (round-2 freshness check)", () => {
   let originalCwd: string;
 
   beforeEach(() => {
-    // Same chdir-then-resetModules dance as the `isSummaryMissing`
-    // suite — `SESSIONS_DIR` snapshots `process.cwd()` at module load.
     originalCwd = process.cwd();
     tempSessionsRoot = mkdtempSync(join(tmpdir(), "bridge-stale-"));
     process.chdir(tempSessionsRoot);
@@ -353,7 +329,6 @@ describe("isSummaryStale (round-2 freshness check)", () => {
     try {
       rmSync(tempSessionsRoot, { recursive: true, force: true });
     } catch {
-      /* best-effort */
     }
   });
 
@@ -389,8 +364,6 @@ describe("isSummaryStale (round-2 freshness check)", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "summary.md"), "READY FOR REVIEW — round 1", "utf8");
     const { isSummaryStale } = await import("../coordinatorNudge");
-    // Stamp the round-2 child as ending far in the future so the mtime
-    // comparison is unambiguous regardless of FS clock skew.
     const futureEnd = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     expect(
       isSummaryStale({
@@ -410,7 +383,6 @@ describe("isSummaryStale (round-2 freshness check)", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "summary.md"), "READY FOR REVIEW — fresh", "utf8");
     const { isSummaryStale } = await import("../coordinatorNudge");
-    // Child finished an hour ago; summary was just written.
     const pastEnd = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     expect(
       isSummaryStale({
@@ -431,8 +403,6 @@ describe("isSummaryStale (round-2 freshness check)", () => {
     writeFileSync(join(dir, "summary.md"), "READY FOR REVIEW", "utf8");
     const { isSummaryStale } = await import("../coordinatorNudge");
     const futureEnd = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    // Future-ended run belongs to a different parent — must not
-    // trigger staleness for COORD_SID.
     expect(
       isSummaryStale({
         taskId,
@@ -511,10 +481,6 @@ describe("shouldFinalizeDeferredCoordinator (2b deferred-DONE finalizer)", () =>
   });
 
   it("returns false when summary is missing (don't silently flip to DONE)", () => {
-    // This is the regression guard for the silent-DONE bug: the legacy
-    // finalizer flipped the row regardless of summary presence, so a
-    // coordinator that exited without writing its contract output got
-    // a green checkmark anyway.
     expect(
       shouldFinalizeDeferredCoordinator({
         parentSessionId: COORD_SID,

@@ -6,9 +6,6 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Button } from "./ui/button";
 import { cn } from "@/libs/cn";
 
-/**
- * Composer "+" — Claude Desktop short menu: upload + @ mention for context.
- */
 export function QuickAddMenu({
   onAttach,
   onMention,

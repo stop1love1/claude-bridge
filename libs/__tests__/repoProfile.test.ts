@@ -80,7 +80,6 @@ describe("scanRepo — Next + Tailwind + Prisma stack", () => {
 
 describe("scanRepo — bare repo without package.json", () => {
   const root = mktmp("bare");
-  // No files at all; just the directory exists.
   const profile = scanRepo(root);
 
   it("returns empty stack and a synthesized summary", () => {
@@ -161,7 +160,6 @@ describe("scanRepo — keyword stopword filtering", () => {
     for (const sw of ["the", "and", "of", "src", "lib", "app", "test", "tests", "spec"]) {
       expect(profile.keywords).not.toContain(sw);
     }
-    // domain word survives
     expect(profile.keywords).toContain("course");
   });
 
@@ -174,8 +172,6 @@ describe("scanRepo — keyword stopword filtering", () => {
 
 describe("scanRepo — file count cap", () => {
   const root = mktmp("filecap");
-  // Generate a wide tree of empty .ts files. We want ≥ FILE_WALK_CAP+1
-  // entries so the cap is exercised. Bun/Node `mkdirSync` is fast enough.
   const target = __test.FILE_WALK_CAP + 50;
   const perDir = 200;
   let created = 0;

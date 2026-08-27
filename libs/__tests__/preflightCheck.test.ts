@@ -1,11 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { countReadsBeforeEdit, renderPreflightRetryContextBlock, type PreflightResult } from "../preflightCheck";
 
-/**
- * Build a synthetic .jsonl session: one assistant message per line,
- * each containing one tool_use block with the given tool name. This
- * is the smallest shape the parser cares about.
- */
 function jsonl(toolNames: string[]): string {
   return toolNames
     .map((name) =>
@@ -47,7 +42,7 @@ describe("countReadsBeforeEdit", () => {
   it("ignores Bash and other non-Read non-Edit tool calls", () => {
     const text = jsonl(["Bash", "Bash", "Edit"]);
     const got = countReadsBeforeEdit(text);
-    expect(got.readsBeforeEdit).toBe(0); // Bash isn't a Read tool
+    expect(got.readsBeforeEdit).toBe(0);
     expect(got.editCount).toBe(1);
   });
 
@@ -103,7 +98,6 @@ describe("renderPreflightRetryContextBlock", () => {
       required: 3,
     };
     const out = renderPreflightRetryContextBlock(result);
-    // Renderer wraps the whole phrase (not just the number) in bold.
     expect(out).toContain("**Grep / Read at least 3 relevant files**");
   });
 });

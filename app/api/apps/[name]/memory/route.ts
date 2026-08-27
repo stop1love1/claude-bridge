@@ -1,13 +1,3 @@
-/**
- * P5/G1 — per-app memory.md API.
- *
- *   GET  → returns the current memory entries (top 50, JSON array).
- *   POST → appends a new entry. Body: `{ "entry": "When X → do Y because Z" }`.
- *
- * Storage lives at `<appPath>/.bridge/memory.md`. The bridge owns the
- * file shape (see `libs/memory.ts`); this route just validates the
- * boundary.
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { appendMemory, topMemoryEntries } from "@/libs/memory";

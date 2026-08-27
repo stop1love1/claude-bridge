@@ -4,18 +4,6 @@ import { acquireSseSlot } from "@/libs/sseLimit";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Global SSE stream of pending PreToolUse permission requests across
- * every active session. Mounted via the GlobalPermissionDialog in
- * Providers so any tab — including ones that aren't watching the
- * originating session — surfaces the popup.
- *
- * Event payloads carry the originating `sessionId` so the dialog can
- * POST the answer back to `/api/sessions/<sid>/permission/<rid>`.
- *
- * 15s keepalive comment, cleanup on `req.signal.abort` — same shape as
- * the per-session permission stream.
- */
 export async function GET(req: NextRequest) {
   const releaseSlot = acquireSseSlot(req);
   if (!releaseSlot) {
@@ -31,12 +19,9 @@ export async function GET(req: NextRequest) {
             encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
           );
         } catch {
-          /* client disconnected */
         }
       };
 
-      // Replay the global backlog so a freshly-mounted dialog catches
-      // anything that was announced before the SSE connect landed.
       for (const p of listAllPending()) {
         send("pending", {
           sessionId: p.sessionId,
@@ -70,7 +55,6 @@ export async function GET(req: NextRequest) {
         try {
           controller.enqueue(encoder.encode(`: keepalive\n\n`));
         } catch {
-          /* ignore */
         }
       }, 15000);
 
@@ -78,18 +62,14 @@ export async function GET(req: NextRequest) {
       const close = () => {
         if (closed) return;
         closed = true;
-        try { unsub(); } catch { /* ignore */ }
+        try { unsub(); } catch { }
         clearInterval(ka);
         try {
           controller.close();
         } catch {
-          /* already closed */
         }
-        try { releaseSlot(); } catch { /* idempotent */ }
-        // Remove the abort listener so a Next.js framework that retains
-        // the request object beyond the stream's lifetime doesn't keep
-        // a dangling reference to this closure.
-        try { req.signal.removeEventListener("abort", close); } catch { /* ignore */ }
+        try { releaseSlot(); } catch { }
+        try { req.signal.removeEventListener("abort", close); } catch { }
       };
 
       req.signal.addEventListener("abort", close);

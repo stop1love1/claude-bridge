@@ -16,46 +16,13 @@ interface CreateSessionBody {
   settings?: ChatSettings;
 }
 
-/**
- * Hard caps on free-text body fields. The prompt is forwarded verbatim
- * to `claude` (which has its own limits), but capping at 50 KB here
- * keeps a hostile client from streaming gigabytes of JSON before we
- * realize there's no point — and matches the L2 audit recommendation.
- *
- * `repo` is also a string but the charset/length cap is enforced by
- * `isValidAppName` (≤ 64 chars, slug-only).
- */
 const MAX_PROMPT_CHARS = 50_000;
 
-/**
- * Spawn a brand-new Claude session in the chosen repo, with an initial
- * prompt. The session is "orphan" until the user links it to a task.
- *
- * Body: { repo: string, prompt: string, settings?: ChatSettings }
- *
- * Permission default is `default` — every tool call triggers the
- * Allow/Deny popup. The composer's mode picker only exposes
- * non-privileged modes (`default` / `acceptEdits` / `plan` / `auto`),
- * matching `isValidUserPermissionMode`. Bypass mode stays reachable
- * for server-side callers (coordinator / agents) that construct
- * ChatSettings directly inside an internal-token-gated handler.
- *
- * H2 hardening: every body field is now validated up-front so a caller
- * can't (a) inject a path-traversal `repo`, (b) coerce
- * `settings.mode = "bypassPermissions"` past a UI that didn't offer
- * the option, or (c) DoS the bridge with a multi-megabyte prompt.
- */
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as Partial<CreateSessionBody>;
 
-  // `repo`: must be a registered app slug. `isValidAppName` rejects
-  // empty strings, traversal payloads, and anything outside the
-  // `[A-Za-z0-9][A-Za-z0-9._-]*` charset, capped at 64 chars.
   if (!isValidAppName(body.repo)) return badRequest("invalid repo");
 
-  // `prompt`: required, trimmed, capped. Treat the empty / whitespace-
-  // only case as the existing 400 to avoid silently spawning an empty
-  // session.
   if (typeof body.prompt !== "string" || !body.prompt.trim()) {
     return badRequest("prompt required");
   }
@@ -63,12 +30,6 @@ export async function POST(req: NextRequest) {
     return badRequest(`prompt too long (max ${MAX_PROMPT_CHARS} chars)`);
   }
 
-  // `settings.mode`: optional, but if set must be one of the documented
-  // permission modes. Without this check a caller could pass any
-  // arbitrary string — including `bypassPermissions` — even when the
-  // UI didn't expose that choice.
-  // Loose `!=` rejects both `undefined` and `null` in one shot, so the
-  // remaining check is just "must be a real object literal".
   if (body.settings != null && typeof body.settings !== "object") {
     return badRequest("invalid settings");
   }
@@ -81,15 +42,10 @@ export async function POST(req: NextRequest) {
 
   const md = readBridgeMd();
   const cwd = resolveRepoCwd(md, BRIDGE_ROOT, body.repo);
-  // L4: keep the rejected name out of the response body — the caller
-  // already knows what they sent.
   if (!cwd) return NextResponse.json({ error: "unknown repo" }, { status: 400 });
 
   try {
     const sessionId = randomUUID();
-    // Default to the popup-driven `default` mode. The body cannot
-    // request `bypassPermissions` because `isValidUserPermissionMode`
-    // rejects it above.
     const effectiveSettings: ChatSettings = {
       ...(body.settings ?? {}),
       mode: body.settings?.mode ?? "default",
@@ -98,10 +54,6 @@ export async function POST(req: NextRequest) {
     const { child } = spawnFreeSession(cwd, body.prompt.trim(), effectiveSettings, settingsPath, sessionId);
     const failure = await waitEarlyFailure(child, 1500);
     if (failure) {
-      // Scrub absolute paths from claude's startup error messages — they
-      // can otherwise echo `D:\Edusoft\…` to the client and reveal the
-      // bridge install layout. Also cap the surface so a hostile child
-      // can't smuggle multi-MB of text into the response body.
       const safeStderr = failure.stderr
         ? scrubPaths(failure.stderr).slice(0, 4096)
         : null;

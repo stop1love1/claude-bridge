@@ -7,15 +7,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * POST /api/workflows/[id]/run
- *
- * Manually start a pipeline run: creates a task and dispatches stage 0;
- * the pipeline engine sequences the rest. Returns the created task id.
- * Allowed even when the workflow is disabled (an explicit operator action),
- * but still bounded by the global concurrency cap so button-mashing can't
- * spawn unbounded parallel runs.
- */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const wf = getWorkflow(id);

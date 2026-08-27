@@ -1,26 +1,3 @@
-/**
- * Run-lifecycle wiring + post-exit gate orchestration.
- *
- * Extracted out of `coordinator.ts` so the file that runs WHEN a child
- * exits is separate from the file that DEFINES coordinator-spawn /
- * detect-scope plumbing. coordinator.ts re-exports `wireRunLifecycle`
- * from here so existing importers (`retrySpawn`, `semanticVerifier`,
- * `app/api/tasks/[id]/agents`) keep working unchanged — see the
- * re-export at the bottom of `coordinator.ts`.
- *
- * Why this still uses lazy `require` for the five gate modules:
- *
- *   The post-exit pipeline needs to call into `verifyChain`,
- *   `verifier`, `preflightCheck`, `styleCritic`, and
- *   `semanticVerifier`. Each of THOSE modules calls `wireRunLifecycle`
- *   for its own retry-spawn lifecycle (via `retrySpawn`). A static
- *   import in either direction creates a cycle. We could break it via
- *   a registration registry, but the cycle is intrinsic to the design
- *   ("a run's exit triggers gate X; gate X's retry IS another run
- *   whose exit triggers gate X again") and the registry adds
- *   indirection without removing the conceptual coupling. Lazy require
- *   inside the post-exit branch is the pragmatic break.
- */
 import type { ChildProcess } from "node:child_process";
 import { basename } from "node:path";
 import {
@@ -48,10 +25,6 @@ import { mergeAndRemoveWorktree } from "./worktrees";
 import { runDevopsAgent } from "./devops";
 import { escalateGateBlock, type EscalationGate } from "./gateEscalation";
 import { logError, logInfo, logWarn } from "./log";
-// Type-only imports — runtime side resolves via lazy `require` inside
-// the post-exit flow to break the import cycle (verifyChain.ts,
-// verifier.ts, preflightCheck.ts, styleCritic.ts, and
-// semanticVerifier.ts all import `wireRunLifecycle` from this file).
 import type * as VerifyChain from "./verifyChain";
 import type * as Verifier from "./verifier";
 import type * as Preflight from "./preflightCheck";
@@ -79,23 +52,6 @@ function loadSemanticVerifier(): typeof SemanticVerifier {
   return require("./semanticVerifier") as typeof SemanticVerifier;
 }
 
-/**
- * Patch one of the four post-exit-gate fields onto the run, atomically
- * combined with the `running → done` status flip when this is the first
- * gate to write meta after `succeedRun` deferred the flip.
- *
- * Why a helper: the four gates (verify chain, preflight/verifier,
- * style critic, semantic verifier) all need the same race-safe
- * pattern — read meta, check whether status is still `running`, write
- * one combined patch (status flip + field) OR a field-only patch. The
- * inline copies were 4× identical 12-line blocks; one transcription
- * error in the next-added 5th gate would silently demote a `done`
- * row back to `running`.
- *
- * Field is `keyof Run` constrained to the gate-result slots so a
- * callsite can't pass `status` or `role` and accidentally bypass the
- * status guard.
- */
 type GateField = "verify" | "verifier" | "styleCritic" | "semanticVerifier";
 async function attachGateResult<F extends GateField>(
   dir: string,
@@ -113,29 +69,6 @@ async function attachGateResult<F extends GateField>(
   await updateRun(dir, runSessionId, patch);
 }
 
-/**
- * Shared crash-branch sequence for the four post-exit gates whose
- * checker can throw (preflight, claim, style, semantic) — extracted
- * after review flagged the identical five-step sequence (log, flip
- * status, persist a "crashed" marker, escalate, block) being copied
- * verbatim into all four call sites. That is exactly the failure mode
- * `attachGateResult` above already exists to prevent — see its own doc
- * comment: a transcription slip on the next hand-duplicated copy. This
- * is that same pattern's 5th copy, so it gets the same treatment.
- *
- * `runVerifyChainGate`'s own crash branch is intentionally NOT routed
- * through this — it carries extra retry/finalVerify logic none of the
- * other four gates have, so folding it in would be a bigger change
- * than a transcription (see the fix-review report for this task).
- *
- * Callers own everything that varies per gate: the log scope, which
- * meta.json field + fully-typed result to persist, the
- * `EscalationGate` label, and the reason text. `attachGateResult`
- * already flips `running → done` internally (guarded on current
- * status) as part of writing the field, so this does NOT also call
- * `updateRun` itself — a second guarded flip here would just be a
- * redundant no-op write.
- */
 async function blockOnGateCrash<F extends GateField>(
   ctx: PostExitContext,
   opts: {
@@ -159,24 +92,6 @@ async function blockOnGateCrash<F extends GateField>(
   return "blocked";
 }
 
-/**
- * Stamp `mergeNotPushed` onto a run row when the local merge landed
- * but the push to the remote failed. Surfaces in meta.json so the UI
- * can render a "needs manual push" indicator — the gate flow itself
- * already succeeded (work is shipped locally), but the operator
- * needs to know the remote hasn't caught up yet.
- *
- * Defensive against missing fields and write failures — if the patch
- * can't land for any reason, we just log; the work is still on disk
- * and the operator can recover by hand.
- *
- * Exported (Task 8 / H6) so the confidence review route's live-tree
- * `ship` branch can stamp the same marker its worktree sibling does
- * when the combined commit+push it triggers fails. That caller can't
- * promise "the merge landed" the way the two call sites below can —
- * see its own comment and the field doc on `Run.mergeNotPushed` for
- * why its message uses a different prefix.
- */
 export async function markMergeNotPushed(
   dir: string,
   runSessionId: string,
@@ -196,47 +111,21 @@ export async function markMergeNotPushed(
   }
 }
 
-/**
- * Shared context every post-exit gate operates on. Built once at the
- * top of postExitFlow so each gate doesn't re-resolve the app or
- * re-load the verifyChain module.
- */
 interface PostExitContext {
-  /** Sessions dir for this task: `SESSIONS_DIR/<taskId>`. */
   dir: string;
-  /** Task id (e.g. `t_20260101_001`). */
   tid: string;
-  /** Pretty tag for log lines: `<role>:<sessionId-prefix>`. */
   t: string;
-  /** Run that just exited. */
   run: Run;
-  /** Task title (used by gates that prompt LLMs + by the commit message). */
   title: string;
-  /** Resolved app, or null when the run targets an unregistered repo. */
   app: App | null;
 }
 
-/**
- * Gate outcome semantics:
- *   - "proceed" — gate passed (or didn't apply); continue down the pipe
- *   - "blocked" — gate failed (or its retry was scheduled); stop the
- *     pipeline so the failed run doesn't reach auto-commit
- */
 type GateOutcome = "proceed" | "blocked";
 
-/**
- * Verify-chain gate. Runs the app's configured `test`/`lint`/`build`/
- * `typecheck`/`format` commands inside the run's worktree (or live
- * tree). Failure schedules a `<role>-vretry` and blocks auto-commit;
- * success records the result and proceeds.
- */
 async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, app } = ctx;
   const vc = loadVerifyChain();
   const verifyCfg = vc.verifyConfigOf(app);
-  // Retry runs are NOT skipped here — we want to re-verify the fix
-  // actually landed. Runaway loop prevention lives in `checkEligibility`
-  // (per-gate budget + per-task ceiling) inside `spawnVerifyRetry`.
   const willRunVerify =
     app !== null && vc.hasAnyVerifyCommand(verifyCfg);
 
@@ -247,9 +136,6 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
   {
     try {
       verifyResult = await vc.runVerifyChain({
-        // P4: run the verify chain inside the run's worktree when
-        // present so it tests the agent's actual edits, not the live
-        // tree's pre-spawn state.
         cwd: run.worktreePath ?? app.path,
         verify: verifyCfg,
       });
@@ -259,11 +145,6 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
       verifyCrashed = true;
     }
 
-    // Decide whether to retry BEFORE writing meta. We then collapse the
-    // status-flip + verify result + retryScheduled flag into a single
-    // updateRun call so concurrent writes (e.g. the new retry run's
-    // appendRun fired by spawnVerifyRetry) can't race a follow-up
-    // patch on the same record.
     let scheduledRetry: Awaited<ReturnType<typeof vc.spawnVerifyRetry>> = null;
     if (verifyResult && !verifyResult.passed) {
       const metaForCheck = readMeta(dir);
@@ -287,12 +168,6 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
       await attachGateResult(dir, run.sessionId, "verify", finalVerify);
     }
 
-    // If the verify chain itself crashed (not just a step failing —
-    // the whole runVerifyChain threw), we have no signal whether the
-    // agent's work passed or not. Treating that as "pass" would
-    // silently release the commit gate; treat it as an inconclusive
-    // failure that blocks the commit. Still flip the run to done so
-    // the UI doesn't hang on `running`.
     if (verifyCrashed) {
       logWarn("verify", "chain crashed — blocking auto-commit (operator must verify manually)", { tag: t });
       await updateRun(
@@ -314,9 +189,6 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
     if (verifyResult && !verifyResult.passed) {
       const failedName = verifyResult.steps.find((s: RunVerifyStep) => !s.ok)?.name;
       if (scheduledRetry) {
-        // Fire the SSE retried event so AgentTree draws the retryOf
-        // arrow — same contract as crash-retry path emits via
-        // childRetry.maybeScheduleRetry → emitRetried.
         emitRetried(tid, scheduledRetry.run, run.sessionId);
         logInfo("verify", `chain failed at \`${failedName}\` — spawned retry`, {
           tag: t,
@@ -332,43 +204,17 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
           retryScheduled: false,
         });
       }
-      // Verify failed → block the auto-commit. The retry (if any) will
-      // re-trigger this whole flow when it exits.
       return "blocked";
     }
   }
   return "proceed";
 }
 
-/**
- * Preflight gate. Did the agent actually read enough of the codebase
- * before editing? Runs BEFORE the verifier (claim-vs-diff) because if
- * the agent didn't follow process there's no point comparing claims
- * that come from process drift. Reuses the `-cretry` suffix and budget
- * — a single follow-up per (parent, role) covers either preflight OR
- * claim-vs-diff failures, since both signal "agent didn't follow
- * process". The `!isAlreadyRetryRun` guard mirrors the verify-chain
- * branch's gate; without it, future drift in `runPreflight`'s internal
- * retry skip would open an infinite-retry footgun.
- */
 async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, app } = ctx;
   if (!app) return "proceed";
-  // Retry runs are intentionally NOT skipped here — confirming the
-  // agent re-read what it needed on the fix is exactly what preflight is
-  // for. Runaway loop prevention lives in `checkEligibility`.
 
   const pf = loadPreflight();
-  // Resolve repoCwd the same way `agents/route.ts` did at spawn time.
-  // The child's `.jsonl` lives under `projectDirFor(repoCwd)` —
-  // using `app.path` instead can land us in a different slug if
-  // BRIDGE.md and `bridge.json` happen to spell the same dir
-  // differently (case, symlinks, trailing slash). Fall back to
-  // `app.path` when BRIDGE.md is missing — preflight will then skip
-  // silently if the slug differs.
-  // P4: when the run executed in a worktree, the transcript lives
-  // under `projectDirFor(worktreePath)` — preflight needs to read
-  // from that exact same cwd or the file lookup misses.
   let preflightCwd = run.worktreePath ?? app.path;
   if (!run.worktreePath) {
     const md = readBridgeMd();
@@ -390,12 +236,6 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
     preflightCrashed = true;
   }
 
-  // The checker itself threw — not "ran and produced a fail verdict"
-  // but no signal at all. Treating that as "proceed" would silently
-  // release the commit gate; block instead, same as the other three
-  // gates and runVerifyChainGate above. Preflight has no dedicated
-  // meta.json field of its own — the crash marker piggybacks on
-  // `verifier`, the same slot the normal fail path below already uses.
   if (preflightCrashed) {
     return await blockOnGateCrash(ctx, {
       logScope: "preflight",
@@ -432,10 +272,6 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
     });
   }
 
-  // Combined patch: status:done + verifier (with preflight reason
-  // surfaced via the existing field — we don't add a new schema
-  // field for preflight, just piggyback on the verifier slot since
-  // the post-exit gate semantics are equivalent).
   const finalVerifier: RunVerifier = {
     verdict: "drift",
     reason: `preflight: ${preflightResult.reason}`,
@@ -467,12 +303,6 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
   return "blocked";
 }
 
-/**
- * Claim-vs-diff verifier gate (P2b-1). Always runs for app runs that
- * aren't themselves retries — the verifier itself is cheap (parse
- * markdown + git status + set diff). Verdict `drift` / `broken`
- * schedules a `-cretry` and blocks; `match` proceeds.
- */
 async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, app } = ctx;
   if (!app) return "proceed";
@@ -482,7 +312,6 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
   let claimCrashed = false;
   try {
     verifierResult = await vfn.runVerifier({
-      // P4: claim-vs-diff has to run where the diff exists.
       appPath: run.worktreePath ?? app.path,
       taskId: tid,
       finishedRun: run,
@@ -493,10 +322,6 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
     claimCrashed = true;
   }
 
-  // The checker itself threw — no signal on whether the claimed files
-  // match the diff. Treating that as "proceed" would silently release
-  // the commit gate; block instead, same as the other three gates and
-  // runVerifyChainGate above.
   if (claimCrashed) {
     return await blockOnGateCrash(ctx, {
       logScope: "verifier",
@@ -516,9 +341,6 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
     });
   }
 
-  // Decide retry BEFORE writing meta — same combined-patch pattern
-  // as the verify-fail branch above so concurrent writes can't
-  // race the same record.
   const needsClaimRetry =
     !!verifierResult &&
     (verifierResult.verdict === "drift" || verifierResult.verdict === "broken");
@@ -567,30 +389,17 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
   return "proceed";
 }
 
-/**
- * Style-critic gate (P2b-2). Opt-in per app via
- * `bridge.json.apps[].quality.critic`. Runs only when the prior gates
- * didn't trigger a retry, the run isn't already a retry, and the app
- * exists. Blocking is gated on `alien` only — `match` and `drift`
- * both ship.
- */
 async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, title, app } = ctx;
   if (!app || app.quality?.critic !== true) {
     return "proceed";
   }
-  // Retry runs intentionally NOT skipped — checking whether the fix
-  // matches house style is exactly the point. Runaway loop prevention
-  // lives in `checkEligibility` (per-gate + per-task ceiling).
 
   const sc = loadStyleCritic();
   let criticResult: RunStyleCritic | null = null;
   let styleCrashed = false;
   try {
     criticResult = await sc.runStyleCritic({
-      // P4: gate runs in the same worktree the coder did so it sees
-      // the agent's diff via `git diff HEAD`. Falls back to the live
-      // tree when worktree mode is off.
       appPath: run.worktreePath ?? app.path,
       taskId: tid,
       finishedRun: run,
@@ -603,10 +412,6 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
     styleCrashed = true;
   }
 
-  // The checker itself threw — no signal on whether the diff fits
-  // house style. Treating that as "proceed" would silently release
-  // the commit gate; block instead, same as the other three gates and
-  // runVerifyChainGate above.
   if (styleCrashed) {
     return await blockOnGateCrash(ctx, {
       logScope: "style-critic",
@@ -676,12 +481,6 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
   return "proceed";
 }
 
-/**
- * Semantic-verifier gate (P2b-2). Default-on (Reliability Amplifier B1):
- * runs unless the app opted out via `bridge.json.apps[].quality.verifier:false`.
- * Runs as a 3-lens majority panel by default (see `resolvePanelSize`); only
- * when the prior gates didn't trigger a retry. Blocking is gated on `broken`.
- */
 async function runSemanticVerifierGate(
   ctx: PostExitContext,
 ): Promise<GateOutcome> {
@@ -689,9 +488,6 @@ async function runSemanticVerifierGate(
   if (!app || !semanticVerifierEnabled(app)) {
     return "proceed";
   }
-  // Retry runs intentionally NOT skipped — checking whether the fix
-  // actually satisfies the task body is exactly what semantic verifier
-  // is for. Runaway loop prevention lives in `checkEligibility`.
 
   const sv = loadSemanticVerifier();
   let semanticResult: RunSemanticVerifier | null = null;
@@ -710,10 +506,6 @@ async function runSemanticVerifierGate(
     semanticCrashed = true;
   }
 
-  // The checker (or the whole judge panel) itself threw — no signal on
-  // whether the change accomplishes the task body. Treating that as
-  // "proceed" would silently release the commit gate; block instead,
-  // same as the other three gates and runVerifyChainGate above.
   if (semanticCrashed) {
     return await blockOnGateCrash(ctx, {
       logScope: "semantic-verifier",
@@ -783,14 +575,6 @@ async function runSemanticVerifierGate(
   return "proceed";
 }
 
-/**
- * Async post-exit pipeline:
- *   1. Run verify chain (if app has any commands) — store result + flip
- *      run status to "done" in ONE combined updateRun call.
- *   2. If verify failed → spawn `<role>-vretry` and skip auto-commit.
- *   3. If verify passed (or didn't run) → honor `git.autoCommit` /
- *      `git.autoPush` per the app's settings, same as before P2.
- */
 async function postExitFlow(args: {
   sessionsDir: string;
   taskId: string;
@@ -813,17 +597,8 @@ async function postExitFlow(args: {
 
   if ((await runSemanticVerifierGate(ctx)) === "blocked") return;
 
-  // Used by the memory-distill block below to skip when this run is
-  // already a retry attempt — the lesson belongs to the original
-  // primary attempt, not the retry that fixed it.
   const vcGuard = loadVerifyChain();
 
-  // Final safety net: if no app exists for this run (e.g. an
-  // unregistered repo), the run is still "running" because succeedRun
-  // deferred the status flip waiting for a post-exit gate that never
-  // came. Flip it now so the UI doesn't show a stuck "running" row.
-  // Coordinator and retry runs already had their status flipped in
-  // succeedRun.
   if (!app) {
     const metaNow = readMeta(dir);
     const r = metaNow?.runs.find((x) => x.sessionId === run.sessionId);
@@ -835,10 +610,6 @@ async function postExitFlow(args: {
     }
   }
 
-  // Speculative winner selection. When this run is part of a fan-out
-  // group (Run.speculativeGroup set), atomically claim the win or
-  // accept that a sibling already won. Losers skip auto-commit + merge
-  // — only the winner's diff lands in the live tree.
   if (run.speculativeGroup) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -849,23 +620,13 @@ async function postExitFlow(args: {
         killedSiblings: claim.killed.length,
       });
       if (!claim.proceed) {
-        // Lost the race. Skip auto-commit + worktree merge entirely.
-        // Worktree was already removed by claim() above.
         return;
       }
     } catch (err) {
       logError("speculative", "claim crashed", err, { tag: t });
-      // Fail-soft: if claim throws, fall through and let auto-commit
-      // run normally. Worst case both winner and laggard sibling
-      // commit; the operator can untangle in git. Better than
-      // blocking ALL auto-commit on a transient bug.
     }
   }
 
-  // Auto-memory distillation. Opt-in per app via `memory.distill`. Runs
-  // BEFORE auto-commit so the agent sees the still-uncommitted diff via
-  // `git diff HEAD`. Skipped on retry runs (the lesson belongs to the
-  // original primary attempt, not the retry that fixed it).
   if (
     app &&
     app.memory?.distill === true &&
@@ -894,32 +655,8 @@ async function postExitFlow(args: {
     }
   }
 
-  // Verify passed (or didn't run), verifier passed/skipped → honor
-  // the app's auto-commit / auto-push settings, same gate as pre-P2.
-  // P4/F1 — when the run executed in a private worktree, run
-  // auto-commit there with autoPush DISABLED (we don't want to push
-  // the throwaway worktree branch). After merge, the live tree's
-  // base branch gets the dedicated push pass below so the operator's
-  // expectation that `autoPush=true` puts reviewed commits on the
-  // remote actually holds.
-  //
-  // SAFETY: in worktree mode we ALWAYS auto-commit, even when the
-  // operator left `autoCommit=false`. The worktree's whole purpose is
-  // to merge back into the base branch on cleanup, and a merge only
-  // carries committed changes — uncommitted edits would be silently
-  // erased by `git worktree remove --force`. Honoring the
-  // operator's `autoCommit=false` here would mean shipping a
-  // configuration whose only outcome is data loss, so we override
-  // the flag (autoPush stays bound to the operator's setting via
-  // the post-merge live-tree push below).
   const useWorktree = !!run.worktreePath;
 
-  // Reliability Amplifier (B2): aggregate the post-exit gate results into a
-  // confidence score. Re-read the run so we see the gate fields the gate
-  // functions just wrote to meta. Low confidence HOLDS the outward action
-  // (push + integration) pending operator review; local auto-commit still
-  // runs (reversible, and worktree mode needs it). Fail-soft: any error
-  // leaves `held=false` so a scoring bug never blocks the normal flow.
   let held = false;
   if (app) {
     try {
@@ -927,9 +664,6 @@ async function postExitFlow(args: {
       const conf = computeConfidence(judged);
       const cfg = readConfidenceConfig();
       held = shouldHoldOutward(conf.score, cfg, useWorktree);
-      // Annotate only — confidence is computed AFTER the real gates, so it
-      // must NOT own the deferred status flip (the quality gates do). A
-      // plain field patch keeps status semantics unchanged.
       await updateRun(dir, run.sessionId, {
         confidence: {
           score: conf.score,
@@ -952,8 +686,6 @@ async function postExitFlow(args: {
   const commitSettings = app
     ? useWorktree
       ? { ...app.git, autoCommit: true, autoPush: false }
-      // Held low-confidence run: commit locally but DON'T push — the
-      // operator ships it via the manual commit endpoint after review.
       : held
         ? { ...app.git, autoPush: false }
         : app.git
@@ -977,11 +709,6 @@ async function postExitFlow(args: {
     }
   }
 
-  // Non-worktree integration: after auto-commit lands on the work
-  // branch (current / fixed / claude/<task-id>), branch on the
-  // operator's `integrationMode`. Worktree mode handles its own
-  // integration further down — we only run this branch when the run
-  // executed in the live tree.
   if (
     app &&
     !held &&
@@ -1007,9 +734,6 @@ async function postExitFlow(args: {
           logInfo("auto-merge", m.message, { tag: t });
         } else {
           logWarn("auto-merge", `${m.message} — ${m.error ?? ""}`, { tag: t });
-          // MERGE-NO-PUSH marker: the merge landed locally but push
-          // failed. Stamp the run so the UI can show it as needing
-          // operator attention even though the gate flow succeeded.
           if (m.message.startsWith("MERGE-NO-PUSH:")) {
             await markMergeNotPushed(dir, run.sessionId, m.message, m.error);
           }
@@ -1035,20 +759,6 @@ async function postExitFlow(args: {
     }
   }
 
-  // P4/F1 — merge the worktree branch back into the base branch and
-  // remove the worktree. Runs ONLY on the success path: any failing
-  // gate above already returned early so we never reach here.
-  //
-  // Reliability Amplifier (B2, Task 7): when this worktree run is
-  // HELD (`cfg.holdWorktree === true` and the score came in below
-  // threshold), skip the merge-back + integration entirely and leave
-  // the worktree in place for operator review — a merge would push
-  // low-confidence work into the base branch before anyone looked at
-  // it, defeating the point of the hold. The operator's `ship` action
-  // on `/api/tasks/<id>/runs/<sessionId>/confidence/review` performs
-  // the deferred merge-back via `performWorktreeMergeBack` below once
-  // reviewed; `dismiss` just clears the hold and leaves the worktree
-  // parked (no automatic merge or cleanup).
   if (app && run.worktreePath) {
     if (held) {
       logInfo("confidence", "worktree run held — merge-back deferred pending operator review", { tag: t });
@@ -1058,37 +768,12 @@ async function postExitFlow(args: {
   }
 }
 
-/**
- * Outcome of `performWorktreeMergeBack`. `stage` names the FIRST step
- * that failed: `merge` means the worktree branch never landed in the
- * base branch (nothing shipped); `integration` / `push` mean the merge
- * DID land but a follow-up step failed. Callers that must not release
- * held work until the merge itself succeeded (the confidence review
- * route's `ship`) key off `stage === "merge"`. postExitFlow ignores
- * the return value entirely — every failure is already logged /
- * stamped internally, preserving its pre-extraction behavior.
- */
 export interface WorktreeMergeBackResult {
   ok: boolean;
   stage?: "merge" | "integration" | "push";
   detail?: string;
 }
 
-/**
- * P4/F1 — merge a worktree run's branch back into its base branch,
- * remove the worktree, run the worktree-mode integration pass
- * (auto-merge / pull-request), and push the live tree. Extracted out
- * of `postExitFlow` (Task 7) so the confidence review route's `ship`
- * action can replay the EXACT same merge-back for a worktree run that
- * was held for low confidence — the unheld path calls this inline at
- * the same point it always did, so its behavior is unchanged.
- *
- * The merge respects whatever auto-commit already did inside the
- * worktree; the worktree pruner mops up anything left behind on a
- * crash. Fail-soft throughout: failures are logged / stamped via
- * `markMergeNotPushed` and surfaced in the returned
- * `WorktreeMergeBackResult` — never thrown.
- */
 export async function performWorktreeMergeBack(params: {
   app: App;
   run: Run;
@@ -1100,14 +785,7 @@ export async function performWorktreeMergeBack(params: {
 }): Promise<WorktreeMergeBackResult> {
   const { app, run, tid, title, t, dir, message } = params;
   if (!run.worktreePath) return { ok: true };
-  // Integration failure is fail-soft (the push pass still runs, same
-  // as pre-extraction), so we record the first failure and keep going
-  // instead of returning early — except merge failure, which aborts
-  // the remaining steps exactly like the old `wm.ok` guards did.
   let firstFailure: WorktreeMergeBackResult | null = null;
-  // Tracks how far we got so a crash mid-flight reports the stage it
-  // died in. A crash still in `merge` means the caller must assume
-  // nothing landed in the base branch.
   let stage: "merge" | "integration" | "push" = "merge";
   try {
     const wm = await mergeAndRemoveWorktree({
@@ -1124,14 +802,6 @@ export async function performWorktreeMergeBack(params: {
     }
     logInfo("worktree", `cleanup: ${wm.message}`, { tag: t });
     stage = "integration";
-    // Worktree integration: after the worktree branch merged into
-    // `baseBranch`, branch on integrationMode. Auto-merge runs the
-    // local fast-forward into mergeTargetBranch BEFORE the autoPush
-    // pass below so that pass pushes the merged target rather than
-    // baseBranch. Pull-request mode hands off to the devops agent
-    // which opens the PR/MR against the configured target.
-    // Conflict on auto-merge is fail-soft: HEAD ends up back on
-    // baseBranch and autoPush still pushes that.
     const baseBranch = run.worktreeBaseBranch ?? null;
     if (
       baseBranch &&
@@ -1144,8 +814,6 @@ export async function performWorktreeMergeBack(params: {
           sourceBranch: baseBranch,
           targetBranch: app.git.mergeTargetBranch,
           message: `merge ${baseBranch} → ${app.git.mergeTargetBranch} (${tid})`,
-          // Push handled by the explicit autoPush pass below to
-          // keep a single push site per run.
           push: false,
         });
         if (m.ok) {
@@ -1173,12 +841,6 @@ export async function performWorktreeMergeBack(params: {
       }
     }
     stage = "push";
-    // P4/F1 — push the live tree's current branch after a successful
-    // merge so `autoPush=true` reaches the merged result, not the
-    // throwaway worktree branch we suppressed above. Calling
-    // `autoCommitAndPush` with autoCommit=false short-circuits at
-    // the "no staged changes" branch, which forwards to `tryPush`
-    // when autoPush is on — exactly what we need.
     if (app.git.autoPush) {
       const r = await autoCommitAndPush(
         app.path,
@@ -1189,10 +851,6 @@ export async function performWorktreeMergeBack(params: {
         logInfo("auto-push", `live tree: ${r.message}`, { tag: t });
       } else {
         logWarn("auto-push", `live tree: ${r.message} — ${r.error ?? ""}`, { tag: t });
-        // Worktree-mode MERGE-NO-PUSH: the worktree branch merged
-        // into base locally (wm.ok) but the push to remote failed.
-        // Stamp the run so the UI surfaces it the same way as the
-        // live-tree path's MERGE-NO-PUSH.
         await markMergeNotPushed(
           dir,
           run.sessionId,
@@ -1213,23 +871,6 @@ export async function performWorktreeMergeBack(params: {
   return firstFailure ?? { ok: true };
 }
 
-/**
- * Wire `error` / `exit` lifecycle on a Claude child so its corresponding
- * meta.json run flips to `done` (clean exit) or `failed` (spawn error /
- * non-zero exit). Used by both the coordinator spawn path and the
- * `/api/tasks/<id>/agents` child spawn path so the same belt-and-
- * suspenders behavior applies everywhere — if the child forgot to PATCH
- * itself via the link API, we still close the run out cleanly.
- *
- * Never overwrites a final state the child already set: only flips when
- * the run is still `running` at the moment of exit.
- *
- * Phase D: after marking the run failed, fire the auto-retry path.
- * `maybeScheduleRetry` decides whether the failure is retryable
- * (it's a child, not coordinator-level; no prior retry exists). The
- * retry helper is lazy-imported to break the import cycle (childRetry
- * uses `wireRunLifecycle` for the retry's own lifecycle).
- */
 export function wireRunLifecycle(
   sessionsDir: string,
   sessionId: string,
@@ -1244,13 +885,7 @@ export function wireRunLifecycle(
       const meta = readMeta(sessionsDir);
       const failedRun = meta?.runs.find((r) => r.sessionId === sessionId);
       if (!failedRun || failedRun.status !== "failed") return;
-      // Speculative loser: the bridge SIGTERM'd this child as part of
-      // winner-selection, not because the agent crashed. Retrying
-      // would just waste tokens running a path the user already
-      // committed (via the winner). Skip auto-retry for losers.
       if (failedRun.speculativeOutcome === "lost") return;
-      // Lazy import: childRetry → coordinator (this file) → … breaks
-      // the cycle if loaded eagerly at module top.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { maybeScheduleRetry } = require("./childRetry") as typeof import("./childRetry");
       maybeScheduleRetry({ taskId, failedRun, exitCode });
@@ -1261,11 +896,6 @@ export function wireRunLifecycle(
 
   const failRun = async (reason: string, exitCode: number | null) => {
     try {
-      // Precondition guard: only flip running → failed. Without this,
-      // a late `exit` after a post-exit gate already wrote `done`
-      // could demote the row. The check runs INSIDE the per-task
-      // lock so a racing writer can't slip a final state in between
-      // the read and the patch.
       await updateRun(
         sessionsDir,
         sessionId,
@@ -1286,29 +916,10 @@ export function wireRunLifecycle(
       const meta = readMeta(sessionsDir);
       const run = meta?.runs.find((r) => r.sessionId === sessionId);
       if (run && run.status === "running") {
-        // NOTE: defer the status flip when a post-exit gate (verify
-        // chain OR claim-vs-diff verifier) will run for this app, so
-        // those branches can write status:done + their result in ONE
-        // combined updateRun patch — avoids a read-modify-write race
-        // and keeps the UI from flashing "done" while a -vretry /
-        // -cretry is still being decided. Gates now run on retry runs
-        // too (budget-controlled re-verification), so defer for any
-        // non-coordinator child with a registered app.
         const app = getApp(run.repo);
         const willRunPostExitGate =
           app !== null && run.role !== "coordinator";
 
-        // 2b — coordinator orchestration deferral. When the coordinator's
-        // process exits cleanly but it has spawned children that are still
-        // queued/running, we DON'T flip status:done immediately. Without
-        // this, the badge flashes DONE while a child is visibly mid-task,
-        // confusing operators ("task is finished, but fixer-cashier is
-        // still running?"). The auto-nudge subscriber
-        // (`libs/coordinatorNudge.ts`) finalizes the flip when children
-        // settle — same trigger that resumes the coordinator on the next
-        // turn. Failure path (`failRun`) is intentionally NOT deferred:
-        // a crashed/killed coordinator is a real terminal state regardless
-        // of whether children are alive.
         const isCoordWithActiveChildren =
           run.role === "coordinator" &&
           !!meta &&
@@ -1319,21 +930,6 @@ export function wireRunLifecycle(
               (r.status === "queued" || r.status === "running"),
           );
 
-        // Coordinator deferral #2 — summary.md missing. Even when no
-        // children are active at exit time, a coordinator that exited
-        // WITHOUT writing the contracted summary should not silently
-        // flip to `done` — the operator's Telegram + UI would say
-        // "completed" while the actual record is empty. Defer the
-        // flip; the nudge scheduled below resumes the coordinator so
-        // it gets a second turn to write the summary. Bounded by
-        // `SUMMARY_NUDGE_MAX_ATTEMPTS` inside `coordinatorNudge` so a
-        // model that genuinely can't comply still settles eventually.
-        //
-        // The lazy require is wrapped in its own try-catch so a failure
-        // loading `coordinatorNudge` (e.g. test environments that
-        // partial-mock the module graph) never blocks the legacy flip
-        // path — fall back to "summary is present" so the rest of the
-        // logic flips status normally.
         const coordHadChildren =
           run.role === "coordinator" &&
           !!meta &&
@@ -1372,15 +968,6 @@ export function wireRunLifecycle(
       logError("lifecycle", "failed to mark run done", e, { tag });
     }
 
-    // Belt-and-suspenders: schedule a nudge evaluation for the
-    // coordinator's own exit. The meta-event subscription in
-    // `coordinatorNudge.onMetaChange` already fires on a child terminal
-    // transition, but if every child already settled BEFORE the
-    // coordinator exited (common pattern: dispatch → wait → exit),
-    // no further transition arrives to drive a re-evaluation. Calling
-    // through the public scheduler here closes that gap. The scheduler
-    // is debounced + summary-aware, so re-firing is safe (no-op when
-    // summary already on disk).
     if (finishedRun && finishedRun.role === "coordinator") {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1391,11 +978,6 @@ export function wireRunLifecycle(
       }
     }
 
-    // Intent & Planning Gate: when a planner finishes while the task is
-    // mid-planning, derive the verdict and advance the gate (auto-approve
-    // a clear operator plan, else park at awaiting-approval). Lazy-require
-    // to avoid the import cycle (this module ← coordinator ← planGateLifecycle).
-    // No-op for every non-planner run and when intake isn't `planning`.
     if (finishedRun && finishedRun.role.toLowerCase().startsWith("planner")) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1410,20 +992,6 @@ export function wireRunLifecycle(
       }
     }
 
-    // P2 — verify chain + commit gate. Wrapped in an async IIFE so the
-    // `child.on("exit", ...)` handler stays sync; rejections surface via
-    // .catch() rather than crashing the Next.js dev server (Risk 1).
-    //
-    // Safety net: if postExitFlow throws BEFORE any gate had a chance to
-    // call attachGateResult (which writes a terminal status), the run
-    // would stay status:running until the stale-run reaper notices the
-    // registry-miss on the next read.
-    // The catch below flips status:FAILED (precondition: still running),
-    // NOT done. A crash in loadVerifyChain / verifyConfigOf means we could
-    // not verify the child's work — surfacing a false green checkmark (and
-    // letting the auto-commit gate proceed on unverified output) is worse
-    // than an honest failure. If a gate already wrote a terminal state the
-    // `status === "running"` precondition makes this a no-op.
     if (finishedRun && finishedRun.role !== "coordinator") {
       void postExitFlow({
         sessionsDir,
@@ -1449,48 +1017,28 @@ export function wireRunLifecycle(
 
   child.once("error", (err) => {
     void failRun(`spawn error: ${err.message}`, null);
-    // Reap per-session settings dir on abnormal exit too — the
-    // child never landed, so the settings file we wrote alongside
-    // it is now garbage. Defer to the next tick so the failRun
-    // updateRun gets a chance to land first (cosmetic ordering).
     setImmediate(() => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { cleanupSessionSettings } = require("./permissionSettings") as typeof import("./permissionSettings");
         cleanupSessionSettings(sessionId);
-      } catch { /* swallow */ }
+      } catch { }
     });
   });
-  // `once`, not `on`: an exit event must drive `succeedRun`/`failRun` —
-  // and therefore the gate chain in `postExitFlow` — exactly one time.
-  // If `wireRunLifecycle` were ever called twice for the same child,
-  // `on` would queue a duplicate retry spawn after the precondition
-  // guard inside `updateRun` short-circuited the second status flip.
   child.once("exit", (code, signal) => {
     if (code === 0) {
       void succeedRun();
     } else if (code !== null) {
       void failRun(`exit code ${code}`, code);
     } else {
-      // code === null means the child was terminated by a signal
-      // (e.g. SIGTERM from the stop button or speculative-loser
-      // selection). Without an explicit branch the run would stay
-      // status:running until the stale-run reaper notices the
-      // registry-miss on the next read.
-      // Treat it as a failed run so failRun's tryAutoRetry logic
-      // (which knows about speculativeOutcome === "lost") can decide
-      // whether to retry or just terminate cleanly.
       void failRun(`killed by signal ${signal ?? "unknown"}`, null);
     }
-    // Always reap the per-session settings file on terminal exit —
-    // success path included. The dir is owned exclusively by this
-    // session so once the process is gone nothing else needs it.
     setImmediate(() => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { cleanupSessionSettings } = require("./permissionSettings") as typeof import("./permissionSettings");
         cleanupSessionSettings(sessionId);
-      } catch { /* swallow */ }
+      } catch { }
     });
   });
 }

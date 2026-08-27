@@ -3,11 +3,6 @@ import { evaluateInternalTokenGate } from "../internalTokenGate";
 
 const TOKEN = "the-real-internal-token";
 
-/**
- * Default "obviously fine" values for fields a given test isn't
- * exercising, so each test only has to spell out what it's actually
- * asserting about.
- */
 const BASE = {
   peerAddr: "127.0.0.1",
   clientForwardedFor: null as string | null,
@@ -79,17 +74,6 @@ describe("evaluateInternalTokenGate", () => {
     ).toBe(false);
   });
 
-  // --- Host-based signal (finding 1: co-located tunnel topology) ---
-  //
-  // libs/tunnels.ts spawns localtunnel/ngrok on the SAME machine as the
-  // bridge, connecting to the local port. So a request arriving through
-  // the operator's public tunnel has a loopback TCP peer — the peer
-  // signal alone contributes nothing for that topology. The tunnel DOES
-  // forward the public hostname as `Host` (e.g. `Host: xyz.loca.lt`),
-  // which is the only remaining signal if the tunnel provider doesn't
-  // inject x-forwarded-for/x-real-ip/forwarded (localtunnel's behavior
-  // here is undocumented in this repo — the defense must not depend on
-  // a third party's undocumented behavior).
 
   it("accepts localhost as an expected local Host, any port", () => {
     expect(evaluateInternalTokenGate({ ...BASE, hostHeader: "localhost:9999" })).toBe(true);

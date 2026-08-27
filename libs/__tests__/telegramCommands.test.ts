@@ -12,19 +12,6 @@ import {
   sendReply,
 } from "../telegramCommands";
 
-/**
- * These tests cover the pure dispatcher + parser + validation layer of
- * `lib/telegramCommands`. Side-effecting handlers (`/done`, `/new`,
- * `/clear`, …) are exercised by the underlying lib tests
- * (`tasks.test.ts`, `meta.test.ts`, etc.); duplicating them here would
- * couple this suite to disk state those suites already cover.
- *
- * What we DO assert:
- *   - command name parsing (leading slash, `@botname` suffix, args)
- *   - unknown command path
- *   - usage / validation messages for `<id>` and `<reqId>` arguments
- *   - help text contains every registered command
- */
 describe("dispatchCommand — parsing", () => {
   it("returns an 'unknown command' message for unknown slugs", async () => {
     const out = await dispatchCommand("/wat");
@@ -34,7 +21,6 @@ describe("dispatchCommand — parsing", () => {
 
   it("strips the @botname suffix Telegram appends in groups", async () => {
     const out = await dispatchCommand("/help@my_bridge_bot");
-    // Should land on the help handler, NOT the unknown branch.
     expect(out).not.toMatch(/Unknown command/);
     expect(out).toMatch(/Bridge commands/i);
   });
@@ -61,8 +47,6 @@ describe("dispatchCommand — parsing", () => {
   });
 
   it("preserves rawTail for /new (multi-word body, no split)", async () => {
-    // Empty body → usage hint, not a "Created" reply (we don't want
-    // /new to create anything when called with nothing).
     const out = await dispatchCommand("/new");
     expect(out).toMatch(/Usage:/);
     expect(out).not.toMatch(/Created/);
@@ -72,8 +56,6 @@ describe("dispatchCommand — parsing", () => {
 describe("dispatchCommand — /help content", () => {
   it("lists every registered command", async () => {
     const help = await dispatchCommand("/help");
-    // Spot-check across tier-0 / tier-1 / tier-2 surfaces. If any of
-    // these disappears the help drift check fires immediately.
     for (const cmd of [
       "/tasks",
       "/done",
@@ -117,9 +99,6 @@ describe("dispatchCommand — permission answer parsing", () => {
   });
 
   it("returns 'no pending request' when nothing matches", async () => {
-    // 6+ char prefix that is extraordinarily unlikely to collide with
-    // any pending request that another test may have left in the
-    // module-level permissionStore.
     const out = await dispatchCommand(
       "/allow zzzzzzzz-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     );
@@ -146,9 +125,6 @@ describe("dispatchCommand — report parsing", () => {
 
 describe("dispatchCommand — read-only commands handle empty state", () => {
   it("/pending returns the no-pending message when the store is empty", async () => {
-    // Other tests in the suite may have left pending entries; we just
-    // assert the dispatcher doesn't crash. If the store happens to be
-    // empty, the green-checkmark message is what we get.
     const out = await dispatchCommand("/pending");
     expect(typeof out).toBe("string");
     expect(out.length).toBeGreaterThan(0);
@@ -167,15 +143,6 @@ describe("dispatchCommand — read-only commands handle empty state", () => {
   });
 });
 
-/**
- * H8 — `fetchUpdates` used to pass `poller.abort?.signal` straight to
- * `fetch`, which only fires on an explicit shutdown. A stalled
- * connection (no clean FIN — routine on a laptop that sleeps or drops
- * Wi-Fi) left the `await fetch` pending forever, so `runLoop`'s catch
- * and its restart backoff never ran. `buildPollSignal` composes a
- * request-level deadline with the shutdown signal so each getUpdates
- * call is bounded no matter what the connection does.
- */
 describe("buildPollSignal — bounds the long-poll per request (audit H8)", () => {
   it("is not already aborted right after construction", () => {
     const sig = buildPollSignal(undefined);
@@ -194,16 +161,10 @@ describe("buildPollSignal — bounds the long-poll per request (audit H8)", () =
     const sig = buildPollSignal(shutdown.signal, 60_000);
     expect(sig.aborted).toBe(false);
     shutdown.abort();
-    // AbortSignal.any propagates synchronously — no need to await.
     expect(sig.aborted).toBe(true);
   });
 
   it("aborts on its own after the deadline elapses, independent of any shutdown signal", async () => {
-    // A vitest fake-timer probe confirmed AbortSignal.timeout's internal
-    // timer is NOT intercepted by vi.useFakeTimers() in this Bun +
-    // vitest setup (it advanced 5001ms of fake time and the signal
-    // never fired) — so this test uses a short REAL deadline via the
-    // overridable `deadlineMs` param instead of the ~35s production one.
     const sig = buildPollSignal(undefined, 20);
     expect(sig.aborted).toBe(false);
     await new Promise((r) => setTimeout(r, 150));
@@ -237,16 +198,6 @@ describe("fetchUpdates — wires a composed, non-shutdown-only signal into fetch
   });
 });
 
-/**
- * H9 — list renderers used to emit one unbounded line per row, and
- * `sendReply` truncated the ALREADY-html-converted string, so a cut
- * had a high chance of landing inside a tag and Telegram rejected the
- * whole `sendMessage` with 400 "can't parse entities". The fix has two
- * parts: cap the renderers so truncation is rarely reached at all
- * (`capListLines`), and when truncation IS needed, cut the pre-HTML
- * markdown-lite text so `mdLiteToHtml` always emits balanced tags by
- * construction (`buildReplyBody`).
- */
 describe("capListLines — bound list renderers with a +K more suffix", () => {
   it("returns the input unchanged when at or under the cap", () => {
     const rows = Array.from({ length: 5 }, (_, i) => `row ${i}`);
@@ -269,12 +220,6 @@ describe("buildReplyBody — truncate before HTML conversion (audit H9)", () => 
       (_, i) => `- \`t_2026_${i}\` *title ${i}*`,
     ).join("\n");
     const out = buildReplyBody(long);
-    // Proves truncation actually happened (the last row is cut off) —
-    // otherwise the balance assertion below would trivially hold on
-    // the untruncated content instead of exercising the fix. (Can't
-    // compare `out.length` to `long.length` directly: HTML tag
-    // overhead legitimately makes the converted-and-truncated output
-    // longer than the raw pre-conversion string in raw character count.)
     expect(out).not.toContain("title 199");
     const opens = (out.match(/<(b|code)>/g) ?? []).length;
     const closes = (out.match(/<\/(b|code)>/g) ?? []).length;
@@ -283,10 +228,6 @@ describe("buildReplyBody — truncate before HTML conversion (audit H9)", () => 
   });
 
   it("degrades a code span truncated mid-token to plain text instead of an orphan tag", () => {
-    // Engineered so REPLY_MAX (3500) lands inside a single, very long,
-    // unterminated code span — the worst case for "cut lands inside a
-    // tag". If truncation ran on the ALREADY-converted HTML (the old
-    // behavior), this would emit an unclosed `<code>`.
     const raw = "`" + "x".repeat(5000);
     const out = buildReplyBody(raw);
     expect(out).not.toContain("<code>");
@@ -325,16 +266,6 @@ describe("sendReply — resilience via the shared retry helper (audit H9)", () =
   });
 });
 
-/**
- * Integration check: the pure `capListLines` helper is exercised above
- * in isolation, but this proves the real `renderTasks` (reached via
- * `/tasks`) is actually wired to it, using real tasks on disk. Follows
- * the chdir + resetModules + dynamic-import convention from
- * `telegramSummary.test.ts` — `SESSIONS_DIR` is captured at module load
- * from `process.cwd()`, so this needs its own fresh module graph
- * pointed at a temp "bridge root" rather than the statically-imported
- * `dispatchCommand` above (which is already bound to the real repo).
- */
 describe("/tasks — end-to-end list cap via the real renderer", () => {
   let tempRoot: string;
   let originalCwd: string;
@@ -352,7 +283,6 @@ describe("/tasks — end-to-end list cap via the real renderer", () => {
     try {
       rmSync(tempRoot, { recursive: true, force: true });
     } catch {
-      /* best-effort */
     }
   });
 

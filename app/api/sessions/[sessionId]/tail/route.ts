@@ -21,17 +21,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const sinceParam = searchParams.get("since");
   const beforeParam = searchParams.get("before");
 
-  // C4 follow-up (task 6 review, defence in depth): `?repo=` is an
-  // absolute path checked only against "is this SOME registered app"
-  // (isRegisteredRepoPath below) — it never confirms the path belongs
-  // to THIS sessionId. Once /message can no longer be used to spawn a
-  // session into a foreign app (see guestSessionRepo.ts), a guest has
-  // no way to CREATE one — but without this, a guest could still tail
-  // any of their task's session ids while pointing `repo` at a
-  // different registered app's project dir. For a guest, discard the
-  // query value and use the repo recorded on the session's own run
-  // instead; operators may tail "free chat" sessions with no owning
-  // run, so their existing query-driven behaviour is unchanged.
   const actor = verifyRequestActor(req);
   let effectiveRepoPath = repoPath;
   if (actor?.kind === "guest") {
@@ -45,12 +34,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     });
   }
 
-  // Whitelist repo against registered apps before hitting the file resolver.
   if (!isRegisteredRepoPath(effectiveRepoPath)) return badRequest("invalid session repo");
   const file = resolveSessionFile(effectiveRepoPath, sessionId);
   if (!file) return badRequest("invalid session repo");
 
-  // Backward-paging mode: caller wants the slice ENDING at `before` bytes.
   if (beforeParam !== null) {
     const before = Number(beforeParam);
     if (!existsSync(file)) {
@@ -60,7 +47,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     return NextResponse.json(result);
   }
 
-  // Default forward-tail mode.
   const since = Number(sinceParam ?? 0);
   if (!existsSync(file)) return NextResponse.json({ lines: [], offset: since, lineOffsets: [] });
   const result = await tailJsonl(file, since);

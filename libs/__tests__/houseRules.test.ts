@@ -3,15 +3,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/**
- * houseRules reads from `BRIDGE_LOGIC_DIR/house-rules.md` (global) and
- * `<appPath>/.bridge/house-rules.md` (per-app). The global path is
- * computed at module import time from `BRIDGE_ROOT`, which itself is
- * `process.cwd()`. We mock `process.cwd()` (no real chdir — the spy
- * just changes the return value) BEFORE importing the module so the
- * fresh import resolves `BRIDGE_LOGIC_DIR` against our temp dir
- * without touching the real `prompts/` directory.
- */
 function mktmp(label: string): string {
   return mkdtempSync(join(tmpdir(), `bridge-houserules-${label}-`));
 }

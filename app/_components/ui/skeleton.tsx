@@ -1,10 +1,5 @@
 import { cn } from "@/libs/cn";
 
-/**
- * Animated skeleton placeholder. Use in place of "Loading…" text while
- * a list / card / detail panel is fetching, so the layout doesn't pop
- * when data lands.
- */
 export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -18,10 +13,6 @@ export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   );
 }
 
-/**
- * Three vertically-stacked card skeletons, sized like a typical task /
- * app / session list row. Drop-in replacement for "Loading…" lists.
- */
 export function ListSkeleton({ rows = 3, className }: { rows?: number; className?: string }) {
   return (
     <div className={cn("space-y-2", className)}>

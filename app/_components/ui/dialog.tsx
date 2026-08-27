@@ -36,11 +36,6 @@ export const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        // `w-[calc(100%-1.5rem)]` keeps a 12px gutter on each side on
-        // mobile so the dialog never sits flush against the viewport
-        // edge; `max-w-lg` still applies on wider screens. Capping
-        // height to 90vh + scrolling content keeps long forms usable on
-        // short phone screens without the bottom buttons being hidden.
         "fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-1.5rem)] max-w-lg max-h-[90vh] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto",
         "rounded-lg border border-border bg-card text-card-foreground shadow-2xl",
         "p-4 sm:p-5 outline-none",

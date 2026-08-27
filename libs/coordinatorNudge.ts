@@ -1,38 +1,3 @@
-/**
- * Auto-nudge an idle coordinator when its children settle.
- *
- * The bridge / coordinator wire was poll-only: the coordinator had to
- * spin a `curl GET /api/tasks/<id>/meta` loop or schedule a wakeup to
- * notice when a child finished. In practice coordinators tend to spawn
- * children, schedule a wakeup, and go idle — and if the wakeup fires
- * before the children finish (or after, but with no children left to
- * wait on), nothing brings the coordinator back. The user had to chat
- * "ping" to manually re-attach a turn.
- *
- * This module subscribes once at server boot to the global meta-change
- * stream. Whenever a run transitions to a terminal state (`done` /
- * `failed` / `cancelled` / `stale`), we ask: was this run a
- * coordinator's child? Are all of that coordinator's children now
- * terminal? Is the coordinator process currently idle (no live claude
- * subprocess attached)? If yes to all three, we resume the coordinator
- * with a short prompt and a one-shot summary of which children settled.
- * Same fan-out path as the `/api/tasks/<id>/continue` button — just
- * triggered by the bridge instead of the user.
- *
- * Guards:
- *   - skip when the finished run has no `parentSessionId` (bridge-spawned
- *     coordinator, no parent to nudge)
- *   - skip when the coordinator process is alive (`isAlive(parentId)`) —
- *     it'll see the new state itself on its next polling tick / wakeup
- *   - skip when any sibling child is still queued/running (a retry that
- *     just respawned would put a fresh `running` row in meta; the next
- *     terminal transition re-evaluates)
- *   - per-coordinator debounce of NUDGE_DEBOUNCE_MS so a burst of
- *     near-simultaneous child exits only nudges once
- *   - 250 ms delay before evaluating, so a synchronous retry-spawn that
- *     fires from the same lifecycle exit handler can land its `queued`
- *     row before we see "all terminal"
- */
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -50,76 +15,19 @@ import { BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
 import { logError, logInfo, logWarn } from "./log";
 
 const NUDGE_DEBOUNCE_MS = 5_000;
-/**
- * Delay before evaluating after a child-terminal event. Originally 250
- * ms — chosen to let a synchronous retry-spawn's `appendRun` land its
- * `queued` row first (so `decideNudge` sees "still running" instead of
- * "all terminal" and false-fires). 100 ms is plenty for that since
- * `appendRun` is a single locked write, and the shorter delay makes
- * coordinator wake-up feel snappier from the operator's perspective.
- */
 const EVAL_DELAY_MS = 100;
-/**
- * Cap how many times we'll re-nudge a coordinator that keeps exiting
- * without writing summary.md. Without a cap, a model that genuinely
- * can't write the file (e.g. context limit, persistent error) would
- * loop forever every time the user's wake handler ticks. After this
- * many failed nudges we let the coordinator's `running → done` flip
- * land so the row stops looking stuck — the operator can re-dispatch
- * by hand from the UI.
- */
 const SUMMARY_NUDGE_MAX_ATTEMPTS = 3;
 
-/**
- * Returns true iff `sessions/<taskId>/summary.md` is missing, empty,
- * or contains only whitespace. The coordinator is contracted to write
- * a final report into that file before exiting cleanly (see
- * `prompts/coordinator-playbook.md` §5); when it's absent we treat the
- * exit as "premature" and let the nudge path resume the session so the
- * model gets a second chance to write the summary instead of the row
- * silently flipping to `done` with no user-visible output.
- */
 export function isSummaryMissing(taskId: string): boolean {
   const path = join(SESSIONS_DIR, taskId, "summary.md");
   if (!existsSync(path)) return true;
   try {
     return readFileSync(path, "utf8").trim().length === 0;
   } catch {
-    // Read errors (permission, transient FS hiccup) — be conservative
-    // and treat as missing so we don't silently swallow the case where
-    // the file genuinely failed to write.
     return true;
   }
 }
 
-/**
- * Returns true when `summary.md` exists but is older than the latest
- * child's `endedAt`. Distinct from `isSummaryMissing` so the nudge
- * decision can differentiate three states:
- *   - missing  → coordinator hasn't shipped yet (round 1)
- *   - present + fresh → round done, no nudge needed
- *   - present + stale → coordinator wrote a summary in an earlier
- *                       round, then new children finished in a later
- *                       round → must re-nudge or the coordinator goes
- *                       silent and the user has to chat "ping" to
- *                       restart the turn. This is the "im lặng round 2"
- *                       bug: the summary on disk is from round 1 but
- *                       round 2's children just settled.
- *
- * Comparison is mtime (summary.md) vs max(endedAt) across runs whose
- * `parentSessionId === parentSessionId` AND `status` is terminal. We
- * only consider children of THIS coordinator so an unrelated child
- * for another task (impossible in the per-task SESSIONS_DIR layout,
- * but defensive) doesn't trigger staleness.
- *
- * Returns false when:
- *   - summary.md doesn't exist (caller should ask `isSummaryMissing`)
- *   - no terminal children yet (nothing to compare against)
- *   - mtime ≥ latest child endedAt (summary covers the most recent
- *     child)
- *   - any error reading mtime / endedAt (be conservative — better to
- *     skip a nudge than fire a spurious one)
- */
 export function isSummaryStale(args: {
   taskId: string;
   parentSessionId: string;
@@ -143,25 +51,13 @@ export function isSummaryStale(args: {
     if (t > latestChildEnd) latestChildEnd = t;
   }
   if (latestChildEnd === 0) return false;
-  // 1s tolerance — mtime has sub-second precision but `endedAt` is ISO
-  // and the order between "child writes report" and "coordinator writes
-  // summary" is bridge-internal. Without the tolerance, a fresh summary
-  // written immediately after the last child's exit can read as stale.
   return latestChildEnd > summaryMtime + 1000;
 }
 
 interface NudgeState {
   installed: boolean;
   unsubscribe: (() => void) | null;
-  /** coordinator sessionId → epoch-ms of the last nudge we sent. */
   lastNudge: Map<string, number>;
-  /**
-   * coordinator sessionId → count of consecutive nudges that fired
-   * because `summary.md` was missing. Reset to 0 once a nudge lands on
-   * a coordinator that DID write the summary; bounded by
-   * `SUMMARY_NUDGE_MAX_ATTEMPTS` so a model that genuinely can't
-   * comply doesn't get hammered forever.
-   */
   summaryNudgeAttempts: Map<string, number>;
 }
 
@@ -175,29 +71,9 @@ const state: NudgeState = G.__bridgeCoordinatorNudge ?? {
 G.__bridgeCoordinatorNudge = state;
 
 function isTerminal(s: RunStatus): boolean {
-  // `cancelled` (operator Stop, audit C1) must count as terminal too —
-  // otherwise a stopped child's `!isTerminal` check never flips, and
-  // every "are all children settled" gate below waits forever for a
-  // process that is already dead.
   return s === "done" || s === "failed" || s === "cancelled" || s === "stale";
 }
 
-/**
- * Pure decision: should the deferred coordinator DONE flip happen now?
- *
- * Returns true iff the coordinator is in the deferred-`running`
- * state from `runLifecycle.succeedRun` AND the conditions to finalize
- * have been reached: process is gone, every child terminal, AND
- * summary.md was actually written. The summary check is required
- * because succeedRun defers the flip specifically when summary is
- * missing — finalizing as DONE without checking would silently
- * accept the coordinator's failure to write its contract output.
- *
- * The `summaryMissing` arg is optional for back-compat. When omitted,
- * treats summary as present (legacy "always finalize" behavior).
- * Production callers should always pass the real value from
- * `isSummaryMissing(taskId)`.
- */
 export function shouldFinalizeDeferredCoordinator(args: {
   parentSessionId: string;
   runs: Run[];
@@ -218,22 +94,6 @@ export function shouldFinalizeDeferredCoordinator(args: {
   );
 }
 
-/**
- * Pure decision: should we mark the coordinator as a hard failure
- * because it exhausted its summary-write nudge budget?
- *
- * Returns true iff:
- *   - the coordinator is still in deferred-`running` state
- *   - its process is gone (no live claude subprocess attached)
- *   - every child has reached a terminal state
- *   - summary.md is still missing/empty
- *   - the nudge counter has hit `SUMMARY_NUDGE_MAX_ATTEMPTS`
- *
- * Once this returns true, `evaluateAndNudge` flips the coordinator run
- * to `failed`, writes a synthetic summary describing the failure, and
- * PATCHes the task section to `BLOCKED` so the operator sees a real
- * failure indicator instead of a silent DONE.
- */
 export function shouldMarkCoordinatorSummaryBlocked(args: {
   parentSessionId: string;
   runs: Run[];
@@ -256,14 +116,6 @@ export function shouldMarkCoordinatorSummaryBlocked(args: {
   );
 }
 
-/**
- * Pure decision: should we nudge the coordinator right now?
- *
- * Extracted so tests can exercise the decision matrix without spinning
- * up the full meta + spawn machinery. The runtime `evaluateAndNudge`
- * just feeds in the live state plus an `isAlive` callback and acts on
- * the verdict.
- */
 export type NudgeDecision =
   | { kind: "nudge"; children: Run[] }
   | { kind: "skip"; reason: string };
@@ -272,36 +124,10 @@ export function decideNudge(args: {
   parentSessionId: string;
   runs: Run[];
   isAlive: (sessionId: string) => boolean;
-  /** Last nudge timestamp for this coordinator (null if none yet). */
   lastNudgeAt: number | null;
-  /** Now. Tests pass a fixed value for deterministic debounce assertions. */
   now: number;
-  /**
-   * Whether `summary.md` is currently missing/empty for this task.
-   * Optional for back-compat with existing callers; defaults to `true`
-   * (the legacy "always nudge once conditions are met" behavior). When
-   * the caller knows the file is present, pass `false` to skip the
-   * resume — re-nudging a coordinator that already shipped its summary
-   * just burns tokens producing noise the operator will discard.
-   */
   summaryMissing?: boolean;
-  /**
-   * Whether `summary.md` exists but is OLDER than the most recent
-   * child's `endedAt` (i.e. coordinator wrote a round-1 summary, then
-   * round-2 children just settled — the on-disk summary doesn't cover
-   * them). When true, we override the "summary already written" skip
-   * and nudge anyway, because the coordinator genuinely needs to react
-   * to the new work. Counts against the summary-nudge attempt budget
-   * the same way a missing summary does (caps runaway loops if the
-   * coordinator keeps producing stale summaries).
-   */
   summaryStale?: boolean;
-  /**
-   * How many times we've already nudged THIS coordinator specifically
-   * because of a missing summary. Caps the resume loop so a model that
-   * genuinely can't write the file doesn't get hammered forever.
-   * Optional / defaults to 0.
-   */
   summaryNudgeAttempts?: number;
 }): NudgeDecision {
   const coordinator = args.runs.find(
@@ -321,17 +147,8 @@ export function decideNudge(args: {
     return { kind: "skip", reason: "coordinator alive" };
   }
 
-  // Default behavior preserved for tests + callers that don't yet
-  // thread the summary state through — treat absence as "missing"
-  // because the legacy nudge always fired when the rest of the gates
-  // passed. Callers (notably `evaluateAndNudge` below) read the file
-  // and pass the real value.
   const summaryMissing = args.summaryMissing ?? true;
   const summaryStale = args.summaryStale ?? false;
-  // Stale overrides "already written": coordinator did ship a summary
-  // for round 1, but new children just finished in round 2 and need
-  // a fresh aggregation. Without this branch the round-2 work goes
-  // unread and the user has to manually re-ping.
   if (!summaryMissing && !summaryStale) {
     return { kind: "skip", reason: "summary already written" };
   }
@@ -347,11 +164,6 @@ export function decideNudge(args: {
   return { kind: "nudge", children };
 }
 
-/**
- * Decide whether `ev` is a terminal transition we care about.
- * Filters out coordinator-self transitions (no need to nudge yourself)
- * and runs without a parentSessionId.
- */
 function isChildTerminalTransition(ev: MetaChangeEvent): ev is MetaChangeEvent & {
   run: Run;
   sessionId: string;
@@ -364,13 +176,6 @@ function isChildTerminalTransition(ev: MetaChangeEvent): ev is MetaChangeEvent &
   return true;
 }
 
-/**
- * Build the one-shot prompt the bridge sends into the resumed
- * coordinator session. Short by design — the coordinator already has
- * the task context in its transcript; we just hand it the diff since
- * its last turn so it can decide whether to dispatch follow-ups or
- * finalize.
- */
 function buildNudgeMessage(args: {
   taskId: string;
   children: Run[];
@@ -390,13 +195,6 @@ function buildNudgeMessage(args: {
   ].join("\n");
 }
 
-/**
- * Synthesize a `summary.md` describing the BLOCKED state so the operator
- * sees real content in the UI's left pane instead of "(file missing)".
- * Kept short and explicit — the operator's recourse is to re-dispatch
- * the task from the UI after investigating why the coordinator couldn't
- * produce a summary (rate-limited model, context-window, etc.).
- */
 function buildBlockedSummary(args: {
   taskId: string;
   attempts: number;
@@ -423,15 +221,6 @@ function buildBlockedSummary(args: {
   ].join("\n");
 }
 
-/**
- * Flip the coordinator run to `failed`, drop a synthetic summary.md,
- * and PATCH the task section to BLOCKED so the operator notices.
- * Called once per coordinator from `evaluateAndNudge` when
- * `shouldMarkCoordinatorSummaryBlocked` returns true.
- *
- * `updateTask` is required via lazy `require` to break the import
- * cycle (tasksStore → meta → coordinatorNudge subscriber).
- */
 async function markCoordinatorSummaryBlocked(args: {
   sessionsDir: string;
   taskId: string;
@@ -445,7 +234,6 @@ async function markCoordinatorSummaryBlocked(args: {
       (r) => r.parentSessionId === parentSessionId,
     ) ?? [];
 
-    // 1. Flip the run to failed (precondition: still running).
     await updateRun(
       sessionsDir,
       parentSessionId,
@@ -453,8 +241,6 @@ async function markCoordinatorSummaryBlocked(args: {
       (r) => r.status === "running",
     );
 
-    // 2. Write the synthetic summary so the left pane shows real text
-    //    instead of "(file missing)".
     try {
       const summaryPath = join(sessionsDir, "summary.md");
       writeFileSync(
@@ -469,8 +255,6 @@ async function markCoordinatorSummaryBlocked(args: {
       });
     }
 
-    // 3. PATCH the task section to BLOCKED. Lazy require breaks the
-    //    tasksStore → meta → coordinatorNudge import cycle.
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const ts = require("./tasksStore") as typeof import("./tasksStore");
@@ -488,8 +272,6 @@ async function markCoordinatorSummaryBlocked(args: {
       { taskId, coordinator: parentSessionId.slice(0, 8) },
     );
 
-    // Drop the counter so the same coordinator id (won't happen in
-    // practice, but tidy) doesn't carry stale state.
     state.summaryNudgeAttempts.delete(parentSessionId);
   } catch (e) {
     logError("coordinator-nudge", "failed to mark coordinator BLOCKED", e, {
@@ -513,15 +295,6 @@ async function evaluateAndNudge(
     && isSummaryStale({ taskId, parentSessionId, runs: meta.runs });
   const attemptsSoFar = state.summaryNudgeAttempts.get(parentSessionId) ?? 0;
 
-  // ─── Summary nudge exhausted → mark coordinator BLOCKED ────────────
-  // When the coordinator has exited, every child settled, summary is
-  // still missing AND the nudge counter has hit the cap, the prior
-  // behavior was to silently let `shouldFinalizeDeferredCoordinator`
-  // flip the row to DONE — operator sees a green checkmark on a task
-  // whose actual record is empty. Replace that with a real failure
-  // indicator: flip the run to `failed`, write a synthetic
-  // summary.md so the operator knows WHAT failed (not just that
-  // something did), and PATCH the task section to BLOCKED.
   if (
     shouldMarkCoordinatorSummaryBlocked({
       parentSessionId,
@@ -537,19 +310,9 @@ async function evaluateAndNudge(
       parentSessionId,
       attempts: attemptsSoFar,
     });
-    // Don't fall through — once BLOCKED, no further nudge attempts.
     return;
   }
 
-  // ─── Normal deferred DONE flip (summary present) ──────────────────
-  // When the coordinator's process exited cleanly but `wireRunLifecycle`
-  // left it as `running` because children were still active (see the
-  // `isCoordWithActiveChildren` branch in `runLifecycle.succeedRun`),
-  // this is the moment to honor the deferred flip: process is gone
-  // (`!isAlive`) AND every child has now reached a terminal state AND
-  // summary.md is present. The summary guard prevents silently flipping
-  // to DONE when the coordinator exited without writing its contract
-  // output — the BLOCKED path above handles the exhausted-attempts case.
   if (
     shouldFinalizeDeferredCoordinator({
       parentSessionId,
@@ -578,11 +341,6 @@ async function evaluateAndNudge(
     }
   }
 
-  // Re-read meta after the potential flip so the nudge decision sees
-  // the latest coordinator status (otherwise decideNudge would still
-  // observe `running` and skip via the "coordinator alive" guard —
-  // wait, the guard checks `isAlive`, not status. But re-reading is
-  // cheap and keeps the next decision consistent if more flips land.)
   const metaAfter = readMeta(sessionsDir) ?? meta;
 
   const now = Date.now();
@@ -597,12 +355,6 @@ async function evaluateAndNudge(
     summaryNudgeAttempts: state.summaryNudgeAttempts.get(parentSessionId) ?? 0,
   });
   if (decision.kind !== "nudge") {
-    // Coordinator finished cleanly with summary on disk AND the
-    // summary is current — clear any counted attempts so a future task
-    // with the same coordinator sessionId (won't happen in practice,
-    // but the map is keyed by sessionId so it's safe to be tidy)
-    // starts fresh. A stale summary leaves the counter alone so a
-    // coordinator that keeps producing stale summaries hits the cap.
     if (!summaryMissing && !summaryStale) {
       state.summaryNudgeAttempts.delete(parentSessionId);
     }
@@ -615,8 +367,6 @@ async function evaluateAndNudge(
     (state.summaryNudgeAttempts.get(parentSessionId) ?? 0) + 1,
   );
 
-  // Bound the debounce map so a long-running bridge with many
-  // coordinators doesn't accumulate entries forever.
   if (state.lastNudge.size > 256) {
     const cutoff = now - NUDGE_DEBOUNCE_MS * 4;
     for (const [k, t] of state.lastNudge) {
@@ -624,22 +374,12 @@ async function evaluateAndNudge(
     }
   }
   if (state.summaryNudgeAttempts.size > 256) {
-    // No timestamp on this counter — just drop the bottom half of
-    // entries when we're over cap. Eviction order doesn't matter:
-    // the counter is consulted on the next nudge and missing entries
-    // default to 0.
     const keys = Array.from(state.summaryNudgeAttempts.keys());
     for (const k of keys.slice(0, keys.length / 2)) {
       state.summaryNudgeAttempts.delete(k);
     }
   }
 
-  // Emit BEFORE the slow `claude --resume` so the UI surfaces a
-  // "resuming coordinator…" indicator immediately. Without this, the
-  // operator stares at a screen with no visible change for the
-  // 10-60s of claude's cold-start before the first assistant message
-  // lands. The coordinator row's existing `running` state alone is
-  // not enough — it was already `running` from the deferred flip.
   const coordRun = metaAfter.runs.find(
     (r) => r.sessionId === parentSessionId,
   );
@@ -657,8 +397,6 @@ async function evaluateAndNudge(
       cwd: BRIDGE_ROOT,
       sessionId: parentSessionId,
       message: buildNudgeMessage({ taskId, children: decision.children }),
-      // Coordinator runs unattended — same bypass mode the original
-      // spawn / continue paths use.
       settings: { mode: "bypassPermissions" },
       context: `coordinator-nudge ${taskId}`,
     });
@@ -680,25 +418,12 @@ async function evaluateAndNudge(
 }
 
 function onMetaChange(ev: MetaChangeEvent): void {
-  // Two trigger sources:
-  //   (a) a child of THIS coordinator just hit a terminal state
-  //   (b) the coordinator itself just exited (transition to done/failed/stale)
-  //
-  // Without (b), a coordinator that exits AFTER every child has already
-  // settled would never get another transition to react to — no child
-  // would fire again, and the coordinator's own exit is filtered out of
-  // the child-terminal predicate. Fix: also schedule an evaluation when
-  // the coordinator's own row transitions to a terminal state. The
-  // evaluation logic itself (`evaluateAndNudge`) re-reads meta and
-  // makes the right call (resume vs. skip) based on summary.md
-  // presence + nudge-attempt budget.
   if (ev.kind !== "transition" || !ev.run || !ev.sessionId) return;
   if (!isTerminal(ev.run.status)) return;
 
   let parentId: string | null = null;
   let label: string;
   if (ev.run.role === "coordinator") {
-    // Self-exit trigger — the coordinator IS the parent for this eval.
     parentId = ev.sessionId;
     label = "self-exit";
   } else if (ev.run.parentSessionId) {
@@ -709,12 +434,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
   }
 
   const taskId = ev.taskId;
-  // Defer briefly so any synchronous retry-spawn fired from the same
-  // lifecycle exit handler can land its `queued` row first. Without
-  // this, a `failed` → retry path would race: we'd see "all terminal"
-  // because the retry's appendRun hadn't completed yet, then nudge,
-  // then the retry would actually start running — coordinator gets
-  // pinged for nothing.
   const t = setTimeout(() => {
     void evaluateAndNudge(taskId, parentId, label);
   }, EVAL_DELAY_MS);
@@ -723,17 +442,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
   }
 }
 
-/**
- * Public entry point for callers OUTSIDE the meta-event stream that
- * want to re-evaluate a coordinator. Same shape as the internal
- * scheduling — `EVAL_DELAY_MS` deferral preserved so an in-flight
- * retry/spawn can land its row first.
- *
- * Used by `runLifecycle.succeedRun` to guarantee a nudge fires when
- * the coordinator's own process exits, even in the edge case where no
- * child transition will follow (all children already settled before
- * the coordinator exited).
- */
 export function scheduleCoordinatorEvaluation(
   taskId: string,
   parentSessionId: string,
@@ -747,26 +455,6 @@ export function scheduleCoordinatorEvaluation(
   }
 }
 
-/**
- * One-shot startup sweep: walk every task dir, and for each one whose
- * coordinator might be stuck (children all terminal, coordinator process
- * gone, summary missing or stale), schedule an evaluation through the
- * normal `decideNudge` path. This catches tasks that got wedged between
- * bridge restarts — the meta-change subscription only sees LIVE
- * transitions, so if children settled while the bridge was down (or
- * before the fix was deployed), no event ever fires and the coordinator
- * stays mute forever until the operator manually pings.
- *
- * Cheap: we read each `meta.json` once (already-cached by `readMeta`),
- * run pure decision logic, and only spawn timers for the rare stuck
- * cases. `decideNudge` itself filters out anything that's actually
- * fine (alive coordinator, children still running, summary current,
- * nudge attempts exhausted) — this sweep just exercises the same
- * gates with a synthetic trigger label so logs distinguish them.
- *
- * Errors per task are swallowed and logged so one bad meta.json
- * doesn't sink the rest of the sweep.
- */
 function runStartupSweep(): void {
   if (!existsSync(SESSIONS_DIR)) return;
   let ids: string[];
@@ -792,13 +480,7 @@ function runStartupSweep(): void {
       );
       if (children.length === 0) continue;
       if (children.some((r) => !isTerminal(r.status))) continue;
-      // `isAlive` here is a coarse skip — the real check happens
-      // inside `decideNudge`. Re-checked there because the alive
-      // table could change between this sweep and the eval timer.
       if (isAlive(coord.sessionId)) continue;
-      // Same gate `decideNudge` will apply: only schedule when the
-      // current on-disk summary is missing OR stale. Avoids waking
-      // every healthy coordinator on boot just to have it skip.
       const summaryMissing = isSummaryMissing(taskId);
       const summaryStale = !summaryMissing
         && isSummaryStale({
@@ -821,25 +503,11 @@ function runStartupSweep(): void {
   }
 }
 
-/**
- * Idempotent installer. Wired from `instrumentation.ts` at server boot
- * (and re-run on Next.js HMR — the `installed` flag stashed on
- * globalThis prevents double-subscription).
- *
- * Also kicks off a one-shot startup sweep (`runStartupSweep`) so any
- * tasks wedged from before the bridge restarted (or from before the
- * stale-summary fix was deployed) get re-evaluated through the normal
- * nudge gates. Deferred behind a microtask so install completes first
- * — keeps the sync path of the boot sequence fast.
- */
 export function ensureCoordinatorNudge(): void {
   if (state.installed) return;
   state.installed = true;
   state.unsubscribe = subscribeMetaAll(onMetaChange);
   logInfo("coordinator-nudge", "installed");
-  // Microtask defer — instrumentation.ts is awaited synchronously
-  // during boot, and we don't want a slow disk scan blocking the
-  // notifier / shutdown handler installs that follow.
   queueMicrotask(() => {
     try {
       runStartupSweep();
@@ -849,13 +517,9 @@ export function ensureCoordinatorNudge(): void {
   });
 }
 
-/**
- * Test helper — tear down the subscription and clear the debounce map
- * so each test starts from a clean slate.
- */
 export function _resetCoordinatorNudgeForTest(): void {
   if (state.unsubscribe) {
-    try { state.unsubscribe(); } catch { /* ignore */ }
+    try { state.unsubscribe(); } catch { }
   }
   state.installed = false;
   state.unsubscribe = null;

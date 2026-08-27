@@ -1,12 +1,3 @@
-/**
- * Git status snapshot for an app: current branch, upstream tracking,
- * ahead/behind counts, and a porcelain summary (modified / added /
- * deleted / untracked file counts).
- *
- * Cheap one-shot — runs three small `git` commands in parallel,
- * 5s combined timeout. Used by the app detail page header so the
- * operator sees branch + dirty/clean state without leaving the row.
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -34,7 +25,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   }
 
   try {
-    // Branch + upstream + ahead/behind in one shot via porcelain v2.
     const [statusRes, logRes] = await Promise.all([
       execFileP("git", ["status", "--porcelain=v2", "--branch"], {
         cwd, timeout: TIMEOUT_MS, windowsHide: true, maxBuffer: 1024 * 1024,
@@ -59,8 +49,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
         const m = /\+(\d+) -(\d+)/.exec(line);
         if (m) { ahead = parseInt(m[1], 10); behind = parseInt(m[2], 10); }
       } else if (line.startsWith("1 ")) {
-        // Modified tracked file. The 2 XY chars after `1 ` describe
-        // staged + unstaged status.
         const xy = line.slice(2, 4);
         if (xy.includes("A")) added++;
         else if (xy.includes("D")) deleted++;

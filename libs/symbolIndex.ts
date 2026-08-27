@@ -1,25 +1,3 @@
-/**
- * P3a — symbol index scanner.
- *
- * Walks an app's "shared helper" directories (`lib/`, `utils/`,
- * `hooks/`, `components/ui/` by default — overridable per app via
- * `bridge.json.apps[].symbolDirs`) and extracts top-level exports as
- * a flat `SymbolEntry[]`. The result is cached on disk by
- * `symbolStore.ts` and injected into every child prompt as a list of
- * "available helpers" — the agent then knows what already exists in
- * the codebase before writing new code.
- *
- * This is the single biggest lever against "agent re-implements `cn`
- * because it didn't know the project already has it" — the most
- * common cause of style drift in LLM-generated code.
- *
- * Pure heuristic, regex-based: no TypeScript AST, no `ts-morph`. The
- * regex catches the four export shapes we care about
- * (`export const`, `export function`, `export class`, `export
- * interface/type`) and ignores the long tail (re-exports, decorators,
- * default exports — those add noise without helping the agent reuse
- * code).
- */
 import {
   existsSync,
   readFileSync,
@@ -39,23 +17,14 @@ export type SymbolKind =
 export interface SymbolEntry {
   name: string;
   kind: SymbolKind;
-  /** Path relative to the app root, posix-style separators. */
   file: string;
-  /**
-   * One-line signature snippet — the rest of the line after the name,
-   * trimmed and capped. Empty for `interface`/`type` blocks (the body
-   * is on subsequent lines). Useful for the agent to know arity /
-   * parameter shape without opening the file.
-   */
   signature: string;
 }
 
 export interface SymbolIndex {
   appName: string;
   refreshedAt: string;
-  /** Dirs the scanner actually walked (after filtering missing ones). */
   scannedDirs: string[];
-  /** Total source files visited (cap-bounded). */
   fileCount: number;
   symbols: SymbolEntry[];
 }
@@ -78,23 +47,9 @@ const READ_CAP_BYTES = 64 * 1024;
 const SIGNATURE_CAP = 120;
 const WALK_DEPTH_CAP = 6;
 
-/**
- * One regex captures all four shapes. Positional groups (1 = kind,
- * 2 = name) — named groups would require ES2018 and the project
- * targets ES2017. Kind ∈ {function, const, let, var, class, interface,
- * type}; name is the identifier. `async`/`abstract` are tolerated but
- * don't change the bucket — `default` exports are dropped further down
- * because they don't carry a useful name.
- */
 const EXPORT_RE =
   /^export\s+(?:async\s+|abstract\s+)?(function|const|let|var|class|interface|type)\s+([A-Za-z_$][\w$]*)/gm;
 
-/**
- * Component detector: PascalCase name AND file is .tsx/.jsx. Lets us
- * promote a `const Button = (...)` to `kind: "component"` so the
- * prompt rendering can group components separately from utility
- * helpers (more useful to the agent).
- */
 function looksLikeComponent(name: string, file: string): boolean {
   if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return false;
   return file.endsWith(".tsx") || file.endsWith(".jsx");
@@ -154,13 +109,6 @@ function walkSourceFiles(root: string): WalkResult {
   return { files: out, capped };
 }
 
-/**
- * Pull every top-level `export <kind> <name>` declaration out of a
- * source file. We capture just the line the name sits on; the
- * signature is the trailing slice after the name (trimmed + capped).
- * `default` exports are dropped because the name we'd capture is the
- * keyword `default`, not the export's identity.
- */
 function extractExports(text: string, fileRel: string): SymbolEntry[] {
   const out: SymbolEntry[] = [];
   EXPORT_RE.lastIndex = 0;
@@ -184,13 +132,9 @@ function extractExports(text: string, fileRel: string): SymbolEntry[] {
     if (kind === "const" && looksLikeComponent(name, fileRel)) {
       kind = "component";
     } else if (kind === "function" && looksLikeComponent(name, fileRel)) {
-      // function components are a thing too
       kind = "component";
     }
 
-    // Capture the rest of the line after `name` for the signature.
-    // We start scanning from the index AFTER the matched header so the
-    // signature reflects the function/const body's first line.
     const headerEnd = m.index + m[0].length;
     const lineEnd = text.indexOf("\n", headerEnd);
     const tail = (lineEnd === -1 ? text.slice(headerEnd) : text.slice(headerEnd, lineEnd))
@@ -214,15 +158,6 @@ function safeReadCapped(path: string): string | null {
   }
 }
 
-/**
- * Scan an app and return its `SymbolIndex`. Always returns; falls
- * back to an empty `symbols` list when no source files exist or none
- * of the configured dirs are present. Never throws.
- *
- * @param symbolDirs  override the default `[lib, utils, hooks, components/ui]`
- *                    set per `bridge.json.apps[].symbolDirs`. Pass `[]` to
- *                    use the defaults; pass a non-empty list to use them.
- */
 export function scanSymbols(
   appPath: string,
   symbolDirs: string[] = [],
@@ -235,18 +170,13 @@ export function scanSymbols(
   let totalFiles = 0;
 
   for (const rel of dirs) {
-    // Defense-in-depth: bridge.json is operator-trusted, but a stray
-    // `../../etc` in `symbolDirs` would otherwise let the scanner
-    // walk outside the app. Mirrors `pinnedFiles.resolveSafely`:
-    // reject absolute paths and any relative path that resolves
-    // outside `appPath`.
     if (!rel || isAbsolute(rel)) continue;
     const root = join(appPath, rel);
     const within = relative(appPath, root);
     if (within.startsWith("..") || isAbsolute(within)) continue;
     if (!existsSync(root)) continue;
     let isDir = false;
-    try { isDir = statSync(root).isDirectory(); } catch { /* skip */ }
+    try { isDir = statSync(root).isDirectory(); } catch { }
     if (!isDir) continue;
 
     scannedDirs.push(rel);
@@ -275,7 +205,6 @@ export function scanSymbols(
   };
 }
 
-// Internal helpers exposed for testing only.
 export const __test = {
   EXPORT_RE,
   extractExports,

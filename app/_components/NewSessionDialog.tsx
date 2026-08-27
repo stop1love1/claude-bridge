@@ -19,16 +19,6 @@ const REPO_KEY = "bridge.newSession.repo";
 const loadStoredRepo = (raw: string | null): string => raw ?? "";
 const dumpStoredRepo = (s: string): string => s;
 
-/**
- * "New session" trigger. One click → fresh chat surface for a brand-new
- * session UUID; the spawn is deferred until the user types their first
- * message in the composer (the message route does create-on-first-send).
- *
- * Kept the file/component name `NewSessionDialog` for import stability;
- * it no longer renders a Dialog modal — the selected repo is the only
- * choice the user needs to make, surfaced as a small dropdown next to
- * the button, with the last pick remembered in localStorage.
- */
 export function NewSessionDialog({
   repos,
   defaultRepo,
@@ -40,11 +30,6 @@ export function NewSessionDialog({
   onCreate: (args: { repo: string }) => Promise<void> | void;
   openRef?: React.MutableRefObject<(() => void) | null>;
 }) {
-  // The persisted repo lives in localStorage and is hydrated through
-  // `useSyncExternalStore` (no SSR-vs-CSR mismatch, no
-  // setState-in-effect). `override` captures the user's *current
-  // session* pick before they click Create — once Create fires the
-  // override is written through to localStorage too.
   const [storedRepo, setStoredRepo] = useLocalStorage<string>(
     REPO_KEY,
     loadStoredRepo,
@@ -53,9 +38,6 @@ export function NewSessionDialog({
   );
   const [override, setOverride] = useState<string | null>(null);
 
-  // Render-time validity fallback: if the requested pick is gone /
-  // doesn't exist anymore, drop back through (defaultRepo → first
-  // existing repo). No effect needed, no setState cascade.
   const requested = override ?? storedRepo;
   const repo = useMemo(() => {
     if (requested && repos.some((r) => r.name === requested && r.exists)) {
@@ -68,10 +50,6 @@ export function NewSessionDialog({
   }, [requested, repos, defaultRepo]);
 
   const groups = useMemo(() => {
-    // `declared === true && !isBridge` are apps registered in
-    // sessions/init.md. `isBridge` is the bridge folder itself.
-    // `declared === false` are sibling folders the bridge spotted on
-    // disk but the user hasn't registered yet.
     const registered = repos.filter((r) => r.declared !== false && !r.isBridge);
     const bridge     = repos.filter((r) => r.isBridge);
     const other      = repos.filter((r) => r.declared === false);
@@ -85,8 +63,6 @@ export function NewSessionDialog({
     void onCreate({ repo });
   };
 
-  // Allow other parts of the page to trigger creation programmatically
-  // (e.g. a keyboard shortcut). Keeps the existing openRef contract.
   useEffect(() => {
     if (!openRef) return;
     openRef.current = create;

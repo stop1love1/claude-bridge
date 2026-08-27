@@ -1,12 +1,3 @@
-/**
- * Working-tree diff for an app — covers everything `git add -A` would
- * stage (HEAD diff for committed-since-HEAD changes, working-tree diff
- * for uncommitted edits). Same shape as the per-run diff endpoint so
- * the existing `DiffViewer` component can render it without changes.
- *
- *   GET /api/apps/<name>/diff
- *   → { kind: "live", cwd, diff, truncated? }
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";

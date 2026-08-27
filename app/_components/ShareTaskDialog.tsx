@@ -48,12 +48,6 @@ function grantSummary(g: ShareGrants): string {
 const checkboxCls =
   "h-3.5 w-3.5 rounded border-border accent-primary cursor-pointer";
 
-/**
- * Operator dialog to create + manage share links for one task. The raw
- * link is shown ONCE right after creation (the token is never stored in
- * plaintext, so it can't be reconstructed later). Existing shares can be
- * revoked, edited, and have individual approved devices kicked.
- */
 export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -62,7 +56,6 @@ export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
   const [creating, setCreating] = useState(false);
   const [createdLink, setCreatedLink] = useState<string | null>(null);
 
-  // Create-form state.
   const [grants, setGrants] = useState<ShareGrants>({
     sendMessage: true,
     spawnAgent: false,
@@ -83,8 +76,6 @@ export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
   useEffect(() => {
     if (!open) return;
     const ac = new AbortController();
-    // Inline async IIFE: every setState lands AFTER the await, so this
-    // doesn't trip react-hooks/set-state-in-effect.
     void (async () => {
       try {
         const { shares: list } = await api.listShares(taskId, { signal: ac.signal });
@@ -96,7 +87,6 @@ export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
     return () => ac.abort();
   }, [open, taskId]);
 
-  // push implies commit — keep the checkboxes consistent.
   const toggleGrant = (key: keyof ShareGrants, value: boolean) => {
     setGrants((g) => {
       const next = { ...g, [key]: value };
@@ -185,7 +175,7 @@ export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        {/* ── Create form ─────────────────────────────────────────── */}
+        {}
         <div className="grid gap-3 rounded-lg border border-border bg-muted/20 p-3 text-xs">
           <div className="font-medium text-foreground">New share link</div>
 
@@ -288,7 +278,7 @@ export function ShareTaskDialog({ taskId, open, onOpenChange }: Props) {
           ) : null}
         </div>
 
-        {/* ── Existing shares ─────────────────────────────────────── */}
+        {}
         <div className="grid gap-2">
           <div className="text-xs font-medium text-muted-foreground">
             Existing links {loading ? "" : `(${shares.length})`}

@@ -10,7 +10,7 @@ let gitAvailable = false;
 try {
   execFileSync("git", ["--version"], { stdio: "ignore" });
   gitAvailable = true;
-} catch { /* skip */ }
+} catch { }
 
 const integration = gitAvailable ? describe : describe.skip;
 
@@ -26,7 +26,6 @@ integration("mergeIntoTargetBranch (real git)", () => {
   });
 
   it("merges a clean fast-forwardable branch into target and leaves HEAD on target", async () => {
-    // Create a work branch with a new commit.
     git(repo, "checkout", "-b", "claude/t1");
     writeFileSync(join(repo, "feature.txt"), "hi\n");
     git(repo, "add", ".");
@@ -41,13 +40,11 @@ integration("mergeIntoTargetBranch (real git)", () => {
     });
     expect(r.ok).toBe(true);
     expect(await readCurrentBranch(repo)).toBe("main");
-    // The merge commit landed on main with the feature file present.
     const log = git(repo, "log", "--oneline", "main");
     expect(log).toMatch(/merge claude\/t1/);
   });
 
   it("aborts on conflict and returns HEAD to the source branch", async () => {
-    // Diverge: main and claude/t1 both edit README.md.
     git(repo, "checkout", "-b", "claude/t1");
     writeFileSync(join(repo, "README.md"), "# branch edit\n");
     git(repo, "add", ".");
@@ -67,15 +64,12 @@ integration("mergeIntoTargetBranch (real git)", () => {
     });
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/aborted/i);
-    // We must end up back on the source so the operator can resolve manually.
     expect(await readCurrentBranch(repo)).toBe("claude/t1");
-    // No half-applied merge state left behind.
     const status = git(repo, "status", "--porcelain");
     expect(status.trim()).toBe("");
   });
 
   it("creates the target branch from source when it doesn't exist locally", async () => {
-    // Operator's `mergeTargetBranch=release/1.0` doesn't exist yet.
     git(repo, "checkout", "-b", "claude/t1");
     writeFileSync(join(repo, "feature.txt"), "hi\n");
     git(repo, "add", ".");
@@ -107,7 +101,6 @@ integration("mergeIntoTargetBranch (real git)", () => {
   it("refuses to merge when the working tree is dirty", async () => {
     git(repo, "checkout", "-b", "claude/t1");
     writeFileSync(join(repo, "dirty.txt"), "uncommitted\n");
-    // Note: not committed.
 
     const r = await mergeIntoTargetBranch({
       cwd: repo,
@@ -118,7 +111,6 @@ integration("mergeIntoTargetBranch (real git)", () => {
     });
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/uncommitted/i);
-    // HEAD must not have moved.
     expect(await readCurrentBranch(repo)).toBe("claude/t1");
   });
 
@@ -135,7 +127,6 @@ integration("mergeIntoTargetBranch (real git)", () => {
   });
 
   it("MERGE-NO-PUSH: surfaces a stable marker when merge lands locally but push fails", async () => {
-    // Repo has no remote configured → push will fail with "no upstream".
     git(repo, "checkout", "-b", "claude/t1");
     writeFileSync(join(repo, "feature.txt"), "hi\n");
     git(repo, "add", ".");
@@ -146,9 +137,8 @@ integration("mergeIntoTargetBranch (real git)", () => {
       sourceBranch: "claude/t1",
       targetBranch: "main",
       message: "merge claude/t1",
-      push: true, // force push attempt
+      push: true,
     });
-    // Merge landed locally (verify with git log), but push failed.
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/^MERGE-NO-PUSH:/);
     const log = git(repo, "log", "--oneline", "main");
@@ -201,7 +191,6 @@ integration("prepareBranch — current mode dirty warning", () => {
       },
       "t_test",
     );
-    // Non-fatal: ok stays true, but message warns.
     expect(r.ok).toBe(true);
     expect(r.message).toMatch(/WARNING/);
     expect(r.message).toMatch(/uncommitted/);
@@ -247,7 +236,6 @@ describe("withGitLock — cross-process file lock", () => {
 
   beforeEach(() => {
     cwd = mktmp("gitlock");
-    // mkdir .git/ so the lock lives there (matches the runtime path).
     mkdirSync(join(cwd, ".git"), { recursive: true });
   });
   afterEach(() => {
@@ -281,8 +269,6 @@ describe("withGitLock — cross-process file lock", () => {
     const a = withGitLock(cwd, async () => {
       events.push("a-start");
       await new Promise((r) => setTimeout(r, 80));
-      // While we're inside, the second caller must NOT have started yet —
-      // either because the in-process queue blocks it or the file lock does.
       events.push("a-end");
     });
     const b = withGitLock(cwd, () => {
@@ -297,7 +283,6 @@ describe("withGitLock — cross-process file lock", () => {
 
   it("evicts a stale lock left behind by a crashed prior process", async () => {
     const lockDir = join(cwd, ".git", ".bridge-git-lock");
-    // Simulate a stale lock from a process that died ~10 minutes ago.
     mkdirSync(lockDir);
     writeFileSync(
       join(lockDir, "owner"),

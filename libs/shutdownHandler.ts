@@ -1,14 +1,3 @@
-/**
- * Process-level shutdown wiring for the bridge: kills any active
- * tunnel children on SIGINT / SIGTERM / `exit` so we don't orphan
- * `lt` / `ngrok` subprocesses.
- *
- * Lives in its own module (rather than inline in `instrumentation.ts`)
- * so the Node.js-only `process.once` / `process.exit` calls stay
- * behind a dynamic-import boundary. The Edge runtime static analyzer
- * scans `instrumentation.ts` for both runtimes, and a runtime guard
- * (`if NEXT_RUNTIME === "nodejs"`) is not enough on its own.
- */
 
 import { killAllTunnels } from "./tunnels";
 import { releaseProcessLock } from "./processLock";
@@ -21,20 +10,14 @@ export function installShutdownHandlers(): void {
   g.__bridgeShutdownInstalled = true;
 
   const onSignal = (code: number) => {
-    try { killAllTunnels(); } catch { /* best-effort on shutdown */ }
-    // Release the single-process lock so the next boot sees a clean
-    // handoff rather than a stale-takeover. No-op if we never held it.
-    try { releaseProcessLock(); } catch { /* best-effort on shutdown */ }
-    // The OS reaps children once we exit; still call exit explicitly so
-    // a stuck Telegram poller can't keep the process alive past the
-    // signal. Numeric code matches POSIX convention (SIGINT → 130,
-    // SIGTERM → 143).
+    try { killAllTunnels(); } catch { }
+    try { releaseProcessLock(); } catch { }
     process.exit(code);
   };
   process.once("SIGINT", () => onSignal(130));
   process.once("SIGTERM", () => onSignal(143));
   process.once("exit", () => {
-    try { killAllTunnels(); } catch { /* best-effort */ }
-    try { releaseProcessLock(); } catch { /* best-effort */ }
+    try { killAllTunnels(); } catch { }
+    try { releaseProcessLock(); } catch { }
   });
 }

@@ -22,14 +22,6 @@ afterEach(() => {
   delete process.env.BRIDGE_QUEUED_STALE_MIN;
 });
 
-/**
- * Build a fake ChildProcess for the spawn registry so a test can
- * assert "process alive → run stays running". The reaper checks
- * `exitCode === null && !killed` to distinguish a healthy registry
- * entry from a zombie (lifecycle-hook-missed) one, so the fake has
- * to mirror Node's real "alive" shape: `exitCode = null` while the
- * process is running.
- */
 function fakeChild(): ChildProcess {
   const ee = new EventEmitter() as unknown as ChildProcess & {
     exitCode: number | null;
@@ -47,7 +39,6 @@ const HEADER_FRESH = {
   taskStatus: "todo" as const,
   taskSection: "TODO" as const,
   taskChecked: false,
-  // Set in each test based on age requirement.
   createdAt: new Date().toISOString(),
 };
 
@@ -57,7 +48,6 @@ function withCreatedAt(iso: string) {
 
 describe("reapStaleRunsForDir — H4 queued state", () => {
   it("flips a queued run to failed when meta.createdAt is older than the cutoff", async () => {
-    // 5 minutes ago, well past the default 2-minute queued cutoff.
     const oldCreated = new Date(Date.now() - 5 * 60_000).toISOString();
     const dir = join(tmp, "t_q1");
     createMeta(dir, withCreatedAt(oldCreated));
@@ -76,14 +66,13 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     expect(run.status).toBe("stale");
     expect(run.endedAt).not.toBeNull();
 
-    // Confirm persisted.
     const reread = readMeta(dir);
     expect(reread!.runs[0].status).toBe("stale");
   });
 
   it("leaves a freshly-queued run alone (within the cutoff window)", async () => {
     const dir = join(tmp, "t_q2");
-    createMeta(dir, HEADER_FRESH); // createdAt = now
+    createMeta(dir, HEADER_FRESH);
     await appendRun(dir, {
       sessionId: "fresh-queued",
       role: "coder",
@@ -98,9 +87,8 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
   });
 
   it("respects BRIDGE_QUEUED_STALE_MIN env override", async () => {
-    process.env.BRIDGE_QUEUED_STALE_MIN = "0.01"; // ~600ms cutoff
+    process.env.BRIDGE_QUEUED_STALE_MIN = "0.01";
     const dir = join(tmp, "t_q3");
-    // createdAt = 30s ago — well past 0.01 min (=600ms)
     const old = new Date(Date.now() - 30_000).toISOString();
     createMeta(dir, withCreatedAt(old));
     await appendRun(dir, {
@@ -133,7 +121,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       role: "coder",
       repo: "fake",
       status: "running",
-      // No registerChild() for this sid → registry-miss → stale.
       startedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       endedAt: null,
     });
@@ -144,11 +131,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
   });
 
   it("does NOT flip a long-running row to stale when the process is still in the registry", async () => {
-    // Regression test for the case in the screenshot: a coordinator
-    // orchestrating multiple child retries had been running 30+ min
-    // and was reaped despite the OS process being healthy. The new
-    // policy is "OS registry is the only signal" — alive = running,
-    // gone = stale, no time cutoff in between.
     const dir = join(tmp, "t_long_alive");
     createMeta(dir, withCreatedAt(new Date(Date.now() - 2 * 60 * 60_000).toISOString()));
     const sid = "long-alive-coordinator";
@@ -157,7 +139,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       role: "coordinator",
       repo: "claude-bridge",
       status: "running",
-      // 2 hours ago — would have been flipped under the old 30-min cutoff.
       startedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
       endedAt: null,
     });
@@ -180,9 +161,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       role: "coder",
       repo: "fake-no-such-repo",
       status: "running",
-      // Started 5 seconds ago — fresh by any wall-clock measure, but
-      // never registered AND repo isn't in bridge.md → can't even
-      // locate a `.jsonl` to fall back on → stale.
       startedAt: new Date(Date.now() - 5_000).toISOString(),
       endedAt: null,
     });
@@ -192,37 +170,23 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
   });
 
   it("keeps a registry-miss running row alive when its JSONL was written within the cutoff", async () => {
-    // Externally-spawned coordinator scenario: a Claude Code IDE
-    // session POSTed `/link` to register itself, but never went
-    // through the bridge's spawn path so it isn't in spawnRegistry.
-    // Its `.jsonl` keeps growing as it dispatches agents — that's
-    // the only liveness signal we have. Threshold is generous (30
-    // min by default) since coordinators idle between child runs.
     const dir = join(tmp, "t_external_alive");
     createMeta(dir, HEADER_FRESH);
     const sid = "0123abcd-4567-89ef-cdef-aaaaaaaaaaaa";
     await appendRun(dir, {
       sessionId: sid,
       role: "coordinator",
-      // BRIDGE_FOLDER (basename of the actual bridge dir) — hits the
-      // fast path in resolveRunCwd that skips bridge.md parsing.
       repo: BRIDGE_FOLDER,
       status: "running",
-      startedAt: new Date(Date.now() - 90 * 60_000).toISOString(), // 90 min ago
+      startedAt: new Date(Date.now() - 90 * 60_000).toISOString(),
       endedAt: null,
     });
 
-    // Plant a fresh `.jsonl` at the path the reaper will look up.
-    // We write to the real `~/.claude/projects/<slug-of-BRIDGE_ROOT>/`
-    // because mocking `homedir` would require resetting the module
-    // graph mid-test. The file is removed in the cleanup block so
-    // it doesn't pollute the developer's machine.
     const slug = pathToSlug(BRIDGE_ROOT);
     const projectsDir = join(process.env.USERPROFILE || process.env.HOME || "", ".claude", "projects", slug);
     mkdirSync(projectsDir, { recursive: true });
     const jsonlPath = join(projectsDir, `${sid}.jsonl`);
     writeFileSync(jsonlPath, '{"type":"user","message":{"content":"hi"}}\n');
-    // Force mtime to "now" — Date.now() / 1000 in seconds.
     const now = Date.now() / 1000;
     utimesSync(jsonlPath, now, now);
 
@@ -231,7 +195,7 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       expect(meta!.runs[0].status).toBe("running");
       expect(meta!.runs[0].endedAt).toBeNull();
     } finally {
-      try { rmSync(jsonlPath, { force: true }); } catch { /* best-effort */ }
+      try { rmSync(jsonlPath, { force: true }); } catch { }
     }
   });
 
@@ -253,12 +217,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     mkdirSync(projectsDir, { recursive: true });
     const jsonlPath = join(projectsDir, `${sid}.jsonl`);
     writeFileSync(jsonlPath, '{"type":"user","message":{"content":"hi"}}\n');
-    // Backdate mtime to 5 hours ago — past the default 4-hour cutoff
-    // (`DEFAULT_STALE_RUN_MIN = 240`). The default was bumped from
-    // 30 min to 240 min so legit long-running tasks (long Bash steps,
-    // multi-hour coordinator agent loops) don't false-positive flip
-    // to stale; this test still proves the cutoff fires when the
-    // transcript truly hasn't moved.
     const old = (Date.now() - 5 * 60 * 60_000) / 1000;
     utimesSync(jsonlPath, old, old);
 
@@ -266,16 +224,11 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       const meta = await reapStaleRunsForDir(dir);
       expect(meta!.runs[0].status).toBe("stale");
     } finally {
-      try { rmSync(jsonlPath, { force: true }); } catch { /* best-effort */ }
+      try { rmSync(jsonlPath, { force: true }); } catch { }
     }
   });
 
   it("keeps a registry-miss running row alive when a recent heartbeat was recorded, even with a stale JSONL", async () => {
-    // Heartbeat-only liveness path: an externally-spawned coordinator
-    // whose JSONL hasn't moved in hours (long Bash, model thinking
-    // gap, etc.) but whose PreToolUse hook recently fired and
-    // POSTed to `/api/sessions/<sid>/heartbeat`. Heartbeat is OR'd
-    // with JSONL freshness — either being fresh keeps the run alive.
     const { recordHeartbeat, _clearHeartbeatsForTest } = await import("../heartbeat");
     _clearHeartbeatsForTest();
 
@@ -287,12 +240,9 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       role: "coordinator",
       repo: BRIDGE_FOLDER,
       status: "running",
-      // Started 5 hours ago; with no heartbeat AND no JSONL the row
-      // would normally flip to stale (past the 4-hour default).
       startedAt: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
       endedAt: null,
     });
-    // Record a heartbeat just now → run should stay running.
     recordHeartbeat(sid);
 
     const meta = await reapStaleRunsForDir(dir);
@@ -303,10 +253,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
   });
 
   it("flips a row stale when neither heartbeat nor JSONL is fresh", async () => {
-    // Belt-and-braces: the OR contract means BOTH signals have to
-    // miss for the reaper to fall through to OS probe (which is
-    // VITEST-shorted to empty Set in the test environment) and
-    // ultimately mark the row stale.
     const { _clearHeartbeatsForTest } = await import("../heartbeat");
     _clearHeartbeatsForTest();
 
@@ -321,7 +267,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
       startedAt: new Date(Date.now() - 5 * 60 * 60_000).toISOString(),
       endedAt: null,
     });
-    // No heartbeat, no JSONL (fake repo isn't in bridge.md).
 
     const meta = await reapStaleRunsForDir(dir);
     expect(meta!.runs[0].status).toBe("stale");
@@ -351,7 +296,6 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     const meta = await reapStaleRunsForDir(dir);
     expect(meta!.runs[0].status).toBe("done");
     expect(meta!.runs[1].status).toBe("failed");
-    // endedAt unchanged
     expect(meta!.runs[1].endedAt).toBe(old);
   });
 });

@@ -17,7 +17,6 @@ function joinRel(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
 }
 
-/** POSIX `rel` joined to real app root (clipboard / tooltips). */
 function absoluteFromAppRoot(appRoot: string, posixRel: string): string {
   const rel = posixRel.replace(/\\/g, "/").replace(/^\/+/, "");
   const trimmedRoot = appRoot.trim().replace(/[/\\]+$/, "");
@@ -173,7 +172,6 @@ export function AppSourceTreeTab({
   appRootPath,
 }: {
   appKey: string;
-  /** Resolved app working directory (e.g. git cwd); when set, copy uses full filesystem path. */
   appRootPath?: string | null;
 }) {
   const toast = useToast();
@@ -231,9 +229,6 @@ export function AppSourceTreeTab({
   }, [appKey]);
 
   useEffect(() => {
-    // Microtask-defer the reset so it doesn't run synchronously in the
-    // effect body (satisfies react-hooks/set-state-in-effect — same
-    // workaround used in app/tasks/[id]/page.tsx).
     void Promise.resolve().then(() => {
       setCache(new Map());
       setExpanded(new Set([""]));
@@ -248,8 +243,6 @@ export function AppSourceTreeTab({
       const st = cache.get(rel);
       if (st?.status === "ok" || st?.status === "loading") continue;
       if (st?.status === "error") continue;
-      // Defer so loadDir's internal setState isn't a synchronous effect-body
-      // setState (react-hooks/set-state-in-effect).
       void Promise.resolve().then(() => loadDir(rel));
     }
   }, [expanded, cache, loadDir]);
@@ -265,9 +258,6 @@ export function AppSourceTreeTab({
 
   useEffect(() => {
     if (!selectedFile) {
-      // Defer the clear so it isn't a synchronous effect-body setState
-      // (react-hooks/set-state-in-effect). The loading-branch setStates
-      // below precede an async fetch, so the rule accepts them.
       void Promise.resolve().then(() => {
         setFileBody(null);
         setFileError(null);
@@ -276,8 +266,6 @@ export function AppSourceTreeTab({
       return;
     }
     const ac = new AbortController();
-    // Defer the loading-prep setStates out of the synchronous effect body
-    // (react-hooks/set-state-in-effect); the fetch below doesn't read them.
     void Promise.resolve().then(() => {
       if (ac.signal.aborted) return;
       setFileLoading(true);

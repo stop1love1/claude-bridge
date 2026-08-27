@@ -1,17 +1,3 @@
-/**
- * Ask the Claude CLI to read a repo and produce a one-sentence
- * description of what it does. Used by the apps auto-detect flow to
- * replace the package.json / README first-line heuristic with a
- * model-grounded summary.
- *
- * The scan is read-only: we run with `--permission-mode bypassPermissions`
- * so the model never prompts for tool approval, but the prompt itself
- * tells it to inspect surface files only and return prose. No diff is
- * applied to the repo.
- *
- * Failure modes (timeout, non-zero exit, missing CLI) all resolve to
- * `null`. The caller falls back to whatever description it already had.
- */
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -39,11 +25,6 @@ const PROMPT = [
   "- If the repo is too thin to summarise, output exactly: (no clear purpose)",
 ].join("\n");
 
-/**
- * Run `claude -p` in `appPath` and return the model's one-sentence
- * answer. Returns `null` on any failure so the caller can keep its
- * existing description.
- */
 export async function scanAppWithClaude(appPath: string): Promise<string | null> {
   if (!existsSync(appPath)) return null;
   return new Promise<string | null>((resolveScan) => {
@@ -61,8 +42,6 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
       {
         cwd: appPath,
         stdio: ["ignore", "pipe", "pipe"],
-        // Detach so a sluggish scan can't pile up zombie sub-processes
-        // when the request handler is GC'd. Killed via SIGTERM below.
         windowsHide: true,
       },
     );
@@ -75,9 +54,6 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
     };
 
     const timer = setTimeout(() => {
-      // treeKill walks the descendant tree on Windows (taskkill /T) and
-      // hits the process group on POSIX, so a sluggish `claude` that
-      // already shelled out to git / node doesn't leave orphans behind.
       treeKill(child, "SIGTERM");
       setTimeout(() => treeKill(child, "SIGKILL"), 3_000);
       console.warn(`scanApp: timed out after ${SCAN_TIMEOUT_MS}ms in ${appPath}`);
@@ -86,7 +62,6 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
-      // Cap accumulated stdout so a runaway claude doesn't eat memory.
       if (stdout.length > 32 * 1024) stdout = stdout.slice(-32 * 1024);
     });
     child.stderr.on("data", (chunk: Buffer) => {
@@ -112,17 +87,10 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
   });
 }
 
-/**
- * Pull the last non-empty line of stdout — `claude -p` ends its
- * response with the assistant's final message, so the trailing line
- * is what we want. Trim, drop quote wrappers, cap length.
- */
 function extractSummary(raw: string): string | null {
   const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (lines.length === 0) return null;
   let last = lines[lines.length - 1];
-  // Strip surrounding quotes / asterisks the model sometimes adds even
-  // when told not to.
   last = last.replace(/^["'`*_]+|["'`*_]+$/g, "").trim();
   if (last.length === 0) return null;
   if (last === "(no clear purpose)") return last;

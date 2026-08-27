@@ -3,10 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 
-/**
- * paths.ts captures `process.cwd()` and `homedir()` at module load
- * time, so each test redirects both then re-imports the module.
- */
 let tempCwd: string;
 let originalEnv: NodeJS.ProcessEnv;
 
@@ -23,14 +19,12 @@ afterEach(() => {
   try {
     rmSync(tempCwd, { recursive: true, force: true });
   } catch {
-    /* best-effort */
   }
 });
 
 describe("BRIDGE_ROOT / BRIDGE_FOLDER", () => {
   it("BRIDGE_ROOT resolves to process.cwd()", async () => {
     const { BRIDGE_ROOT } = await import("../paths");
-    // resolve() may normalize Windows drive case; compare case-insensitively.
     expect(BRIDGE_ROOT.toLowerCase()).toBe(tempCwd.toLowerCase());
   });
 

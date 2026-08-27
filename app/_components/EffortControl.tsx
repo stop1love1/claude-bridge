@@ -4,16 +4,9 @@ import { Sparkles } from "lucide-react";
 import type { EffortLevel } from "@/libs/client/types";
 import { cn } from "@/libs/cn";
 
-/**
- * The five real `claude --effort` levels, rendered as a dot scale. The
- * sixth tier, `ultracode`, is a separate accent chip (it isn't "more
- * effort than max" — it's xhigh + the bridge orchestration directive — so
- * a sixth dot would misread).
- */
 const DOT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 type DotLevel = (typeof DOT_LEVELS)[number];
 
-/** Human label shown inline next to "Effort". */
 export const EFFORT_LABEL: Record<EffortLevel, string> = {
   low: "low",
   medium: "medium",
@@ -23,15 +16,6 @@ export const EFFORT_LABEL: Record<EffortLevel, string> = {
   ultracode: "Ultracode · xhigh + bridge fan-out",
 };
 
-/**
- * Effort tier picker — a 5-dot scale plus an "Ultra" accent chip. Shared
- * by the composer's mode popover and the new-task dialog so both stay in
- * lockstep with Claude Code's effort scale.
- *
- * Renders only the label + controls row (a `flex` div); the parent owns
- * outer padding / borders. `value` undefined displays as "max" (matching
- * the composer's long-standing default) but sends no effort downstream.
- */
 export function EffortControl({
   value,
   onChange,
@@ -41,8 +25,6 @@ export function EffortControl({
 }) {
   const current: EffortLevel = value ?? "max";
   const isUltra = current === "ultracode";
-  // When ultracode is active, all five dots read "filled" — it sits at/above
-  // the top of the effort scale.
   const dotIdx = isUltra ? DOT_LEVELS.length - 1 : DOT_LEVELS.indexOf(current as DotLevel);
 
   return (

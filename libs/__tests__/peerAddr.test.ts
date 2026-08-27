@@ -6,15 +6,6 @@ import {
   stampServerAuthoredHeaders,
 } from "../peerAddr";
 
-/**
- * These two headers are the entire security boundary for the
- * same-host gate in `libs/internalTokenGate.ts` — the gate trusts
- * them unconditionally. Nothing that tests the gate itself can prove
- * the delete-before-stamp actually runs, because the gate is always
- * fed already-sanitized values by construction (it has no way to
- * receive a "raw, unsanitized" input). Only a test at THIS layer,
- * against the function that does the deleting, can pin that.
- */
 function fakeReq(opts: {
   headers?: Record<string, string | string[] | undefined>;
   remoteAddress?: string | null;

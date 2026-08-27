@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 
-/** One-shot WebSocket PTY tickets — minted over cookie-authenticated HTTP, consumed on upgrade. */
 type Entry = { exp: number; sub: string };
 const store = new Map<string, Entry>();
 const TTL_MS = 60_000;

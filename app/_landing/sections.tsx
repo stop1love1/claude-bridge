@@ -127,8 +127,7 @@ export function LandingHeader() {
 export function Hero() {
   return (
     <section className="relative overflow-hidden border-b border-border">
-      {/* Subtle dot grid + radial glow + bottom hairline build the
-          production-feel backdrop without competing with foreground copy. */}
+      {}
       <div
         aria-hidden="true"
         className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,var(--color-primary)_0%,transparent_60%)] opacity-20"
@@ -444,9 +443,6 @@ export function Preview() {
 }
 
 export function QuickLinks() {
-  // Every card here links into the operator dashboard. Demo deployments
-  // can't run any of those routes — render nothing rather than a wall of
-  // dead links that would all redirect back to here.
   if (DEMO_MODE) return null;
   return (
     <section className={`${CONTAINER} ${SECTION} pb-12 sm:pb-16`}>
@@ -477,14 +473,6 @@ export function QuickLinks() {
   );
 }
 
-/**
- * CSS-only runtime tab control. The whole landing page renders as a
- * Server Component, so we avoid hydration cost by driving tab state
- * with `<input type="radio">` + Tailwind's named `peer-checked/<id>`
- * variants — no `useState`, no `"use client"` needed. The radios sit
- * at the top so every tab strip and panel can reference them as a
- * previous sibling.
- */
 function RuntimeTabs() {
   const runtimes = [
     { id: "npm", label: "npm", install: "npm install", serve: "npm run serve" },
@@ -492,7 +480,6 @@ function RuntimeTabs() {
     { id: "bun", label: "Bun", install: "bun install", serve: "bun run serve" },
   ] as const;
 
-  // Hard-coded peer variants — Tailwind's JIT can't see template strings.
   const tabClass: Record<typeof runtimes[number]["id"], string> = {
     npm:  "peer-checked/npm:bg-primary peer-checked/npm:text-primary-foreground peer-checked/npm:shadow",
     pnpm: "peer-checked/pnpm:bg-primary peer-checked/pnpm:text-primary-foreground peer-checked/pnpm:shadow",
@@ -506,9 +493,7 @@ function RuntimeTabs() {
 
   return (
     <div className="max-w-md mx-auto mb-3">
-      {/* Hidden radios — must precede the tab strip + panels so peer
-          variants resolve. `defaultChecked` on npm makes it the
-          initially-active tab. */}
+      {}
       <input
         type="radio"
         name="bridge-runtime"
@@ -529,7 +514,7 @@ function RuntimeTabs() {
         className="peer/bun sr-only"
       />
 
-      {/* Tab strip */}
+      {}
       <div
         className="flex items-stretch p-1 rounded-md border border-border bg-card/80 backdrop-blur mb-2"
         role="tablist"
@@ -547,8 +532,7 @@ function RuntimeTabs() {
         ))}
       </div>
 
-      {/* Panels — one per runtime, only the matching peer-checked
-          variant flips it from `hidden` to `block`. */}
+      {}
       {runtimes.map(({ id, install, serve }) => (
         <div
           key={id}

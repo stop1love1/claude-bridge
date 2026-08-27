@@ -1,15 +1,3 @@
-/**
- * Standardized prompt wrapper for spawned child agents.
- *
- * The bridge wraps every child spawn (POST /api/tasks/<id>/agents) so the
- * coordinator only has to write the role-specific brief — all the boilerplate
- * (task header, language directive, repo profile, pre-warmed context,
- * self-register snippet, report contract) is added by `buildChildPrompt`.
- *
- * Section order is contract: the coordinator's aggregator parses the report
- * by section header, and children rely on the wrapper's structure to know
- * what's expected. Keep additions append-only, don't reorder.
- */
 import type { RepoProfile } from "./repoProfile";
 import type { AppVerify } from "./apps";
 import type { SymbolIndex, SymbolEntry } from "./symbolIndex";
@@ -30,126 +18,26 @@ export interface BuildChildPromptOpts {
   role: string;
   repo: string;
   repoCwd: string;
-  /** Pre-warmed repo context (git status / log / ls-files). Optional. */
   contextBlock?: string;
-  /** The role-specific instructions the coordinator wrote. Untrusted. */
   coordinatorBody: string;
-  /** Cached profile for the target repo, if any. */
   profile?: RepoProfile;
-  /**
-   * Folder name of the bridge itself (where reports go).
-   * Defaults to the runtime-detected `BRIDGE_FOLDER` from `paths.ts`,
-   * but tests / non-default deployments can override.
-   */
   bridgeFolder?: string;
-  /**
-   * (P1/C3) Pre-loaded global+per-app `house-rules.md` markdown. Rendered
-   * verbatim into a `## House rules` section after `## Language` so the
-   * agent reads team constraints before the task body. Null/undefined =
-   * skip the section entirely.
-   */
   houseRules?: string | null;
-  /**
-   * (P1/H1) Pre-loaded `prompts/playbooks/<role>.md` markdown. When
-   * present, prepended to the coordinator brief inside `## Your role`
-   * so the role contract is visible before the task-specific brief.
-   * Null/undefined = render only the coordinator body (current behavior).
-   */
   playbookBody?: string | null;
-  /**
-   * (P1/D1) Per-app verify contract from `bridge.json`. When at least
-   * one command is set, rendered as a `## Verify commands` section so
-   * the agent self-checks before writing its report. P2 will exec these
-   * automatically — surfacing them in P1 lets agents catch issues before
-   * the bridge has to.
-   */
   verifyHint?: AppVerify | null;
-  /**
-   * (P3a/A2) Symbol index for the target app — top-level exports
-   * extracted from `lib/`, `utils/`, `hooks/`, `components/ui/` (or
-   * the dirs the operator overrode in `bridge.json.symbolDirs`).
-   * Rendered as a `## Available helpers` section so the agent knows
-   * what already exists and reaches for it instead of writing a new
-   * util that duplicates one already in the codebase. Null/undefined
-   * = skip the section.
-   */
   symbolIndex?: SymbolIndex | null;
-  /**
-   * (P3a/A1) Per-app style fingerprint — auto-detected indent / quote
-   * / semicolon / export / file-naming preferences. Rendered as a
-   * compact `## House style (auto-detected)` section so the agent
-   * matches the codebase's micro-style without the operator having
-   * to hand-write rules in house-rules.md. Null/undefined = skip.
-   */
   styleFingerprint?: StyleFingerprint | null;
-  /**
-   * (P3a/B3) Pinned files declared in `bridge.json.pinnedFiles`,
-   * pre-loaded as `{ rel, content, truncated }`. Rendered as a
-   * `## Pinned context` section with each file in its own fenced
-   * code block. Empty list = skip the section.
-   */
   pinnedFiles?: PinnedFile[];
-  /**
-   * (P3b/B2) Auto-attached reference files chosen heuristically from
-   * the symbol index using task-body keyword overlap. Rendered as
-   * `## Reference files` distinct from `## Pinned context` so the
-   * agent knows these were AI-picked vs operator-pinned. Empty list
-   * = skip the section.
-   */
   attachedReferences?: ReferenceFile[];
-  /**
-   * (P3b/B4) Recent git activity in the focus dir the bridge inferred
-   * from the task body. Rendered as `## Recent direction` after
-   * `## Repo context` so the agent sees what's been actively
-   * changing in the area it's about to touch. Null = skip.
-   */
   recentDirection?: RecentDirection | null;
-  /**
-   * (P5/G1) Per-app memory entries — durable learnings from prior
-   * tasks. Rendered as `## Memory` after `## House style` so the
-   * agent reads accreted rules right next to the static team
-   * constraints. Empty list = skip.
-   */
   memoryEntries?: string[];
-  /**
-   * (Detect) Cached `DetectedScope` for the task — same value the
-   * coordinator saw. Rendered as `## Detected scope` after `## Task`
-   * so the child can see what features / entities / files / repos the
-   * bridge identified before it dives into the role-specific brief.
-   * Null/undefined = no scope cached (legacy task / detect disabled).
-   */
   detectedScope?: DetectedScope | null;
-  /**
-   * (Planner) Contents of `sessions/<task-id>/plan.md` if a planner
-   * agent has already drafted one for this task. Rendered as a
-   * `## Shared plan (from planner)` section right before `## Your role`
-   * so every downstream coder/reviewer reads the agreed cross-repo
-   * contracts and breakdown before diving into their own brief.
-   * Null/undefined/empty = no planner has run yet — section omitted.
-   *
-   * The agents route loads this file for every spawn (cheap — one stat
-   * + one read), so any role that runs after the planner sees the same
-   * shared plan automatically. The planner itself sees it too on
-   * re-dispatch, which lets it refine instead of starting over.
-   */
   sharedPlan?: string | null;
-  /**
-   * Cross-cutting observations earlier siblings left for later ones on
-   * the same task — the contents of `sessions/<task-id>/notes.md`.
-   * Rendered as `## Peer notes` near the top of the wrapped prompt so
-   * a child reads them BEFORE diving into its own work, gets context
-   * from siblings already in flight, and can append its own
-   * observations for the next sibling. Null/empty = no notes yet.
-   */
   peerNotes?: string | null;
 }
 
 const COORDINATOR_BODY_CAP = 16 * 1024;
 
-/**
- * Render a profile entry as a human-readable bullet. Defensive against
- * partially-populated profiles (no stack/features/entrypoints).
- */
 function renderProfileLine(p: RepoProfile): string {
   const summary = p.summary?.trim() || `${p.name} — (no summary)`;
   const stack = p.stack.length > 0 ? p.stack.join(", ") : "(unknown)";
@@ -160,11 +48,6 @@ function renderProfileLine(p: RepoProfile): string {
   return `- **${p.name}** — ${summary} Stack: ${stack}. Features: ${features}. Entrypoints: ${entrypoints}.`;
 }
 
-/**
- * Sanitize untrusted coordinator-authored text. We don't try deep escaping —
- * the body is markdown-in-markdown — just a length cap so a runaway
- * coordinator can't blow out the context window for the child.
- */
 function sanitizeCoordinatorBody(body: string): string {
   const trimmed = (body ?? "").trim();
   if (trimmed.length === 0) {
@@ -177,80 +60,18 @@ function sanitizeCoordinatorBody(body: string): string {
   );
 }
 
-/**
- * Strip any sequence that would terminate the fenced code block we
- * embed `taskBody` inside (`\n```\n` at column 0, with any number of
- * leading backticks ≥ 3). User-supplied content with a literal triple
- * backtick on its own line would otherwise close the wrapper fence
- * early and inject arbitrary markdown / instructions into the child
- * prompt.
- *
- * Earlier this used a zero-width joiner injection that some LLMs strip
- * during input normalization, defeating the guard. Switched to a more
- * robust substitution that breaks the fence syntax outright by
- * inserting a U+200B (ZERO-WIDTH SPACE) between the prefix whitespace
- * and the backticks AND degrading the fence to indented-code form via
- * a leading regular space — markdown parsers treat ``` after a space
- * as inline code or plain text, not a fence boundary, regardless of
- * what the LLM does with the ZWSP.
- */
 export function sanitizeTaskBodyForFence(body: string): string {
   return (body ?? "").replace(/^(\s*)(`{3,})/gm, "$1​ ​$2");
 }
 
-/**
- * Defang structural markers that would let user-supplied task content
- * hijack the coordinator template. Two attack surfaces:
- *
- *   1. The `{{...}}` template placeholders: a body that contains the
- *      literal text `{{TASK_BODY}}` could be substituted recursively
- *      if the substitution order ever changed, leaking template state.
- *   2. The `## Your job` splice marker the coordinator uses to insert
- *      the detected-scope block: a body containing that line would
- *      cause `spliceScopeBlock` to inject the scope at an
- *      attacker-controlled position, and any subsequent `## Your job`
- *      heading shifted into earlier substitution would alter intent.
- *
- * We replace both patterns with a visually-similar but inert variant
- * (the LLM still reads them, but no template / splice code matches).
- */
 export function sanitizeUserPromptContent(input: string): string {
   if (!input) return "";
   return input
-    // {{X}} → ｛｛X｝｝ (fullwidth braces — LLM-readable, not a placeholder)
     .replace(/\{\{/g, "｛｛")
     .replace(/\}\}/g, "｝｝")
-    // `## Your job` (and a couple of close variants) → degrade the
-    // heading by inserting a ZWSP after the leading hashes so it is
-    // no longer matched by `indexOf("## Your job")` anywhere.
     .replace(/^(#{1,6})(\s+Your job\b)/gim, "$1​$2");
 }
 
-/**
- * Build the full child prompt. Pure function — no I/O.
- *
- * Output sections, in order (sections marked OPT-IN are emitted only
- * when the corresponding input is present):
- *   1. Header line (role, task id, repo, cwd, dispatcher disclaimer)
- *   2. ## Language
- *   3. ## House rules                            (OPT-IN — opts.houseRules)
- *   4. ## House style (auto-detected)            (OPT-IN — opts.styleFingerprint)
- *   5. ## Memory                                 (OPT-IN — opts.memoryEntries)
- *   6. ## Task
- *   7. ## Detected scope                         (OPT-IN — opts.detectedScope)
- *   8. ## Shared plan (from planner)             (OPT-IN — opts.sharedPlan)
- *   9. ## Your role (playbook prepended if any, then coordinator brief)
- *  10. ## Repo profile
- *  11. ## Available helpers                      (OPT-IN — opts.symbolIndex)
- *  12. ## Repo context (auto-captured by bridge)
- *  13. ## Recent direction                       (OPT-IN — opts.recentDirection)
- *  14. ## Pinned context                         (OPT-IN — opts.pinnedFiles)
- *  15. ## Reference files                        (OPT-IN — opts.attachedReferences)
- *  16. ## Self-register
- *  17. ## Report contract — REQUIRED
- *  18. ## Verify commands                        (OPT-IN — opts.verifyHint)
- *  19. ## Spawn-time signals
- */
 export function buildChildPrompt(opts: BuildChildPromptOpts): string {
   const {
     taskId,
@@ -280,8 +101,6 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
 
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
   const safeTaskBody = sanitizeTaskBodyForFence(taskBody);
-  // Title is user-controlled; defang template/splice markers and flatten
-  // newlines so it can't break out of its single `- Title:` line.
   const safeTitle = sanitizeUserPromptContent(taskTitle).replace(/\r?\n/g, " ");
   const profileLine = profile
     ? renderProfileLine(profile)
@@ -351,9 +170,6 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     );
   }
 
-  // `plan.md` / `notes.md` are written by sibling child agents, so they're
-  // as untrusted as task body — a malicious/confused child could plant
-  // instructions or a fence break. Defang both before splicing.
   const sharedPlanTrimmed = sanitizeTaskBodyForFence(
     sanitizeUserPromptContent((sharedPlan ?? "").trim()),
   );
@@ -543,18 +359,6 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
   return lines.join("\n");
 }
 
-/**
- * Stable-per-app sections, extracted for `--append-system-prompt-file`
- * caching. Returns content that is byte-identical across every spawn
- * with the same app config — the Anthropic API caches matching system
- * prompt prefixes, so siblings + future tasks for the same app reuse
- * the cache slot. Excludes anything that depends on `taskId`,
- * `coordinatorBody`, `contextBlock`, `recentDirection`, or session
- * UUIDs (those go into the user message via `buildUserMessage`).
- *
- * Returns "" when no stable content is worth appending — caller should
- * skip the `--append-system-prompt-file` flag in that case.
- */
 export function buildSystemPromptAppend(opts: BuildChildPromptOpts): string {
   const {
     profile,
@@ -653,10 +457,6 @@ export function buildSystemPromptAppend(opts: BuildChildPromptOpts): string {
     );
   }
 
-  // Only return content when we have at least one optional section
-  // beyond Language — Language alone isn't worth a separate file +
-  // CLI flag round-trip. The caller can detect this and skip the
-  // `--append-system-prompt-file` arg entirely.
   const hasOptionalSection =
     houseRulesTrimmed.length > 0 ||
     styleLines.length > 0 ||
@@ -670,19 +470,6 @@ export function buildSystemPromptAppend(opts: BuildChildPromptOpts): string {
   return lines.join("\n");
 }
 
-/**
- * Task-specific sections, extracted for stdin (the user message). The
- * complement of `buildSystemPromptAppend` — together they cover every
- * section `buildChildPrompt` emits, just split by stability so the
- * stable half can be cached via `--append-system-prompt-file` and the
- * volatile half stays cheap to send fresh.
- *
- * The stable per-app sections are NOT duplicated here — they live in
- * the system prompt. The user message starts with the role/task header
- * and ends with spawn-time signals, omitting House rules / House style
- * / Memory / Repo profile / Available helpers / Pinned context /
- * Verify commands.
- */
 export function buildUserMessage(opts: BuildChildPromptOpts): string {
   const {
     taskId,
@@ -874,11 +661,6 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
   return lines.join("\n");
 }
 
-/**
- * Render the AppVerify object as bullet lines for the `## Verify
- * commands` section. Returns an empty array when there's nothing to
- * surface so the caller can skip the section header entirely.
- */
 function renderVerifyEntries(v: AppVerify | null | undefined): string[] {
   if (!v) return [];
   const out: string[] = [];
@@ -898,19 +680,12 @@ function renderVerifyEntries(v: AppVerify | null | undefined): string[] {
   return out;
 }
 
-/**
- * (P3a/A2) Render the symbol index as bullet lines grouped by kind.
- * Components first (most useful for UI repos), then plain helpers.
- * Caps at 30 entries to keep prompt token cost predictable; the
- * `+N more` line tells the agent how many were truncated.
- */
 const SYMBOLS_PROMPT_CAP = 30;
 function renderSymbolIndexLines(
   index: SymbolIndex | null | undefined,
 ): string[] {
   if (!index || !index.symbols || index.symbols.length === 0) return [];
 
-  // Stable sort: components first, then by file path, then by name.
   const sorted = [...index.symbols].sort((a, b) => {
     const aComp = a.kind === "component" ? 0 : 1;
     const bComp = b.kind === "component" ? 0 : 1;
@@ -936,18 +711,10 @@ function renderSymbolIndexLines(
   if (extra > 0) {
     out.push("", `…and **${extra}** more — full list in \`.bridge-state/symbol-indexes.json\`.`);
   }
-  // Quiet a possible unused-symbol warning when SymbolEntry isn't
-  // referenced by name elsewhere in this file.
   void (null as unknown as SymbolEntry | null);
   return out;
 }
 
-/**
- * (P3a/A1) Render the style fingerprint as 5-7 short lines. Skips
- * dimensions where the auto-detector returned `unknown` so we don't
- * give the agent confidence-less guidance ("indent: unknown" is
- * worse than no advice).
- */
 function renderStyleFingerprintLines(
   fp: StyleFingerprint | null | undefined,
 ): string[] {
@@ -1002,12 +769,6 @@ function renderStyleFingerprintLines(
   return out;
 }
 
-/**
- * (P3a/B3) Render pinned files as fenced code blocks, one per file.
- * The fence language is inferred from the file extension when
- * possible — helps the LLM tokenizer treat the contents as code
- * rather than prose. Truncated files get a trailing marker line.
- */
 function renderPinnedFilesLines(
   files: PinnedFile[] | null | undefined,
 ): string[] {
@@ -1039,12 +800,6 @@ function inferLang(file: string): string {
   return map[ext] ?? "";
 }
 
-/**
- * (P3b/B2) Render auto-attached reference files. Same fenced-block
- * shape as `renderPinnedFilesLines` so the agent's tokenizer treats
- * the body as code, plus a one-line score badge per file so the
- * agent knows WHY each was attached.
- */
 function renderReferenceFilesLines(
   files: ReferenceFile[] | null | undefined,
 ): string[] {
@@ -1068,11 +823,6 @@ function renderReferenceFilesLines(
   return out;
 }
 
-/**
- * (P3b/B4) Render the recent-direction window as a fenced diff-stat
- * block. Single block per spawn (we always pick one focus dir, not a
- * list).
- */
 function renderRecentDirectionLines(
   direction: RecentDirection | null | undefined,
 ): string[] {

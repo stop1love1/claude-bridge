@@ -17,7 +17,6 @@ export type SlashCommandsItemDto = {
   source: SlashDiscoverySource | "builtin";
 };
 
-/** Project overrides user overrides builtin for the same slug (same precedence as Claude Code). */
 function mergeBySlug(
   builtinDto: SlashCommandsItemDto[],
   userDto: SlashCommandsItemDto[],

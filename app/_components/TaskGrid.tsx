@@ -64,10 +64,6 @@ function GridCard({
   onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
   const runs = meta?.runs ?? [];
-  // The bridge itself runs the coordinator role; hide it from the
-  // sibling-repo + agent count summaries so a task that only has the
-  // coordinator running doesn't read as "1 agent" (zero have been
-  // dispatched yet — the coordinator is the dispatcher).
   const childRuns = runs.filter((r) => r.role !== "coordinator");
   const repoSet = Array.from(new Set(childRuns.map((r) => r.repo)));
   const status = deriveStatus(task, meta);
@@ -78,11 +74,8 @@ function GridCard({
     <div
       onClick={onOpen}
       onKeyDown={(e) => {
-        // Card is the primary navigation target; mirror native button
-        // semantics so keyboard users can open it without tabbing past
-        // the inline Trash / checkbox affordances first.
         if (e.key === "Enter" || e.key === " ") {
-          if (e.target !== e.currentTarget) return; // let inner buttons handle their own keys
+          if (e.target !== e.currentTarget) return;
           e.preventDefault();
           onOpen();
         }
@@ -112,8 +105,6 @@ function GridCard({
           className={`shrink-0 mt-0.5 h-4 w-4 rounded border flex items-center justify-center transition-colors ${
             selected
               ? "border-primary bg-primary text-primary-foreground"
-              // Always visible below sm: (touch devices without hover);
-              // hidden by default and revealed on hover/focus from sm: up.
               : "border-border bg-background opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
           }`}
         >
@@ -190,9 +181,6 @@ const SECTION_ACCENT: Record<TaskSection, string> = {
   [SECTION_DONE]: "border-success/40",
 };
 
-// Per-section copy for empty Kanban columns. Generic "empty" reads the
-// same in all four states; tailored hints make TODO and BLOCKED feel
-// purposeful and tell the operator what dropping a card here means.
 const SECTION_EMPTY: Record<TaskSection, { title: string; hint: string }> = {
   [SECTION_TODO]:    { title: "Nothing queued",  hint: "Drag a card here, or quick-add above." },
   [SECTION_DOING]:   { title: "Idle",            hint: "Drag a card here to mark it in-progress." },
@@ -222,9 +210,6 @@ export function TaskGrid({
   metaByTask: Map<string, Meta>;
   activeTaskId: string | null;
   query: string;
-  /** `true` while the parent's first task fetch is in flight. We swap
-   *  the EmptyState ("No tasks yet") for skeleton rows so the page
-   *  doesn't briefly read as empty before data lands. */
   loading?: boolean;
   onOpenTask: (id: string) => void;
   onQuickAdd: (body: string) => void;
@@ -234,9 +219,6 @@ export function TaskGrid({
   onMoveTask?: (id: string, section: TaskSection) => Promise<void> | void;
 }) {
   const [quick, setQuick] = useState("");
-  // Layout pref hydrates through `useSyncExternalStore` (the
-  // `useLocalStorage` hook), which gives us SSR safety without an
-  // effect that calls `setLayout`.
   const [layout, setLayoutPersist] = useLocalStorage<Layout>(
     LAYOUT_KEY,
     loadLayout,
@@ -245,8 +227,6 @@ export function TaskGrid({
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
-  // Tracks which Kanban column is currently the drop target so we can
-  // highlight it and which task is being dragged so we can dim it.
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverSection, setDragOverSection] = useState<TaskSection | null>(null);
 
@@ -270,12 +250,6 @@ export function TaskGrid({
     [filtered],
   );
 
-  // Drop selected ids that no longer exist (e.g. after a delete).
-  // Done via the React-docs "previous-render snapshot" trick — when
-  // `sorted` changes between renders, recompute the cleaned set
-  // synchronously during render and call `setSelected` *only* if it
-  // really shrank. React eats the render and re-runs without
-  // cascading.
   const [prevSorted, setPrevSorted] = useState(sorted);
   if (sorted !== prevSorted) {
     setPrevSorted(sorted);
@@ -427,9 +401,6 @@ export function TaskGrid({
       <div className="flex-1 overflow-y-auto pb-16">
         {sorted.length === 0 ? (
           loading ? (
-            // First-mount: render skeleton rows in the same grid the
-            // real cards will use. Without this the EmptyState flashes
-            // for ~hundreds of ms before the initial fetch settles.
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-4">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="rounded-lg border border-border p-3 bg-card">
@@ -478,9 +449,6 @@ export function TaskGrid({
                 : undefined;
               const onDragLeave = onMoveTask
                 ? (e: React.DragEvent<HTMLDivElement>) => {
-                    // dragleave fires every time the cursor enters a child;
-                    // only clear the hover when the cursor truly leaves
-                    // the column wrapper.
                     if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
                     if (dragOverSection === section) setDragOverSection(null);
                   }

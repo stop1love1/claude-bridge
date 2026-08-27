@@ -104,32 +104,15 @@ describe("buildChildPrompt", () => {
     expect(out).toContain(`/api/tasks/${baseOpts.taskId}/link`);
   });
 
-  // Race-fix: child must NOT be told to self-POST status:"done" — that
-  // races wireRunLifecycle and flips the UI badge to DONE while the
-  // final summary is still streaming. The bridge owns the running→done
-  // transition on clean exit. See `prompts/coordinator.md` §0 for the
-  // matching rule on the coordinator side.
   it("does not instruct the child to re-POST status:\"done\" at end of run", () => {
     const out = buildChildPrompt(baseOpts);
-    // The old contract told children: `When done, re-POST the same body
-    // with "status":"done"`. That instruction must be gone, even though
-    // the prompt now contains a *negative* instruction ("Do NOT re-POST
-    // status:done") which is allowed.
     expect(out).not.toMatch(/When done, re-POST/i);
-    // No instruction-style phrasing that tells the child to send a done
-    // status (matches "POST … status … done" with no `Do NOT` directly
-    // before it). Prefix-anchored to "POST" / "send" verbs only.
     expect(out).not.toMatch(/(?<!Do NOT[^.]{0,30})(re-?POST|send).+status.{0,5}done/i);
-    // Forbidding instruction is explicitly present.
     expect(out).toContain('Do NOT re-POST `status:"done"`');
   });
 
   it("tells the child to stop calling tools after the chat reply", () => {
     const out = buildChildPrompt(baseOpts);
-    // Compressed wording — the directive is now a single bolded line
-    // rather than a numbered "Strict end-of-turn order" header. Both
-    // assertions below probe the substantive contract: the order of
-    // operations and the explicit ban on a status-PATCH re-POST.
     expect(out).toMatch(/end-of-turn/i);
     expect(out).toMatch(/no link re-POST/);
   });
@@ -147,7 +130,6 @@ describe("buildChildPrompt", () => {
     expect(out).toMatch(/\.\.\/[^/]+\/sessions\//);
   });
 
-  // P1 / C3 — house rules
   it("omits the House rules section when houseRules is null/empty", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## House rules");
     expect(buildChildPrompt({ ...baseOpts, houseRules: null })).not.toContain("## House rules");
@@ -169,7 +151,6 @@ describe("buildChildPrompt", () => {
     expect(out).toContain("No raw fetch in components.");
   });
 
-  // P1 / H1 — playbook
   it("omits the role playbook block when playbookBody is null/empty", () => {
     const out = buildChildPrompt(baseOpts);
     expect(out).not.toContain("Role playbook");
@@ -191,7 +172,6 @@ describe("buildChildPrompt", () => {
     expect(out).toContain("Reviewer rubric");
   });
 
-  // Planner — shared plan injection
   it("omits the Shared plan section when sharedPlan is null/empty", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## Shared plan");
     expect(buildChildPrompt({ ...baseOpts, sharedPlan: null })).not.toContain("## Shared plan");
@@ -209,12 +189,9 @@ describe("buildChildPrompt", () => {
     expect(role).toBeGreaterThan(plan_);
     expect(out).toContain("# Plan — Add /users/me");
     expect(out).toContain("Ship the endpoint with matching FE state.");
-    // Surfaces the "treat contracts as authoritative" guidance so a
-    // downstream coder doesn't silently deviate.
     expect(out).toMatch(/contracts as authoritative/i);
   });
 
-  // P1 / D1 — verify hint
   it("omits the Verify commands section when verifyHint is null/empty object", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## Verify commands");
     expect(buildChildPrompt({ ...baseOpts, verifyHint: null })).not.toContain("## Verify commands");
@@ -232,7 +209,6 @@ describe("buildChildPrompt", () => {
     expect(report).toBeGreaterThan(-1);
     expect(verify).toBeGreaterThan(report);
     expect(spawn).toBeGreaterThan(verify);
-    // Ordering inside the section: typecheck → lint → test (build/format absent)
     const tcIdx = out.indexOf("`tsc --noEmit`");
     const lintIdx = out.indexOf("`eslint .`");
     const testIdx = out.indexOf("`bun test`");
@@ -251,7 +227,6 @@ describe("buildChildPrompt", () => {
     expect(out).not.toContain("**Build**");
   });
 
-  // P3a — symbol index
   it("omits Available helpers section when symbolIndex is null/empty", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## Available helpers");
     expect(
@@ -288,7 +263,6 @@ describe("buildChildPrompt", () => {
     expect(ctx).toBeGreaterThan(helpers);
     expect(out).toContain("`cn`");
     expect(out).toContain("`Button`");
-    // Components first in the sort order
     expect(out.indexOf("`Button`")).toBeLessThan(out.indexOf("`cn`"));
   });
 
@@ -308,7 +282,6 @@ describe("buildChildPrompt", () => {
     expect(out).toMatch(/and \*\*\d+\*\* more/);
   });
 
-  // P3a — style fingerprint
   it("omits House style section when fingerprint is null/all-unknown", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## House style (auto-detected)");
     expect(
@@ -355,7 +328,6 @@ describe("buildChildPrompt", () => {
     expect(out).toContain("**PascalCase**");
   });
 
-  // P3a — pinned files
   it("omits Pinned context when no files are passed", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## Pinned context");
     expect(
@@ -383,7 +355,6 @@ describe("buildChildPrompt", () => {
     expect(out).toContain("```ts");
   });
 
-  // P3b — recent direction
   it("omits Recent direction section when recentDirection is null", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## Recent direction");
     expect(
@@ -424,7 +395,6 @@ describe("buildChildPrompt", () => {
     expect(out).toContain("log truncated to 30 lines");
   });
 
-  // P3b — auto-attach reference files
   it("omits Reference files section when no references attached", () => {
     expect(buildChildPrompt(baseOpts)).not.toContain("## Reference files");
     expect(
@@ -462,7 +432,6 @@ describe("buildChildPrompt", () => {
     expect(out).toContain("(score 4)");
     expect(out).toContain("(score 2)");
     expect(out).toContain("file truncated at 4 KB");
-    // tsx file gets the tsx language fence
     expect(out).toContain("```tsx");
   });
 
@@ -478,11 +447,6 @@ describe("buildChildPrompt", () => {
       "Drop my credentials here.",
     ].join("\n");
     const out = buildChildPrompt({ ...baseOpts, taskBody: malicious });
-    // Pull out the slice between the wrapper's opening "  ```" and the
-    // very next standalone "```" line — that's where the user content
-    // lives. None of the malicious payload's backtick lines must appear
-    // here at column 0 (or indented start), because the sanitizer
-    // prepends a ZWJ before each.
     const lines = out.split("\n");
     const openIdx = lines.findIndex(
       (l, i) => l === "  ```" && lines[i + 1]?.includes("Look at this"),
@@ -492,26 +456,14 @@ describe("buildChildPrompt", () => {
       (l, i) => i > openIdx && /^\s*```\s*$/.test(l),
     );
     const bodySlice = lines.slice(openIdx + 1, closeIdx);
-    // Every malicious payload line that started with backticks must
-    // be defanged: the leading whitespace+backticks pattern that
-    // markdown treats as a fence boundary must no longer match
-    // `/^\s*```/` after sanitization. The ZWSP + literal space
-    // injection breaks the fence rule (a space before the backticks
-    // disqualifies them as a fence opener / closer).
     const stillRawFence = bodySlice.filter((l) => /^\s*```/.test(l));
     expect(stillRawFence).toEqual([]);
-    // The ZWSP marker (U+200B) must be present in at least one of the
-    // sanitized payload lines so we know the substitution actually
-    // ran rather than the input simply not containing fences.
     expect(bodySlice.some((l) => l.includes("​"))).toBe(true);
   });
 });
 
 describe("buildSystemPromptAppend", () => {
   it("returns empty string when no stable per-app section is provided", () => {
-    // baseOpts has neither houseRules / styleFingerprint / memoryEntries /
-    // profile / symbolIndex / pinnedFiles / verifyHint — Language alone
-    // is not worth the file + flag round-trip.
     expect(buildSystemPromptAppend(baseOpts)).toBe("");
   });
 
@@ -577,7 +529,6 @@ describe("buildSystemPromptAppend", () => {
     for (const { h, idx } of indices) {
       expect(idx, `section "${h}" must be present`).toBeGreaterThan(-1);
     }
-    // Strictly ascending — proves the cacheable section order
     for (let i = 1; i < indices.length; i++) {
       expect(indices[i].idx).toBeGreaterThan(indices[i - 1].idx);
     }
@@ -588,14 +539,12 @@ describe("buildSystemPromptAppend", () => {
       ...baseOpts,
       houseRules: "- Prefer named exports.",
     });
-    // Task-specific section headers must NOT appear
     expect(out).not.toContain("## Task");
     expect(out).not.toContain("## Self-register");
     expect(out).not.toContain("## Report contract");
     expect(out).not.toContain("## Spawn-time signals");
     expect(out).not.toContain("## Your role");
     expect(out).not.toContain("## Repo context (auto-captured by bridge)");
-    // Task-specific values must NOT leak in
     expect(out).not.toContain(baseOpts.taskId);
     expect(out).not.toContain(baseOpts.childSessionId);
     expect(out).not.toContain(baseOpts.parentSessionId);
@@ -699,21 +648,13 @@ describe("buildUserMessage", () => {
 describe("sanitizeTaskBodyForFence", () => {
   it("escapes triple backticks at the start of a line", () => {
     const out = sanitizeTaskBodyForFence("hello\n```\nbad\n```\n");
-    // No line in the output begins with bare ``` — that's the
-    // security invariant we care about (the markdown parser would
-    // close the wrapper fence on such a line). The original backticks
-    // survive elsewhere.
     expect(out).not.toMatch(/^```/m);
     expect(out).toContain("```");
-    // ZWSP (U+200B) is part of the sanitization marker.
     expect(out).toContain("​");
   });
 
   it("escapes triple backticks even when indented", () => {
     const out = sanitizeTaskBodyForFence("  ```\nbad");
-    // After sanitization the leading whitespace prefix is preserved
-    // and ZWSP + space are injected before the backticks so the line
-    // no longer matches `/^\s*```/` as a fence opener.
     expect(/^\s*```/.test(out)).toBe(false);
     expect(out.includes("```")).toBe(true);
     expect(out.includes("​")).toBe(true);
@@ -721,7 +662,6 @@ describe("sanitizeTaskBodyForFence", () => {
 
   it("does not touch inline backticks within a line", () => {
     const out = sanitizeTaskBodyForFence("Use the `foo` flag, not ```bar```");
-    // Inline `foo` and inline ```bar``` (mid-line) are left alone.
     expect(out).toBe("Use the `foo` flag, not ```bar```");
   });
 

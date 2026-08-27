@@ -1,18 +1,3 @@
-/**
- * Startup banner — runs once per server boot from `instrumentation.ts`
- * and prints a `[bridge]` log block summarizing the health of every
- * service the bridge depends on (or speaks to). The goal is one
- * scannable view in the dev terminal so the operator immediately
- * knows whether Claude is reachable, whether Telegram credentials
- * actually work, etc., instead of finding out 10 minutes later when
- * a notification silently drops.
- *
- * Every check is best-effort: a network ping that times out just
- * downgrades the status from "ok" to "warn", it never throws and
- * never blocks the dev server from coming up. We deliberately keep
- * this module dependency-light — `node:child_process` for `claude
- * --version`, `fetch` for Telegram `/getMe`, no fancy logger.
- */
 
 import { spawn } from "node:child_process";
 import { loadAuthConfig, pruneExpired, writeRuntimeMeta } from "./auth";
@@ -37,12 +22,6 @@ const TG_HOST = "https://api.telegram.org";
 const TG_TIMEOUT_MS = 4000;
 const CLAUDE_TIMEOUT_MS = 5000;
 
-/**
- * Spawn `claude --version` and resolve to the trimmed stdout, or null
- * when the binary can't be found / hangs / errors. We don't need the
- * exit code — any output that includes a recognizable version string
- * is enough to confirm the binary works.
- */
 function probeClaude(): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
@@ -64,7 +43,7 @@ function probeClaude(): Promise<string | null> {
       return;
     }
     const timer = setTimeout(() => {
-      try { child?.kill("SIGKILL"); } catch { /* ignore */ }
+      try { child?.kill("SIGKILL"); } catch { }
       finish(null);
     }, CLAUDE_TIMEOUT_MS);
     child.on("error", () => {
@@ -80,9 +59,6 @@ function probeClaude(): Promise<string | null> {
         finish(null);
         return;
       }
-      // First non-empty line — `claude --version` prints something like
-      // `1.2.3 (Claude Code)`; we grab the leading line so the banner
-      // stays compact.
       const first = combined.split(/\r?\n/).find((l) => l.trim()) ?? "";
       finish(first.trim() || null);
     });
@@ -117,8 +93,6 @@ async function checkTelegramBot(): Promise<CheckResult> {
     }
     return { name: "telegram-bot", status: "missing", detail: "not configured" };
   }
-  // Best-effort `/getMe` ping with a short timeout. Don't block boot
-  // if Telegram is slow / firewalled.
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TG_TIMEOUT_MS);
   try {
@@ -127,11 +101,6 @@ async function checkTelegramBot(): Promise<CheckResult> {
     });
     if (!r.ok) {
       const rawBody = await r.text().catch(() => "");
-      // Telegram occasionally echoes the request URL (which carries the
-      // bot token) in some error response bodies. Scrub the token out
-      // before logging so the boot banner / log files never carry it
-      // in plaintext. Belt-and-suspenders: also redact any URL-shaped
-      // path that includes the literal `bot<digits>:` prefix.
       const safeBody = rawBody
         .split(botToken).join("[redacted]")
         .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]");
@@ -187,10 +156,6 @@ function checkTelegramUserClient(): CheckResult {
       detail: `partial creds — missing: ${missing.join(", ")}`,
     };
   }
-  // Probing `client.connect()` here would gate the dev server on a
-  // network round-trip; we only verify creds are present. The
-  // `telegramNotifier`'s install path will warn separately if the
-  // session has been revoked.
   const target = user.targetChatId.trim() || "Saved Messages";
   return {
     name: "telegram-user",
@@ -202,11 +167,6 @@ function checkTelegramUserClient(): CheckResult {
 function checkAuth(): CheckResult {
   const cfg = loadAuthConfig();
   if (!cfg) {
-    // Mint a one-time setup token and surface it in the banner so the
-    // operator can paste it into the first-run setup form. Without
-    // the token, the setup endpoint refuses — that's what closes the
-    // Host-header spoofing hole the previous loopback-only check
-    // could not.
     let setupToken = "";
     try {
       setupToken = ensureSetupToken();
@@ -222,9 +182,6 @@ function checkAuth(): CheckResult {
       detail: `no operator account — open ${BRIDGE_URL}/login on this machine to set one${tokenHint}`,
     };
   }
-  // Auth already configured — make sure no stale setup token file
-  // lingers from a previous incomplete setup attempt. Cheap idempotent
-  // unlink; password rotation must use the CLI from here on.
   clearSetupToken();
   const live = pruneExpired(cfg.trustedDevices);
   return {
@@ -234,14 +191,6 @@ function checkAuth(): CheckResult {
   };
 }
 
-/**
- * Claim the single-process lock for this `SESSIONS_DIR`. A live foreign
- * holder means two bridges share one state dir — their meta.json writes
- * race outside the in-process per-task mutex, and freshly-spawned runs
- * can be silently dropped. Surface it loudly so the operator kills the
- * duplicate. Stale-lock takeover (previous crash) is the normal restart
- * path and reports `ok`.
- */
 function checkProcessLock(): CheckResult {
   const lock = acquireProcessLock({ port: BRIDGE_PORT, url: BRIDGE_URL });
   if (!lock.acquired && lock.heldBy) {
@@ -287,25 +236,13 @@ const STATUS_GLYPH: Record<CheckStatus, string> = {
   error: "✗",
 };
 
-/**
- * Run every startup check and emit a tagged log line per service. We
- * use console.info so it shows up in dev (`bun dev`) and `next start`
- * without needing a logger config — eslint's `no-console` is disabled
- * locally for this single banner. Returning the results lets tests
- * assert on the structure without scraping stdout.
- */
 export async function runStartupChecks(): Promise<CheckResult[]> {
   console.info(
     `[bridge] starting up — port=${BRIDGE_PORT} url=${BRIDGE_URL}`,
   );
 
-  // Drop the live URL into bridge.json#runtime so CLI helpers (the
-  // `bun run approve:login` flow in particular) can locate the running
-  // server without the operator having to know whether dev or prod is
-  // up, or what port either bound to.
   writeRuntimeMeta({ url: BRIDGE_URL, port: BRIDGE_PORT });
 
-  // Synchronous checks first (instant), async ones in parallel after.
   const sync: CheckResult[] = [
     checkProcessLock(),
     checkAuth(),
@@ -316,12 +253,12 @@ export async function runStartupChecks(): Promise<CheckResult[]> {
   const asyncResults = await Promise.all([checkClaudeCli(), checkTelegramBot()]);
 
   const all: CheckResult[] = [
-    sync[0],            // process-lock
-    sync[1],            // auth
-    asyncResults[0],    // claude-cli
-    sync[2],            // apps
-    asyncResults[1],    // telegram-bot
-    sync[3],            // telegram-user
+    sync[0],
+    sync[1],
+    asyncResults[0],
+    sync[2],
+    asyncResults[1],
+    sync[3],
   ];
 
   for (const r of all) {

@@ -1,19 +1,3 @@
-/**
- * Devops connection-check probe for an app.
- *
- * Tells the operator — in advance — whether `integrationMode:
- * "pull-request"` is actually going to work for this app:
- *
- *   1. Is the directory a git repo with an `origin` remote?
- *   2. Did we classify the host (github / gitlab) — or is it self-hosted?
- *   3. Is the matching CLI installed and authenticated?
- *
- * Returns a structured payload the Settings UI renders next to the
- * "Pull request" radio so the operator can fix the missing prereq
- * before saving the setting and being surprised at runtime.
- *
- * GET /api/apps/<name>/devops-check
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -28,18 +12,10 @@ const AUTH_TIMEOUT_MS = 8_000;
 type Ctx = { params: Promise<{ name: string }> };
 
 interface AuthProbe {
-  /** True iff `<cli> auth status` exited 0. */
   authenticated: boolean;
-  /** Short message — first non-empty line of stderr from the auth probe. */
   message: string;
 }
 
-/**
- * Probe whether the operator is logged in. `gh auth status` and
- * `glab auth status` both write a human-readable summary to stderr
- * and exit 0 on success / 1 on missing auth. We grab the first
- * non-empty line so the UI has something concrete to display.
- */
 async function probeAuth(cli: IntegrationCli): Promise<AuthProbe> {
   try {
     const r = await execFileP(cli, ["auth", "status"], {
@@ -68,7 +44,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "app folder is missing", cwd: app.path }, { status: 404 });
   }
 
-  // Step 1 + 2: detect cli + remote.
   const detect = await detectIntegrationCli(app.path);
   if ("reason" in detect) {
     return NextResponse.json({
@@ -82,7 +57,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     });
   }
 
-  // Step 3: auth probe.
   const auth = await probeAuth(detect.cli);
 
   return NextResponse.json({

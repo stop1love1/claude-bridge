@@ -8,22 +8,12 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string; reqId: string }> };
 
-/**
- * GET /api/share/access/<id>/pending/<reqId>
- *
- * Public guest poll. While pending, returns `{ status: "pending" }`.
- * On approval, **sets the scoped guest cookie** and returns
- * `{ status: "approved", taskId }`, then consumes the request. On denial,
- * returns `{ status: "denied", reason? }` and consumes it.
- */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   if (DEMO_MODE) {
     return NextResponse.json({ error: "demo mode" }, { status: 503 });
   }
   const { id, reqId } = await ctx.params;
   const pending = getShareRequest(reqId);
-  // Bind the poll to the share in the URL so a leaked reqId can't be
-  // polled against the wrong share.
   if (!pending || pending.shareId !== id) {
     return NextResponse.json({ status: "expired" });
   }
@@ -38,7 +28,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ status: "denied", reason });
   }
 
-  // approved → mint the cookie if the share + device are still valid.
   const share = getShare(pending.shareId);
   if (!share || !isShareUsable(share) || !findValidDevice(share, pending.did)) {
     consumeShareRequest(reqId);

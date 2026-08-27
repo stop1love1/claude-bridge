@@ -134,7 +134,7 @@ describe("findNearDuplicateRole", () => {
       repo: "edusoft-lms",
       role: "fixer-cashier",
     });
-    expect(result?.existing.sessionId).toBe(SID_B); // earlier endedAt
+    expect(result?.existing.sessionId).toBe(SID_B);
   });
 
   it("flags `coder-v2` as near-duplicate of an existing `coder`", () => {
@@ -148,17 +148,12 @@ describe("findNearDuplicateRole", () => {
   });
 
   it("respects allowDuplicate semantics by being a no-op when bypassed by caller (caller must skip the call)", () => {
-    // Caller-side: when `allowDuplicate: true` is set, the route is
-    // expected to NOT call findNearDuplicateRole at all. This test
-    // documents the contract: the function itself does not check
-    // allowDuplicate (route does), but it's harmless to call.
     const result = findNearDuplicateRole({
       runs: [run({ role: "fixer" })],
       parentSessionId: PARENT,
       repo: "edusoft-lms",
       role: "fixer-cashier",
     });
-    // Function returns the match either way — gating is the route's job.
     expect(result).not.toBeNull();
   });
 });

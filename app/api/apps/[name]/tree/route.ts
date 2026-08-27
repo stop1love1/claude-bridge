@@ -1,13 +1,3 @@
-/**
- * One-level directory listing under a registered app root. Used by the
- * app detail "Source code" tab for lazy tree expansion.
- *
- *   GET /api/apps/<segment>/tree?dir=relative/sub/path
- *
- * `dir` is optional (root when absent). Relative segments use `/`;
- * `..`, NUL, and absolute paths are rejected. Result paths are always
- * contained under `app.path`.
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
@@ -16,7 +6,6 @@ import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
-/** Hard cap per directory listing (very large dirs return `truncated`). */
 const MAX_ENTRIES = 100_000;
 
 type Ctx = { params: Promise<{ name: string }> };

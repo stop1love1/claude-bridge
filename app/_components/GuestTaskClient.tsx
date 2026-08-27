@@ -40,19 +40,12 @@ function grantBadge(grants: ShareGrants): string {
   return on.length ? `view · ${on.join(" · ")}` : "view only";
 }
 
-/** Pick the run a guest lands on: the coordinator if present, else newest. */
 function pickRun(runs: Run[]): Run | null {
   if (runs.length === 0) return null;
   const coord = runs.find((r) => r.role.toLowerCase().includes("coordinator"));
   return coord ?? runs[runs.length - 1];
 }
 
-/**
- * Guest task client for `/share/<id>/<token>`. Runs the access handshake
- * (request → operator approves → cookie), then renders the task with the
- * full `SessionLog` (live stream + permission answering + composer) —
- * scoped server-side to this one task by the share's grants.
- */
 export function GuestTaskClient({ shareId, token }: { shareId: string; token: string }) {
   const [phase, setPhase] = useState<Phase>("gate");
   const [name, setName] = useLocalStorage(NAME_KEY, loadName, "", dumpName);
@@ -91,7 +84,6 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
     }
   }, [shareId, token, name, onApproved]);
 
-  // Poll for the operator's decision while pending.
   useEffect(() => {
     if (phase !== "pending" || !reqId) return;
     let stop = false;
@@ -103,7 +95,6 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
         else if (r.status === "denied") { setError(r.reason ?? ""); setPhase("denied"); }
         else if (r.status === "expired") { setPhase("gate"); setReqId(null); }
       } catch {
-        /* transient — keep polling */
       }
     };
     void tick();
@@ -111,7 +102,6 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
     return () => { stop = true; clearInterval(h); };
   }, [phase, reqId, shareId, onApproved]);
 
-  // Once approved, poll the task meta so the run list stays fresh.
   useEffect(() => {
     if (phase !== "approved" || !taskId) return;
     const ac = new AbortController();
@@ -123,7 +113,6 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
         setMeta(m);
         setSelectedSid((cur) => cur ?? pickRun(m.runs)?.sessionId ?? null);
       } catch {
-        /* ignore */
       }
     };
     void tick();
@@ -138,7 +127,6 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
     return { sessionId: run.sessionId, repoPath: run.repoPath, role: run.role, repo: run.repo };
   }, [meta, selectedSid]);
 
-  // ── Gate / pending / denied screens ────────────────────────────
   if (phase !== "approved") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -199,7 +187,6 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
     );
   }
 
-  // ── Approved: scoped task view ─────────────────────────────────
   return (
     <div className="flex h-screen flex-col bg-background">
       <header className="flex items-center gap-3 border-b border-border px-4 py-2 text-sm">
@@ -225,8 +212,7 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
           </select>
         ) : null}
       </header>
-      {/* Intent & Planning Gate — guests can approve only with the grant.
-          The px-4 wrapper collapses to zero height when the card is inactive. */}
+      {}
       <div className="px-4 space-y-3 empty:hidden">
         {taskId && (
           <PlanReviewCard

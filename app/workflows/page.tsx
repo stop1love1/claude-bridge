@@ -317,8 +317,6 @@ function SettingsPanel({
   );
 }
 
-// ── Create / edit form ────────────────────────────────────────────────
-
 type ScheduleKind = "none" | "interval" | "daily";
 type IntervalUnit = "m" | "h" | "d";
 const UNIT_MS: Record<IntervalUnit, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 };
@@ -450,7 +448,7 @@ function WorkflowForm({
           </div>
         </div>
 
-        {/* Stages editor */}
+        {}
         <div className="grid gap-2">
           <div className="flex items-center justify-between">
             <Label>Stages (run in order)</Label>
@@ -504,7 +502,7 @@ function WorkflowForm({
           ))}
         </div>
 
-        {/* Optional schedule */}
+        {}
         <div className="grid gap-1.5 sm:grid-cols-[auto_1fr] sm:items-end sm:gap-3">
           <div className="grid gap-1.5">
             <Label htmlFor="wf-kind">Schedule (optional)</Label>

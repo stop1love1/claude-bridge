@@ -25,13 +25,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // CLAUDE.md contract: only the human user can promote a task to DONE
-  // (by ticking the card's checkbox in the UI). Coordinators / children
-  // hit this route via the internal-token path of `verifyRequestAuthOrInternal`,
-  // which is why we use `verifyRequestAuth` (cookie-only) here. Without
-  // this gate, a buggy or hostile coordinator can `curl PATCH … {"section":
-  // "DONE — not yet archived"}` with the internal token and bypass the
-  // user-confirmation review gate.
   if (patch.section === DONE_SECTION) {
     const cookie = verifyRequestAuth(req);
     if (!cookie) {
@@ -50,13 +43,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   return NextResponse.json(updated);
 }
 
-/**
- * Cookie-only — deliberately NOT verifyRequestAuthOrInternal.
- * CLAUDE.md never grants child agents authority to delete tasks; if a
- * coordinator could DELETE via the internal-token bypass, a compromised
- * child could nuke any task in the system. The browser UI is the only
- * sanctioned caller, so we require a real session cookie.
- */
 export async function DELETE(req: NextRequest, ctx: Ctx) {
   if (!verifyRequestAuth(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });

@@ -25,7 +25,6 @@ describe("presenceStore", () => {
   it("drops participants past the TTL", () => {
     touchPresence(TASK, { id: "gdv_a", label: "Alice", kind: "guest" }, 1000);
     touchPresence(TASK, { id: "gdv_b", label: "Bob", kind: "guest" }, 1000 + PRESENCE_TTL_MS);
-    // now = 1001 + TTL → cutoff 1001: Alice (1000) is stale, Bob (1000+TTL) is fresh.
     const active = listActive(TASK, 1000 + PRESENCE_TTL_MS + 1);
     expect(active.map((p) => p.label)).toEqual(["Bob"]);
   });

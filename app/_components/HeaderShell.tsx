@@ -15,28 +15,14 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 
-/**
- * Global top-of-page header — strictly cross-page chrome:
- *
- *   [Brand] [MainNav]                       [Theme] [User]
- *
- * Page-specific filters / breadcrumbs / action buttons belong in a
- * per-page sub-toolbar rendered just below this header. Keeping that
- * stuff out of here means the global row never has to flex around
- * variable content and never overflows on narrow viewports.
- */
 export function HeaderShell({
   active,
   badges,
 }: {
-  /** Omit on off-nav pages (e.g. /usage) so no top-nav pill highlights. */
   active?: MainNavSection;
   badges?: Partial<Record<MainNavSection, React.ReactNode>>;
 }) {
   const { pref, resolved, setPref, mounted } = useTheme();
-  // Pre-mount: render a stable Monitor icon so SSR markup matches the
-  // first client render. After mount, swap to the icon that reflects
-  // the user's actual preference.
   const Icon = !mounted
     ? Monitor
     : pref === "system" ? Monitor : resolved === "dark" ? Moon : Sun;
@@ -58,8 +44,7 @@ export function HeaderShell({
         />
         <h1 className="hidden md:inline text-sm font-semibold">Claude Bridge</h1>
       </Link>
-      {/* min-w-0 lets the scrollable nav shrink instead of pushing the
-          theme/user buttons off-screen on narrow viewports. */}
+      {}
       <div className="flex-1 min-w-0">
         <MainNav active={active} badges={badges} />
       </div>

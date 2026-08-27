@@ -22,13 +22,6 @@ interface TelegramSettingsPatchBody {
   forwardChatFilter?: TelegramForwardChatFilter;
 }
 
-/**
- * GET /api/telegram/settings
- *
- * Returns the active Telegram credentials. The bot token is masked in
- * the response so it doesn't leak into browser DevTools / network logs;
- * the UI just needs to know whether one is set, not its contents.
- */
 export function GET() {
   const settings = getManifestTelegramSettings();
   return NextResponse.json({
@@ -42,17 +35,6 @@ export function GET() {
   });
 }
 
-/**
- * PUT /api/telegram/settings
- *
- * Body: `{ botToken?, chatId?, forwardChat?, forwardChatMinChars? }`.
- * Empty strings clear the corresponding field; omitted fields are left
- * as-is. Once both fields are empty (and forwardChat is at default) the
- * entire `telegram` section is dropped from `bridge.json` (handled by
- * `setManifestTelegramSettings`).
- *
- * Returns the post-write settings (bot token masked).
- */
 export async function PUT(req: NextRequest) {
   let body: TelegramSettingsPatchBody;
   try {
@@ -90,18 +72,10 @@ export async function PUT(req: NextRequest) {
 
   const next = setManifestTelegramSettings(patch);
 
-  // Install (or re-install) the notifier subscription right now —
-  // without this the operator has to restart `bun dev` for new
-  // credentials to take effect, since `instrumentation.ts` only runs
-  // once per server boot. Tear down first so a token / chat id swap
-  // doesn't leave the old subscribers attached.
   if (next.botToken && next.chatId) {
     teardownTelegramNotifier();
     ensureTelegramNotifier();
   } else {
-    // Cleared both fields → unsubscribe so we don't leave dead
-    // listeners feeding `sendTelegram` (which would short-circuit on
-    // missing creds anyway, but the channel cost is wasteful).
     teardownTelegramNotifier();
   }
 
@@ -116,11 +90,6 @@ export async function PUT(req: NextRequest) {
   });
 }
 
-/**
- * Show the last 4 chars of the token, masking the rest with `•`. Bot
- * tokens are sensitive (anyone holding one can post as the bot) — we
- * never echo the full string back to a UI.
- */
 function maskToken(token: string): string {
   if (token.length <= 4) return "•".repeat(token.length);
   return `${"•".repeat(token.length - 4)}${token.slice(-4)}`;

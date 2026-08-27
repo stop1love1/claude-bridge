@@ -27,7 +27,6 @@ describe("__test.pickTouchedDir", () => {
 
   it("returns the parent dir of the top-scoring file", () => {
     const idx = mkIndex(["hooks/forms/useFormState.ts", "lib/util.ts"]);
-    // Override symbol names to drive the score where we want
     idx.symbols = [
       { name: "useFormState", kind: "function", file: "hooks/forms/useFormState.ts", signature: "" },
       { name: "validateForm", kind: "function", file: "hooks/forms/useFormState.ts", signature: "" },
@@ -40,7 +39,6 @@ describe("__test.pickTouchedDir", () => {
   it("normalizes Windows-style backslashes in the returned dir", () => {
     const idx = mkIndex([]);
     idx.symbols = [
-      // synthesized backslash path
       { name: "Form", kind: "component", file: "components\\forms\\Login.tsx", signature: "" },
       { name: "FormField", kind: "component", file: "components\\forms\\Field.tsx", signature: "" },
     ];

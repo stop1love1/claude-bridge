@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 beforeEach(() => {
-  // Drop the global singleton between tests so emitter listeners and
-  // pending entries don't leak across cases.
   delete (globalThis as { __bridgePermissionStore?: unknown }).__bridgePermissionStore;
 });
 
@@ -85,7 +83,7 @@ describe("subscribe — per-session emitter", () => {
     expect(answereds).toEqual(["req-a"]);
     off();
     store.announcePending({ ...baseReq, requestId: "req-b" });
-    expect(pendings).toEqual(["req-a"]); // off() unsubscribed
+    expect(pendings).toEqual(["req-a"]);
   });
 
   it("does NOT notify subscribers of other sessions", async () => {
@@ -116,7 +114,6 @@ describe("subscribeAll — global emitter", () => {
     const off = store.subscribeAllPermissions(() => {
       throw new Error("subscriber blew up");
     });
-    // Must not throw out to the announcer.
     expect(() => store.announcePending(baseReq)).not.toThrow();
     off();
   });

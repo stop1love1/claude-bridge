@@ -9,8 +9,6 @@ function scope(grants: ShareGrants, taskId = "t_1"): GuestScope {
   return { taskId, grants };
 }
 
-// Default predicate: every session is in the task (we test the session
-// gate separately).
 const inTask = () => true;
 const notInTask = () => false;
 
@@ -30,7 +28,6 @@ describe("authorizeGuestRequest — view baseline (no grant required)", () => {
     expect(authorizeGuestRequest("GET", "/api/sessions/sess-9/tail", scope(NONE), inTask).ok).toBe(true);
     expect(authorizeGuestRequest("GET", "/api/sessions/sess-9/tail/stream", scope(NONE), inTask).ok).toBe(true);
     expect(authorizeGuestRequest("GET", "/api/sessions/sess-9/permission/stream", scope(NONE), inTask).ok).toBe(true);
-    // Session not in the task → denied even though the route shape matches.
     expect(authorizeGuestRequest("GET", "/api/sessions/sess-9/tail", scope(NONE), notInTask).ok).toBe(false);
   });
 });
@@ -61,7 +58,6 @@ describe("authorizeGuestRequest — grant gates", () => {
   it("spawnAgent (NOT sendMessage) gates the agents-spawn route", () => {
     const p = "/api/tasks/t_1/agents";
     expect(authorizeGuestRequest("POST", p, scope(NONE), inTask).ok).toBe(false);
-    // sendMessage alone is no longer enough to spawn agents.
     expect(authorizeGuestRequest("POST", p, scope({ ...NONE, sendMessage: true }), inTask).ok).toBe(false);
     expect(authorizeGuestRequest("POST", p, scope({ ...NONE, spawnAgent: true }), inTask).ok).toBe(true);
   });
@@ -88,8 +84,8 @@ describe("authorizeGuestRequest — deny by default", () => {
       ["GET", "/api/sessions/all"],
       ["POST", "/api/apps/myapp/exec"],
       ["POST", "/api/apps/myapp/commit"],
-      ["GET", "/api/tasks/t_1/runs/sess-9/commit"], // wrong method for a POST-only rule
-      ["DELETE", "/api/tasks/t_1/meta"], // method not allowed for guest
+      ["GET", "/api/tasks/t_1/runs/sess-9/commit"],
+      ["DELETE", "/api/tasks/t_1/meta"],
       ["PUT", "/api/bridge/settings"],
       ["GET", "/api/usage"],
       ["GET", "/not-an-api/path"],

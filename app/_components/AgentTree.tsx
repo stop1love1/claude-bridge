@@ -25,11 +25,6 @@ import { duration } from "@/libs/client/time";
 import { RUN_STATUS_PILL } from "@/libs/client/runStatus";
 import { DiffViewer } from "./DiffViewer";
 
-// Role-keyed color/icon. Roles are free-form strings the coordinator
-// invents per task, so the lookup falls through to a neutral default.
-// Retry suffixes (`-retry`, `-cretry`, `-svretry`, `-vretry`,
-// `-stretry`) are stripped before the lookup so a `fixer-cretry`
-// follow-up still renders as a wrench.
 const ROLE_COLOR: Record<string, string> = {
   coordinator: "text-warning",
   reviewer: "text-primary",
@@ -57,11 +52,6 @@ function roleColor(role: string) {
   return ROLE_COLOR[normalizeRole(role)] ?? "text-muted-foreground";
 }
 
-// Stable wrapper around the lucide icon picked from `role`. Switch
-// instead of a `roleIcon(role)` lookup that returns a component —
-// React 19's `static-components` rule rejects rendering a component
-// referenced via a function-returned variable because static analysis
-// can't prove the result is stable across renders.
 function RoleIcon({
   role,
   size,
@@ -111,45 +101,19 @@ interface TreeNode {
 
 interface RepoGroup {
   repo: string;
-  /** Top-level nodes inside this repo (their parent is the coordinator
-   *  or is missing from runs[]). Sub-children stay nested. */
   roots: TreeNode[];
-  /** Most recent run in the group — used as the sessionId pivot for
-   *  the repo-level "View Diff" button (every run in a repo group
-   *  typically shares a worktree, so any of them produces the same
-   *  diff; pick the freshest for clearest provenance). */
   pivotRun: Run;
 }
 
 interface Layout {
-  /** The coordinator (or first parentless run if no coordinator) — rendered at the top. */
   owner: Run | null;
-  /** Everything else, grouped by repo so the user can scan per-project. */
   repoGroups: RepoGroup[];
 }
 
-/**
- * Walk `runs[]` and produce: (a) the coordinator/owner row, (b) one
- * group per distinct child repo containing the runs in that repo,
- * already organised into parent-child sub-trees.
- *
- * The previous flat tree layout intermixed runs across repos — when
- * a coordinator dispatched to two apps, the user had to read the
- * `@ <repo>` suffix on every row to know which project a run
- * belonged to. Grouping by repo surfaces project boundaries
- * visually and lets us hang a single "View Diff" button per repo
- * (one diff per worktree, not per agent).
- *
- * Cycles in `parentSessionId` (pathological meta.json) are guarded
- * by `visited` so the recursion can't loop forever.
- */
 function buildLayout(runs: Run[]): Layout {
   if (runs.length === 0) return { owner: null, repoGroups: [] };
   const byId = new Map(runs.map((r) => [r.sessionId, r]));
 
-  // Coordinator picked the same way the legacy tree did: prefer a
-  // role==="coordinator" parentless run; otherwise the first
-  // parentless run; otherwise the first run.
   const owner =
     runs.find((r) => !r.parentSessionId && r.role === "coordinator") ??
     runs.find((r) => !r.parentSessionId) ??
@@ -172,10 +136,6 @@ function buildLayout(runs: Run[]): Layout {
     };
   };
 
-  // Repo groups: every run that isn't the owner. Top-level inside
-  // each group = runs whose parent IS the owner OR whose parent
-  // doesn't exist in the runs list (orphans). Sub-trees stay nested
-  // for the rare case where one child spawns another.
   const groups = new Map<string, RepoGroup>();
   for (const run of runs) {
     if (run.sessionId === owner.sessionId) continue;
@@ -191,8 +151,6 @@ function buildLayout(runs: Run[]): Layout {
       groups.set(run.repo, g);
     }
     g.roots.push(node);
-    // Pivot is the latest started/created in the group — best proxy
-    // for "what worktree is currently most relevant".
     if (
       (run.startedAt ?? "") > (g.pivotRun.startedAt ?? "") ||
       (!g.pivotRun.startedAt && run.startedAt)
@@ -201,9 +159,6 @@ function buildLayout(runs: Run[]): Layout {
     }
   }
 
-  // Stable repo order: alphabetical by repo name. Predictable enough
-  // for the user to find the same project in the same place across
-  // tasks; deterministic for screenshot diff'ing.
   const repoGroups = [...groups.values()].sort((a, b) =>
     a.repo.localeCompare(b.repo),
   );
@@ -211,11 +166,6 @@ function buildLayout(runs: Run[]): Layout {
   return { owner, repoGroups };
 }
 
-/**
- * Trim a stream-json `task_started.description` to a one-line preview
- * for the live label. Some descriptions Claude attaches are full
- * paragraphs; we want a single concise line under the run row.
- */
 function truncateLabel(s: string, max: number): string {
   const oneLine = s.replace(/\s+/g, " ").trim();
   return oneLine.length > max ? oneLine.slice(0, max - 1) + "…" : oneLine;
@@ -258,9 +208,6 @@ function AgentNode({
   const dur = duration(run.startedAt, run.endedAt);
   const active = activeSessionId === run.sessionId;
   const canKill = run.status === "running" && !!onKill;
-  // Delete makes sense for terminal-state rows. Running rows show
-  // Kill (SIGTERM) instead — the two actions are mutually exclusive
-  // by status to avoid accidentally nuking a live agent.
   const canDelete = run.status !== "running" && run.status !== "queued" && !!onDelete;
   const live =
     run.status === "running"
@@ -315,9 +262,6 @@ function AgentNode({
           </span>
         </button>
         {(canKill || canDelete) && (
-          // On touch devices (no hover) the actions stay visible at all
-          // times. From sm: up they hide and reveal on hover/focus —
-          // standard "spatial" desktop UX.
           <div className="absolute -right-1 -top-1 flex sm:hidden sm:group-hover/node:flex sm:group-focus-within/node:flex">
             {canKill ? (
               <button
@@ -449,20 +393,6 @@ function RepoGroupView({
   );
 }
 
-/**
- * Render a `meta.runs[]` array as: coordinator at the top, then one
- * folder section per child repo with its agents grouped inside.
- *
- * - `onSelectRun` switches the chat panel to that run.
- * - `onKill` (optional) is called when the user clicks the hover-X on
- *   a `running` node. The parent should confirm + POST
- *   `/api/tasks/<id>/runs/<sid>/kill`.
- * - `onDelete` (optional) is called when the user clicks the hover-
- *   trash on a terminal-state node. The parent should confirm +
- *   `DELETE /api/sessions/<sid>?repo=<folder>` to remove the run
- *   from meta and delete the underlying `.jsonl`.
- * - The tree is rendered even when only the coordinator exists.
- */
 function AgentTreeInner({
   meta,
   taskId,
@@ -484,8 +414,6 @@ function AgentTreeInner({
 }) {
   const layout = useMemo(() => buildLayout(meta?.runs ?? []), [meta?.runs]);
   const [diff, setDiff] = useState<{ run: Run; repo: string } | null>(null);
-  // Diff endpoint requires a task id to look up meta — without it we
-  // suppress the inline diff button entirely instead of failing later.
   const onDiff = taskId ? (run: Run, repo: string) => setDiff({ run, repo }) : undefined;
 
   if (layout.repoGroups.length === 0) {
@@ -499,10 +427,7 @@ function AgentTreeInner({
   return (
     <>
       <div className="space-y-3">
-        {/* Coordinator is rendered by TaskDetail's separate Owner section
-            above the tree — duplicating it here would pad the tree with
-            a row the user already sees. We still use it for layout
-            decisions (parent linkage), just don't render its row. */}
+        {}
         {layout.repoGroups.map((g) => (
           <RepoGroupView
             key={g.repo}

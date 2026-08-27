@@ -127,7 +127,7 @@ describe("deriveVerdict", () => {
       actual: ["src/foo.ts", "bun.lock", "package-lock.json"],
     });
     expect(v.verdict).toBe("pass");
-    expect(v.unclaimedActual).toEqual([]); // lock files filtered out
+    expect(v.unclaimedActual).toEqual([]);
   });
 
   it("normalizes Windows-style backslashes in paths before comparison", () => {

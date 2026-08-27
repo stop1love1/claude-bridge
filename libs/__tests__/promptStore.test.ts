@@ -4,12 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Run } from "../meta";
 
-/**
- * Same temp-dir + cwd-spy pattern as houseRules / playbooks tests:
- * point process.cwd() at a fresh temp dir BEFORE importing the module
- * so SESSIONS_DIR resolves into our fixture instead of the real
- * sessions/ folder under the bridge.
- */
 function mktmp(): string {
   return mkdtempSync(join(tmpdir(), "bridge-promptstore-"));
 }
@@ -69,7 +63,6 @@ describe("readOriginalPrompt", () => {
     const newPath = join(dir, "coder-app-api.prompt.txt");
     writeFileSync(oldPath, "OLD");
     writeFileSync(newPath, "NEW");
-    // Force the older mtime to actually be older.
     const past = new Date(Date.now() - 60_000);
     utimesSync(oldPath, past, past);
     const { readOriginalPrompt } = await import("../promptStore");

@@ -49,8 +49,6 @@ describe("extractExtension", () => {
   });
 
   it("does NOT treat a leading-dot dotfile as an extension", () => {
-    // `.bashrc` has no extension; treating the whole name as ext would
-    // make every dotfile look like an executable to the blocklist.
     expect(extractExtension(".bashrc")).toBe("");
     expect(extractExtension(".env")).toBe("");
   });
@@ -151,15 +149,12 @@ describe("validateUploadName", () => {
   });
 
   it("strips Windows-illegal chars before checking the extension", () => {
-    // `evil*.exe` sanitizes to `evil_.exe` which still ends in `.exe`.
     const r = validateUploadName("evil*.exe");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("blocked-extension");
   });
 
   it("catches the trailing-dot bypass (evil.exe.)", () => {
-    // `evil.exe.` sanitizes to `evil.exe` and is then rejected as a
-    // blocked extension.
     const r = validateUploadName("evil.exe.");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("blocked-extension");
@@ -214,8 +209,6 @@ describe("assertInsideUploadDir", () => {
   });
 
   it("rejects a sibling directory whose path shares a prefix", () => {
-    // `/tmp/uploads/abc-evil/file` must not be accepted just because
-    // it starts with `/tmp/uploads/abc`.
     const sibling = resolve("/tmp/uploads/abc-evil/file");
     expect(assertInsideUploadDir(dir, sibling)).toBe(false);
   });

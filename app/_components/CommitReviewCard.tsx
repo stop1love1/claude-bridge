@@ -5,12 +5,6 @@ import { ShieldAlert } from "lucide-react";
 import { api } from "@/libs/client/api";
 import type { Run } from "@/libs/client/types";
 
-/**
- * Reliability Amplifier (B2) — operator review surface for low-confidence
- * runs whose outward action (push/integration) was HELD. Lists held runs
- * and lets the operator ship the held work (push) or dismiss the hold.
- * Renders nothing when no run is held.
- */
 export function CommitReviewCard({
   taskId,
   runs,

@@ -6,11 +6,6 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const apps = loadApps();
-  // P4/F1 — opportunistic worktree pruner. Runs on every apps-GET
-  // (cheap; the apps page is the only thing that hits this regularly).
-  // Reaps `.worktrees/*` directories older than the configured TTL
-  // for any app that has worktree mode enabled. Errors per app stay
-  // local — never fail the GET because of a pruner glitch.
   await Promise.all(
     apps
       .filter((a) => a.git.worktreeMode === "enabled")

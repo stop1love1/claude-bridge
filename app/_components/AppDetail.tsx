@@ -55,23 +55,6 @@ interface CommitEntry {
 
 type Tab = "source" | "diff" | "commits" | "tasks";
 
-/**
- * App detail page — git management + uncommitted diff + a docked
- * terminal: interactive PTY (xterm + `node-pty`) or one-shot HTTP exec.
- *
- * Layout (Linear/Notion-style clean):
- *   - Global `HeaderShell` (same as other bridge pages) stays visible
- *   - Combined app header: back to Apps, app title, refresh; second row
- *     for git branch chip, change summary, cwd path
- *   - Tab bar: Source code / Diff / Commits / Tasks
- *   - Tab content fills the remaining space
- *   - Terminal docks at the bottom: collapsed by default to a 36px bar,
- *     drag-resizable when open, click the chevron to toggle
- *
- * The previous fixed `grid-rows-[1fr_320px]` ate a third of the screen
- * for the terminal even when the operator was reading the diff. The new
- * layout reclaims that space and only spends it when the user opts in.
- */
 const TERMINAL_DEFAULT_HEIGHT = 240;
 const TERMINAL_MIN_HEIGHT = 120;
 const TERMINAL_BAR_HEIGHT = 32;
@@ -80,15 +63,8 @@ export function AppDetail({ name }: { name: string }) {
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("source");
-  /**
-   * Resolved app label for the header (`name` is often a path segment).
-   * Only written from the apps fetch callback — avoids setState in the
-   * effect body (react-hooks/set-state-in-effect).
-   */
   const [titleCache, setTitleCache] = useState<{ segment: string; display: string } | null>(null);
   const displayTitle = titleCache?.segment === name ? titleCache.display : name;
-  // Terminal docking state. Collapsed by default so the main tab
-  // (default Source code) gets the full viewport on first paint.
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT);
 
@@ -100,7 +76,7 @@ export function AppDetail({ name }: { name: string }) {
       const bySlug = apps.find((a) => a.name === name);
       const hit = byPath ?? bySlug;
       setTitleCache({ segment: name, display: hit ? hit.name : name });
-    }).catch(() => { /* keep route `name` until a later refresh */ });
+    }).catch(() => { });
     return () => { cancelled = true; };
   }, [name]);
 
@@ -108,7 +84,6 @@ export function AppDetail({ name }: { name: string }) {
     document.title = `${displayTitle} · Apps | Claude Bridge`;
   }, [displayTitle]);
 
-  // Initial + manual refresh for the status header.
   const reloadStatus = useCallback(() => {
     const ac = new AbortController();
     api.appStatus(name, { signal: ac.signal })
@@ -155,8 +130,7 @@ export function AppDetail({ name }: { name: string }) {
             {tab === "tasks" && <TasksTab name={name} />}
           </main>
 
-          {/* Terminal: collapsed bar by default; drag the top edge to
-              resize when open; click the chevron to toggle. */}
+          {}
           <TerminalPanel
             name={name}
             open={terminalOpen}
@@ -166,10 +140,6 @@ export function AppDetail({ name }: { name: string }) {
             onToggle={() => setTerminalOpen((v) => !v)}
             onResize={setTerminalHeight}
             onMaybeChangedRepo={() => {
-              // Most commands the operator runs (git pull, git checkout,
-              // pnpm install creating a lockfile diff…) plausibly mutate
-              // the working tree. Refresh the header status after every
-              // command so badges stay honest.
               reloadStatus();
             }}
           />
@@ -179,7 +149,6 @@ export function AppDetail({ name }: { name: string }) {
   );
 }
 
-/* ─────────────────────────── Page chrome ─────────────────────────── */
 
 function AppDetailPageHeader({
   title,
@@ -276,12 +245,6 @@ function AppDetailPageHeader({
   );
 }
 
-/**
- * Compact change-summary row. Each non-zero count gets a small dot in
- * the canonical git color (M=warning, A=success, D=destructive, R=info,
- * ?=fg-dim). Lower visual weight than the previous "M3 A1 D2" inline
- * which competed with the branch label.
- */
 function ChangeSummary({ counts }: { counts: StatusPayload["counts"] }) {
   const total =
     counts.modified +
@@ -396,7 +359,6 @@ function CountBadge({ n, active }: { n: number; active: boolean }) {
   );
 }
 
-/* ─────────────────────────── Diff tab ─────────────────────────── */
 
 function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => void }) {
   const toast = useToast();
@@ -418,8 +380,6 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
   }, [name, attempt]);
 
   const refresh = () => {
-    // Reset transient state in the event handler so the effect body stays
-    // free of cascading setState calls (React 19 lint).
     setLoading(true);
     setError(null);
     setAttempt((a) => a + 1);
@@ -433,17 +393,12 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
     () => (entries.length > 0 ? squashSingleDir(buildFileTree(entries)) : null),
     [entries],
   );
-  // Derive default selection instead of mirroring it in an effect: when the
-  // user hasn't picked a path yet, fall back to the first entry. Picking a
-  // path persists across diff refreshes if it still exists.
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   const selected =
     entries.find((e) => e.path === pickedPath) ?? entries[0] ?? null;
   const selectedPath = selected?.path ?? null;
   const setSelectedPath = setPickedPath;
 
-  // Commit composer state — same shape as the per-run DiffViewer's,
-  // pointed at the app-level endpoints instead of the run-scoped ones.
   const [commitMsg, setCommitMsg] = useState("");
   const [committing, setCommitting] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -488,7 +443,7 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Commit composer */}
+      {}
       <div className="border-b border-border bg-background p-2 space-y-1.5">
         <div className="relative">
           <textarea
@@ -541,7 +496,7 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
         </div>
       </div>
 
-      {/* Tree + hunks */}
+      {}
       <div className="flex-1 min-h-0 grid grid-cols-[minmax(220px,32%)_1fr] overflow-hidden">
         <aside className="min-h-0 overflow-auto border-r border-border bg-background">
           {loading && (
@@ -575,7 +530,6 @@ function DiffTab({ name, onAfterCommit }: { name: string; onAfterCommit: () => v
   );
 }
 
-/* ─────────────────────────── Commits tab ─────────────────────────── */
 
 function CommitsTab({ name }: { name: string }) {
   const [commits, setCommits] = useState<CommitEntry[]>([]);
@@ -629,18 +583,7 @@ function CommitsTab({ name }: { name: string }) {
   );
 }
 
-/* ─────────────────────────── Tasks tab ─────────────────────────── */
 
-/**
- * Tasks scoped to this app. Replaces the previous "Tasks" link in the
- * tab nav that took the operator off to /tasks?app=<name> — keeping it
- * inline preserves the page context and lets the operator triage a
- * task without losing their diff/terminal state.
- *
- * Rendering: same kanban-section discipline as the main /tasks page —
- * "Doing" / "Todo" / "Done" / "Blocked" buckets with count badges.
- * Each row links into the dedicated task detail page on click.
- */
 function TasksTab({ name }: { name: string }) {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -688,8 +631,6 @@ function TasksTab({ name }: { name: string }) {
       </div>
     );
   }
-  // Group by section and render in a fixed order. Newest first within
-  // each section (tasks already arrive in id-desc order from the API).
   const sections: Array<{ key: string; label: string; items: Task[] }> = [
     { key: SECTION_DOING, label: "In progress", items: tasks.filter((t) => t.section === SECTION_DOING) },
     { key: SECTION_TODO, label: "Todo", items: tasks.filter((t) => t.section === SECTION_TODO) },
@@ -735,7 +676,6 @@ function TasksTab({ name }: { name: string }) {
   );
 }
 
-/* ─────────────────────────── Terminal panel ─────────────────────────── */
 
 interface TerminalEntry {
   id: number;
@@ -777,16 +717,8 @@ function TerminalPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const idCounter = useRef(0);
-  // Drag state for the resize handle. Tracked in a ref so the
-  // pointermove handler doesn't trigger React re-renders 60×/sec.
   const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
 
-  /**
-   * Pointer-driven resize. Pointermove updates `height` directly via
-   * onResize; the parent's setState is the only re-render path. Caps
-   * to [minHeight, viewportHeight - 260] so the terminal can't swallow
-   * the global nav, app header, and tab bar.
-   */
   const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!open) return;
     e.preventDefault();
@@ -812,9 +744,6 @@ function TerminalPanel({
     window.addEventListener("pointerup", onUp);
   };
 
-  // Auto-scroll the output to the latest entry. We do this on
-  // history mutations rather than per-keystroke so typing in the
-  // input field doesn't fight the scroll position.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -866,9 +795,6 @@ function TerminalPanel({
     }
   }, [draft, name, onMaybeChangedRepo]);
 
-  // History recall — Up / Down arrow walks past commands, like a
-  // real shell. Backs up the in-progress draft so navigating back
-  // to "present" restores it.
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -905,9 +831,6 @@ function TerminalPanel({
     inputRef.current?.focus();
   };
 
-  // Compute the dock's outer height: when collapsed, just the bar;
-  // when open, bar + body. The relative wrapper hosts the absolute
-  // resize handle straddling the top edge.
   const outerHeight = open ? barHeight + height : barHeight;
 
   return (

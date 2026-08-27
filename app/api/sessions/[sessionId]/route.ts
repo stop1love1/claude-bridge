@@ -14,18 +14,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
 
-/**
- * Delete a Claude Code session: removes the .jsonl from
- * `~/.claude/projects/<slug>/` and unlinks the session from any task's
- * meta.json. Runtime task state lives in `meta.json`, so the task row
- * itself is unaffected — only the linked session goes.
- *
- * The repo is required because the same sessionId could theoretically
- * collide across project dirs; we won't guess.
- *
- *   DELETE /api/sessions/<sessionId>?repo=<folder-name>
- *   DELETE /api/sessions/<sessionId>          → search every known repo
- */
 export async function DELETE(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
@@ -39,7 +27,6 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     ...resolveRepos(md, BRIDGE_ROOT).map((r) => ({ name: r.name, path: r.path })),
   ];
 
-  // Bring in sibling folders too — discovered repos can also host sessions.
   const parent = dirname(BRIDGE_ROOT);
   const seenNames = new Set(declared.map((r) => r.name));
   const seenProjectDirs = new Set(declared.map((r) => projectDirFor(r.path)));
@@ -54,14 +41,8 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
       seenNames.add(entry.name);
       seenProjectDirs.add(projectDirFor(path));
     }
-  } catch { /* ignore */ }
+  } catch { }
 
-  // Mirror /api/sessions/all: surface every project folder under
-  // ~/.claude/projects/ that holds at least one session, even if it's
-  // not a registered repo or current sibling. Without this, sessions
-  // recovered via cwd from .jsonl files (worktrees, since-deleted
-  // siblings, unrelated cwds) would 404 on DELETE because the named
-  // candidate list never sees them.
   for (const orphan of discoverOrphanProjects(seenProjectDirs)) {
     if (seenNames.has(orphan.name)) continue;
     discovered.push({ name: orphan.name, path: orphan.path });
@@ -90,16 +71,6 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // Unlink from any task meta.json that references this session. We
-  // use `removeSessionFromTask` so the read-filter-write happens under
-  // the same per-task lock that protects appendRun/updateRun (H7) and
-  // through `atomicWriteJson` rather than a raw `writeFileSync`.
-  //
-  // `findSessionTaskDirs` resolves the owning task(s) up front off the
-  // cached meta, so we only take the per-task lock + rewrite on the dir
-  // that actually holds the session — not all N task dirs. A session
-  // belongs to exactly one task in practice; >1 hit (corruption) still
-  // unlinks from each.
   const unlinkedFromTasks: string[] = [];
   for (const dir of findSessionTaskDirs(sessionId)) {
     const removed = await removeSessionFromTask(dir, sessionId);
@@ -109,10 +80,6 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
   if (!removedFile && unlinkedFromTasks.length === 0) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }
-  // Drop the /api/sessions/all 2 s response cache. removeSessionFromTask
-  // already emits meta:changed when a link existed, but pure orphan
-  // deletes never touch meta — without an explicit bust the next poll
-  // would still surface the just-deleted row for up to TTL.
   bustSessionsListCache();
   return ok({
     fileRemoved: removedFile,

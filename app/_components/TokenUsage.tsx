@@ -15,12 +15,6 @@ const ZERO: TokenTotals = {
   cacheCreationTokens: 0, cacheReadTokens: 0, turns: 0,
 };
 
-/**
- * Format an integer token count as a compact human label:
- *   524 → "524"
- *   12_400 → "12.4k"
- *   3_200_000 → "3.2M"
- */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   if (n < 1000) return String(n);
@@ -35,10 +29,6 @@ export function TokenUsage({
   title,
 }: {
   totals?: TokenTotals | null;
-  /**
-   * `compact` → single pill (in / out / cache).
-   * `detailed` → 3 separate pills with icons + labels (used in TaskDetail).
-   */
   variant?: "compact" | "detailed";
   className?: string;
   title?: string;

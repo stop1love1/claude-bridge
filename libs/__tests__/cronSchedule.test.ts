@@ -46,26 +46,25 @@ describe("computeNextRun — interval", () => {
 
 describe("computeNextRun — daily", () => {
   it("returns a future time whose local HH:MM matches", () => {
-    const after = new Date(2026, 4, 30, 8, 0, 0).getTime(); // local 08:00
+    const after = new Date(2026, 4, 30, 8, 0, 0).getTime();
     const next = computeNextRun({ kind: "daily", time: "09:00" }, after);
     expect(next).toBeGreaterThan(after);
     const d = new Date(next);
     expect(d.getHours()).toBe(9);
     expect(d.getMinutes()).toBe(0);
-    // 09:00 today is still ahead of 08:00 → same calendar day.
     expect(d.getDate()).toBe(30);
   });
 
   it("rolls to tomorrow when the slot already passed", () => {
-    const after = new Date(2026, 4, 30, 10, 0, 0).getTime(); // local 10:00
+    const after = new Date(2026, 4, 30, 10, 0, 0).getTime();
     const next = computeNextRun({ kind: "daily", time: "09:00" }, after);
     const d = new Date(next);
     expect(d.getHours()).toBe(9);
-    expect(d.getDate()).toBe(31); // next day
+    expect(d.getDate()).toBe(31);
   });
 
   it("rolls to tomorrow when the slot is exactly now (strictly after)", () => {
-    const after = new Date(2026, 4, 30, 9, 0, 0).getTime(); // exactly 09:00
+    const after = new Date(2026, 4, 30, 9, 0, 0).getTime();
     const next = computeNextRun({ kind: "daily", time: "09:00" }, after);
     expect(next).toBeGreaterThan(after);
     expect(new Date(next).getDate()).toBe(31);

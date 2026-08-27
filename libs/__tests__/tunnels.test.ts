@@ -14,9 +14,6 @@ describe("extractTunnelUrl — ngrok", () => {
   });
 
   it("does NOT match an error line that happens to contain the URL", () => {
-    // The triage scenario: stderr error line carrying the URL inside
-    // an error message. With the success-cue gate this must NOT flip
-    // the tunnel into status=running.
     const line =
       't=2024-04-29T12:00:00 lvl=eror msg="failed to start tunnel" url=https://abc-123.ngrok-free.app err="auth failed"';
     expect(extractTunnelUrl("ngrok", line)).toBeNull();
@@ -55,17 +52,6 @@ describe("extractTunnelUrl — localtunnel", () => {
   });
 });
 
-/**
- * Tunnel → `bridge.json#publicUrl` wiring + auto-start settings.
- *
- * Follows the `homedir()`-redirect + `resetModules` + fresh-dynamic-
- * import convention from `auth.test.ts` / `childRetry.test.ts` so these
- * tests read/write a temp `bridge.json`, never the operator's real one.
- * `node:child_process#spawn` is mocked per-test via `vi.doMock` (not the
- * hoisted `vi.mock`, since we need a fresh fake child per test after
- * `resetModules`) so `startTunnel` never shells out to a real
- * localtunnel/ngrok process — we drive its stdout/stderr by hand.
- */
 describe("tunnel → publicUrl wiring", () => {
   let tempHome: string;
   let originalHome: string | undefined;
@@ -113,16 +99,16 @@ describe("tunnel → publicUrl wiring", () => {
     try {
       const { removeTunnel } = await import("../tunnels");
       for (const id of createdIds) {
-        try { removeTunnel(id); } catch { /* best-effort */ }
+        try { removeTunnel(id); } catch { }
       }
-    } catch { /* module may have failed to load in a given test */ }
+    } catch { }
     vi.restoreAllMocks();
     vi.resetModules();
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
     if (originalBridgePort === undefined) delete process.env.BRIDGE_PORT;
     else process.env.BRIDGE_PORT = originalBridgePort;
-    try { rmSync(tempHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { rmSync(tempHome, { recursive: true, force: true }); } catch { }
   });
 
   it("flips publicUrl when a tunnel on the bridge port starts running (stdout, localtunnel)", async () => {
@@ -263,9 +249,6 @@ describe("tunnel → publicUrl wiring", () => {
     );
     expect(getManifestPublicUrl()).toBe("https://abc-123.loca.lt");
 
-    // Simulate the tunnel process dying WITHOUT stopTunnel/removeTunnel —
-    // crash, OOM-kill, external taskkill. This is the unattended failure
-    // mode auto-start makes likely; publicUrl must not stay stale.
     (fakeChild as unknown as EventEmitter).emit("exit", 1, null);
 
     expect(getManifestPublicUrl()).toBe("");
@@ -312,11 +295,9 @@ describe("tunnel → publicUrl wiring", () => {
     const { maybeAutoStartTunnel, listTunnels } = await import("../tunnels");
     const { setTunnelAutoStart } = await import("../apps");
 
-    // Unset (null) config.
     await maybeAutoStartTunnel();
     expect(listTunnels()).toHaveLength(0);
 
-    // Present but disabled.
     setTunnelAutoStart({ enabled: false, provider: "localtunnel", port: 7777 });
     await maybeAutoStartTunnel();
     expect(listTunnels()).toHaveLength(0);
@@ -326,8 +307,6 @@ describe("tunnel → publicUrl wiring", () => {
     await mockSpawn();
     const { maybeAutoStartTunnel, listTunnels } = await import("../tunnels");
     const { setTunnelAutoStart } = await import("../apps");
-    // ngrok with no authtoken saved → startTunnel throws synchronously
-    // ("ngrok authtoken not set — …"). Auto-start must swallow it.
     setTunnelAutoStart({ enabled: true, provider: "ngrok", port: 7777 });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -360,7 +339,7 @@ describe("getTunnelAutoStart / setTunnelAutoStart", () => {
     vi.resetModules();
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
-    try { rmSync(tempHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { rmSync(tempHome, { recursive: true, force: true }); } catch { }
   });
 
   it("returns null when unset", async () => {

@@ -1,31 +1,3 @@
-/**
- * Run a one-shot shell command inside an app's working tree.
- *
- * Powers the terminal panel on the app detail page. Synchronous
- * request/response — the operator sends a command line, the bridge
- * runs it, the response is `{ stdout, stderr, exitCode, durationMs,
- * truncated? }`. NOT an interactive PTY — no stdin streaming, no
- * cursor codes, no raw-mode TTY. Use it for `git log`, `pnpm test`,
- * `ls`, `bun run …` — anything that produces output and exits.
- *
- * Authorization model: the operator owns the bridge process; the
- * bridge already runs every spawned agent's tools with the same
- * filesystem and process privileges it has itself. This endpoint
- * doesn't add new attack surface against itself, but it DOES make
- * remote-friendly attacks easier if the bridge is exposed to the
- * network — bind to localhost only, or guard with the existing
- * auth middleware (which this route inherits).
- *
- * Hard limits to keep the route well-behaved:
- *   - 30s wall-clock timeout per command
- *   - 1 MB stdout / 1 MB stderr cap (truncated marker appended)
- *   - 16 KB command-line cap
- *   - basic blocklist (shared with `libs/appExecGuard.ts`) for the
- *     most-likely-foot-gun shell forms (rm -rf /, fork bombs,
- *     force-pushing to a protected branch). Operators who really mean
- *     to run those bypass via their own terminal; the blocklist is a
- *     "did you mean it" guard not a security boundary.
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -81,12 +53,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "app folder is missing", cwd }, { status: 404 });
   }
 
-  // Use the platform's default shell so quoting / globbing / && / |
-  // all work the way the operator expects when they type into a
-  // terminal. On Windows this is `cmd.exe /c`; on POSIX it's `sh -c`.
-  // We don't honor `$SHELL` because pulling in zsh/fish startup files
-  // makes behavior depend on the operator's home dir and timing
-  // varies wildly with an over-decorated rc file.
   const isWindows = process.platform === "win32";
   const shell = isWindows ? "cmd.exe" : "sh";
   const shellArgs = isWindows ? ["/d", "/s", "/c", command] : ["-c", command];
@@ -126,7 +92,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const result: { exitCode: number | null; signal: NodeJS.Signals | null } = await new Promise(
     (resolve) => {
       const timer = setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        try { child.kill("SIGKILL"); } catch { }
         resolve({ exitCode: null, signal: "SIGKILL" });
       }, TIMEOUT_MS);
       child.on("exit", (code, signal) => {

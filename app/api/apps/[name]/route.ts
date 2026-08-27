@@ -25,10 +25,6 @@ export const dynamic = "force-dynamic";
 const VALID_BRANCH_MODES: GitBranchMode[] = ["current", "fixed", "auto-create"];
 const VALID_WORKTREE_MODES: ("disabled" | "enabled")[] = ["disabled", "enabled"];
 const VALID_INTEGRATION_MODES: GitIntegrationMode[] = ["none", "auto-merge", "pull-request"];
-// Restrict the fixed-branch input to git-friendly characters. Refs can't
-// contain spaces, `..`, `~`, `^`, `:`, `?`, `*`, `[`, backslashes, or end
-// in `.lock`; the regex below is conservative but covers the real-world
-// cases (`main`, `develop`, `feature/x`, `release-1.2`).
 const BRANCH_RE = /^[A-Za-z0-9._/-]{1,200}$/;
 
 interface PatchBody {
@@ -40,9 +36,6 @@ interface PatchBody {
   retry?: Partial<Record<keyof AppRetry, number | null>>;
 }
 
-// Boolean-only quality flags this PATCH endpoint accepts. `verifierPanel`
-// (a number, B1) is intentionally excluded — it's configured via bridge.json,
-// not this boolean toggle route.
 const QUALITY_KEYS = ["critic", "verifier"] as const;
 
 const RETRY_KEYS: Array<keyof AppRetry> = [
@@ -52,22 +45,8 @@ const RETRY_KEYS: Array<keyof AppRetry> = [
 const VERIFY_KEYS: Array<keyof AppVerify> = [
   "test", "lint", "build", "typecheck", "format",
 ];
-// Verify commands run via `sh -c <cmd>` in P2; cap length to a sane
-// shell-line bound so a runaway paste can't blow up later exec calls.
 const VERIFY_CMD_MAX = 1024;
 
-/**
- * When the deployment opts into `BRIDGE_LOCK_VERIFY=1`, every
- * verify-command edit through the API is rejected. The operator can
- * still seed verify commands at deploy time by editing
- * `~/.claude/bridge.json` directly (file is mode 0600, only the
- * deploying user can write it). This locks the post-auth RCE surface
- * — a hijacked browser cookie can no longer rewrite shell strings the
- * verify chain will execute.
- *
- * Defaults to OFF so existing local-only installs keep their UX. The
- * production deployment guide should set this to "1".
- */
 const VERIFY_LOCKED = process.env.BRIDGE_LOCK_VERIFY === "1";
 
 export async function PATCH(
@@ -156,9 +135,6 @@ export async function PATCH(
         { status: 400 },
       );
     }
-    // Cross-field rule: a non-`none` integrationMode requires a target.
-    // We check both the patch's own target (if supplied) and the existing
-    // value (if the patch only updates mode without touching target).
     if (
       gp.integrationMode !== undefined &&
       gp.integrationMode !== "none"
@@ -179,9 +155,6 @@ export async function PATCH(
   let currentName = existingApp.name;
   let migratedTasks = 0;
 
-  // Order matters: rename FIRST so subsequent description/git updates
-  // address the new name. Migrate task metadata in the same step so the
-  // UI never sees a window where tasks point at a non-existent app.
   if (hasName) {
     const desired = (body.name ?? "").trim();
     if (!isValidAppName(desired)) {
@@ -216,9 +189,6 @@ export async function PATCH(
 
   if (hasVerify) {
     const vp = verifyPatch as Partial<AppVerify>;
-    // Validate every supplied verify command up-front: shell strings (or
-    // empty string to clear). Reject unknown keys / non-strings so a bad
-    // patch never lands in bridge.json.
     const sanitized: Partial<AppVerify> = {};
     for (const key of VERIFY_KEYS) {
       if (!Object.prototype.hasOwnProperty.call(vp, key)) continue;

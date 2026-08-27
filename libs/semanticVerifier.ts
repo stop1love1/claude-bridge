@@ -1,23 +1,3 @@
-/**
- * P2b-2 — agent-driven semantic verifier.
- *
- * Spawned in `coordinator.ts:postExitFlow` AFTER the inline verifier
- * AND (if enabled) the style critic decide the diff can ship, only
- * when the target app has opted in via
- * `bridge.json.apps[].quality.verifier = true`. Judges whether the
- * diff actually accomplishes the task body — semantic verification,
- * distinct from the inline verifier's claim-vs-diff honesty check.
- *
- *   verdict = pass     → commit proceeds
- *   verdict = drift    → commit proceeds, surfaced in meta for review
- *   verdict = broken   → block commit, spawn `<role>-svretry` retry
- *   verdict = skipped  → preconditions not met (no playbook, gate
- *                        crashed, no verdict file) — commit proceeds
- *
- * Distinct from `libs/verifier.ts`:
- *   - inline verifier  — "did the agent claim what they actually edited?"
- *   - semantic verifier (this) — "do the edits actually do what the task asked?"
- */
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { appendRun, readMeta, type Run, type RunSemanticVerifier } from "./meta";
@@ -52,11 +32,6 @@ export const SEMANTIC_VERIFIER_RETRY_SUFFIX = "-svretry";
 const VERDICT_FILE = "semantic-verifier-verdict.json";
 const CONCERNS_CAP = 10;
 
-/**
- * Reliability Amplifier (B1): the three diverse lenses the semantic panel
- * judges through. Each judge runs the same playbook with one lens nudge
- * appended; the panel blocks only on majority `broken`.
- */
 export const SEMANTIC_LENSES: PanelLens[] = [
   {
     key: "correctness",
@@ -76,10 +51,8 @@ export const SEMANTIC_LENSES: PanelLens[] = [
 ];
 
 export interface RunSemanticVerifierOptions {
-  /** Absolute cwd of the target app. */
   appPath: string;
   taskId: string;
-  /** The coder run we're verifying. */
   finishedRun: Run;
   taskTitle: string;
   taskBody: string;
@@ -91,15 +64,9 @@ const BRIEF_BODY = [
   "Write the verdict file before exiting. The bridge reads it directly to decide whether to gate the commit.",
 ].join("\n");
 
-/**
- * Validate + coerce the agent-supplied JSON. Same defensive shape as
- * `parseCriticVerdict` — returns null when the payload is unusable so
- * the caller falls back to a `skipped` verdict.
- */
 export function parseSemanticVerdict(
   raw: unknown,
 ): {
-  // Never "skipped": the guard below rejects anything but pass/drift/broken.
   verdict: "pass" | "drift" | "broken";
   reason: string;
   concerns: string[];
@@ -124,12 +91,6 @@ export function parseSemanticVerdict(
   return { verdict: v, reason, concerns };
 }
 
-/**
- * Top-level entry: spawn the verifier agent against the freshly-finished
- * run, wait for it, parse its verdict, and return the populated
- * `RunSemanticVerifier`. Always returns a verdict (never `null`) —
- * `skipped` covers every fail-soft path.
- */
 export async function runSemanticVerifier(
   opts: RunSemanticVerifierOptions,
 ): Promise<RunSemanticVerifier> {
@@ -148,7 +109,6 @@ export async function runSemanticVerifier(
   const app = getApp(opts.finishedRun.repo);
   const panelSize = app ? resolvePanelSize(app) : 3;
 
-  // Single-judge path (panelSize === 1) — byte-for-byte the pre-B1 behavior.
   if (panelSize === 1) {
     const outcome: AgentGateOutcome = await runAgentGate({
       appPath: opts.appPath,
@@ -180,7 +140,6 @@ export async function runSemanticVerifier(
     };
   }
 
-  // Panel path: one judge per lens (capped to the defined lenses), majority rule.
   const lenses = SEMANTIC_LENSES.slice(0, panelSize);
   const results = await runGatePanel({
     appPath: opts.appPath,
@@ -221,9 +180,6 @@ export async function runSemanticVerifier(
   };
 }
 
-/**
- * Render the retry-context block prepended to a `-svretry` prompt.
- */
 export function renderSemanticRetryContextBlock(
   verifier: RunSemanticVerifier,
 ): string {
@@ -250,11 +206,6 @@ export function renderSemanticRetryContextBlock(
   return lines.join("\n");
 }
 
-/**
- * Eligibility for semantic-verifier retry. Delegates to the central
- * ladder: counts existing `-svretry*` siblings against
- * `app.retry.semantic` (default 1).
- */
 export function isEligibleForSemanticVerifierRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
@@ -268,9 +219,6 @@ export function isEligibleForSemanticVerifierRetry(args: {
   }).eligible;
 }
 
-/**
- * Spawn the semantic-retry. Mirrors `styleCritic.spawnStyleCriticRetry`.
- */
 export async function spawnSemanticVerifierRetry(args: {
   taskId: string;
   finishedRun: Run;

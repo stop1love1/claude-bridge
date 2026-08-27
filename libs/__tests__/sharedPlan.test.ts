@@ -12,8 +12,6 @@ describe("sharedPlan", () => {
 
   beforeEach(() => {
     tmpRoot = mktmp();
-    // Spy on process.cwd() (no real chdir) so the freshly re-imported
-    // paths.ts resolves SESSIONS_DIR against our temp fixture.
     vi.spyOn(process, "cwd").mockReturnValue(tmpRoot);
     vi.resetModules();
   });
@@ -50,13 +48,11 @@ describe("sharedPlan", () => {
   it("appends a truncation notice when plan.md exceeds the cap", async () => {
     const taskDir = join(tmpRoot, "sessions", "t_20260501_003");
     mkdirSync(taskDir, { recursive: true });
-    // 20 KB of `x` blows past the 16 KB cap.
     writeFileSync(join(taskDir, "plan.md"), "x".repeat(20 * 1024));
     const { loadSharedPlan, SHARED_PLAN_CAP_BYTES } = await import("../sharedPlan");
     const plan = loadSharedPlan("t_20260501_003");
     expect(plan).not.toBeNull();
     expect(plan).toContain("plan.md truncated at 16 KB");
-    // Content portion (before the appended notice) is bounded by the cap.
     expect(SHARED_PLAN_CAP_BYTES).toBe(16 * 1024);
   });
 
@@ -91,7 +87,6 @@ describe("sharedPlan", () => {
     expect(plan).toContain("### From planner-ui");
     expect(plan).toContain("/finance/refunds/summary");
     expect(plan).toContain("4 summary cards");
-    // Separator between slots
     expect(plan).toContain("\n\n---\n\n");
   });
 
@@ -151,7 +146,6 @@ describe("sharedPlan", () => {
     const { loadSharedPlan } = await import("../sharedPlan");
     const plan = loadSharedPlan(id);
     expect(plan).toBe(body);
-    // No merge separator when there's only one slot.
     expect(plan).not.toContain("### From ");
   });
 });

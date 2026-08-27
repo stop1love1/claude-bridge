@@ -132,7 +132,6 @@ describe("autoQueueTick", () => {
     listTasksMock.mockReturnValue([task({ id: "t_20260701_001" })]);
     await autoQueueTick();
     expect(spawnMock).not.toHaveBeenCalled();
-    // Config check short-circuits before touching tasks at all.
     expect(listTasksMock).not.toHaveBeenCalled();
   });
 
@@ -173,7 +172,7 @@ describe("autoQueueTick", () => {
 
   it("task with existing runs is skipped even if section is TODO", async () => {
     writeAutoQueueConfig({ enabled: true, maxConcurrent: 1 });
-    const hasRuns = task({ id: "t_20260701_001" }); // TODO but already has a failed run
+    const hasRuns = task({ id: "t_20260701_001" });
     const clean = task({ id: "t_20260702_001" });
     listTasksMock.mockReturnValue([hasRuns, clean]);
     readMetaMock.mockImplementation((dir: string) =>

@@ -17,19 +17,6 @@ const DEFAULT_AUTO_START: TunnelAutoStart = {
   port: BRIDGE_PORT,
 };
 
-/**
- * GET/PUT /api/tunnels/settings
- *
- * Operator-only config for "auto-start a tunnel at boot"
- * (`bridge.json#tunnels.autoStart`), read by
- * `libs/tunnels.ts#maybeAutoStartTunnel()` from `instrumentation.ts`.
- * `/api/tunnels/*` is already denied to guests by the share allowlist
- * (see `libs/guestAccess.ts`), same as the rest of this route family
- * (`providers/ngrok/install`, `providers/ngrok/authtoken`) — the PUT
- * below still adds an explicit CSRF → rate-limit → operator-actor check
- * since it mutates persisted config, matching the guard shape used by
- * `app/api/tasks/[id]/plan/approve/route.ts`.
- */
 export function GET() {
   return NextResponse.json(getTunnelAutoStart() ?? DEFAULT_AUTO_START);
 }

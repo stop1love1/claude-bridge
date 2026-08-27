@@ -1,17 +1,3 @@
-/**
- * Pure (non-React) helpers + types extracted out of `SessionLog.tsx`.
- *
- * Keeping these in a separate module:
- *   - lets us unit-test the parsing logic without rendering React,
- *   - makes the main component file (still ~2000 lines of view code)
- *     easier to navigate,
- *   - and avoids accidentally pulling JSX into a code path the parent
- *     renders server-side.
- *
- * Anything that touches React state, hooks, or JSX stays in
- * `SessionLog.tsx` — the boundary is "pure functions over plain
- * data only".
- */
 
 export type ActiveRun = {
   sessionId: string;
@@ -21,10 +7,10 @@ export type ActiveRun = {
 };
 
 export interface ImageSource {
-  type?: string;             // "base64" | "url"
-  media_type?: string;       // image/png, image/jpeg…
-  data?: string;             // base64 payload (sans data: prefix)
-  url?: string;              // when source.type === "url"
+  type?: string;
+  media_type?: string;
+  data?: string;
+  url?: string;
 }
 
 export interface ContentBlock {
@@ -37,7 +23,6 @@ export interface ContentBlock {
   content?: unknown;
   tool_use_id?: string;
   is_error?: boolean;
-  /** Present on `image` content blocks (Anthropic vision). */
   source?: ImageSource;
 }
 
@@ -52,27 +37,16 @@ export interface LogEntry {
   type?: string;
   timestamp?: string;
   uuid?: string;
-  /** Present on `ai-title` entries — Claude Code's auto-generated session title. */
   aiTitle?: string;
   message?: {
     role?: string;
     id?: string;
     content?: string | ContentBlock[];
-    /** Present on assistant turns; carries per-turn token accounting. */
     usage?: UsageBlock;
-    /** Anthropic API stop reason: end_turn / tool_use / max_tokens / refusal / stop_sequence. */
     stop_reason?: string;
   };
 }
 
-/**
- * Parsed shape of an `AskUserQuestion` tool call's `input`. The tool lets
- * the model ask 1..4 questions, each with 2..4 options; `multiSelect`
- * decides radio vs checkbox. We render this as an interactive card so the
- * operator can answer from the bridge (the headless `claude -p` child
- * can't field the question itself — it errors past the tool and ends its
- * turn, so the answer rides back as the next user message).
- */
 export interface AskUserOption {
   label: string;
   description?: string;
@@ -84,13 +58,6 @@ export interface AskUserQuestion {
   options: AskUserOption[];
 }
 
-/**
- * Defensively parse an `AskUserQuestion` tool_use `input`. Returns the
- * questions array, or `null` when the payload isn't the expected shape
- * (caller should fall back to the generic tool render). Drops malformed
- * questions/options rather than throwing — a partial/streaming payload
- * shouldn't crash the transcript.
- */
 export function parseAskUserQuestion(input: unknown): AskUserQuestion[] | null {
   if (!input || typeof input !== "object") return null;
   const raw = (input as Record<string, unknown>).questions;
@@ -117,13 +84,6 @@ export function parseAskUserQuestion(input: unknown): AskUserQuestion[] | null {
   return out.length > 0 ? out : null;
 }
 
-/**
- * Render the operator's selections into the message text sent back to the
- * session. One line per answered question: `<header or question>: <picks>`.
- * Picks are the chosen option labels (and/or a free-text "Other" value),
- * comma-joined. Questions with no selection are skipped — the submit
- * gate already requires every question answered, but this stays robust.
- */
 export function buildAnswerMessage(
   questions: AskUserQuestion[],
   selections: string[][],
@@ -140,19 +100,14 @@ export function buildAnswerMessage(
 }
 
 export interface ParsedAttachment {
-  rawPath: string;     // absolute path on disk, as written into the .jsonl
-  name: string;        // basename
+  rawPath: string;
+  name: string;
   size?: number;
   isImage: boolean;
 }
 
 export type Kind = "user" | "assistant" | "tool_result" | "hidden";
 
-// .jsonl is a stream of every event; most are noise to a chat reader.
-// `ai-title` carries the auto-generated session title (surfaced in the
-// header instead of as a chat row); `last-prompt` is the leaf-pointer
-// stub Claude writes to track resume targets; `file-history-snapshot`
-// is the Edit-tool's per-file diff cache. None belong in the transcript.
 export const HIDDEN_TYPES = new Set([
   "queue-operation", "attachment", "summary",
   "system-prompt-injection", "command-message",
@@ -178,17 +133,6 @@ export function asBlocks(content: unknown): ContentBlock[] {
   return [];
 }
 
-// Tags Claude re-emits inside user / tool_result messages that are pure
-// internal scaffolding — IDE breadcrumbs, slash-command echoes, system
-// reminders, the bridge's own task-notification envelope and its inner
-// fields. Hide them. Only well-known tags are stripped, never arbitrary
-// `<foo>` the user might have actually typed.
-//
-// The list intentionally separates the *envelope* tags (which are
-// always paired open/close) from *child fields* the assistant
-// sometimes paraphrases on their own (e.g. naked `<task-id>` without
-// the wrapping `<task-notification>`). Both are scaffolding from the
-// bridge's perspective; both deserve to be stripped.
 const SYSTEM_TAGS = [
   "system-reminder",
   "task-notification",
@@ -200,9 +144,6 @@ const SYSTEM_TAGS = [
   "local-command-stderr",
   "command-stdout",
   "command-stderr",
-  // Inner fields the bridge feeds into <task-notification> blocks. The
-  // assistant occasionally echoes one of these standalone when it
-  // paraphrases an event ("the <task-id> is …"); strip both forms.
   "task-id",
   "task-title",
   "task-body",
@@ -215,14 +156,6 @@ const SYSTEM_TAG_RE = new RegExp(
   `<(${SYSTEM_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?<\\/\\1>`,
   "g",
 );
-// Single-tag forms — handles two real-world leaks the paired regex
-// misses:
-//   1. Streaming partials where the close tag hasn't arrived yet
-//      (`<system-reminder>foo` rendered before `</system-reminder>`).
-//   2. Self-contained orphan opens / closes the model emits when
-//      paraphrasing structure ("inside <task-id>t_…</task-id> we…").
-// Run AFTER the paired strip so we don't accidentally split inside a
-// well-formed pair.
 const SYSTEM_TAG_OPEN_RE = new RegExp(
   `<(${SYSTEM_TAGS.join("|")})\\b[^>]*\\/?>`,
   "g",
@@ -234,24 +167,19 @@ const SYSTEM_TAG_CLOSE_RE = new RegExp(
 
 export function stripSystemTags(text: string): string {
   if (!text || text.indexOf("<") === -1) return text;
-  // Run paired strip repeatedly to catch nested cases. Cap iterations
-  // to avoid infinite loops on weird inputs.
   let prev = text;
   for (let i = 0; i < 4; i++) {
     const next = prev.replace(SYSTEM_TAG_RE, "");
     if (next === prev) break;
     prev = next;
   }
-  // Then drop any orphan opens / closes the paired pass missed.
   prev = prev.replace(SYSTEM_TAG_OPEN_RE, "").replace(SYSTEM_TAG_CLOSE_RE, "");
-  // Collapse 3+ newlines left behind to a single blank line.
   return prev.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function summarizeInput(input: unknown): string {
   if (!input || typeof input !== "object") return "";
   const o = input as Record<string, unknown>;
-  // Show the most useful single field for common tools.
   const primary = o.file_path ?? o.path ?? o.command ?? o.pattern ?? o.url ?? o.query ?? o.description;
   if (typeof primary === "string") return primary.length > 90 ? primary.slice(0, 90) + "…" : primary;
   return "";
@@ -271,20 +199,14 @@ export function stringifyResult(content: unknown): string {
   return JSON.stringify(content, null, 2);
 }
 
-// `mcp__plugin_<plugin>_<server>__<toolname>` → "playwright · browser navigate".
-// Built-in tool names (Bash / Read / Edit / etc.) pass through unchanged.
 export function prettyToolName(raw: string): string {
   if (!raw) return raw;
   if (!raw.startsWith("mcp__plugin_")) return raw;
   const rest = raw.slice("mcp__plugin_".length);
-  // rest is `<plugin>_<server>__<toolname>` typically — the first `__`
-  // separates the server-prefix part from the actual tool name.
   const sepIdx = rest.indexOf("__");
   if (sepIdx === -1) return rest.replace(/__/g, " · ").replace(/_/g, " ");
   const head = rest.slice(0, sepIdx);
   const tail = rest.slice(sepIdx + 2);
-  // head looks like `playwright_playwright` or `context7_context7` —
-  // collapse repeats to one label.
   const headParts = head.split("_").filter(Boolean);
   const dedup: string[] = [];
   for (const p of headParts) if (dedup[dedup.length - 1] !== p) dedup.push(p);
@@ -293,9 +215,6 @@ export function prettyToolName(raw: string): string {
   return label ? `${label} · ${toolPretty}` : toolPretty;
 }
 
-// Pull image references out of a tool_result text body. Matches:
-//   [<alt>](relative/path.png)   ← markdown image / link
-//   relative/path.png            ← bare path on its own line
 const IMG_MD_RE = /\[[^\]]*\]\(([^)]+\.(?:png|jpe?g|gif|webp|svg|bmp|avif))\)/gi;
 const IMG_LINE_RE = /^([^\s<>][^\n]*\.(?:png|jpe?g|gif|webp|svg|bmp|avif))\s*$/gim;
 
@@ -311,12 +230,6 @@ export function extractImagePaths(text: string): string[] {
 
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 
-/**
- * Pull attachments out of a user message we sent. The composer prefixes
- * them with `Attached file: \`<abs path>\` (<name>, <bytes> bytes) — …`,
- * so we can recover them by line-matching that exact shape and strip
- * those lines from the display text.
- */
 export function extractAttachments(text: string): { stripped: string; items: ParsedAttachment[] } {
   const items: ParsedAttachment[] = [];
   const lines = text.split("\n");
@@ -340,7 +253,6 @@ export function extractAttachments(text: string): { stripped: string; items: Par
       isImage: IMG_EXT.test(rawPath),
     });
   }
-  // Trim trailing blank lines left behind by stripped attachment block.
   while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
   while (kept.length && !kept[0].trim()) kept.shift();
   return { stripped: kept.join("\n"), items };

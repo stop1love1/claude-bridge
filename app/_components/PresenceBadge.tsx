@@ -6,12 +6,6 @@ import { api } from "@/libs/client/api";
 
 type Participant = { id: string; label: string; kind: "operator" | "guest" };
 
-/**
- * Multi-coder Presence (Epic D). Heartbeats every 8s and shows who else is
- * on the task ("👥 N" + names). Identity is server-derived; `label` is the
- * display name this client wants to be shown as (operator omits it; a guest
- * passes the name they entered on the share gate).
- */
 export function PresenceBadge({ taskId, label }: { taskId: string; label?: string }) {
   const [active, setActive] = useState<Participant[]>([]);
 
@@ -23,7 +17,6 @@ export function PresenceBadge({ taskId, label }: { taskId: string; label?: strin
         const r = await api.pingPresence(taskId, label);
         if (!stop) setActive(r.active);
       } catch {
-        /* transient — keep trying */
       }
     };
     void ping();

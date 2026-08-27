@@ -75,9 +75,6 @@ describe("isCoordinatorOrchestrating", () => {
   });
 
   it("treats `stale` as terminal — does NOT count toward orchestration", () => {
-    // A stale child shouldn't keep the badge pulsing forever; the
-    // staleRunReaper marks runs stale precisely because they're not
-    // active anymore.
     expect(
       isCoordinatorOrchestrating({
         coordinator: coord("done"),

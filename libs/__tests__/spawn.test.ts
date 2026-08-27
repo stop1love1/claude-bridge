@@ -74,11 +74,6 @@ describe("buildCoordinatorArgs", () => {
     expect(args).not.toContain("--model");
   });
 
-  // The coordinator passes `disallowedTools: ["Task"]` to hard-block the
-  // built-in Task / Agent tool at the CLI level — the only thing that
-  // survives a coordinator template change. Drift in `settingsArgs`
-  // would silently restore the broken in-process subagent path the
-  // bridge cannot track.
   it("emits --disallowed-tools when settings.disallowedTools is set", () => {
     const args = buildCoordinatorArgs(
       {
@@ -101,9 +96,6 @@ describe("buildCoordinatorArgs", () => {
         taskId: "t_x",
         prompt: "",
         settings: {
-          // Mix of valid (Task, Bash(git *)), garbage (rm -rf, empty),
-          // and a wrong-shape entry (--inject-flag). Only the valid two
-          // should reach the argv.
           disallowedTools: ["Task", "rm -rf /", "", "Bash(git *)", "--inject-flag"],
         },
       },
@@ -134,10 +126,6 @@ describe("buildCoordinatorArgs", () => {
     expect(b).not.toContain("--disallowed-tools");
   });
 
-  // S3.3 — explicit coverage for every settings key the gate accepts /
-  // rejects. The point isn't novelty; it's ensuring a future drift in
-  // VALID_MODES / VALID_EFFORT / the model regex breaks loudly here
-  // rather than silently letting an arbitrary string reach the CLI.
   it.each([
     "default",
     "acceptEdits",
@@ -166,9 +154,6 @@ describe("buildCoordinatorArgs", () => {
     },
   );
 
-  // The bridge `ultracode` tier is NOT a real `--effort` value — claude
-  // rejects it. It must resolve to `--effort xhigh` (the directive half is
-  // injected via the system prompt, exercised separately below).
   it("resolves the ultracode tier to --effort xhigh, never --effort ultracode", () => {
     const args = buildCoordinatorArgs(
       { role: "coordinator", taskId: "t_x", prompt: "", settings: { effort: "ultracode" } },
@@ -180,8 +165,6 @@ describe("buildCoordinatorArgs", () => {
   });
 
   it("rejects model strings that contain shell or path traversal characters", () => {
-    // Plain alphanumerics + `.` `-` `_` only — anything that could
-    // smuggle a flag, glob, or path separator must not reach the CLI.
     const reject = ["opus 4", "../etc/passwd", "model;rm -rf /", "model$(whoami)", ""];
     for (const model of reject) {
       const args = buildCoordinatorArgs(
@@ -216,8 +199,6 @@ describe("buildCoordinatorArgs", () => {
     const idx = args.indexOf("--settings");
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(args[idx + 1]).toBe("/tmp/sess.json");
-    // --settings must come BEFORE --output-format so that the streaming
-    // flags don't interleave with the per-spawn settings argument.
     expect(idx).toBeLessThan(args.indexOf("--output-format"));
   });
 
@@ -230,19 +211,6 @@ describe("buildCoordinatorArgs", () => {
   });
 });
 
-/**
- * H4 regression: the route handler used to call `appendRun` AFTER the
- * spawn, so a thrown spawn left a live (or attempted) child with no
- * matching row in meta.json. Spec is now:
- *
- *   1. appendRun({status:"queued", startedAt:null})
- *   2. try { spawn() } catch { updateRun({status:"failed", endedAt:now}); rethrow }
- *   3. updateRun({status:"running", startedAt:now})
- *
- * This test simulates that flow with a synthetic "spawn" that throws,
- * and asserts the meta.json on disk ends up with one row, status
- * "failed", endedAt populated.
- */
 describe("appendRun-before-spawn (H4)", () => {
   let tmp: string;
   beforeEach(() => {
@@ -276,8 +244,6 @@ describe("appendRun-before-spawn (H4)", () => {
       if (opts.spawnThrows) {
         throw new Error("ENOENT: claude binary not on PATH");
       }
-      // Simulate a successful spawn promotion path so the success
-      // branch is also exercised by the second case below.
       await updateRun(tmp, SESSION_ID, {
         status: "running",
         startedAt: "2026-04-24T10:00:01Z",
@@ -304,8 +270,6 @@ describe("appendRun-before-spawn (H4)", () => {
     expect(run.sessionId).toBe(SESSION_ID);
     expect(run.status).toBe("failed");
     expect(run.endedAt).toBe("2026-04-24T10:00:01Z");
-    // startedAt stays null because the spawn never succeeded — the run
-    // was queued and immediately failed without ever going running.
     expect(run.startedAt).toBeNull();
   });
 
@@ -322,16 +286,6 @@ describe("appendRun-before-spawn (H4)", () => {
   });
 });
 
-/**
- * CRIT-1 regression: the permission hook used to no-op unless the
- * spawner explicitly opted IN to bridge-mediated approval. The fix
- * inverts that — the hook contacts the bridge by default, and the
- * spawn path opts the child OUT only for `bypassPermissions` mode
- * (coordinator + auto-spawned children where there's no human at the
- * keyboard to click Allow). `autoApproveEnv` is the single source of
- * truth for that mapping; the spawn function spreads its result into
- * the child env.
- */
 describe("autoApproveEnv (CRIT-1)", () => {
   it("returns BRIDGE_AUTO_APPROVE=1 only for bypassPermissions", () => {
     expect(autoApproveEnv({ mode: "bypassPermissions" })).toEqual({
@@ -353,12 +307,6 @@ describe("autoApproveEnv (CRIT-1)", () => {
   });
 });
 
-/**
- * Effort tier resolution. `low|medium|high|xhigh|max` pass through to the
- * real `--effort` flag; `ultracode` is the bridge-only tier that maps to
- * `--effort xhigh` AND flags the directive injection. Garbage maps to
- * "nothing" (no flag), matching the silent-reject contract above.
- */
 describe("resolveEffort", () => {
   it.each(["low", "medium", "high", "xhigh", "max"] as const)(
     "passes the real CLI level %s through unchanged, ultracode off",
@@ -378,12 +326,6 @@ describe("resolveEffort", () => {
   });
 });
 
-/**
- * The ultracode directive is delivered via `--append-system-prompt-file`.
- * `withUltracodeDirective` returns the base file untouched when the tier
- * is off, and a NEW content-addressed file carrying the directive (folded
- * onto any base content) when on.
- */
 describe("withUltracodeDirective", () => {
   it("returns the base file unchanged when ultracode is off", () => {
     expect(withUltracodeDirective(undefined, false)).toBeUndefined();

@@ -18,12 +18,6 @@ import type {
   GateStatus,
 } from "./types";
 import type { ShareView, ShareGrants, ShareGit } from "../shareStore";
-// Type-only import — erased at compile time, so this does NOT pull the
-// server-only `web-push` module into the client bundle. Without the
-// explicit import, `PushSubscriptionJSON` below silently resolved to
-// lib.dom's ambient global of the same name (ALL fields optional),
-// which let a structurally-empty object typecheck against
-// `pushSubscribe` — the strict server contract requires endpoint + keys.
 import type { PushSubscriptionJSON } from "../webPush";
 import type {
   Workflow,
@@ -34,14 +28,6 @@ import type {
 import type { SchedulerStatus } from "../scheduler";
 import type { ActivePipelineRun } from "../pipelineEngine";
 
-/**
- * Optional cancellation handle accepted by every read-side `api.*` helper.
- * Components in long-lived effects pass `ac.signal` so that on unmount we
- * actually abort the network request, not just discard its result.
- *
- * Aborted requests reject with a `DOMException("AbortError")`; callers
- * either ignore the rejection (nothing to display anyway) or rethrow.
- */
 export type ReqOpts = { signal?: AbortSignal };
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -92,9 +78,7 @@ export const api = {
   ) =>
     req<{
       sessionId: string;
-      /** True when the message was queued behind an in-flight turn instead of spawned immediately. */
       queued?: boolean;
-      /** 1-based position in the FIFO when `queued` is true. */
       position?: number;
     }>(`/sessions/${sessionId}/message`, {
       method: "POST",
@@ -123,7 +107,6 @@ export const api = {
     req<Array<{ rel: string; path: string }>>(
       `/repos/${encodeURIComponent(repo)}/files?q=${encodeURIComponent(query)}`,
     ),
-  /** Built-in list (JSON) + `~/.claude` + repo `.claude/commands` & skills — same sources Claude Code loads. */
   repoSlashCommands: (name: string, opts?: ReqOpts) =>
     req<{ items: SlashCommandsItemDto[] }>(
       `/repos/${encodeURIComponent(name)}/slash-commands`,
@@ -136,12 +119,6 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     return r.json() as Promise<{ path: string; name: string; size: number }>;
   },
-  /**
-   * XHR-backed variant that surfaces upload progress (0–1 fraction).
-   * `fetch` doesn't expose `progress` events; XHR does. We keep both
-   * helpers around so callers that don't care about progress aren't
-   * forced to wire callbacks.
-   */
   uploadFileWithProgress: (
     sessionId: string,
     file: File,
@@ -214,11 +191,6 @@ export const api = {
       added: App[];
       skipped: Array<{ name: string; reason: "already-registered" | "not-a-repo" }>;
     }>("/apps/auto-detect", { method: "POST" }),
-  /**
-   * Bulk-add apps from the auto-detect modal's review step. Failures
-   * are returned per item so the dialog can surface duplicates and
-   * keep the rest of the selection.
-   */
   bulkAddApps: (
     apps: Array<{ name: string; path: string; description?: string; preset?: "recommended" }>,
   ) =>
@@ -260,14 +232,12 @@ export const api = {
       message: string;
       fileCount: number;
       cwd: string;
-      /** `"llm"` when Claude wrote it; `"heuristic"` for the local fallback. */
       source: "llm" | "heuristic";
     }>(
       `/tasks/${taskId}/runs/${sessionId}/commit/suggest${opts?.heuristic ? "?heuristic=1" : ""}`,
       { method: "POST", signal: opts?.signal },
     ),
 
-  // ─── App detail page ─────────────────────────────────────────────
   appStatus: (name: string, opts?: ReqOpts) =>
     req<{
       cwd: string;
@@ -305,7 +275,6 @@ export const api = {
       message: string;
       fileCount: number;
       cwd: string;
-      /** `"llm"` when Claude wrote it; `"heuristic"` for the local fallback. */
       source: "llm" | "heuristic";
     }>(
       `/apps/${encodeURIComponent(name)}/commit/suggest${opts?.heuristic ? "?heuristic=1" : ""}`,
@@ -350,9 +319,6 @@ export const api = {
   telegramTest: () =>
     req<{ ok: true } | { ok: false; reason: string }>(`/telegram/test`, { method: "POST" })
       .catch((e: Error) => {
-        // The route returns 503 with a JSON body when not configured;
-        // surface that as a structured error rather than a thrown one
-        // so the caller can show the reason in a toast.
         const m = /^503 (.+)$/.exec(e.message);
         if (m) {
           try { return JSON.parse(m[1]) as { ok: false; reason: string }; }
@@ -568,7 +534,6 @@ export const api = {
       method: "DELETE",
     }),
 
-  // ─── Task share links (operator) ─────────────────────────────────
   listShares: (taskId: string, opts?: ReqOpts) =>
     req<{ shares: ShareView[] }>(
       `/share?taskId=${encodeURIComponent(taskId)}`,
@@ -616,7 +581,6 @@ export const api = {
       { method: "POST", body: JSON.stringify({ decision, reason }) },
     ),
 
-  // ─── Task share access (guest, public endpoints) ─────────────────
   shareAccess: (id: string, token: string, name?: string) =>
     req<
       | { status: "approved"; taskId: string; grants: ShareGrants }
@@ -633,7 +597,6 @@ export const api = {
       | { status: "expired" }
     >(`/share/access/${encodeURIComponent(id)}/pending/${encodeURIComponent(reqId)}`),
 
-  // ─── Workflows (multi-stage pipelines + cron + 24/7 status) ───────
   workflows: (opts?: ReqOpts) =>
     req<{
       workflows: Workflow[];
@@ -688,7 +651,6 @@ export const api = {
     }),
 };
 
-/** Pending guest access request, as surfaced to the operator's modal. */
 export interface ShareRequestDto {
   id: string;
   shareId: string;

@@ -21,22 +21,11 @@ import {
   type TaskSection,
 } from "./tasks";
 
-/**
- * Resolve a task's sessions directory after asserting the id is in the
- * canonical `t_YYYYMMDD_NNN` format. Rejects anything that could escape
- * `SESSIONS_DIR` — separators, parent traversal, drive letters, null
- * bytes — so callers don't have to validate at every entry point.
- */
 function safeSessionDir(id: string): string | null {
   if (!isValidTaskId(id)) return null;
   return join(SESSIONS_DIR, id);
 }
 
-/**
- * meta.json is now the source of truth for tasks. This module replaces
- * the old `tasks.md` round-trip with a per-task file under
- * `sessions/<task-id>/meta.json`.
- */
 
 function metaToTask(meta: Meta): Task {
   return {
@@ -62,12 +51,6 @@ function ensureSessionsDir(): void {
 function listMetaIds(): string[] {
   if (!existsSync(SESSIONS_DIR)) return [];
   return readdirSync(SESSIONS_DIR).filter((id) => {
-    // Reject anything that doesn't match the canonical
-    // `t_YYYYMMDD_NNN` shape. Without this, a stray manual directory
-    // (`t_20260501_001_backup`, a leftover archive folder, etc.)
-    // would end up parsed by `generateTaskId`'s sequence math and
-    // could overflow the 3-digit counter — silently breaking
-    // `isValidTaskId` for every subsequent ID minted that day.
     if (!isValidTaskId(id)) return false;
     try {
       return statSync(join(SESSIONS_DIR, id)).isDirectory();
@@ -77,50 +60,24 @@ function listMetaIds(): string[] {
   });
 }
 
-// In-process cache for `listTasks()`. The dashboard polls
-// `GET /api/tasks` every few seconds; without a cache each poll
-// scanned every `sessions/<id>/meta.json` synchronously — N+1
-// disk reads scaling with the task count. The cache is invalidated
-// the moment any meta.json changes (see `subscribeMetaAll` below)
-// so a UI edit is visible immediately. The cached array is a
-// freshly-allocated copy so callers can safely mutate / sort.
 const LIST_TASKS_TTL_MS = 1000;
 let listTasksCache: { value: Task[]; expires: number } | null = null;
 
-// Reverse index: sessionId → taskId. Used by `findTaskBySessionId`,
-// which previously did an O(N) linear scan + readMeta on every chat
-// message. Built lazily on first lookup, then kept in sync by
-// patching the index from the meta-change event payload itself —
-// avoiding the previous "invalidate on EVERY change → rebuild
-// O(N×readMeta) on next lookup" pattern that turned a burst spawn
-// of 5 children into 5 full-index rebuilds.
 let sessionIndex: Map<string, string> | null = null;
 
 subscribeMetaAll((ev) => {
-  // `listTasksCache` is content-sensitive (status/section change the
-  // metaToTask projection), so any meta change still busts it.
   listTasksCache = null;
-  // `sessionIndex` only cares about the SET of sessionIds. Patch
-  // incrementally rather than invalidating, except when we genuinely
-  // can't reason locally about the change.
-  if (!sessionIndex) return; // not yet built — nothing to patch
+  if (!sessionIndex) return;
   switch (ev.kind) {
     case "spawned":
     case "retried":
-      // New run landed → add its sessionId.
       if (ev.sessionId) sessionIndex.set(ev.sessionId, ev.taskId);
       return;
     case "transition":
     case "updated":
     case "task-section":
-      // Status/section toggles don't change the sessionId set.
       return;
     case "writeMeta":
-      // Wholesale meta rewrite (e.g. createMeta after delete-recreate
-      // races). Could in principle add/remove sessionIds, but the
-      // current call sites are title edits + initial create. Keep
-      // the cache; if a regression ever appears here, swap to
-      // `sessionIndex = null;` for the safe fallback.
       return;
   }
 });
@@ -147,7 +104,6 @@ export function listTasks(): Task[] {
     const meta = readMeta(join(SESSIONS_DIR, id));
     if (meta) tasks.push(metaToTask(meta));
   }
-  // Newest first — `createdAt` is an ISO string so lexical sort works.
   tasks.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   listTasksCache = { value: tasks, expires: now + LIST_TASKS_TTL_MS };
   return [...tasks];
@@ -160,18 +116,6 @@ export function getTask(id: string): Task | null {
   return meta ? metaToTask(meta) : null;
 }
 
-/**
- * Reverse-lookup a task by any of its session ids. Used by the message
- * route to detect when the user is chatting in a task that's been
- * marked done — we re-open it (untick + back to DOING) so a follow-up
- * conversation isn't trapped inside a "completed" pill.
- *
- * Backed by an in-process index (sessionId → taskId) populated lazily
- * and invalidated whenever any meta.json changes. The previous
- * implementation did an O(N) scan + N readMeta calls per message,
- * which on a busy bridge with hundreds of tasks added measurable
- * latency to every chat send.
- */
 export function findTaskBySessionId(sessionId: string): Task | null {
   if (!sessionIndex) sessionIndex = buildSessionIndex();
   const taskId = sessionIndex.get(sessionId);
@@ -187,11 +131,8 @@ export function createTask(input: {
   title: string;
   body: string;
   app?: string | null;
-  /** Provenance — "manual" (UI), "cron" / "pipeline" (workflow engine). */
   origin?: "manual" | "cron" | "pipeline";
-  /** Originating workflow id when minted by a workflow. */
   workflowId?: string | null;
-  /** Effort tier for the coordinator + (by default) its children. */
   effort?: Task["effort"];
 }): Task {
   ensureSessionsDir();
@@ -235,12 +176,6 @@ type TaskPatch = Partial<Pick<Task, "title" | "body" | "section" | "status" | "c
 export async function updateTask(id: string, patch: TaskPatch): Promise<Task | null> {
   const dir = safeSessionDir(id);
   if (!dir) return null;
-  // Acquired the per-task mutex here too so a UI title/section edit
-  // racing a child's appendRun (or any other run-row mutator) can't
-  // silently overwrite the just-appended row. meta.runs and the task
-  // header live in the same JSON, so the read-modify-write window
-  // must be serialized against everything in libs/meta.ts that
-  // takes the same lock.
   return withTaskLock(dir, () => {
     const meta = readMeta(dir);
     if (!meta) return null;
@@ -255,11 +190,6 @@ export async function updateTask(id: string, patch: TaskPatch): Promise<Task | n
       meta.taskStatus = patch.status;
     }
     writeMeta(dir, meta);
-    // Surface section changes (TODO/DOING/BLOCKED → DONE etc.) on the
-    // meta event bus so the Telegram notifier can ping when the user
-    // ticks the "complete" checkbox in the UI. The emitter no-ops
-    // when prevSection === nextSection, so a pure title/body edit
-    // doesn't fire a spurious notification.
     emitTaskSection({
       taskId: id,
       prevSection,
@@ -277,29 +207,10 @@ export interface DeleteTaskResult {
   sessionsFailed: number;
 }
 
-/**
- * Delete a task plus its linked Claude session files. We enumerate
- * runs from meta.json BEFORE removing the dir, then for each run:
- *   1. SIGTERM any still-running child (best-effort) so we don't fight
- *      file locks on Windows
- *   2. Remove `<projectDir>/<sessionId>.jsonl` under the run's repo
- *   3. Remove any per-session settings under `.bridge-state/<sessionId>/`
- *
- * Failures on individual sessions are counted but don't abort the task
- * deletion — the user's intent is "make this task go away", and a stuck
- * .jsonl shouldn't trap the meta.json forever.
- */
 export async function deleteTask(id: string): Promise<DeleteTaskResult> {
   const dir = safeSessionDir(id);
   if (!dir || !existsSync(dir)) return { ok: false, sessionsDeleted: 0, sessionsFailed: 0 };
 
-  // Serialize against any in-flight `appendRun` / `updateRun` /
-  // `updateTask` for this task. Without the lock, an `appendRun` queued
-  // before the rmSync wins the meta-write race and re-creates a stub
-  // meta.json after we delete the directory; subsequent reads then throw
-  // `meta.json missing`. The lock guarantees we observe a consistent
-  // run-list and that no further writes for this dir can land between
-  // the kills and the directory rmSync.
   return withTaskLock(dir, () => {
     let sessionsDeleted = 0;
     let sessionsFailed = 0;
@@ -309,14 +220,12 @@ export async function deleteTask(id: string): Promise<DeleteTaskResult> {
       const bridgeMd = readBridgeMd();
 
       for (const run of meta.runs) {
-        try { killChild(run.sessionId); } catch { /* best-effort */ }
+        try { killChild(run.sessionId); } catch { }
 
-        // Per-session settings dir (free-session shape — harmless if it
-        // doesn't exist for task-scoped runs).
         const stateDir = join(BRIDGE_STATE_DIR, run.sessionId);
         if (existsSync(stateDir)) {
           try { rmSync(stateDir, { recursive: true, force: true }); }
-          catch { /* ignore */ }
+          catch { }
         }
 
         const cwd = bridgeMd ? resolveRepoCwd(bridgeMd, BRIDGE_ROOT, run.repo) : null;
@@ -333,11 +242,6 @@ export async function deleteTask(id: string): Promise<DeleteTaskResult> {
     }
 
     rmSync(dir, { recursive: true, force: true });
-    // Drop this task's sessionIds from the reverse index. The
-    // meta-change subscription doesn't fire on directory removal, so
-    // without this the cache would resolve a deleted task's sessionIds
-    // to its old taskId until the next process restart. Benign (the
-    // follow-up `getTask` returns null anyway) but tidier to clean up.
     if (sessionIndex && meta) {
       for (const run of meta.runs) sessionIndex.delete(run.sessionId);
     }
@@ -349,26 +253,11 @@ export function isValidSection(section: string): section is TaskSection {
   return Object.prototype.hasOwnProperty.call(SECTION_STATUS, section);
 }
 
-/**
- * Re-tag every task whose `taskApp` points at `oldName` so it points at
- * `newName` instead. Used by the apps-rename API route to keep the
- * task → app association intact across renames. Returns the count of
- * meta files that were rewritten.
- *
- * Best-effort: a single corrupt meta.json doesn't abort the migration —
- * we skip it and continue. The caller reports the count back to the UI
- * as a toast so the operator can spot a partial cascade.
- */
 export async function migrateTaskApp(oldName: string, newName: string): Promise<number> {
   if (oldName === newName) return 0;
   let migrated = 0;
   for (const id of listMetaIds()) {
     const dir = join(SESSIONS_DIR, id);
-    // Each task gets its own lock acquisition: a parallel `Promise.all`
-    // would block on the same dir's queue anyway, and a sequential loop
-    // keeps the error handling per-task simple. The lock is the same
-    // one appendRun/updateRun take, so a child agent's run-row mutate
-    // running against the same task can't trample our header rewrite.
     const ok = await withTaskLock(dir, () => {
       const meta = readMeta(dir);
       if (!meta) return false;

@@ -26,10 +26,10 @@ describe("__test.tokenize", () => {
     expect(out).toContain("user");
     expect(out).toContain("profile");
     expect(out).toContain("express");
-    expect(out).not.toContain("the"); // stopword
-    expect(out).not.toContain("a"); // too short
-    expect(out).not.toContain("4"); // numeric
-    expect(out).not.toContain("add"); // stopword (in our list)
+    expect(out).not.toContain("the");
+    expect(out).not.toContain("a");
+    expect(out).not.toContain("4");
+    expect(out).not.toContain("add");
   });
 
   it("returns empty for an empty string", () => {
@@ -51,7 +51,7 @@ describe("__test.scoreSymbol", () => {
   };
 
   it("counts substring matches in file path + symbol name", () => {
-    expect(__test.scoreSymbol(sym, ["form"])).toBe(1); // matches both name and file, but counted as one token = +1
+    expect(__test.scoreSymbol(sym, ["form"])).toBe(1);
     expect(__test.scoreSymbol(sym, ["form", "state"])).toBe(2);
     expect(__test.scoreSymbol(sym, ["unrelated"])).toBe(0);
   });
@@ -78,7 +78,6 @@ describe("__test.pickCandidateFiles", () => {
     const got = __test.pickCandidateFiles(symbols, ["form", "state"]);
     expect(got[0]?.file).toBe("hooks/useFormState.ts");
     expect(got[0]?.score).toBeGreaterThanOrEqual(__test.MIN_SCORE);
-    // Avatar / cn shouldn't make the cut for "form state" tokens.
     expect(got.find((c) => c.file === "components/Avatar.tsx")).toBeUndefined();
   });
 

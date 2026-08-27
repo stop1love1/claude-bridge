@@ -1,46 +1,11 @@
-/**
- * Gate status aggregation (Task 6).
- *
- * Rolls the per-run QA gate results (`verify`, `verifier` (claim-vs-diff),
- * `styleCritic`, `semanticVerifier`, `confidence` — see `libs/meta.ts`)
- * into a compact `{gates, allGreen}` summary the summary API, the
- * Telegram notifier, and the task UI can all render without duplicating
- * the aggregation logic.
- *
- * Retry-chain handling: `libs/retryLadder.ts` guarantees a run's retries
- * only ever chain on the SAME gate that failed (cross-gate retries are
- * blocked), so a run's `role` base and `repo` are invariant along its
- * whole `retryOf` chain. That means the "latest attempt" for a chain is
- * simply: any run that no other run's `retryOf` points at (nothing
- * superseded it). We collect every such chain-head run (excluding
- * coordinator runs) and read whichever gate fields it carries — older,
- * superseded attempts are dropped entirely so a stale PASS can never
- * mask a newer FAIL (or vice versa).
- *
- * Runtime-agnostic: no `node:fs` / server-only imports, so this module
- * is safe to import from API routes, the Telegram notifier, AND
- * "use client" UI components alike (only `import type` pulls from
- * `./meta`, which IS server-only — type-only imports are erased at
- * build time and never reach the client bundle).
- */
 import type { Meta, Run, RunVerify, RunVerifier, RunStyleCritic, RunSemanticVerifier } from "./meta";
 import { parseRole } from "./retryLadder";
 
-/**
- * `drift` is a distinct NON-blocking verdict: the style critic blocks
- * only on `alien` and the semantic verifier only on `broken` (see
- * runLifecycle.ts `needsStyleRetry` / `needsSemanticRetry`) — their
- * `drift` verdicts ship with a note, so they must not read as red.
- * Claim-vs-diff `drift` genuinely blocks (runLifecycle.ts
- * `needsClaimRetry`) and maps to `fail` instead.
- */
 export type GateVerdict = "pass" | "fail" | "drift" | "skipped" | "held";
 
 export interface GateStatusEntry {
-  /** Short gate-kind label: "verify" | "claim" | "style" | "semantic" | "confidence". */
   name: string;
   verdict: GateVerdict;
-  /** Human detail — which run/role/repo produced this verdict + why. */
   detail?: string;
 }
 
@@ -57,8 +22,6 @@ const ICON: Record<GateVerdict, string> = {
   skipped: "⚪",
 };
 
-/** Verdicts that do NOT flip `allGreen` — the run shipped (or the gate
- *  simply didn't apply). `drift` is style/semantic's non-blocking note. */
 const GREEN_VERDICTS: ReadonlySet<GateVerdict> = new Set(["pass", "drift", "skipped"]);
 
 type Confidence = NonNullable<Run["confidence"]>;
@@ -75,16 +38,12 @@ function verifyEntry(v: RunVerify): { verdict: GateVerdict; detail: string } {
 function verifierEntry(v: RunVerifier): { verdict: GateVerdict; detail: string } {
   if (v.verdict === "pass") return { verdict: "pass", detail: v.reason };
   if (v.verdict === "skipped") return { verdict: "skipped", detail: v.reason };
-  // "drift" | "broken" — BOTH block the commit for the claim gate
-  // (runLifecycle.ts needsClaimRetry fires on either), so both are `fail`.
   return { verdict: "fail", detail: v.reason };
 }
 
 function styleEntry(v: RunStyleCritic): { verdict: GateVerdict; detail: string } {
   if (v.verdict === "match") return { verdict: "pass", detail: v.reason };
   if (v.verdict === "skipped") return { verdict: "skipped", detail: v.reason };
-  // Style blocks only on `alien` (runLifecycle.ts needsStyleRetry);
-  // `drift` ships with a note — surface it as non-blocking drift.
   if (v.verdict === "drift") return { verdict: "drift", detail: v.reason };
   return { verdict: "fail", detail: v.reason };
 }
@@ -92,8 +51,6 @@ function styleEntry(v: RunStyleCritic): { verdict: GateVerdict; detail: string }
 function semanticEntry(v: RunSemanticVerifier): { verdict: GateVerdict; detail: string } {
   if (v.verdict === "pass") return { verdict: "pass", detail: v.reason };
   if (v.verdict === "skipped") return { verdict: "skipped", detail: v.reason };
-  // Semantic blocks only on `broken` (runLifecycle.ts needsSemanticRetry);
-  // `drift` ships with a note — surface it as non-blocking drift.
   if (v.verdict === "drift") return { verdict: "drift", detail: v.reason };
   return { verdict: "fail", detail: v.reason };
 }
@@ -106,7 +63,6 @@ function confidenceEntry(c: Confidence): { verdict: GateVerdict; detail: string 
   return { verdict: "pass", detail: base };
 }
 
-/** Build every gate entry present on a single (already chain-head) run. */
 function entriesForRun(run: Run): GateStatusEntry[] {
   const parsed = parseRole(run.role);
   const attemptSuffix = parsed.attempt > 0 ? ` (attempt ${parsed.attempt})` : "";
@@ -136,13 +92,6 @@ function entriesForRun(run: Run): GateStatusEntry[] {
   return entries;
 }
 
-/**
- * Aggregate gate results across a task's runs, following each retry
- * chain to its newest (non-superseded) attempt. Coordinator runs are
- * always excluded — gates only ever attach to child (coder/reviewer/…)
- * runs. Returns `{gates: [], allGreen: true}` when no run in the task
- * has any gate field set (nothing configured / nothing ran yet).
- */
 export function computeGateStatus(meta: Meta): GateStatus {
   const superseded = new Set<string>();
   for (const r of meta.runs) {
@@ -151,7 +100,7 @@ export function computeGateStatus(meta: Meta): GateStatus {
 
   const gates: GateStatusEntry[] = [];
   for (const run of meta.runs) {
-    if (superseded.has(run.sessionId)) continue; // an older attempt in its chain
+    if (superseded.has(run.sessionId)) continue;
     if (parseRole(run.role).baseRole === "coordinator") continue;
     gates.push(...entriesForRun(run));
   }
@@ -160,11 +109,6 @@ export function computeGateStatus(meta: Meta): GateStatus {
   return { gates, allGreen };
 }
 
-/**
- * Compact `## Gate status` Markdown table — embedded in `summary.md`-
- * adjacent surfaces (currently the summary API response; callers decide
- * whether/where to render it).
- */
 export function renderGateStatusMarkdown(status: GateStatus): string {
   if (status.gates.length === 0) {
     return "## Gate status\n\nNo gates configured.";
@@ -184,11 +128,6 @@ export function renderGateStatusMarkdown(status: GateStatus): string {
   ].join("\n");
 }
 
-/**
- * One-line compact rendering for chat surfaces (Telegram Ready-for-
- * review message). Empty string when no gates are configured — callers
- * should skip appending a blank "Gates:" line in that case.
- */
 export function renderGateStatusLine(status: GateStatus): string {
   if (status.gates.length === 0) return "";
   if (status.allGreen) {

@@ -1,30 +1,7 @@
-/**
- * Next.js instrumentation hook — runs once per server boot (and on HMR
- * reload in dev). We use it to:
- *
- *   1. Install the Telegram notifier so the subscription is in place
- *      before any task runs land.
- *   2. Print a one-shot health banner (`[bridge] …`) covering Claude
- *      CLI, auth state, registered apps, and both Telegram channels —
- *      so the operator immediately sees what's wired up vs missing
- *      instead of finding out later when something silently no-ops.
- *   3. Register the tunnel-shutdown signal handler eagerly. Doing it
- *      here (rather than lazily inside `startTunnel`) means a SIGINT
- *      delivered before any tunnel exists still leaves a usable
- *      handler in place; HMR-trapped stale closures are also gone
- *      because we install before the route module is reloaded.
- *
- * Everything below is a no-op on the Edge runtime; only `nodejs` boots
- * exercise startup checks, the notifier, and the tunnel handler.
- */
 
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
-  // Health banner first — runs in parallel with the notifier install
-  // (we don't `await` it). Notifier install is synchronous-ish, so
-  // doing it second keeps any "telegram notifier installed" log next
-  // to the matching banner line. Both swallow their own errors.
   const { runStartupChecks } = await import("./libs/startupChecks");
   void runStartupChecks().catch((err: unknown) => {
     console.warn("[bridge] startup checks failed:", (err as Error).message);
@@ -33,33 +10,17 @@ export async function register(): Promise<void> {
   const { ensureTelegramNotifier } = await import("./libs/telegramNotifier");
   ensureTelegramNotifier();
 
-  // Auto-nudge an idle coordinator when its children settle. Without
-  // this the coordinator has to poll meta.json on its own (or wait for
-  // its self-scheduled wakeup) — which is why "child finished, but
-  // coordinator never picks up unless I ping" was the recurring UX
-  // complaint pre-fix. Idempotent + HMR-safe (state lives on globalThis).
   const { ensureCoordinatorNudge } = await import("./libs/coordinatorNudge");
   ensureCoordinatorNudge();
 
-  // Workflows: the pipeline engine sequences each multi-stage run, and the
-  // scheduler triggers scheduled (cron) runs. Both gate internally on the
-  // process lock so only the singleton bridge advances/dispatches.
-  // Idempotent + HMR-safe.
   const { ensurePipelineEngine } = await import("./libs/pipelineEngine");
   ensurePipelineEngine();
   const { ensureScheduler } = await import("./libs/scheduler");
   ensureScheduler();
 
-  // Tunnel shutdown handlers live behind a dynamic import so the Node-
-  // only `process.once` / `process.exit` calls stay invisible to the
-  // Edge runtime static analyzer.
   const { installShutdownHandlers } = await import("./libs/shutdownHandler");
   installShutdownHandlers();
 
-  // Optional auto-start of a tunnel at boot (`bridge.json#tunnels.autoStart`,
-  // toggled from the Tunnels page). Registered after the shutdown
-  // handlers above so a tunnel spawned here is guaranteed to be reaped
-  // on exit. No-ops when unset; never throws past this point.
   const { maybeAutoStartTunnel } = await import("./libs/tunnels");
   void maybeAutoStartTunnel().catch((err: unknown) => {
     console.warn("[tunnels] auto-start failed:", (err as Error).message);

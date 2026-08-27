@@ -4,12 +4,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Run } from "../meta";
 
-/**
- * `readFailedSessionContext` resolves the jsonl path through
- * `projectDirFor(repoCwd)`, which itself reads `~/.claude/projects/`.
- * We point homedir at a temp dir, mkdir the slugged project dir,
- * write a synthetic jsonl, and verify the tail-streaming reader.
- */
 let tempHome: string;
 const VALID_SID = "0123abcd-4567-89ef-cdef-0123456789ab";
 const REPO = "/home/u/proj-childretry";
@@ -28,7 +22,6 @@ afterEach(() => {
   try {
     rmSync(tempHome, { recursive: true, force: true });
   } catch {
-    /* best-effort */
   }
 });
 
@@ -84,14 +77,10 @@ describe("readFailedSessionContext (streaming tail reader)", () => {
     await writeJsonl([assistantBlock("done", tools)]);
     const { readFailedSessionContext } = await import("../childRetry");
     const ctx = readFailedSessionContext(VALID_SID, REPO);
-    // The function caps the global list at MAX_TOOL_USE_ENTRIES (5).
-    // Within one assistant message we keep the first N from document order.
     expect(ctx.recentToolUses.length).toBe(5);
   });
 
   it("handles a long file (forces multiple chunk reads)", async () => {
-    // Generate a synthetic multi-MB jsonl to exercise the chunked
-    // streaming path. Each padding line is ~10 KB; 200 lines ≈ 2 MB.
     const padding = "x".repeat(10000);
     const lines: object[] = [];
     for (let i = 0; i < 200; i++) {
@@ -109,7 +98,6 @@ describe("readFailedSessionContext (streaming tail reader)", () => {
 
   it("ignores malformed jsonl lines without throwing", async () => {
     const path = await writeJsonl([{ type: "user", message: { role: "user", content: "ok" } }]);
-    // Append garbage manually.
     const fs = await import("node:fs");
     fs.appendFileSync(path, "this is not json\n");
     fs.appendFileSync(path, JSON.stringify(assistantBlock("real answer")) + "\n");
@@ -131,17 +119,6 @@ describe("readFailedSessionContext (streaming tail reader)", () => {
   });
 });
 
-/**
- * C1: a run the operator explicitly stopped (Stop button / kill route)
- * must never be picked up by auto-retry — that would silently undo the
- * human's Stop and spend another turn `--resume`-ing the exact session
- * they just killed. `isEligibleForRetry` resolves its meta.json through
- * `SESSIONS_DIR`, which is captured from `process.cwd()` at module load,
- * so we mock `process.cwd()` (same pattern as gateEscalation.test.ts /
- * promptStore.test.ts) on top of the outer `beforeEach`'s homedir mock
- * (which already keeps `getApp()` from reading the real bridge.json) and
- * re-import fresh per test.
- */
 describe("isEligibleForRetry (cancelled short-circuits auto-retry, C1)", () => {
   const TASK_ID = "t_20260826_001";
 
@@ -163,12 +140,6 @@ describe("isEligibleForRetry (cancelled short-circuits auto-retry, C1)", () => {
     });
   }
 
-  // Satisfies every OTHER precondition `isEligibleForRetry` checks (a
-  // parent session + an untouched per-gate/per-task retry budget) so
-  // the "genuinely failed" case below reaches the real eligible path
-  // instead of passing for the wrong reason (e.g. failing the "no
-  // parent" check first, which would pass even if the cancelled guard
-  // were broken).
   function makeRun(overrides: Partial<Run>): Run {
     return {
       sessionId: VALID_SID,

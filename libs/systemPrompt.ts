@@ -3,21 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_STATE_DIR } from "./paths";
 
-/**
- * Content-addressed cache for `--append-system-prompt-file` payloads.
- * Same content → same path → same Anthropic API prompt-cache prefix, so
- * siblings + future spawns reuse the cache. Shared by the agents route
- * (per-app context) and the spawn layer (ultracode directive).
- */
 const SYS_PROMPT_CACHE_DIR = join(BRIDGE_STATE_DIR, "cache", "sys-prompts");
 
-/**
- * Write `content` to `.bridge-state/cache/sys-prompts/<sha256>.txt`
- * (idempotent — same content writes to the same path). Returns the
- * absolute path so the caller can pass it to
- * `claude --append-system-prompt-file`, or `null` when content is empty
- * (caller should skip the flag).
- */
 export function ensureSystemPromptFile(content: string): string | null {
   if (!content || content.length === 0) return null;
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 32);
@@ -29,15 +16,6 @@ export function ensureSystemPromptFile(content: string): string | null {
   return path;
 }
 
-/**
- * The "Ultracode" tier directive. Claude Code's IDE ultracode mode bundles
- * `--effort xhigh` with the in-process Workflow tool — but that tool is
- * IDE-only and unreachable from the headless `claude -p` children the
- * bridge spawns (verified: no flag/settings enables it in print mode). So
- * the bridge's ultracode tier delivers the `xhigh` effort for real and
- * substitutes the bridge's OWN multi-agent dispatch for "workflows" by
- * appending this directive to the spawned agent's system prompt.
- */
 export const ULTRACODE_DIRECTIVE = `<bridge-ultracode>
 Ultracode mode is on for this session. Optimize for the most exhaustive, correct outcome — token cost is not a constraint. Do not trade correctness for speed or brevity.
 
@@ -48,14 +26,6 @@ Ultracode mode is on for this session. Optimize for the most exhaustive, correct
 Solo, careful execution is fine for trivial or already-verified steps.
 </bridge-ultracode>`;
 
-/**
- * When `ultracode` is on, append {@link ULTRACODE_DIRECTIVE} to the
- * (optional) base system-prompt file and return a NEW content-addressed
- * file path holding the combination. When off, return `baseFile`
- * unchanged. Used by the spawn layer so every spawn path (coordinator /
- * free session / child agent / resume) picks up the directive uniformly,
- * keyed only on the resolved effort level.
- */
 export function withUltracodeDirective(
   baseFile: string | undefined,
   ultracode: boolean,
@@ -66,7 +36,6 @@ export function withUltracodeDirective(
     try {
       base = readFileSync(baseFile, "utf8");
     } catch {
-      /* base file vanished — fall back to the directive alone */
     }
   }
   const combined = base ? `${base}\n\n${ULTRACODE_DIRECTIVE}` : ULTRACODE_DIRECTIVE;

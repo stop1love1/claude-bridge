@@ -1,4 +1,3 @@
-/** Slash palette rows from `/api/repos/<name>/slash-commands`. */
 export type SlashCommandsItemSource = "builtin" | "project" | "user";
 
 export interface SlashCommandsItemDto {
@@ -7,15 +6,8 @@ export interface SlashCommandsItemDto {
   source: SlashCommandsItemSource;
 }
 
-// `TaskStatus` / `TaskSection` / `Task` live in `libs/tasks.ts` (the
-// server-side source of truth). Imported here so other interfaces in
-// this file can reference them, then re-exported so existing client
-// imports `from "@/libs/client/types"` keep working.
 import type { Task, TaskStatus, TaskSection } from "../tasks";
 import type { RunStatus } from "../runStatus";
-// `libs/gateStatus.ts` is runtime-agnostic (no node:fs / server-only
-// imports) so it's safe to import type-only here — erased at build
-// time, never pulled into the client bundle.
 import type { GateStatus, GateStatusEntry, GateVerdict } from "../gateStatus";
 
 export type { Task, TaskStatus, TaskSection, RunStatus, GateStatus, GateStatusEntry, GateVerdict };
@@ -23,47 +15,23 @@ export type { Task, TaskStatus, TaskSection, RunStatus, GateStatus, GateStatusEn
 export interface Run {
   sessionId: string;
   role: string;
-  repo: string;          // folder name of the repo this run targets
-  /**
-   * Absolute path of `repo`, resolved server-side and surfaced by
-   * `GET /api/tasks/<id>/meta`. The operator UI usually derives this from
-   * the repos list; a task-share guest (which can't list repos) relies on
-   * it to open the session tail stream. Absent if the repo can't resolve.
-   */
+  repo: string;
   repoPath?: string | null;
   status: RunStatus;
   startedAt: string | null;
   endedAt: string | null;
-  /**
-   * (Phase B+) The coordinator session UUID that spawned this run via
-   * `POST /api/tasks/<id>/agents`. `null` / absent means the run was
-   * spawned directly by the bridge (e.g. it IS the coordinator), or
-   * by a pre-Phase-B path. Phase C uses this to draw the agent tree.
-   */
   parentSessionId?: string | null;
-  /**
-   * Set when the post-success integration merged locally but the
-   * push to the remote failed. UI renders this as a yellow
-   * "needs-push" badge so the operator notices the work hasn't
-   * reached the remote yet. See server-side `Run.mergeNotPushed`
-   * in libs/meta.ts for the authoritative shape.
-   */
   mergeNotPushed?: {
     message: string;
     error: string | null;
     at: string;
   } | null;
-  /**
-   * Reliability Amplifier (B1): semantic gate result attached to the
-   * judged (coder) run. UI-facing subset of the server `RunSemanticVerifier`.
-   */
   semanticVerifier?: {
     verdict: "pass" | "drift" | "broken" | "skipped";
     reason: string;
     panelSize?: number;
     votes?: Array<{ lens: string; verdict: "pass" | "drift" | "broken"; reason: string }>;
   } | null;
-  /** Reliability Amplifier (B2): aggregate confidence + escalation hold. */
   confidence?: {
     score: number;
     band: "high" | "medium" | "low";
@@ -72,7 +40,6 @@ export interface Run {
   } | null;
 }
 
-/** Intent & Planning Gate — UI-facing subset of the server IntakeRecord. */
 export type IntakeStatus = "none" | "planning" | "awaiting-approval" | "approved" | "error";
 export interface IntakeQuestion {
   id: string;
@@ -82,10 +49,6 @@ export interface IntakeQuestion {
 }
 export interface TaskIntake {
   status: IntakeStatus;
-  // "unknown" mirrors server GateVerdict (libs/planGate.ts): the planner
-  // produced no usable artifact at all, distinct from "clear" (it looked
-  // and found nothing to ask). Kept in sync manually — this type doesn't
-  // import GateVerdict to avoid pulling server-only code into the bundle.
   verdict: "clear" | "needs-decision" | "unknown" | null;
   summary: string | null;
   questions: IntakeQuestion[];
@@ -100,21 +63,16 @@ export interface Meta {
   taskChecked: boolean;
   createdAt: string;
   runs: Run[];
-  /** Intent & Planning Gate sub-state (absent on legacy / gate-off tasks). */
   intake?: TaskIntake | null;
 }
 
 export interface Repo {
-  name: string;          // folder name, authoritative
+  name: string;
   path: string;
   exists: boolean;
-  /** true only for the bridge itself */
   isBridge?: boolean;
-  /** registered in `sessions/init.md` vs auto-discovered as a sibling folder */
   declared?: boolean;
-  /** description from the apps registry (only set on registered repos) */
   description?: string;
-  /** current git branch (null = not a git repo or read failed) */
   branch?: string | null;
 }
 
@@ -127,29 +85,12 @@ export interface AppGitSettings {
   fixedBranch: string;
   autoCommit: boolean;
   autoPush: boolean;
-  /** (P4) `enabled` runs every spawned child in a private worktree. */
   worktreeMode: GitWorktreeMode;
-  /**
-   * Integration target branch — used when `integrationMode` is
-   * `auto-merge` (local merge) or `pull-request` (devops agent opens
-   * a PR/MR). Empty when `integrationMode === "none"`.
-   */
   mergeTargetBranch: string;
-  /**
-   * What the bridge does with the agent's work branch after auto-commit:
-   * `none` | `auto-merge` (local) | `pull-request` (gh/glab via devops).
-   */
   integrationMode: GitIntegrationMode;
-  /** Per-app override for the `git push` timeout (5_000–600_000 ms). */
   pushTimeoutMs?: number;
 }
 
-/**
- * Per-app verify contract — shell commands the bridge runs after a
- * child agent finishes. P1 surfaces these into the child prompt so the
- * agent self-checks before reporting; P2 will exec them and feed
- * failures into auto-retry.
- */
 export interface AppVerify {
   test?: string;
   lint?: string;
@@ -158,20 +99,11 @@ export interface AppVerify {
   format?: string;
 }
 
-/**
- * (P2b-2) Per-app opt-in agent-driven quality gates. Both default off
- * because each enabled flag costs an extra LLM spawn per task.
- */
 export interface AppQuality {
   critic?: boolean;
   verifier?: boolean;
 }
 
-/**
- * (Gap 2) Per-gate retry budgets. Each gate has an independent attempt
- * counter, capped server-side at MAX_RETRY_PER_GATE. Default 1 = legacy
- * single-shot retry per gate.
- */
 export interface AppRetry {
   crash?: number;
   verify?: number;
@@ -188,33 +120,17 @@ export interface App {
   description: string;
   git: AppGitSettings;
   verify: AppVerify;
-  /**
-   * (P3a) Files always injected into spawned children's prompts.
-   * Paths relative to the app root.
-   */
   pinnedFiles: string[];
-  /**
-   * (P3a) Override the default `[lib, utils, hooks, components/ui]`
-   * symbol-index scan roots. Empty = use defaults.
-   */
   symbolDirs: string[];
-  /**
-   * (P2b-2) Opt-in agent-driven post-exit quality gates. Empty object
-   * = both gates off (the default).
-   */
   quality: AppQuality;
-  /**
-   * (Gap 2) Per-gate retry budgets. Empty / missing = each gate uses
-   * the default (1 attempt per gate).
-   */
   retry: AppRetry;
 }
 
 export interface SessionSummary {
   sessionId: string;
-  repo: string;          // folder name the session belongs to (its project dir)
-  repoPath: string;      // absolute path on disk, surfaced for full-path grouping
-  branch: string | null; // current git branch of the repo (null if not a git tree)
+  repo: string;
+  repoPath: string;
+  branch: string | null;
   isBridge: boolean;
   mtime: number;
   size: number;
@@ -222,8 +138,6 @@ export interface SessionSummary {
   link: { taskId: string; role: string } | null;
 }
 
-// SECTION_ORDER lives in `libs/tasks.ts` (single source of truth). Re-
-// exported here for back-compat with existing UI imports.
 export { SECTION_ORDER } from "../tasks";
 import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "../tasks";
 
@@ -251,10 +165,6 @@ export type PermissionMode =
   | "bypassPermissions"
   | "dontAsk";
 
-// `low|medium|high|xhigh|max` map straight to `claude --effort`; `ultracode`
-// is the bridge-only top tier (resolves to xhigh + an orchestration
-// directive — see libs/systemPrompt.ts). Kept in sync with `EffortLevel`
-// in libs/spawn.ts and `EFFORT_LEVELS` in libs/validate.ts.
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultracode";
 
 export interface ChatSettings {
@@ -263,11 +173,6 @@ export interface ChatSettings {
   model?: string;
 }
 
-/**
- * Auto-detect candidate as it travels over the SSE stream. Mirror of
- * `DetectCandidate` in `libs/apps.ts`; lifted here so the dialog can
- * type the parsed `event.data` payloads without importing server code.
- */
 export interface DetectCandidate {
   name: string;
   rawPath: string;
@@ -279,11 +184,6 @@ export interface DetectCandidate {
   isMonorepoChild: boolean;
 }
 
-/**
- * Public-facing shape of `libs/tunnels.ts#TunnelEntry`. Mirrored here
- * so the `/tunnels` page and the `api` client can type tunnel rows
- * without dragging server-only `child_process` imports into the bundle.
- */
 export type TunnelStatus = "starting" | "running" | "error" | "stopped";
 export type TunnelProvider = "localtunnel" | "ngrok";
 
@@ -301,11 +201,6 @@ export interface TunnelEntry {
   log: string[];
 }
 
-/**
- * Per-provider availability snapshot — see `libs/tunnels#detectProviders`.
- * The Tunnels page uses these fields to render install / authtoken
- * affordances next to the provider select.
- */
 export interface TunnelProviderStatus {
   provider: TunnelProvider;
   installed: boolean;
@@ -321,10 +216,6 @@ export interface TunnelInstallResult {
   log: string;
 }
 
-/**
- * Mirrors `libs/apps.ts#TunnelAutoStart` — the "auto-start on boot"
- * setting rendered as a toggle on the Tunnels page.
- */
 export interface TunnelAutoStart {
   enabled: boolean;
   provider: TunnelProvider;
@@ -338,7 +229,6 @@ export type DetectEvent =
   | { type: "skipped"; path: string; reason: "not-a-repo" | "already-scanned" | "permission" | "max-dirs" }
   | { type: "done"; candidates: number; alreadyRegistered: number; scanned: number };
 
-/** Per-model token totals out of `~/.claude/stats-cache.json`. */
 export interface UsageModel {
   inputTokens: number;
   outputTokens: number;
@@ -350,13 +240,11 @@ export interface UsageModel {
   maxOutputTokens: number;
 }
 
-/** Single quota window from `/api/oauth/usage`. */
 export interface QuotaWindow {
   utilization: number;
   resetsAt: string | null;
 }
 
-/** Extra-usage / overage credit status. */
 export interface ExtraUsage {
   isEnabled: boolean;
   monthlyLimit: number | null;
@@ -365,11 +253,6 @@ export interface ExtraUsage {
   currency: string | null;
 }
 
-/**
- * Live `/usage` panel — same data Anthropic returns to the CLI's
- * `/usage › Usage` tab and to claude.ai/settings/usage.
- * `weeklyClaudeDesign` is the server's `seven_day_omelette` codename.
- */
 export interface QuotaPanel {
   fiveHour: QuotaWindow | null;
   weeklyAllModels: QuotaWindow | null;
@@ -383,7 +266,6 @@ export interface QuotaPanel {
   fetchedAt: string;
 }
 
-/** Server response for `/api/usage` — see `libs/usageStats.ts`. */
 export interface UsageSnapshot {
   source: "stats-cache" | "missing";
   cacheUpdatedAt: string | null;

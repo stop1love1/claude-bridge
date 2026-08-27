@@ -39,7 +39,6 @@ describe("answerShareRequest", () => {
   it("approves and is idempotent on a second answer", () => {
     const e = createShareRequest(ARGS);
     expect(answerShareRequest(e.id, "approved")?.status).toBe("approved");
-    // A second answer doesn't flip an already-decided request.
     expect(answerShareRequest(e.id, "denied")?.status).toBe("approved");
   });
 

@@ -5,15 +5,6 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve as resolvePath } from "node:path";
 import type { ChildProcess } from "node:child_process";
 
-/**
- * runLifecycle.ts uses lazy `require("./<gate>")` inside the post-exit
- * flow to break a circular import. vitest's `vi.mock` only catches
- * static `import` statements, not `require()` — so we have to seed
- * `require.cache` on the *source* require's resolution before the
- * subject module loads. Each fake module exposes the same shape as
- * the real one but every function returns a benign no-op so the post-
- * exit pipeline short-circuits to "no gate ran".
- */
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Module = require("node:module") as typeof import("node:module") & {
   _resolveFilename: (
@@ -26,12 +17,6 @@ const Module = require("node:module") as typeof import("node:module") & {
 };
 const originalResolve = Module._resolveFilename;
 
-/**
- * `overrides` lets a test replace individual functions on a fake gate
- * module (e.g. make `runVerifyChain` return a failing result) while
- * keeping the rest of the benign defaults. Keyed by module name, then
- * shallow-merged over that module's default fake.
- */
 function seedRequireCache(overrides: Record<string, object> = {}) {
   const libsDir = resolvePath(__dirname, "..");
   const fakes: Record<string, object> = {
@@ -81,12 +66,6 @@ function seedRequireCache(overrides: Record<string, object> = {}) {
       }),
     },
   };
-  // Hook Node's CJS resolver so a `require("./<gate>")` call inside
-  // runLifecycle.ts (which is a .ts file with no compiled .js sibling
-  // on disk) gets steered at our seeded cache entry instead of failing
-  // with MODULE_NOT_FOUND. Vitest's mock registry only catches static
-  // `import`s, not lazy `require`, so this override is the only way
-  // to mock the post-exit gate modules.
   const fakeKeyFor: Record<string, string> = {};
   for (const [name, mod] of Object.entries(fakes)) {
     const filename = resolvePath(libsDir, name + ".ts");
@@ -114,35 +93,7 @@ function seedRequireCache(overrides: Record<string, object> = {}) {
   };
 }
 
-/**
- * `wireRunLifecycle` is the bridge's "child exit → meta.json status
- * flip" hook. Three state-transition guards keep it from corrupting
- * a run record under race:
- *
- *   1. `succeedRun` defers the running → done flip when a post-exit
- *      gate (verify chain, verifier, style critic, semantic verifier)
- *      will run for this app. The gate's `attachGateResult` collapses
- *      status:done + the result into a single combined patch, so a
- *      racing writer can't slip in between.
- *   2. `failRun` runs the patch under a precondition that the row is
- *      still `running`. A late `exit` after a post-exit gate already
- *      wrote `done` must NOT demote it back to `failed`.
- *   3. The kill-route's own status patch runs the same precondition;
- *      a post-exit `running → done` flip after a kill-mediated
- *      `failed` must not undo the explicit failure.
- *
- * These tests exercise the public `wireRunLifecycle` entry point with
- * a `vi.mock`'d gate layer so we never spawn a real `claude`. The fake
- * child is just a Node `EventEmitter` — `wireRunLifecycle` only attaches
- * `on("error" | "exit", …)` listeners.
- */
 
-// All gate modules return null/false so post-exit flow short-circuits
-// to the "no gate ran" branch in succeedRun's outer guard. The guard
-// behavior (deferred flip when a gate WILL run) is exercised separately
-// via the `getApp` mock — when an app is registered for a non-coordinator
-// run, the flip is deferred regardless of whether the gate ultimately
-// produces a result.
 vi.mock("../verifyChain", () => ({
   verifyConfigOf: () => null,
   hasAnyVerifyCommand: () => false,
@@ -172,32 +123,19 @@ vi.mock("../semanticVerifier", () => ({
   isEligibleForSemanticVerifierRetry: () => false,
 }));
 
-// Auto-retry hook: never kicks in. Without this the failRun branch
-// would call into childRetry which has its own I/O.
 vi.mock("../childRetry", () => ({
   maybeScheduleRetry: vi.fn(),
 }));
 
-// Permission settings cleanup is fire-and-forget in setImmediate; mock
-// to a no-op so the test doesn't try to touch a real on-disk dir.
 vi.mock("../permissionSettings", () => ({
   cleanupSessionSettings: vi.fn(),
 }));
 
-// The default test path returns null (no app registered) so the post-
-// exit flow falls through to the `if (!app)` safety-net branch — that's
-// the simplest path to exercise. Individual tests can re-mock with
-// `getApp.mockReturnValueOnce(...)` for the deferred-flip case.
 const getAppMock = vi.fn();
 vi.mock("../apps", () => ({
   getApp: (name: string) => getAppMock(name),
-  // postExitFlow → repos.appsAsRepos pulls the full app list when the
-  // run isn't in a worktree. Empty array keeps that path inert.
   loadApps: () => [],
   isValidAppName: () => true,
-  // Reliability Amplifier (B1): the semantic gate is default-on and reads
-  // these helpers. Mirror the real default-on semantics so a test app with
-  // `quality.verifier:false` keeps the gate off.
   semanticVerifierEnabled: (app: { quality?: { verifier?: boolean } }) =>
     app.quality?.verifier !== false,
   resolvePanelSize: (app: { quality?: { verifierPanel?: number } }) => {
@@ -206,10 +144,6 @@ vi.mock("../apps", () => ({
   },
 }));
 
-// `readBridgeMd` returning "" short-circuits resolveRepoCwd (which
-// would otherwise call into the full repos pipeline). Same trick we
-// use everywhere else when we don't care about repo resolution in a
-// test.
 vi.mock("../paths", async () => {
   const actual = await vi.importActual<typeof import("../paths")>("../paths");
   return {
@@ -218,7 +152,6 @@ vi.mock("../paths", async () => {
   };
 });
 
-// gitOps / worktrees / devops side-effects: stub everything to no-ops.
 vi.mock("../gitOps", () => ({
   autoCommitAndPush: vi.fn(),
   mergeIntoTargetBranch: vi.fn(),
@@ -231,11 +164,6 @@ vi.mock("../devops", () => ({
   runDevopsAgent: vi.fn(),
 }));
 
-// Fail-loud escalation (BLOCKED PATCH + Telegram ping) is exercised by
-// its own unit tests in `gateEscalation.test.ts`. Stub it here so a
-// future test that reaches a real "blocked, no retry" branch can't
-// accidentally PATCH a real task or fire a real Telegram send if this
-// dev machine's `bridge.json` happens to have Telegram configured.
 vi.mock("../gateEscalation", () => ({
   escalateGateBlock: vi.fn(),
   notifyGateInfraSkip: vi.fn(),
@@ -256,28 +184,21 @@ const TASK_HEADER = {
 beforeEach(() => {
   vi.resetModules();
   tmp = mkdtempSync(join(tmpdir(), "runlifecycle-"));
-  // Reset the per-call mock so each test owns its own getApp behavior.
   getAppMock.mockReset();
   getAppMock.mockReturnValue(null);
   seedRequireCache();
 });
 
 afterEach(() => {
-  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { }
   Module._resolveFilename = originalResolve;
 });
 
-/** Spin up a fake `claude` child that's just an EventEmitter. */
 function makeFakeChild(): ChildProcess & { emit: (ev: string, ...args: unknown[]) => boolean } {
   const ee = new EventEmitter();
   return ee as unknown as ChildProcess & { emit: (ev: string, ...args: unknown[]) => boolean };
 }
 
-/**
- * `wireRunLifecycle` works asynchronously inside `void succeedRun()` /
- * `void failRun()` — give the microtask queue + setImmediate cleanup a
- * couple of ticks to drain before reading meta.json.
- */
 async function flushAsync(times = 3): Promise<void> {
   for (let i = 0; i < times; i++) {
     await new Promise((r) => setImmediate(r));
@@ -372,9 +293,6 @@ describe("wireRunLifecycle — state transitions", () => {
       startedAt: "2026-04-24T10:00:01Z",
       endedAt: null,
     });
-    // Simulate a gate (or anything else) writing `done` BEFORE the
-    // child's exit event fires — succeedRun must observe the row as
-    // already-done and not re-flip it.
     await updateRun(tmp, SID, { status: "done", endedAt: "2026-04-24T10:00:02Z" });
 
     const child = makeFakeChild();
@@ -401,9 +319,6 @@ describe("wireRunLifecycle — state transitions", () => {
       startedAt: "2026-04-24T10:00:01Z",
       endedAt: null,
     });
-    // Simulate the kill route flipping the row to `failed` first; the
-    // child's exit handler must respect that final state and not
-    // overwrite it (e.g. with a different `endedAt` or status).
     await updateRun(tmp, SID, {
       status: "failed",
       endedAt: "2026-04-24T10:00:02Z",
@@ -417,8 +332,6 @@ describe("wireRunLifecycle — state transitions", () => {
     const meta = readMeta(tmp);
     const run = meta?.runs.find((r) => r.sessionId === SID);
     expect(run?.status).toBe("failed");
-    // endedAt must be the kill-time value — failRun's precondition
-    // means it never wrote a second timestamp.
     expect(run?.endedAt).toBe("2026-04-24T10:00:02Z");
   });
 
@@ -461,12 +374,6 @@ describe("wireRunLifecycle — state transitions", () => {
       endedAt: null,
     });
 
-    // Register an app for `real-app`. With a non-coordinator role this
-    // is the trigger for `willRunPostExitGate = true` — succeedRun must
-    // NOT flip the run to `done` itself; it defers to the gate's
-    // `attachGateResult` (which our test mocks short-circuit, leaving
-    // the run in `running`). The downstream "no-app" safety net would
-    // pick it up if app were null, but here the gate path owns the flip.
     getAppMock.mockReturnValue({
       name: "real-app",
       path: "/tmp/fake-app",
@@ -484,10 +391,6 @@ describe("wireRunLifecycle — state transitions", () => {
 
     const meta = readMeta(tmp);
     const run = meta?.runs.find((r) => r.sessionId === SID);
-    // The flip is deferred: gate would write done+result atomically.
-    // Our gate stubs all return null, so post-exit's safety net for
-    // app-less runs (`if (!app)`) is also skipped. End result: status
-    // stays `running` for this test, which proves the deferral happened.
     expect(run?.status).toBe("running");
     expect(run?.endedAt).toBeNull();
   });
@@ -497,7 +400,6 @@ describe("wireRunLifecycle — state transitions", () => {
     const { wireRunLifecycle } = await import("../runLifecycle");
 
     createMeta(tmp, TASK_HEADER);
-    // Append a DIFFERENT run; the wired session id below has no row.
     await appendRun(tmp, {
       sessionId: "other-sid",
       role: "coordinator",
@@ -513,26 +415,12 @@ describe("wireRunLifecycle — state transitions", () => {
     await flushAsync();
 
     const meta = readMeta(tmp);
-    // The unrelated row stays exactly as it was.
     const other = meta?.runs.find((r) => r.sessionId === "other-sid");
     expect(other?.status).toBe("running");
-    // The wired (missing) sid produced no row.
     expect(meta?.runs.find((r) => r.sessionId === SID)).toBeUndefined();
   });
 });
 
-/**
- * Fail-loud escalation wiring (Task 4). Each gate's "blocked, no retry
- * scheduled" branch must call `escalateGateBlock` exactly once with the
- * right `gate` label and `retryScheduled: false`. These tests drive a
- * real `wireRunLifecycle` exit through `postExitFlow` with the seeded
- * gate fakes overridden to produce a failing verdict + ineligible
- * retry, then assert on the `vi.mock`'d `escalateGateBlock`.
- *
- * Without these, a future edit could silently drop a call site (or flip
- * `retryScheduled`) and the suite would stay green — the blanket mock
- * above only prevents real side effects, it doesn't assert wiring.
- */
 describe("postExitFlow — escalateGateBlock call-site wiring", () => {
   const REAL_APP = {
     name: "real-app",
@@ -544,14 +432,10 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
     memory: { distill: false },
   };
 
-  /** Seed meta + a running coder run, register the app, fire exit 0,
-   *  drain, and return the mocked escalateGateBlock's calls. */
   async function driveExit(appOverrides: object = {}) {
     const { createMeta, appendRun } = await import("../meta");
     const ge = await import("../gateEscalation");
     const { wireRunLifecycle } = await import("../runLifecycle");
-    // The vi.mock factory result survives vi.resetModules — clear the
-    // accumulated calls so each test asserts only its own escalations.
     vi.mocked(ge.escalateGateBlock).mockClear();
 
     createMeta(tmp, TASK_HEADER);
@@ -604,8 +488,6 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
           startedAt: "2026-04-24T10:00:02Z",
           endedAt: "2026-04-24T10:00:03Z",
         }),
-        // isEligibleForVerifyRetry stays false (default fake) →
-        // no scheduled retry → escalation must fire.
       },
     });
     const calls = await driveExit();
@@ -708,18 +590,10 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
   });
 
   it("gates that pass do not escalate (clean proceed path)", async () => {
-    // All default fakes return null / no-command → every gate proceeds.
     const calls = await driveExit();
     expect(calls).toHaveLength(0);
   });
 
-  // Task 1 (bridge-audit-fixes, C2): a gate whose CHECKER throws — not
-  // "ran and returned a fail verdict" — must not be indistinguishable
-  // from a pass. Mirrors the verify-crash test above for the other
-  // four gates. `git.autoCommit: true` makes the autoCommitAndPush
-  // assertion meaningful: REAL_APP defaults it to false, which would
-  // make "not called" trivially true regardless of whether the crash
-  // branch actually blocks anything.
   it("preflight crash blocks the commit and escalates", async () => {
     seedRequireCache({
       preflightCheck: {
@@ -736,9 +610,6 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
     expect((calls[0][0] as { reason: string }).reason).toContain("crashed");
     expect(gitOps.autoCommitAndPush).not.toHaveBeenCalled();
 
-    // Preflight has no dedicated meta.json field — it piggybacks the
-    // crash marker onto `verifier`, the same slot its normal fail path
-    // already uses (see runPreflightGate's `finalVerifier`).
     const { readMeta } = await import("../meta");
     const meta = readMeta(tmp);
     const run = meta?.runs.find((r) => r.sessionId === SID);
@@ -803,9 +674,6 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
   });
 
   it("records an explicit crashed verdict so the score can see it (semantic)", async () => {
-    // Task 2 (confidence scoring) reads this field — absence is
-    // ambiguous (an app can legitimately opt out of the semantic gate),
-    // but an explicit "crashed" verdict is not.
     seedRequireCache({
       semanticVerifier: {
         runSemanticVerifier: async () => { throw new Error("panel exploded"); },

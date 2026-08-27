@@ -4,12 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseApps, serializeApps, type App } from "../apps";
 
-/**
- * Focused tests for the P1/D1 `verify` field round-trip. The full apps
- * loader has a lot more surface (git settings, atomic writes, name
- * validation) — those are covered by integration via the existing API
- * routes; here we lock down the new field's normalize/serialize behavior.
- */
 describe("apps.verify (D1)", () => {
   it("defaults to empty when the manifest entry has no verify key", () => {
     const json = JSON.stringify({
@@ -119,16 +113,6 @@ describe("apps.verify (D1)", () => {
   });
 });
 
-/**
- * D2: `addApp` / `backfillAppVerifyIfEmpty` auto-detect verify commands
- * via `libs/verifyDetect.ts`. These tests hit the real `loadApps`/
- * `saveApps` file I/O, so — same pattern as `sessions.test.ts` — they
- * redirect `homedir()` to a fresh temp dir per test and re-import
- * `../apps` after `vi.resetModules()` so the module's captured
- * `BRIDGE_JSON` path (derived from `USER_CLAUDE_DIR` at import time)
- * points into the sandbox instead of the operator's real
- * `~/.claude/bridge.json`.
- */
 describe("apps.verify — addApp auto-detect (D2)", () => {
   let tempHome: string;
   let appDir: string;
@@ -152,12 +136,10 @@ describe("apps.verify — addApp auto-detect (D2)", () => {
     try {
       rmSync(tempHome, { recursive: true, force: true });
     } catch {
-      /* best-effort */
     }
     try {
       rmSync(appDir, { recursive: true, force: true });
     } catch {
-      /* best-effort */
     }
   });
 

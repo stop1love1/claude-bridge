@@ -26,10 +26,8 @@ import { Textarea } from "./ui/textarea";
 import { useToast } from "./Toasts";
 
 interface AppSettingsDialogProps {
-  /** App to edit. When null the dialog is closed. */
   app: App | null;
   onClose: () => void;
-  /** Called with the updated App after a successful save. */
   onSaved: (app: App) => void;
 }
 
@@ -55,8 +53,6 @@ const MODE_OPTIONS: Array<{
   },
 ];
 
-// Same shape as the bridge.json APP_NAME_RE — kept in sync so the UI
-// rejects bad names before the round-trip.
 const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const INTEGRATION_OPTIONS: Array<{
@@ -81,8 +77,6 @@ const INTEGRATION_OPTIONS: Array<{
   },
 ];
 
-// Mirrors `MAX_RETRY_PER_GATE` in libs/retryLadder.ts — kept inline here so
-// the slider UI doesn't have to import server code.
 const MAX_RETRY_PER_GATE = 5;
 
 const RETRY_GATES: Array<{
@@ -122,10 +116,6 @@ const RETRY_GATES: Array<{
   },
 ];
 
-/**
- * Strategy ladder for attempt N (purely informational — the prompt
- * shape is decided server-side by `retryLadder.strategyForAttempt`).
- */
 const STRATEGY_AT_ATTEMPT: Record<number, string> = {
   1: "same-context (full prompt + failure)",
   2: "fresh-focus (drop chatter, focus narrowly)",
@@ -134,15 +124,6 @@ const STRATEGY_AT_ATTEMPT: Record<number, string> = {
   5: "fixer-only",
 };
 
-/**
- * Per-app editor: name + description + git workflow. Persisted to
- * `bridge.json` via PATCH /api/apps/[name]. The dialog is controlled by
- * the parent — pass `app=null` to close.
- *
- * NOTE: the parent should pass `key={app?.name ?? "closed"}` so React
- * remounts this component when the target app changes — that's how we
- * keep the local draft in sync with the prop without a useEffect.
- */
 export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogProps) {
   const [name, setName] = useState<string>(app?.name ?? "");
   const [description, setDescription] = useState<string>(app?.description ?? "");
@@ -157,9 +138,6 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
     setGit((g) => (g ? { ...g, branchMode: mode } : g));
   };
 
-  // Switching integration mode promotes the matching git settings so the
-  // mode is internally consistent the moment it lands. Mirrors the
-  // server-side normalize rules in libs/apps.ts.
   const onIntegrationModeChange = (mode: GitIntegrationMode) => {
     setGit((g) => {
       if (!g) return g;
@@ -226,9 +204,6 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
       if (descriptionDirty) patch.description = trimmedDescription;
       if (gitDirty) patch.git = git;
       if (retryDirty) {
-        // Diff against the original so we send `null` for cleared keys
-        // and only send numeric values for set keys. The server treats
-        // `null` as "revert to default" and missing keys as "no change".
         const original = app.retry ?? {};
         const next: Partial<Record<keyof AppRetry, number | null>> = {};
         const keys = new Set([
@@ -367,7 +342,6 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
               onChange={(v) => setGit((g) => (g ? {
                 ...g,
                 autoCommit: v,
-                // Disabling auto-commit cascades: no push, no integration.
                 autoPush: v ? g.autoPush : false,
                 integrationMode: v ? g.integrationMode : "none",
                 mergeTargetBranch: v ? g.mergeTargetBranch : "",
@@ -451,7 +425,7 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
               re-prompt, attempt 3+ = fixer-only directive.
             </p>
             {RETRY_GATES.map((gate) => {
-              const value = retry[gate.key] ?? 1; // unset → default 1
+              const value = retry[gate.key] ?? 1;
               return (
                 <div key={gate.key} className="grid gap-1 rounded-md border border-border p-2">
                   <div className="flex items-center justify-between gap-2">
@@ -538,11 +512,6 @@ interface DevopsCheckResult {
   remote: string | null;
 }
 
-/**
- * "Test connection" button + verdict line for the pull-request mode.
- * Saves the operator from discovering at task-execution time that
- * `gh` isn't installed or they aren't logged in.
- */
 function DevopsConnectionCheck({ appSegment }: { appSegment: string }) {
   const [state, setState] = useState<
     | { kind: "idle" }

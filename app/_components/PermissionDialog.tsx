@@ -27,15 +27,7 @@ function summarize(input: unknown): string {
   return s;
 }
 
-/**
- * Per-session modal Allow / Deny dialog. All queue / SSE / answer
- * plumbing lives in `usePermissionQueue`; this file is just the modal
- * UI for the head of the queue.
- */
 export function PermissionDialog({ sessionId }: { sessionId: string | null | undefined }) {
-  // Hook must be called unconditionally; pass a never-firing scope when
-  // there's no session so we don't subscribe to the cross-session feed
-  // by accident.
   const { queue, answer } = usePermissionQueue(
     sessionId ? { sessionId } : { sessionId: "" },
   );
@@ -45,12 +37,6 @@ export function PermissionDialog({ sessionId }: { sessionId: string | null | und
   const onAnswer = useCallback(
     async (decision: "allow" | "deny") => {
       if (!current) return;
-      // Reset the checkbox before the next pending request renders —
-      // otherwise the user's intent for request N silently carries over
-      // to request N+1. (M6 from cluster F.) The `remember` flag is
-      // forwarded into `answer` so usePermissionQueue can persist it
-      // into its own remembered map (replaces the per-component ref
-      // that lived here pre-refactor).
       setRemember(false);
       await answer(current, decision, remember);
     },
@@ -61,7 +47,7 @@ export function PermissionDialog({ sessionId }: { sessionId: string | null | und
   if (!current) return null;
 
   return (
-    <AlertDialog open onOpenChange={() => { /* modal: close only via Allow/Deny */ }}>
+    <AlertDialog open onOpenChange={() => { }}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
@@ -88,12 +74,7 @@ export function PermissionDialog({ sessionId }: { sessionId: string | null | und
         </label>
 
         <AlertDialogFooter>
-          {/* Deny is the safer default. Radix's AlertDialog already
-              auto-focuses Cancel on open via onOpenAutoFocus; the
-              explicit `autoFocus` is belt-and-suspenders. The visual
-              shift to outline-destructive is what really tells the
-              operator: Deny reads as the cautious choice, Allow as
-              the deliberate one. */}
+          {}
           <AlertDialogCancel
             autoFocus
             onClick={() => void onAnswer("deny")}

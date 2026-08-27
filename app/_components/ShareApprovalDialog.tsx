@@ -32,12 +32,6 @@ function grantSummary(grants: ShareRequestDto["grants"]): string {
   return on.length ? on.join(", ") : "view only";
 }
 
-/**
- * Polls `/api/share/requests` every ~3s and surfaces a pending guest
- * access request as a modal. Sibling of `LoginApprovalDialog` — mounted
- * once globally so it fires on whichever page the operator is on, and
- * silently no-ops (the endpoint 401s) for guests / signed-out clients.
- */
 export function ShareApprovalDialog() {
   const [queue, setQueue] = useState<ShareRequestDto[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -58,7 +52,6 @@ export function ShareApprovalDialog() {
           return fresh;
         });
       } catch {
-        // 401 (guest / signed out) or a network blip — retry next tick.
       }
     };
     void tick();
@@ -92,7 +85,7 @@ export function ShareApprovalDialog() {
   if (!top) return null;
 
   return (
-    <Dialog open onOpenChange={() => { /* must answer; no auto-close */ }}>
+    <Dialog open onOpenChange={() => { }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Guest wants to open a shared task</DialogTitle>

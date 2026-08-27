@@ -63,7 +63,7 @@ describe("__test.extractExports", () => {
     const longSig = "x".repeat(200);
     const src = `export const huge = (${longSig}) => 1`;
     const out = __test.extractExports(src, "lib/x.ts");
-    expect(out[0]?.signature.length).toBeLessThanOrEqual(120 + 1); // +1 for ellipsis
+    expect(out[0]?.signature.length).toBeLessThanOrEqual(120 + 1);
     expect(out[0]?.signature.endsWith("…")).toBe(true);
   });
 
@@ -96,7 +96,6 @@ describe("scanSymbols", () => {
         "utils/date.ts": "export const formatDate = (d: Date) => d.toISOString()",
         "hooks/useToast.ts": "export function useToast() { return { toast: () => {} } }",
         "components/ui/Button.tsx": "export const Button = () => null",
-        // Should be ignored — outside default dirs
         "src/random.ts": "export const ignored = 1",
       });
       const idx = scanSymbols(root);
@@ -118,10 +117,6 @@ describe("scanSymbols", () => {
       writeFiles(root, {
         "lib/keep.ts": "export const Inside = 1",
       });
-      // Pretend the operator wrote `bridge.json.symbolDirs: ["../../etc", "/abs", ""]`
-      // — none of these should land outside the app, even though each
-      // would otherwise be a valid path. The "lib" entry must still be
-      // walked so the rejection is selective, not all-or-nothing.
       const idx = scanSymbols(root, ["../../etc", "/abs/somewhere", "", "lib"]);
       expect(idx.scannedDirs).toEqual(["lib"]);
       expect(idx.symbols.map((s) => s.name)).toEqual(["Inside"]);

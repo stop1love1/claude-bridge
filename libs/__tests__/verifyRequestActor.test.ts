@@ -12,12 +12,6 @@ import {
   type ShareGrants,
 } from "../shareStore";
 
-/**
- * Integration test for `verifyRequestActor`: an operator cookie/internal
- * token resolves to an operator; a guest cookie resolves to a guest ONLY
- * while the live share + device are valid. Auth config lives in a temp
- * HOME; the share store's real `.bridge-state` file is snapshot/restored.
- */
 
 let tempHome: string;
 let originalHome: string | undefined;
@@ -66,7 +60,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
-  try { rmSync(tempHome, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try { rmSync(tempHome, { recursive: true, force: true }); } catch { }
   if (savedShares !== null) writeFileSync(shareInternal.SHARES_FILE, savedShares, "utf8");
   else rmSync(shareInternal.SHARES_FILE, { force: true });
   resetShares();
@@ -124,7 +118,6 @@ describe("verifyRequestActor — guest", () => {
   it("rejects a guest cookie whose device was never approved", async () => {
     const { signGuestSession, verifyRequestActor } = await import("../auth");
     const { share } = createShare({ taskId: "t_1", grants: GRANTS, git: GIT, deviceTtlMs: null });
-    // No addDevice → the did is not in the share.
     const { token } = signGuestSession({ shareId: share.id, taskId: "t_1", did: "gdv_ghost", deviceTtlMs: null });
     expect(verifyRequestActor(fakeReq(token))).toBeNull();
   });
@@ -133,7 +126,6 @@ describe("verifyRequestActor — guest", () => {
     const { signGuestSession, verifyRequestActor } = await import("../auth");
     const { share } = createShare({ taskId: "t_1", grants: GRANTS, git: GIT, deviceTtlMs: null });
     addDevice(share.id, { did: "gdv_a", label: "Alice", ip: "1.2.3.4" });
-    // Forge a cookie claiming a different task than the share's.
     const { token } = signGuestSession({ shareId: share.id, taskId: "t_EVIL", did: "gdv_a", deviceTtlMs: null });
     expect(verifyRequestActor(fakeReq(token))).toBeNull();
   });

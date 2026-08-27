@@ -19,13 +19,6 @@ interface AnnounceBody {
   timestamp?: string;
 }
 
-/**
- * POST: called by `agents/permission-hook.cjs` before every tool call.
- * The hook hands us a fresh requestId + tool metadata; we stash it as
- * `pending` and notify any UI subscribed to this session's stream so
- * the user sees a popup. Returns immediately — the hook then long-polls
- * `[requestId]/route.ts` for the answer.
- */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
@@ -37,10 +30,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 },
     );
   }
-  // L6: gate the body fields. The permission store keys on (sessionId,
-  // requestId) and the UI templates `tool` into the popup label, so a
-  // malformed value here would either pollute the in-memory map or
-  // render unsafely.
   if (!isValidRequestId(body.requestId)) return badRequest("invalid requestId");
   if (!isValidToolName(body.tool)) return badRequest("invalid tool");
 
@@ -54,11 +43,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   return ok();
 }
 
-/**
- * GET: optional — UI calls this when it mounts to render any backlog
- * of pending requests it might have missed before its SSE subscription
- * connected. Filters out already-answered records.
- */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");

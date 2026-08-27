@@ -11,12 +11,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * Resolve a run's `repo` (app name) to its absolute path. The operator UI
- * derives this from the repos list it already fetches, but a task-share
- * guest can't list repos — so we surface `repoPath` per run here. It's
- * the value SessionLog needs to open the tail stream. Cached per request.
- */
 function repoPathResolver(): (repo: string) => string | null {
   const cache = new Map<string, string | null>();
   let md: string | null | undefined;
@@ -37,10 +31,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   if (!isValidTaskId(id)) return badRequest("invalid task id");
   const meta = await reapStaleRunsForDir(join(SESSIONS_DIR, id));
   if (!meta) return NextResponse.json({ error: "not found" }, { status: 404 });
-  // Enrich each run with its resolved absolute repoPath so any consumer
-  // (operator UI or guest share view) can open the session tail stream
-  // without separately resolving the app registry. Extra field; existing
-  // consumers ignore it.
   const resolve = repoPathResolver();
   const enriched = {
     ...meta,

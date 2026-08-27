@@ -1,30 +1,3 @@
-/**
- * Telegram notifier — server-only.
- *
- * Subscribes to the bridge's per-task lifecycle events and the global
- * permission-pending stream, and forwards a short Markdown message to
- * a configured Telegram chat. Disabled (no network calls) unless both
- * `botToken` and `chatId` are set — read primarily from
- * `bridge.json.telegram` (operator-managed via the bridge UI), with a
- * fallback to the legacy `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
- * env vars so existing installs keep working until they migrate.
- *
- * The notifier installs once per process (HMR-safe) and never throws —
- * any send error is logged to the bridge's console with a brief reason.
- *
- * What fires is gated by `notificationLevel` (see `libs/apps`):
- *   - "minimal" — coordinator done/failed, ANY child failure, section
- *                 → BLOCKED / DONE, permission requests (per-tool
- *                 coalesced).
- *   - "normal"  — minimal + child completions + section → DOING (on
- *                 START only, not "Resumed").
- *   - "verbose" — every transition / section move / permission, with
- *                 only the legacy 1.5s requestId dedupe.
- *
- * Per-event short-window dedupe (`DEDUPE_MS`) still runs at every level
- * so a flood of identical events from a flapping session can't bypass
- * the volume control.
- */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { subscribeMetaAll, readMeta, type MetaChangeEvent } from "./meta";
@@ -54,17 +27,6 @@ import {
 import { sendPushToAll } from "./webPush";
 import { sendTelegramApiMessage } from "./telegramSendRetry";
 
-/**
- * Task 9: best-effort Web Push fan-out beside the key Telegram notify
- * sites (permission pending, coordinator ready-for-review summary,
- * task BLOCKED, plan awaiting-approval, and — Task 10 — device-login
- * pending). `sendPushToAll`
- * already no-ops with zero subscribers and never rejects internally —
- * this wrapper adds a belt-and-suspenders `.catch()` so a call site
- * can `notifyPush(...)` with no further ceremony and it can NEVER
- * throw or reject into the caller, matching the "never breaks the
- * calling notifier path" contract from the Task 9 brief.
- */
 function notifyPush(payload: { title: string; body: string; url?: string }): void {
   try {
     void sendPushToAll(payload).catch((err) => {
@@ -78,12 +40,6 @@ function notifyPush(payload: { title: string; body: string; url?: string }): voi
 const TG_HOST = "https://api.telegram.org";
 const DEDUPE_MS = 1500;
 const MAX_TEXT = 3500;
-/**
- * Window during which repeated permission requests from the same
- * `(sessionId, tool)` pair are silently absorbed into the first one.
- * Bash-loop-style sessions can fire 10+ permission requests in a few
- * seconds; without coalescing each one becomes its own Telegram ping.
- */
 const PERM_COALESCE_MS = 60_000;
 
 interface NotifierState {
@@ -101,12 +57,6 @@ const state: NotifierState =
   };
 G.__bridgeTelegramNotifier = state;
 
-/**
- * Resolve the active Telegram credentials. Prefers `bridge.json.telegram`
- * (operator-managed via the bridge UI); falls back to legacy env vars
- * for installs that haven't migrated yet. Returns `null` when neither
- * source has both fields filled.
- */
 function envConfig(): { token: string; chatId: string } | null {
   const settings = getManifestTelegramSettings();
   if (settings.botToken && settings.chatId) {
@@ -115,40 +65,10 @@ function envConfig(): { token: string; chatId: string } | null {
   return null;
 }
 
-// Exported so other modules that send raw Telegram text (e.g.
-// `libs/gateEscalation.ts`) escape dynamic text the same way instead of
-// hand-rolling their own regex.
 export function escapeMarkdownV2(s: string): string {
-  // Telegram MarkdownV2 reserves these chars; escape them so role/repo
-  // names with `_` / `.` / `-` don't break the message render.
   return s.replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
 
-/**
- * Send a notification text. The bridge always tries BOTH channels in
- * parallel when configured:
- *
- *   - Bot API     — fast HTTP, MarkdownV2 formatting, native fallbacks.
- *   - User-client — gram-js MTProto, posts as the operator's account so
- *                   it sidesteps Bot API's "bot can't message bot" /
- *                   group-privacy limits.
- *
- * Either-or-both work: a configured user-client means notifications
- * keep flowing even if the bot is restricted, and vice versa. Failures
- * on one side log a warning and don't block the other.
- *
- * The user-client receives the same `text` but stripped of MarkdownV2
- * escapes, since gram-js posts as plain text by default — operators
- * can switch to HTML / Markdown formatting per-call if they need it.
- */
-/**
- * Public counterpart of `sendTelegram` for callers outside this module
- * (e.g. `telegramChatForwarder.ts`). Same fan-out semantics: tries Bot
- * API + user-client in parallel when configured, swallows per-channel
- * errors. Exported so the chat forwarder doesn't have to duplicate the
- * fan-out logic — and so any future caller pipes through the same
- * truncation / formatting / dedup behavior.
- */
 export async function sendTelegramRaw(text: string): Promise<void> {
   return sendTelegram(text);
 }
@@ -165,25 +85,9 @@ async function sendTelegram(text: string): Promise<void> {
   }
 
   if (tasks.length === 0) return;
-  // Run in parallel; never reject the outer promise (handlers below
-  // swallow per-channel errors so one dead channel doesn't kill the
-  // sibling).
   await Promise.allSettled(tasks);
 }
 
-/**
- * Per-chat serial queue. Bot API throttles to ~1 msg/sec per chat and
- * ~30 msg/sec global; bursts get 429s that previously dropped messages
- * silently. Serializing per chat keeps us under the local limit, and
- * the retry loop below handles whatever 429 / 5xx still slips through.
- *
- * HMR-safe: pinned onto globalThis like every other stateful map in
- * this codebase (permissionStore, spawnRegistry, meta write queues).
- * Without this, a Next.js dev HMR reload mid-burst would drop the
- * chain head and the new module instance's queue starts from a fresh
- * `Promise.resolve()` — racing the orphan promise's `.finally` that
- * still holds a closure over the old `botQueues` Map.
- */
 const G_NOTIFIER = globalThis as unknown as {
   __bridgeTelegramBotQueues?: Map<string, Promise<void>>;
 };
@@ -209,20 +113,12 @@ async function sendViaBot(
   const truncated = text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "…" : text;
   const url = `${TG_HOST}/bot${encodeURIComponent(cfg.token)}/sendMessage`;
 
-  // Retry/backoff policy (429 honors `retry_after`; 5xx and network
-  // errors back off exponentially; a parse-mode 400 resends once
-  // plain) lives in `telegramSendRetry.ts`, shared with
-  // `telegramCommands.sendReply` — see that module's header comment.
-  // The per-chat serialization queue stays local to this file.
   await enqueueBotSend(cfg.chatId, () =>
     sendTelegramApiMessage(
       url,
       (plainFallbackUsed) => ({
         chat_id: cfg.chatId,
         text: truncated,
-        // After a MarkdownV2 parse error we resend without parse_mode
-        // so the user still sees the message — better a raw message
-        // than silently dropped formatting noise.
         ...(plainFallbackUsed ? {} : { parse_mode: "MarkdownV2" }),
         disable_web_page_preview: true,
       }),
@@ -232,9 +128,6 @@ async function sendViaBot(
 }
 
 async function sendViaUserClient(text: string): Promise<void> {
-  // gram-js posts plain text by default; un-escape the MarkdownV2
-  // syntax we added for the bot side so the user-account version
-  // reads naturally instead of `\.\!\(...`.
   const plain = text.replace(/\\([_*[\]()~`>#+\-=|{}.!\\])/g, "$1");
   const truncated = plain.length > MAX_TEXT ? plain.slice(0, MAX_TEXT) + "…" : plain;
   try {
@@ -249,7 +142,6 @@ function shouldSend(key: string): boolean {
   const last = state.recent.get(key) ?? 0;
   if (now - last < DEDUPE_MS) return false;
   state.recent.set(key, now);
-  // Cap the dedupe map; old entries can't fire dupes anyway.
   if (state.recent.size > 256) {
     const cutoff = now - DEDUPE_MS * 4;
     for (const [k, t] of state.recent) {
@@ -259,18 +151,6 @@ function shouldSend(key: string): boolean {
   return true;
 }
 
-/**
- * Decide whether a `transition` event should produce a Telegram ping
- * given the operator's notification level.
- *
- *   minimal — coordinator done/failed, OR any child `failed`. Child
- *             `done` is filtered out (the coordinator's own done is
- *             the actionable signal).
- *   normal  — same as minimal PLUS child `done`. Surfaces "this
- *             specific subagent finished" without the per-bash-call
- *             firehose of verbose.
- *   verbose — every done/failed transition (legacy behavior).
- */
 function shouldNotifyTransition(
   level: TelegramNotificationLevel,
   role: string,
@@ -279,24 +159,10 @@ function shouldNotifyTransition(
   if (level === "verbose") return true;
   const isCoordinator = role === "coordinator";
   if (status === "failed") return true;
-  // status === "done":
   if (level === "minimal") return isCoordinator;
-  // normal:
   return true;
 }
 
-/**
- * Decide whether a `task-section` event should ping Telegram.
- *
- *   minimal — only `BLOCKED` and `DONE — not yet archived`.
- *             These are the moves that mean "I need the operator's
- *             attention". Started / Resumed / Reset to TODO are
- *             bookkeeping.
- *   normal  — same as minimal PLUS first-time `DOING` (Started, not
- *             Resumed). Lets the operator know a task actually picked
- *             up workers without firing on every shuffle.
- *   verbose — every section move (legacy).
- */
 function shouldNotifySection(
   level: TelegramNotificationLevel,
   prev: string | undefined,
@@ -308,29 +174,15 @@ function shouldNotifySection(
   return false;
 }
 
-/**
- * Build the trailing "open in UI" line for a Telegram message. Empty
- * string when the operator hasn't set a public URL — we don't ship a
- * `localhost:7777` link to a phone, since the phone can't reach it.
- *
- * Telegram MarkdownV2 inline-link form: `[label](url)`. Labels and the
- * URL itself need escaping for the reserved set (we already do that
- * for the rest of the body); a bare `\n[Open](https://…/tasks/t_x)`
- * renders as a tappable link in mobile clients.
- */
 function renderTaskLink(taskId: string): string {
   const base = getPublicBridgeUrl();
   if (!base || base.startsWith("http://localhost")) return "";
-  // taskId is `t_YYYYMMDD_NNN`, all URL-safe — but escape the closing
-  // parens / brackets MarkdownV2 reserves anyway, in case the format
-  // ever loosens.
   const url = `${base}/tasks/${taskId}`.replace(/([)\\])/g, "\\$1");
   return `\n[Open in bridge](${url})`;
 }
 
 function onMetaChange(ev: MetaChangeEvent): void {
   const level = getManifestTelegramSettings().notificationLevel;
-  // Run lifecycle: child / coordinator finished or crashed.
   if (ev.kind === "transition" && ev.run) {
     const next = ev.run.status;
     if (next !== "done" && next !== "failed") return;
@@ -338,25 +190,9 @@ function onMetaChange(ev: MetaChangeEvent): void {
     const dedupeKey = `meta:${ev.taskId}:${ev.sessionId}:${next}`;
     if (!shouldSend(dedupeKey)) return;
 
-    // Coordinator completion gets the rich summary treatment — instead
-    // of "✅ coordinator completed" + a separate stream of chat
-    // fragments, send ONE consolidated message containing the verdict
-    // and summary.md body. Falls back to the bland message only when
-    // summary.md is missing AND status is `failed` (the coordinator
-    // crashed before writing). Missing summary on `done` is suppressed
-    // entirely because the deferred-flip + nudge path
-    // (`coordinatorNudge` + `runLifecycle.succeedRun`) is mid-flight —
-    // a second turn will resume the coordinator and a real summary
-    // will land soon. Pinging "completed" now would mislead the
-    // operator into thinking the task is shippable when it isn't.
     if (ev.run.role === "coordinator") {
       const summary = readSummaryMd(ev.taskId);
       if (summary) {
-        // Task 6: fold the aggregated gate status (verify / claim /
-        // style / semantic / confidence, latest-attempt-per-chain) into
-        // the same Ready-for-review ping so the operator sees red/green
-        // without opening the UI. Best-effort — a missing/corrupt
-        // meta.json degrades to no gate line, never blocks the message.
         const taskMeta = readMeta(join(SESSIONS_DIR, ev.taskId));
         const gateStatus: GateStatus | undefined = taskMeta ? computeGateStatus(taskMeta) : undefined;
         void sendTelegram(renderCoordinatorSummaryMessage({
@@ -365,8 +201,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
           status: next,
           gateStatus,
         }));
-        // Task 9: web-push fan-out beside the coordinator ready-for-review
-        // (and blocked/failed/etc) summary ping.
         const firstLine = (summary.split(/\r?\n/)[0] ?? "").trim();
         const { label } =
           next === "failed"
@@ -380,11 +214,8 @@ function onMetaChange(ev: MetaChangeEvent): void {
         return;
       }
       if (next === "done") {
-        // Premature exit — let the nudge cycle bring it back.
         return;
       }
-      // Fall through to bland "⚠️ coordinator failed" for failures
-      // with no summary on disk — the operator needs to know.
     }
 
     const role = escapeMarkdownV2(ev.run.role);
@@ -399,8 +230,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
     void sendTelegram(text);
     return;
   }
-  // User-initiated section transitions: UI tick the complete checkbox,
-  // or move TODO ↔ DOING / BLOCKED via the kanban board / API.
   if (ev.kind === "task-section" && ev.nextSection) {
     if (!shouldNotifySection(level, ev.prevSection, ev.nextSection)) return;
     const dedupeKey = `task-section:${ev.taskId}:${ev.nextSection}:${ev.taskChecked}`;
@@ -416,12 +245,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
       `task \`${taskId}\` — ${title}` +
       renderTaskLink(ev.taskId);
     void sendTelegram(text);
-    // Task 9: web-push fan-out for the "needs your attention" case
-    // specifically — BLOCKED. DONE / Started already have their own
-    // affordances in the UI (checkbox, kanban), so a push there would
-    // just be noise; a task going BLOCKED is the one section move that
-    // means "something needs a human now", matching what Telegram's
-    // `minimal` level already singles out.
     if (ev.nextSection === SECTION_BLOCKED) {
       notifyPush({
         title: `🔴 Blocked — ${ev.taskId}`,
@@ -431,8 +254,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
     }
     return;
   }
-  // Intent & Planning Gate: a plan just landed in awaiting-approval —
-  // ping the operator so they know to /plan · /approve · /replan.
   if (ev.kind === "intake-awaiting-approval") {
     if (!shouldNotifyIntakeAwaitingApproval(level)) return;
     const dedupeKey = `intake-awaiting:${ev.taskId}`;
@@ -443,7 +264,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
         taskTitle: ev.taskTitle ?? "",
       }) + renderTaskLink(ev.taskId);
     void sendTelegram(text);
-    // Task 9: web-push fan-out beside the plan-awaiting-approval ping.
     notifyPush({
       title: `📋 Plan ready for review — ${ev.taskId}`,
       body: (ev.taskTitle ?? "").slice(0, 200) || "(untitled)",
@@ -453,14 +273,6 @@ function onMetaChange(ev: MetaChangeEvent): void {
   }
 }
 
-/**
- * Read `sessions/<taskId>/summary.md` and return its trimmed content,
- * or `null` if the file is missing / empty / unreadable. The coordinator
- * is contracted to write this file on completion (per
- * `prompts/coordinator-playbook.md` §5); when it lands we use it as the
- * canonical Telegram message body so the operator gets the actual
- * shipping summary instead of an opaque "✅ completed" ping.
- */
 export function readSummaryMd(taskId: string): string | null {
   const path = join(SESSIONS_DIR, taskId, "summary.md");
   if (!existsSync(path)) return null;
@@ -472,13 +284,6 @@ export function readSummaryMd(taskId: string): string | null {
   }
 }
 
-/**
- * Classify the verdict from the first line of summary.md. The four
- * verdicts coordinators are contracted to emit are the canonical set
- * (per coordinator-playbook §5 / `forwardChatImportantPatterns`); anything
- * else falls back to a neutral icon so an off-script summary still gets
- * delivered. Returns the icon + a human label for the header.
- */
 export function classifyVerdict(firstLine: string): { icon: string; label: string } {
   const upper = firstLine.toUpperCase();
   if (upper.includes("READY FOR REVIEW")) {
@@ -496,22 +301,10 @@ export function classifyVerdict(firstLine: string): { icon: string; label: strin
   return { icon: "📌", label: "Summary" };
 }
 
-/**
- * Compose the consolidated coordinator-done Telegram message: header
- * with verdict icon + label + task id, then the summary body (escaped
- * for MarkdownV2), capped at `MAX_TEXT - reserved` so the trailing
- * "Open in bridge" link always lands cleanly. Failure-status `failed`
- * with a summary present is rare (the coordinator usually doesn't get
- * to write summary on a crash), but if it happens we honor the file —
- * the operator gets the model's best-effort context.
- */
 export function renderCoordinatorSummaryMessage(args: {
   taskId: string;
   summary: string;
   status: "done" | "failed";
-  /** Task 6: aggregated gate status, when the caller has it. Optional —
-   *  omitted entirely (no "Gates:" line) when the caller couldn't read
-   *  meta.json, and skipped when no gates were configured. */
   gateStatus?: GateStatus;
 }): string {
   const lines = args.summary.split(/\r?\n/);
@@ -525,17 +318,9 @@ export function renderCoordinatorSummaryMessage(args: {
   const headerLine = `${icon} *${escapeMarkdownV2(label)}* — task \`${taskId}\``;
   const link = renderTaskLink(args.taskId);
 
-  // Task 6: gate line is composed BEFORE the body cap so its length can
-  // be included in the reserved budget — otherwise a max-length body plus
-  // the appended gate block could push the trailing link past the
-  // truncation cliff in `sendViaBot`.
   const gateLine = args.gateStatus ? renderGateStatusLine(args.gateStatus) : "";
   const gateBlock = gateLine ? `\n\n${escapeMarkdownV2(gateLine)}` : "";
 
-  // Reserve enough room for header + gate line + link + ellipsis so a
-  // long summary doesn't push the link off the truncation cliff in
-  // `sendViaBot`. 600 chars is a generous upper bound covering the
-  // worst-case escaped link URL + header.
   const reserved = headerLine.length + gateBlock.length + link.length + 600;
   const bodyCap = Math.max(500, MAX_TEXT - reserved);
   const body = args.summary.length > bodyCap
@@ -546,27 +331,10 @@ export function renderCoordinatorSummaryMessage(args: {
   return `${headerLine}\n\n${escapedBody}${gateBlock}${link}`;
 }
 
-/**
- * Decide whether an `intake-awaiting-approval` event should ping
- * Telegram. Per the brief: send at `normal`+ (i.e. everything except
- * `minimal` — a plan stuck waiting for a human is exactly the kind of
- * "needs your attention" event `minimal` is meant to still surface via
- * `BLOCKED`-style section moves, but the gate doesn't move the task's
- * *section*, so we gate it on notificationLevel directly instead).
- */
 function shouldNotifyIntakeAwaitingApproval(level: TelegramNotificationLevel): boolean {
   return level !== "minimal";
 }
 
-/**
- * Render the "plan ready for review" ping sent when a task's intake
- * transitions into `awaiting-approval` (see
- * `planGateLifecycle.resolvePlanGateAfterPlanner` /
- * `emitIntakeAwaitingApproval`). The three commands are wrapped in
- * backticks (MarkdownV2 code spans) so the task id's underscores and
- * the literal `<note>` placeholder don't need full reserved-char
- * escaping — only `` ` `` / `\` matter inside a code span.
- */
 export function renderPlanAwaitingApprovalMessage(args: {
   taskId: string;
   taskTitle: string;
@@ -579,19 +347,6 @@ export function renderPlanAwaitingApprovalMessage(args: {
   );
 }
 
-/**
- * Task 10: render the "new device login pending" ping. Fires when
- * `libs/loginApprovals.createPendingLogin` creates an entry — i.e. a
- * NEW device supplied valid credentials but ≥ 1 trusted device already
- * exists, so the login route parked it instead of signing a cookie
- * outright (see that file's header comment for the full flow).
- *
- * Security note: approving via `/approvelogin` below is EQUIVALENT to
- * an existing trusted device clicking Approve in the web UI's modal —
- * the Telegram chat-id allowlist (`telegramCommands.handleUpdate`) is
- * the ONLY auth boundary here, same as `/allow` / `/deny` for tool
- * permissions and `/approve` for the plan gate.
- */
 export function renderPendingLoginMessage(entry: PendingLogin): string {
   const ua = escapeMarkdownV2(entry.userAgent.slice(0, 120));
   const ip = escapeMarkdownV2(entry.remoteIp);
@@ -599,12 +354,6 @@ export function renderPendingLoginMessage(entry: PendingLogin): string {
   return `🔐 New device login pending: ${ua} from \`${ip}\` — \`/approvelogin ${prefix}\``;
 }
 
-/**
- * Same "normal+" gating as `shouldNotifyIntakeAwaitingApproval` — a
- * device asking to be trusted is exactly the kind of "needs your
- * attention soon" event that should reach the operator at every level
- * except `minimal`.
- */
 function shouldNotifyPendingLogin(level: TelegramNotificationLevel): boolean {
   return level !== "minimal";
 }
@@ -615,7 +364,6 @@ function onPendingLogin(entry: PendingLogin): void {
   const dedupeKey = `login-pending:${entry.id}`;
   if (!shouldSend(dedupeKey)) return;
   void sendTelegram(renderPendingLoginMessage(entry));
-  // Task 9-style web-push fan-out beside the Telegram ping.
   notifyPush({
     title: "🔐 New device login pending",
     body: `${entry.userAgent.slice(0, 120)} from ${entry.remoteIp}`,
@@ -645,18 +393,6 @@ function sectionVerb(
   return `Section: ${next}`;
 }
 
-/**
- * Per-`(session, tool)` coalescing window. The first request wakes the
- * operator; follow-ups within `PERM_COALESCE_MS` are silently absorbed
- * because the operator only needs ONE prompt per "session X wants tool
- * Y" pattern — they'll see the rest in the bridge UI.
- *
- * In `verbose` mode we skip the coalescer entirely so debugging the
- * permission flow itself still gets a per-request signal.
- */
-// Stashed on globalThis so a dev HMR reload doesn't reset the window and
-// resume pinging Telegram once per request until it re-elapses (every
-// other stateful map in this layer follows the same pattern).
 const GPC = globalThis as unknown as { __bridgePermCoalesce?: Map<string, number> };
 const permCoalesce: Map<string, number> = GPC.__bridgePermCoalesce ?? new Map<string, number>();
 GPC.__bridgePermCoalesce = permCoalesce;
@@ -672,9 +408,6 @@ function shouldCoalescePermission(
   const last = permCoalesce.get(key) ?? 0;
   if (now - last < PERM_COALESCE_MS) return true;
   permCoalesce.set(key, now);
-  // Bound the map: drop entries older than 4× the window. They can't
-  // coalesce future requests anyway and unbounded growth in a long-
-  // running bridge eventually shows up in heap snapshots.
   if (permCoalesce.size > 256) {
     const cutoff = now - PERM_COALESCE_MS * 4;
     for (const [k, t] of permCoalesce) {
@@ -691,21 +424,12 @@ function onPermission(req: PendingRequest): void {
   if (!shouldSend(dedupeKey)) return;
   const tool = escapeMarkdownV2(req.tool);
   const sid = escapeMarkdownV2(req.sessionId.slice(0, 8));
-  // Surface the first 8 chars of the requestId so the operator can
-  // reply with `/allow <prefix>` or `/deny <prefix>` from chat — the
-  // command handler accepts any prefix ≥6 chars and looks up the full
-  // request across all pending. Backticks let mobile Telegram tap-to-
-  // copy the prefix without selecting surrounding text.
   const reqPrefix = escapeMarkdownV2(req.requestId.slice(0, 8));
   const text =
     `🔐 *Permission needed*\n` +
     `tool \`${tool}\` · session \`${sid}\`\n` +
     `req \`${reqPrefix}\` — reply \`/allow ${reqPrefix}\` or \`/deny ${reqPrefix}\``;
   void sendTelegram(text);
-  // Task 9: web-push fan-out beside the permission-pending ping. No
-  // task link — a permission request is tied to a session, not a task
-  // (`PendingRequest` carries no taskId), so the notification just
-  // surfaces enough to jog the operator into opening the bridge.
   notifyPush({
     title: "🔐 Permission needed",
     body: `tool ${req.tool} · session ${req.sessionId.slice(0, 8)}`,
@@ -714,28 +438,12 @@ function onPermission(req: PendingRequest): void {
 
 export function ensureTelegramNotifier(): void {
   if (state.installed) return;
-  // Whether either Telegram channel is configured only gates the
-  // Telegram-specific pieces below (the inbound command poller / user-
-  // client listener). The three lifecycle subscriptions install
-  // unconditionally: their handlers (`onMetaChange` / `onPermission` /
-  // `onPendingLogin`) are also the ONLY place the Task 9 web-push
-  // fan-out (`notifyPush`) fires from, and `sendTelegram` itself
-  // already no-ops cheaply when neither channel is configured — so a
-  // push-only operator (no Telegram bot/user-client credentials, but
-  // ≥1 subscribed browser) still needs these subscriptions live to get
-  // notified at all. Early-returning here used to skip installing them
-  // entirely, silencing push for every push-only bridge.
   const hasBot = envConfig() !== null;
   const hasUser = isUserClientConfigured();
   state.installed = true;
   state.unsubscribers.push(subscribeMetaAll(onMetaChange));
   state.unsubscribers.push(subscribeAllPermissions(onPermission));
   state.unsubscribers.push(subscribeLoginApprovals(onPendingLogin));
-  // Inbound side: long-poll Telegram for slash commands so the operator
-  // can run `/tasks`, `/done <id>`, etc. from their phone. The poller
-  // checks for bot creds itself and is a no-op when only the
-  // user-client is configured; user-client inbound is wired separately
-  // below.
   if (hasBot) startTelegramCommandPoller();
   if (hasUser) {
     void startTelegramUserCommandListener().catch((err) => {
@@ -745,11 +453,6 @@ export function ensureTelegramNotifier(): void {
       );
     });
   }
-  // Chat forwarder mirrors assistant prose from spawned sessions.
-  // Self-gates on `forwardChat` per-event, so installing it here is
-  // safe even when the operator hasn't enabled forwarding yet — flipping
-  // the setting takes effect on the next `spawned` event without a
-  // teardown / reinstall cycle.
   ensureTelegramChatForwarder();
   console.info(
     `[telegram] notifier installed (bot=${hasBot}, user=${hasUser})`,
@@ -758,7 +461,7 @@ export function ensureTelegramNotifier(): void {
 
 export function teardownTelegramNotifier(): void {
   for (const fn of state.unsubscribers.splice(0)) {
-    try { fn(); } catch { /* ignore */ }
+    try { fn(); } catch { }
   }
   stopTelegramCommandPoller();
   void stopTelegramUserCommandListener();
@@ -766,12 +469,6 @@ export function teardownTelegramNotifier(): void {
   state.installed = false;
 }
 
-/**
- * Pull the human-readable `description` field out of a Telegram error
- * response (`{"ok":false,"error_code":403,"description":"Forbidden: …"}`),
- * falling back to the raw body when the response wasn't JSON. Caps the
- * result so a runaway error message can't blow out a toast.
- */
 function extractTelegramError(body: string): string {
   if (!body) return "(empty body)";
   try {
@@ -780,15 +477,10 @@ function extractTelegramError(body: string): string {
       return parsed.description.trim().slice(0, 200);
     }
   } catch {
-    /* not JSON — fall through to raw */
   }
   return body.slice(0, 200);
 }
 
-/**
- * Surface the configured/health state to a `/api/telegram/test` route so
- * the user can verify their bot token + chat id without grepping logs.
- */
 export async function pingTelegramTest(): Promise<{ ok: boolean; reason?: string }> {
   const cfg = envConfig();
   if (!cfg) {

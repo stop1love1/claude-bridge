@@ -8,13 +8,6 @@ import { BRIDGE_ROOT } from "@/libs/paths";
 
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/detect/scan-roots
- *
- * Returns the operator's saved scan roots plus the implicit default
- * (`dirname(BRIDGE_ROOT)`) so the dialog can pre-fill its textarea
- * even when nothing has been persisted yet.
- */
 export function GET() {
   const saved = getManifestDetectScanRoots();
   return NextResponse.json({
@@ -23,13 +16,6 @@ export function GET() {
   });
 }
 
-/**
- * PUT /api/detect/scan-roots
- *
- * Body: `{ roots: string[] }`. Persists into
- * `bridge.json.detect.scanRoots`. An empty array clears the field so
- * `bridge.json` stays terse for default-config operators.
- */
 export async function PUT(req: NextRequest) {
   let body: { roots?: unknown };
   try {

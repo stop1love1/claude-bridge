@@ -10,27 +10,9 @@ import { checkRateLimit } from "@/libs/rateLimit";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Telegram test sends one real message per call via the user-client's
- * outbound MTProto connection. 5/min/IP keeps an authenticated operator
- * from spamming their channel by hammering the "Test" button, and stops
- * a hostile authenticated context from racking up provider cost.
- */
 const TELEGRAM_TEST_WINDOW_MS = 60 * 1000;
 const TELEGRAM_TEST_LIMIT_PER_IP = 5;
 
-/**
- * POST /api/telegram/user/test
- *
- * Verifies the user-client's StringSession is alive and the configured
- * `targetChatId` is reachable by:
- *   1. Connecting (lazy — first call only)
- *   2. Calling `getMe` to confirm the session is authorized
- *   3. Sending a one-off "✅ Bridge user-client OK" message
- *
- * Returns 200 with the resolved user info on success, 503 with a
- * structured `reason` on any failure so the UI can toast it.
- */
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req.headers);
   const denied = checkRateLimit("telegram:test:ip", ip, TELEGRAM_TEST_LIMIT_PER_IP, TELEGRAM_TEST_WINDOW_MS);

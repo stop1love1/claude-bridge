@@ -1,19 +1,3 @@
-/**
- * Prompt-size auditor.
- *
- *   bun scripts/audit-prompts.ts                # synthetic samples
- *   bun scripts/audit-prompts.ts --task t_…     # real task from sessions/
- *   bun scripts/audit-prompts.ts --json         # machine-readable output
- *
- * Renders the coordinator template + a representative child prompt the
- * way the bridge actually does, then prints byte size, approximate
- * token count (chars/4 — a coarse but consistent yardstick), and a
- * per-section breakdown so it's obvious where the bloat sits.
- *
- * Use it before/after touching `prompts/coordinator.md` or
- * `libs/childPrompt.ts` to make sure changes shrink (not grow) the
- * spawn cost. CI can wire it up with `--json` and a regression check.
- */
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -24,7 +8,6 @@ import type { RepoProfile } from "../libs/repoProfile";
 
 const REPO_ROOT = (() => {
   const here = fileURLToPath(new URL(".", import.meta.url));
-  // scripts/ lives at the repo root; this file is scripts/audit-prompts.ts
   return join(here, "..");
 })();
 
@@ -71,11 +54,6 @@ function approxTokens(chars: number): number {
   return Math.round(chars / APPROX_CHARS_PER_TOKEN);
 }
 
-/**
- * Split a prompt by `## Header` sections so the auditor can attribute
- * bytes to each labeled chunk. Anything before the first `## ` lands
- * in a synthetic `<preamble>` row so the totals balance.
- */
 function sectionize(text: string): SectionStat[] {
   const lines = text.split("\n");
   const sections: SectionStat[] = [];
@@ -113,14 +91,6 @@ function statFor(label: string, prompt: string): PromptStat {
   };
 }
 
-/**
- * Render the coordinator kernel the same way `libs/coordinator.ts`
- * does the substitution. We don't splice the `## Detected scope`
- * block here (that requires the detect layer + bridge.json access);
- * the audit deliberately measures the *static* template since that's
- * the cost paid on every spawn. Add `--with-scope` later if it
- * becomes useful.
- */
 function renderCoordinatorTemplate(args: {
   taskId: string;
   taskTitle: string;
@@ -142,13 +112,6 @@ function renderCoordinatorTemplate(args: {
     .replaceAll("{{TASK_BODY}}", args.taskBody);
 }
 
-/**
- * Build a representative child prompt. By default uses synthetic
- * task data with all opt-in sections enabled at modest sizes (so the
- * audit measures the realistic upper bound of what gets sent to a
- * spawned child). When `--task` is provided we read the real task's
- * meta.json + bridge state files for a closer-to-production figure.
- */
 function buildSampleChildPrompt(taskId: string | null): string {
   const sample = {
     taskTitle: taskId

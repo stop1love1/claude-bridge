@@ -32,31 +32,15 @@ type Mode = "config" | "scanning" | "review" | "adding";
 interface AutoDetectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Fires after the bulk-add succeeds so the parent page can refetch. */
   onAdded?: () => void;
 }
 
 interface CandidateRow {
   candidate: DetectCandidate;
   selected: boolean;
-  /** User-edited registration name. Defaults to `candidate.name`. */
   editedName: string;
 }
 
-/**
- * Multi-step modal driving the auto-detect flow:
- *
- *   1. config   — pick scan roots (textarea, one per line) + recursion depth
- *   2. scanning — SSE stream from `/api/apps/auto-detect/stream`, candidates
- *                 stream in live with a running counter
- *   3. review   — checklist of detected repos with editable names; the
- *                 operator picks which to register
- *   4. adding   — bulk POST to `/api/apps/bulk`; toasts the result and
- *                 kicks Claude description scans in the background
- *
- * The operator's scan roots are persisted to `bridge.json.detect.scanRoots`
- * on confirm so the next session doesn't ask again.
- */
 export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDialogProps) {
   const [mode, setMode] = useState<Mode>("config");
   const [rootsText, setRootsText] = useState("");
@@ -71,8 +55,6 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
   const esRef = useRef<EventSource | null>(null);
   const toast = useToast();
 
-  // Hydrate saved roots when dialog opens; pre-fill the textarea so the
-  // operator's last roster shows up instead of a blank slate.
   useEffect(() => {
     if (!open) return;
     void api
@@ -83,15 +65,9 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
         setRootsText(r.roots.length > 0 ? r.roots.join("\n") : "");
       })
       .catch(() => {
-        /* leave the textarea empty so placeholder shows */
       });
   }, [open]);
 
-  // Tear everything down when the dialog closes — close the EventSource
-  // explicitly because the browser holds the TCP connection open
-  // otherwise. setState calls are deferred to a microtask so the
-  // react-hooks/set-state-in-effect lint rule stays happy (project
-  // convention — see app/apps/page.tsx for the same pattern).
   useEffect(() => {
     if (open) return;
     esRef.current?.close();
@@ -106,10 +82,6 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
     });
   }, [open]);
 
-  // Mount-lifetime cleanup: if the user navigates away mid-scan the
-  // close-on-!open effect doesn't run, so the EventSource lingers and
-  // keeps the TCP connection open. Mirror the close here so the
-  // connection is always reaped.
   useEffect(() => () => {
     esRef.current?.close();
     esRef.current = null;
@@ -168,16 +140,10 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
         setMode("review");
         es.close();
       }
-      // `skipped` events are dropped — they're noise for the UI; we
-      // could surface them as a "12 folders skipped" line in review
-      // mode, but in practice operators don't care about non-repos.
     };
     es.onerror = () => {
       es.close();
       esRef.current = null;
-      // The server closes the stream after `done`, which trips this
-      // handler too. Distinguish by `sawDone`: if we got a done event,
-      // the review mode is already set; otherwise it's a real failure.
       if (!sawDone) {
         setErrorMsg("Connection to scanner closed unexpectedly. Try again.");
         setMode("config");
@@ -226,7 +192,6 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
       toast("info", "Pick at least one app to add");
       return;
     }
-    // Reject obviously-bad name edits before the round-trip.
     const badRow = selectedRows.find(
       (r) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(r.editedName),
     );
@@ -239,8 +204,6 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
     }
     setMode("adding");
     try {
-      // Persist the operator's scan roots if changed, so the next time
-      // the dialog opens they don't have to retype.
       const cleanedRoots = rootsText
         .split("\n")
         .map((s) => s.trim())
@@ -251,7 +214,6 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
         try {
           await api.updateScanRoots(cleanedRoots);
         } catch {
-          /* not fatal — they'll just retype next time */
         }
       }
 
@@ -280,9 +242,6 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
             .join(", ")}`,
         );
       }
-      // Description scans run in the background — same pattern as the
-      // single-app Add flow. Failures are silent; the heuristic
-      // description from auto-detect remains.
       void Promise.allSettled(
         addedNames.map((n) => api.scanApp(n).catch(() => null)),
       );
@@ -382,7 +341,6 @@ export function AutoDetectDialog({ open, onOpenChange, onAdded }: AutoDetectDial
   );
 }
 
-/* ─────────────────────────── steps ─────────────────────────── */
 
 interface ConfigStepProps {
   rootsText: string;

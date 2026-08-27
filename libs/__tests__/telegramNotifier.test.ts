@@ -1,31 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * `ensureTelegramNotifier` used to early-return before installing ANY
- * of its event subscriptions (`subscribeMetaAll` / `subscribeAllPermissions`
- * / `subscribeLoginApprovals`) when neither Telegram channel was
- * configured. Those same subscriptions are what drive the Task 9
- * web-push fan-out (`notifyPush` calls live inside the subscribed
- * handlers) — so a push-only operator (no Telegram bot/user-client
- * credentials, but a browser subscribed via `/api/push/subscribe`)
- * never got notified of anything. Fix: install the subscriptions
- * unconditionally and gate only the Telegram *sends* on credentials.
- *
- * This test proves the fix by configuring zero Telegram credentials,
- * calling `ensureTelegramNotifier()`, then firing a real event through
- * `loginApprovals.createPendingLogin` (same trigger used by
- * `telegramLoginCommands.test.ts`'s notifier-hook tests) and asserting
- * `sendPushToAll` — mocked here — still gets called.
- */
 
 const sendPushToAll = vi.fn().mockResolvedValue(undefined);
 vi.mock("../webPush", () => ({
   sendPushToAll: (...args: unknown[]) => sendPushToAll(...args),
 }));
 
-// Force both Telegram channels to read as "unconfigured" regardless of
-// whatever the real bridge.json / env on this machine happens to have,
-// so the test is deterministic wherever it runs.
 vi.mock("../apps", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../apps")>();
   return {
@@ -91,7 +71,6 @@ describe("ensureTelegramNotifier — push fan-out without Telegram credentials",
       userAgent: "Mozilla/5.0",
     });
 
-    // Double-install would double-subscribe and fire the push twice.
     expect(sendPushToAll).toHaveBeenCalledTimes(1);
   });
 });

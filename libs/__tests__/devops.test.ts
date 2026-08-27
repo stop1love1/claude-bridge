@@ -15,7 +15,6 @@ describe("parseRemoteHost", () => {
   it("extracts host from ssh URLs", () => {
     expect(parseRemoteHost("git@github.com:owner/repo.git")).toBe("github.com");
     expect(parseRemoteHost("git@gitlab.example.com:owner/repo.git")).toBe("gitlab.example.com");
-    // Custom user prefix.
     expect(parseRemoteHost("deploy@host.local:org/repo.git")).toBe("host.local");
   });
 
@@ -47,12 +46,9 @@ describe("classifyHost", () => {
   });
 
   it("does not match hostnames that merely contain `gitlab` as a substring", () => {
-    // Regression: a naive `host.includes("gitlab")` would route any of
-    // these to glab and then fail because the protocol disagrees.
     expect(classifyHost("notgitlab.internal")).toBe("unknown");
     expect(classifyHost("gitlab-archive.com")).toBe("unknown");
     expect(classifyHost("mygitlab.example.org")).toBe("unknown");
-    // But a real label like `gitlab.acme.io` still matches.
     expect(classifyHost("gitlab.acme.io")).toBe("gitlab");
     expect(classifyHost("internal.gitlab.acme.io")).toBe("gitlab");
   });

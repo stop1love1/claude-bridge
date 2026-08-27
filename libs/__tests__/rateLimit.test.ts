@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * Each test resets the singleton store via `vi.resetModules()` so a
- * leak from one test never silently raises another's bucket counter.
- */
 
 beforeEach(() => {
-  // Drop the in-memory bucket map between tests by deleting the
   // global singleton stash. Cheaper than a full module reset.
   delete (globalThis as { __bridgeRateLimit?: unknown }).__bridgeRateLimit;
   vi.useFakeTimers();
@@ -47,9 +42,7 @@ describe("rateLimit fixed-window behavior", () => {
     const { rateLimit } = await import("../rateLimit");
     rateLimit("a", "k", 1, 1000);
     expect(rateLimit("a", "k", 1, 1000).ok).toBe(false);
-    // Different key on same bucket — fresh count.
     expect(rateLimit("a", "other", 1, 1000).ok).toBe(true);
-    // Different bucket on same key — fresh count.
     expect(rateLimit("b", "k", 1, 1000).ok).toBe(true);
   });
 });
@@ -69,7 +62,6 @@ describe("rateLimitClear", () => {
     rateLimit("a", "k2", 1, 1000);
     rateLimitClear("a", "k1");
     expect(rateLimit("a", "k1", 1, 1000).ok).toBe(true);
-    // k2 was untouched.
     expect(rateLimit("a", "k2", 1, 1000).ok).toBe(false);
   });
 });
@@ -93,7 +85,6 @@ describe("checkRateLimit", () => {
 
   it("Retry-After is at least 1 second even when window has milliseconds left", async () => {
     const { checkRateLimit } = await import("../rateLimit");
-    // Tiny window and limit — ceiling math must still produce ≥1.
     checkRateLimit("t", "ip", 1, 50);
     const denial = checkRateLimit("t", "ip", 1, 50);
     expect(denial).not.toBeNull();

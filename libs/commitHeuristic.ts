@@ -1,43 +1,18 @@
-/**
- * Shared change-collection + heuristic commit-message generator.
- *
- * Both commit-suggest routes (`/api/apps/<name>/commit/suggest` and
- * `/api/tasks/<id>/runs/<sid>/commit/suggest`) used to carry their own
- * byte-identical copies of `parseNameStatus` / `deriveScope` / `classify`
- * / `buildMessage` plus the three-`git`-command row-collection block.
- * That duplication drifted and made improving the heuristic a two-edit
- * chore. This module is the single source of truth, and — more
- * importantly — the one place that also collects the *diff text* the LLM
- * generator needs to write a SEMANTIC message instead of guessing from
- * filenames.
- */
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileP = promisify(execFile);
 
-/** Default per-git-command timeout for the (fast, local) collection. */
 const GIT_TIMEOUT_MS = 5_000;
-/**
- * Cap on the unified diff we feed the LLM. Big enough to cover a normal
- * commit's hunks, small enough to keep the prompt cheap. The model is
- * told it's truncated and may read more via git if it needs to.
- */
 const DIFF_CAP_BYTES = 16 * 1024;
 
 export interface NameStatusLine {
   status: "A" | "D" | "M" | "R" | "T" | "C";
   path: string;
-  /** Pre-rename path when status === "R". */
   oldPath?: string;
 }
 
-/**
- * Parse `git diff --name-status -M`. Format per line:
- *   `<S>\t<path>` for plain statuses
- *   `R<sim>\t<oldPath>\t<newPath>` for renames (`R100`, `R087`, …)
- */
 export function parseNameStatus(out: string): NameStatusLine[] {
   const rows: NameStatusLine[] = [];
   for (const ln of out.split("\n")) {
@@ -64,11 +39,6 @@ const GENERIC_TOPS = new Set([
   "packages", "modules", "module",
 ]);
 
-/**
- * Deepest shared non-generic directory across the changed paths. Skips
- * generic top-levels (`src/`, `app/`, …) so a scope reads like a feature
- * (`auth`, `finance`) rather than a layout folder.
- */
 export function deriveScope(paths: string[]): string {
   if (paths.length === 0) return "";
   const splits = paths.map((p) => p.split("/"));
@@ -113,12 +83,6 @@ function classify(rows: NameStatusLine[]): { type: string; verb: string } {
   return { type, verb };
 }
 
-/**
- * Last-resort, no-LLM message. Intentionally a file-shaped summary — the
- * UI labels it `source: "heuristic"` so the operator knows to refine it.
- * The LLM path is what produces a semantic message; this only fires when
- * claude is unavailable / times out.
- */
 export function buildHeuristicMessage(rows: NameStatusLine[]): string {
   if (rows.length === 0) return "chore: no changes";
   const scope = deriveScope(rows.map((r) => r.path));
@@ -145,7 +109,6 @@ export function buildHeuristicMessage(rows: NameStatusLine[]): string {
   return `${title}\n\n${bullets.join("\n")}`;
 }
 
-/** Render the merged rows as a compact `git status`-style summary. */
 function renderNameStatus(rows: NameStatusLine[]): string {
   return rows
     .map((r) => {
@@ -162,13 +125,9 @@ function renderNameStatus(rows: NameStatusLine[]): string {
 }
 
 export interface CollectedChanges {
-  /** Merged, de-duplicated changed files (HEAD diff + working tree + untracked). */
   rows: NameStatusLine[];
-  /** Compact `git status`-style summary of `rows` (for the LLM prompt). */
   nameStatus: string;
-  /** Truncated unified diff of tracked changes (for the LLM prompt). */
   diff: string;
-  /** True when `diff` was cut at `DIFF_CAP_BYTES`. */
   diffTruncated: boolean;
 }
 
@@ -179,18 +138,6 @@ async function git(cwd: string, args: string[], timeoutMs: number): Promise<stri
   return res.stdout.toString();
 }
 
-/**
- * Collect everything `git add -A` would stage — committed-since-HEAD
- * edits, uncommitted working-tree edits, and untracked files — merged
- * and de-duplicated by path. Also returns a truncated unified diff and a
- * compact name-status summary for the LLM generator.
- *
- * The three name-status commands are required (the caller treats a
- * throw as a 500). The unified diff is best-effort: a repo with no HEAD
- * (no commits yet) makes `git diff HEAD` fail, so we degrade to an empty
- * diff rather than aborting — the name-status summary still lets the LLM
- * write something useful.
- */
 export async function collectChanges(
   cwd: string,
   timeoutMs: number = GIT_TIMEOUT_MS,
@@ -218,10 +165,6 @@ export async function collectChanges(
   let diff = "";
   let diffTruncated = false;
   if (rows.length > 0) {
-    // Tracked changes vs HEAD — the hunks the LLM reads to describe the
-    // behavior delta. Untracked file *content* isn't here (it's not in
-    // HEAD), but those files are named in `nameStatus`, and the model
-    // can `cat` them via Bash if it needs the body.
     const raw = await git(cwd, ["diff", "-M", "HEAD"], timeoutMs).catch(() => "");
     if (raw.length > DIFF_CAP_BYTES) {
       diff = raw.slice(0, DIFF_CAP_BYTES);

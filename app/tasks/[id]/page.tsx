@@ -32,28 +32,15 @@ function TaskPageInner() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loading, setLoading] = useState(true);
-  // Per-child live status (Thinking… / Running: <tool>) populated by the
-  // per-task SSE `child-status` event. Plain useState<Map>: each SSE
-  // event swaps in a fresh Map identity so consumers re-render via
-  // normal React reactivity. The functional updater closure keeps the
-  // SSE handler stable across renders.
   const [liveStatusBySession, setLiveStatusBySession] = useState<
     Map<string, { kind: string; label?: string }>
   >(new Map());
-  // Mobile (< lg) shows ONE of TaskDetail / SessionLog at full height
-  // via a tab bar; lg+ keeps the side-by-side split. The lazy initializer
-  // reads from the same `useSearchParams()` snapshot the rest of the
-  // page already consumes — `window.location` access from a render path
-  // would crash any SSR/prerender pass that tries to evaluate the page.
   const [mobileTab, setMobileTab] = useState<"detail" | "chat">(() => {
     const urlTab = search.get("activeTab");
     if (urlTab === "detail" || urlTab === "chat") return urlTab;
     return search.get("sid") ? "chat" : "detail";
   });
 
-  // Active run is reconstructed from the URL (`?sid=…`) so reloading or
-  // sharing the URL keeps the same chat selected. It also cooperates
-  // with deep-links from /sessions which already set ?sid=… for us.
   const activeRun = useMemo<ActiveRun | null>(() => {
     const sid = search.get("sid");
     if (!sid || !meta?.runs?.length) return null;
@@ -68,9 +55,6 @@ function TaskPageInner() {
     };
   }, [search, meta, repos]);
 
-  /** List fetch (`task`) can lag `meta.json`. SSE updates `meta` only
-   *  (e.g. chat send re-opens a done task via `updateTask`); merge the
-   *  live header so Detail / toolbar match disk without a full reload. */
   const resolvedTask = useMemo((): Task | null => {
     if (!task) return null;
     if (!meta || meta.taskId !== task.id) return task;
@@ -115,13 +99,9 @@ function TaskPageInner() {
 
   useEffect(() => {
     api.repos().then(setRepos).catch(() => {});
-    // Microtask-defer the setState-bearing fetch — calling
-    // `refreshTask()` synchronously in an effect body trips
-    // `react-hooks/set-state-in-effect`.
     void Promise.resolve().then(refreshTask);
   }, [refreshTask]);
 
-  // Visibility-paused meta polling, mirrors the pattern in app/page.tsx.
   const [visible, setVisible] = useState(
     typeof document !== "undefined" ? document.visibilityState === "visible" : true,
   );
@@ -137,43 +117,28 @@ function TaskPageInner() {
       const m = await api.meta(id);
       setMeta(m);
     } catch {
-      /* 404 ok until meta.json exists */
     }
   }, [id]);
 
   useEffect(() => {
     if (!visible || !id) return;
-    // Initial fetch + a slow polling safety net (30s — was 5s). The SSE
-    // stream now ships the full Meta snapshot on every lifecycle event,
-    // so the polling loop only exists to recover from a dropped SSE
-    // connection (Next dev-server HMR can sever it). 30s is plenty for
-    // recovery and reduces idle HTTP chatter.
     void Promise.resolve().then(loadMeta);
-    // Also refresh the task itself (title/body/checked may have been
-    // edited in another tab while this one was hidden).
     void Promise.resolve().then(refreshTask);
     const h = setInterval(loadMeta, 30000);
     return () => clearInterval(h);
   }, [visible, id, loadMeta, refreshTask]);
 
-  // Lifecycle SSE: every server-side event piggybacks the full Meta
-  // snapshot via `payload.meta`, so we never need a follow-up
-  // /api/tasks/<id> round-trip — just patch state straight from the
-  // event payload. Wired through the shared `useEventSource` hook so
-  // the open/close + listener-attach lifecycle is consistent across
-  // the bridge's three SSE consumers (this page, SessionLog, and
-  // usePermissionQueue).
   const applyMetaFromEvent = useCallback((ev: MessageEvent) => {
     try {
       const data = JSON.parse(ev.data) as { meta?: Meta };
       if (data.meta) setMeta(data.meta);
-      else void loadMeta(); // legacy payload — fall back to refetch
-    } catch { /* ignore */ }
+      else void loadMeta();
+    } catch { }
   }, [loadMeta]);
   const applySnapshotFromEvent = useCallback((ev: MessageEvent) => {
     try {
       setMeta(JSON.parse(ev.data) as Meta);
-    } catch { /* ignore */ }
+    } catch { }
   }, []);
   const applyChildStatus = useCallback((ev: MessageEvent) => {
     try {
@@ -187,14 +152,12 @@ function TaskPageInner() {
         else next.set(data.sessionId, data.status);
         return next;
       });
-    } catch { /* ignore */ }
+    } catch { }
   }, []);
   const applyChildAlive = useCallback((ev: MessageEvent) => {
     try {
       const data = JSON.parse(ev.data) as { sessionId: string; alive: boolean };
       if (!data.alive) {
-        // Child exited — drop the live label so the row stops showing
-        // a stale "Running:…" tail.
         setLiveStatusBySession((prev) => {
           if (!prev.has(data.sessionId)) return prev;
           const next = new Map(prev);
@@ -202,7 +165,7 @@ function TaskPageInner() {
           return next;
         });
       }
-    } catch { /* ignore */ }
+    } catch { }
   }, []);
   const eventListeners = useMemo(
     () => ({
@@ -225,12 +188,6 @@ function TaskPageInner() {
     { listeners: eventListeners },
   );
 
-  // If no `?sid=` is in the URL yet, default to the coordinator's session
-  // by writing it to the URL — that opens the chat panel immediately AND
-  // means the selection survives a reload. Guarded by a ref so the
-  // 5-second meta poll, which produces a fresh `meta.runs` array on
-  // every tick even when the contents are identical, doesn't keep
-  // calling router.replace and polluting browser history.
   const autoSelectedRef = useRef(false);
   useEffect(() => {
     if (autoSelectedRef.current) return;
@@ -246,11 +203,6 @@ function TaskPageInner() {
     });
   }, [meta?.runs, repos, search, setActiveRun]);
 
-  // Sync the mobile tab to ?activeTab=. We deliberately don't include
-  // mobileTab in the deps — the effect should react to URL changes only,
-  // not to its own setState side-effect. The `prev !== nextTab` guard
-  // keeps React from queuing an identity-only update; the microtask
-  // defer satisfies the project's `react-hooks/set-state-in-effect` rule.
   useEffect(() => {
     const urlTab = search.get("activeTab");
     const nextTab: "detail" | "chat" = urlTab === "chat" ? "chat" : "detail";
@@ -298,10 +250,6 @@ function TaskPageInner() {
 
   const handleSelectRun = useCallback(
     (run: Run) => {
-      // Both the sid and activeTab updates land in one router.replace
-      // because separate calls would each rebuild params from the same
-      // stale `search` snapshot — the second call would overwrite the
-      // first's sid and the chat would stay on the old run.
       setMobileTab("chat");
       const params = new URLSearchParams(Array.from(search.entries()));
       params.set("sid", run.sessionId);
@@ -337,10 +285,6 @@ function TaskPageInner() {
       const tag = el.tagName;
       return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
     };
-    // Skip our Esc handler when a Radix overlay (Dialog / DropdownMenu /
-    // Popover / AlertDialog) is open — Radix handles Esc itself, and
-    // running our handler on top would dismiss the overlay AND
-    // navigate, losing the user's place.
     const overlayOpen = () =>
       typeof document !== "undefined" &&
       !!document.querySelector(
@@ -393,11 +337,7 @@ function TaskPageInner() {
     <div className="flex flex-col h-dvh overflow-hidden">
       <HeaderShell active="tasks" />
 
-      {/* Page sub-toolbar — breadcrumb + keyboard hints out of the global
-          header. truncate + min-w-0 keep long titles from breaking row
-          wrap on narrow viewports. The back arrow is a real button on
-          mobile (browser back can be unpredictable inside SPA history)
-          and degrades to a plain `/` separator on sm+. */}
+      {}
       <div className="shrink-0 px-3 py-2 border-b border-border bg-background flex items-center gap-2 min-w-0">
         <button
           type="button"
@@ -418,10 +358,7 @@ function TaskPageInner() {
         </kbd>
       </div>
 
-      {/* Mobile-only tab bar — picks which panel takes the full height
-          below. Hidden on md+ where both panels render side-by-side
-          (detail pane gets a constrained max-width so the chat keeps
-          breathing room on iPad-portrait widths). */}
+      {}
       <div className="md:hidden shrink-0 flex border-b border-border bg-card">
         <button
           type="button"
@@ -450,8 +387,7 @@ function TaskPageInner() {
       </div>
 
       <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
-        {/* Both panels stay mounted (display:none vs flex) so editor
-            state and scroll position survive a tab switch. */}
+        {}
         <div
           className={`flex-1 min-h-0 md:flex md:flex-1 md:min-w-0 md:max-w-md lg:max-w-2xl xl:max-w-3xl md:border-r border-border ${
             mobileTab === "detail" ? "flex" : "hidden"

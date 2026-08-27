@@ -1,21 +1,3 @@
-/**
- * LLM-driven detector. Shells out to `claude -p` with a structured
- * prompt that asks the model to return a single JSON object matching
- * the `DetectedScope` shape.
- *
- * Why `claude -p` (the CLI) and not the Anthropic SDK?
- *   1. Zero new dependency — the CLI is already a hard requirement
- *      for the bridge, and `libs/scanApp.ts` already shells out to it.
- *   2. Same auth path as everything else — operators don't have to
- *      provision a separate API key.
- *   3. Bypasses the OS-level keyring / session juggling the SDK would
- *      need on Windows.
- *
- * Failure modes (timeout, non-zero exit, malformed JSON) all resolve
- * to `null`. The caller (`libs/detect/index.ts`) uses that as the cue
- * to fall back to the heuristic detector — detection NEVER blocks
- * task creation, just degrades gracefully.
- */
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -28,10 +10,6 @@ const DETECT_TIMEOUT_MS = 60_000;
 const STDOUT_CAP_BYTES = 64 * 1024;
 const STDERR_CAP_BYTES = 8 * 1024;
 
-/**
- * Public entry. Returns `null` on any failure so the caller can fall
- * back to the heuristic impl with a clear signal.
- */
 export async function detectWithLLM(
   input: DetectInput,
 ): Promise<DetectedScope | null> {
@@ -45,16 +23,6 @@ export async function detectWithLLM(
   return parseLLMResponse(raw, input);
 }
 
-/**
- * Render the structured prompt the model gets. We give it:
- *   1. The task body + title verbatim
- *   2. The candidate repo list with profile summaries + capabilities
- *   3. A strict JSON schema to fill in
- *
- * Keep the prompt below ~8K tokens for cost — the bridge calls this
- * on EVERY task creation, and a runaway prompt becomes a tax on
- * task throughput.
- */
 function buildLLMPrompt(input: DetectInput): string {
   const profiles = input.profiles ?? {};
   const capabilities = input.capabilities ?? {};
@@ -134,10 +102,6 @@ function buildLLMPrompt(input: DetectInput): string {
   return lines.join("\n");
 }
 
-/**
- * Run `claude -p` with the prompt and return raw stdout, capped. Returns
- * null on any failure so the parser doesn't waste cycles on garbage.
- */
 function runClaude(prompt: string): Promise<string | null> {
   return new Promise<string | null>((resolveRun) => {
     let stdout = "";
@@ -197,11 +161,6 @@ function runClaude(prompt: string): Promise<string | null> {
   });
 }
 
-/**
- * Pull the JSON block out of the model's response and validate it
- * against the `DetectedScope` shape. Returns null on any structural
- * problem so the caller can fall back to heuristic.
- */
 function parseLLMResponse(
   raw: string,
   input: DetectInput,
@@ -239,7 +198,7 @@ function parseLLMResponse(
 
   const features = sanitizeStringList(obj.features);
   const entities = sanitizeStringList(obj.entities);
-  const files = sanitizeStringList(obj.files, 200); // longer cap for paths
+  const files = sanitizeStringList(obj.files, 200);
 
   const confidenceRaw = typeof obj.confidence === "string" ? obj.confidence.trim().toLowerCase() : "";
   const confidence: DetectedScope["confidence"] =
@@ -251,9 +210,6 @@ function parseLLMResponse(
     ? obj.reason.trim().slice(0, 400)
     : "llm: (no reason)";
 
-  // User pin override: if the user pinned a repo, force it to the top
-  // and switch source to "user-pinned" — even if the model didn't
-  // honor the directive.
   let finalRepos = repos;
   let source: DetectedScope["source"] = "llm";
   if (input.pinnedRepo && allowedRepos.has(input.pinnedRepo)) {
@@ -277,15 +233,9 @@ function parseLLMResponse(
   };
 }
 
-/**
- * Pull the first ```json … ``` fenced block out of raw text, falling
- * back to a bare JSON object scan if no fence was used. Returns null
- * when nothing JSON-shaped was found.
- */
 function extractJsonBlock(raw: string): string | null {
   const fenced = raw.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
   if (fenced && fenced[1]) return fenced[1].trim();
-  // Last-resort: scan for the outermost {...} that parses.
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end === -1 || end < start) return null;

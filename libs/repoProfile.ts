@@ -1,21 +1,3 @@
-/**
- * Phase G — repo profile scanner.
- *
- * Synchronously walks a sibling repo and derives a `RepoProfile`: stack
- * (next, nestjs, prisma, …), domain keywords, high-level features (auth,
- * payments, lms, …), and entrypoint glob patterns. Pure heuristic, no LLM
- * calls — every read is `try/catch` so a half-checked-out / network-broken
- * sibling never crashes the bridge.
- *
- * Two consumers:
- *  - `detect/heuristic.ts` — boosts the keyword scoring with profile signals.
- *  - `coordinator.ts`      — prepends a "## Repo profiles" block to every
- *                            coordinator prompt so the LLM knows the
- *                            contract surface of each candidate repo.
- *
- * TODO: an LLM-assisted upgrade can plug in later via a
- * `summarizeWithLLM(profile)` hook on top of this heuristic baseline.
- */
 
 import {
   existsSync,
@@ -74,14 +56,6 @@ const STOPWORDS = new Set([
   "package", "lock", "readme", "license", "docs", "doc",
 ]);
 
-/**
- * Top-level rules used to derive `features[]`. Order matters only for
- * de-dupe; matching is independent per rule.
- *
- * Each rule scans the union of: deps, top-level dir names, prisma model
- * names, and harvested keywords, looking for any of `match[]` as a
- * substring (lowercased). One hit → feature added once.
- */
 const FEATURE_RULES: { feature: string; match: string[] }[] = [
   { feature: "auth",          match: ["auth", "login", "jwt", "oauth", "session"] },
   { feature: "payments",      match: ["payment", "billing", "stripe", "invoice", "subscription"] },
@@ -167,17 +141,11 @@ function existsAny(repoPath: string, names: string[]): boolean {
   return names.some((n) => existsSync(join(repoPath, n)));
 }
 
-/**
- * Walk the repo from a small set of meaningful roots, counting file
- * extensions. Bounded by `FILE_WALK_CAP` and `WALK_DEPTH_CAP` so a
- * pathological tree can't lock us up.
- */
 function countExtensions(repoPath: string): { counts: Record<string, number>; topLevelDirs: string[] } {
   const counts: Record<string, number> = {};
   const topLevelDirs: string[] = [];
   let visited = 0;
 
-  // Collect top-level dir names first (used for keyword harvest).
   try {
     for (const e of readdirSync(repoPath, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
@@ -186,7 +154,6 @@ function countExtensions(repoPath: string): { counts: Record<string, number>; to
       topLevelDirs.push(e.name);
     }
   } catch {
-    /* unreadable repo root */
   }
 
   const walk = (dir: string, depth: number): boolean => {
@@ -230,10 +197,6 @@ function topNExtensions(counts: Record<string, number>, n: number): Record<strin
   return out;
 }
 
-/**
- * Pull the first heading + first non-empty paragraph out of a markdown
- * blob (≤4 KB). Used for the human `summary` field.
- */
 function extractMarkdownIntro(md: string): string {
   const lines = md.split(/\r?\n/);
   let heading = "";
@@ -259,10 +222,6 @@ function extractMarkdownIntro(md: string): string {
   return heading || paragraph || "";
 }
 
-/**
- * Read prisma/schema.prisma if present and pluck out `model Foo {…}` /
- * `enum Bar {…}` declarations as keyword candidates.
- */
 function readPrismaModels(repoPath: string): string[] {
   const text = safeReadText(join(repoPath, "prisma", "schema.prisma"), 64 * 1024);
   if (!text) return [];
@@ -309,7 +268,6 @@ function deriveStack(
   const hasPlaywright = !!deps["playwright"] || !!deps["@playwright/test"];
 
   if (hasNext) stack.add("next");
-  // omit react when next is present (redundant)
   if (hasReact && !hasNext) stack.add("react");
   if (hasVue) stack.add("vue");
   if (hasSvelte) stack.add("svelte");
@@ -321,7 +279,6 @@ function deriveStack(
   if (hasAnthropic) stack.add("anthropic-sdk");
   if (hasPlaywright) stack.add("playwright");
 
-  // File-based confirmation / fallbacks.
   const hasNextConfig = existsAny(repoPath, [
     "next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs",
   ]);
@@ -368,7 +325,6 @@ function deriveEntrypoints(
     } else if (routerStyle === "pages") {
       out.push("pages/api/**/*.ts", "pages/**/*.tsx");
     } else {
-      // unknown / src — best guess
       out.push("app/**/*.tsx", "pages/**/*.tsx");
     }
   }
@@ -413,11 +369,6 @@ function synthesizeSummary(name: string, stack: string[]): string {
   return `${name} — ${tag} (no README found)`;
 }
 
-/**
- * Scan `repoPath` and produce a `RepoProfile`. Always returns; falls
- * back to a synthesized summary + empty stack when there's no
- * package.json / README / etc. Never throws.
- */
 export function scanRepo(repoPath: string): RepoProfile {
   const name = basename(repoPath);
   const pkg = parsePackageJson(repoPath);
@@ -439,8 +390,6 @@ export function scanRepo(repoPath: string): RepoProfile {
   const { counts, topLevelDirs } = countExtensions(repoPath);
   const fileCounts = topNExtensions(counts, TOP_EXTENSIONS_CAP);
 
-  // Keyword harvest: summary + dep names (split on -/_) + prisma models +
-  // top-level dir names + pkg name. Lowercase, strip stopwords, dedupe.
   const depTokens = Object.keys(pkg?.deps ?? {}).flatMap((d) =>
     d.replace(/^@/, "").split(/[/_-]+/g),
   );
@@ -486,7 +435,6 @@ export function scanRepo(repoPath: string): RepoProfile {
   };
 }
 
-// Internal helpers exposed for testing only.
 export const __test = {
   STOPWORDS,
   FEATURE_RULES,
@@ -497,18 +445,10 @@ export const __test = {
   KEYWORD_CAP,
 };
 
-/**
- * Light placeholder so callers can wire an LLM-driven enrichment later.
- * Returns the profile as-is; replace impl when an SDK is available.
- */
 export function summarizeWithLLM(profile: RepoProfile): RepoProfile {
   return profile;
 }
 
-/**
- * Helper for callers that want to skip the path/stat dance themselves.
- * `existsCheck = false` short-circuits without touching disk.
- */
 export function scanRepoIfExists(
   repoPath: string,
   existsCheck = true,

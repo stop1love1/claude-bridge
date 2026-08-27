@@ -38,9 +38,6 @@ const MODE_OPTIONS: Array<{
     hint: "Claude will automatically choose the best permission mode for each task",
     icon: Zap,
   },
-  // Operator opt-in via `NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS=1`. The server
-  // mirrors the same gate in `isValidUserPermissionMode`, so toggling
-  // this off drops the option from the UI AND rejects spoofed requests.
   ...(process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS === "1"
     ? [
         {
@@ -53,12 +50,6 @@ const MODE_OPTIONS: Array<{
     : []),
 ];
 
-/**
- * Mode + effort picker — Claude-style. Anchors to the mode-pill
- * Trigger and pops upward, right-aligned with the trigger so the
- * panel extends leftward over the chat instead of clipping the
- * viewport edge.
- */
 export function ChatSettingsMenu({
   value,
   onChange,

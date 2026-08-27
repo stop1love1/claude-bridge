@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * loginApprovals stores its in-memory map on `globalThis`. We clear it
- * between tests so a leak from one doesn't influence the next.
- */
 beforeEach(() => {
   delete (globalThis as { __bridgeLoginApprovals?: unknown }).__bridgeLoginApprovals;
   vi.useFakeTimers();
@@ -49,7 +45,6 @@ describe("getPendingLogin / answerPendingLogin / consumePendingLogin", () => {
     const a = createPendingLogin(sampleArgs);
     const ok = answerPendingLogin(a.id, "approved");
     expect(ok?.status).toBe("approved");
-    // Re-answering does not flip back; returns the existing record.
     const reAnswer = answerPendingLogin(a.id, "denied");
     expect(reAnswer?.status).toBe("approved");
   });
@@ -101,7 +96,6 @@ describe("expiry pruning", () => {
       await import("../loginApprovals");
     const a = createPendingLogin(sampleArgs);
     answerPendingLogin(a.id, "approved");
-    // Bump 1 minute — well within the 5-minute post-answer keep window.
     vi.advanceTimersByTime(60 * 1000);
     expect(getPendingLogin(a.id)?.status).toBe("approved");
   });

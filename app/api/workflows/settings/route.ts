@@ -11,15 +11,10 @@ interface SettingsBody {
   maxConcurrentRuns?: number;
 }
 
-/** GET /api/workflows/settings — global scheduler settings. */
 export function GET() {
   return NextResponse.json(getSchedulerSettings());
 }
 
-/**
- * PUT /api/workflows/settings — toggle cron auto-runs and set the
- * max-concurrent-runs cap (clamped to [1, 10] in the store).
- */
 export async function PUT(req: NextRequest) {
   let body: SettingsBody;
   try {

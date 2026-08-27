@@ -19,22 +19,10 @@ import { useToast } from "./Toasts";
 import { AutoDetectDialog } from "./AutoDetectDialog";
 
 interface AddAppDialogProps {
-  /** Called after a successful add or auto-detect so the parent can refetch. */
   onChanged?: () => void;
-  /** Imperative trigger so a parent button or hotkey can open the modal. */
   openRef?: React.MutableRefObject<(() => void) | null>;
 }
 
-/**
- * Dialog for declaring a new app in the bridge's apps registry
- * (`~/.claude/bridge.json`). The "Auto-detect" button next to it opens
- * the multi-step `AutoDetectDialog` which streams a scan of one or
- * more parent directories and lets the operator review + pick repos
- * to register before anything is written.
- *
- * Both actions are exposed as a single `<div>` of buttons so callers
- * can drop them next to whatever toolbar they already have.
- */
 export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
   const [open, setOpen] = useState(false);
   const [autoDetectOpen, setAutoDetectOpen] = useState(false);
@@ -80,10 +68,6 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
         description: trimmedDescription || undefined,
         preset: useRecommendedPreset ? "recommended" : undefined,
       });
-      // If the user didn't write a description, ask Claude to read
-      // the repo and produce one. Closing the dialog and toasting
-      // immediately keeps the form responsive — the scan runs in
-      // the background and a follow-up toast announces the result.
       const needsScan = trimmedDescription.length === 0;
       toast(
         "success",
@@ -100,7 +84,6 @@ export function AddAppDialog({ onChanged, openRef }: AddAppDialogProps) {
               onChanged?.();
             }
           } catch {
-            /* heuristic / blank description stays — no toast spam */
           }
         })();
       }

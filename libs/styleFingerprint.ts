@@ -1,23 +1,3 @@
-/**
- * P3a / A1 — style fingerprint scanner.
- *
- * Samples a small number of source files from an app (`.ts` / `.tsx`
- * preferred, falling back to `.js` / `.jsx`) and tallies micro-style
- * indicators: indentation, quote style, semicolons, trailing commas,
- * import order, default-vs-named export ratio, file-name casing.
- * Output is rendered as 5-7 plain-English lines and prepended into
- * every child prompt as "House style (auto-detected)".
- *
- * The fingerprint deliberately stays at the micro level: indent, quote,
- * semicolon, etc. Macro patterns (where to place files, what
- * abstractions to prefer) live in `house-rules.md` (P1/C3) and the
- * symbol index (P3a/A2). Mixing the two would make the prompt bloat
- * faster than it adds value.
- *
- * Pure heuristic + line-by-line regex — no tokenizer, no AST. Robust
- * to non-source files: falls back to `unknown` per dimension when the
- * sample has no signal.
- */
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 
@@ -36,15 +16,12 @@ export type FileCaseStyle =
 export interface StyleFingerprint {
   appName: string;
   refreshedAt: string;
-  /** Source files actually sampled (post filter, capped). */
   sampledFiles: number;
   indent: { kind: IndentKind; width: number };
   quotes: QuoteStyle;
   semicolons: SemicolonStyle;
   trailingComma: TrailingCommaStyle;
   exports: ExportPreference;
-  /** Per-file-extension casing breakdown so the agent knows whether
-   *  `Button.tsx` (Pascal) or `button.tsx` (kebab) is canonical. */
   fileNaming: {
     tsx: FileCaseStyle;
     ts: FileCaseStyle;
@@ -68,23 +45,17 @@ const READ_CAP_BYTES = 32 * 1024;
 const WALK_DEPTH_CAP = 5;
 
 interface Tally {
-  // indent
   spaces2: number;
   spaces4: number;
   tabs: number;
-  // quotes
   singleQuotes: number;
   doubleQuotes: number;
-  // semicolons
   endsSemi: number;
   endsBare: number;
-  // trailing comma in multi-line arrays/objects
   trailingComma: number;
   noTrailingComma: number;
-  // exports
   defaultExports: number;
   namedExports: number;
-  // file-name casing
   tsxPascal: number;
   tsxKebab: number;
   tsxCamel: number;
@@ -120,12 +91,6 @@ function isSourceFile(name: string): boolean {
   return SOURCE_EXTS.some((ext) => name.endsWith(ext));
 }
 
-/**
- * Walk the app and sample source files. We bias toward `.ts` / `.tsx`
- * (which carry the most representative project style) by returning
- * those first; .js/.jsx fill remaining slots only when the cap isn't
- * reached. Bounded by `FILE_SAMPLE_CAP`, `WALK_DEPTH_CAP`.
- */
 function sampleFiles(appPath: string): string[] {
   const tsFiles: string[] = [];
   const jsFiles: string[] = [];
@@ -158,7 +123,6 @@ function sampleFiles(appPath: string): string[] {
 
   visit(appPath, 0);
 
-  // ts files first, fill remainder with js.
   if (tsFiles.length >= FILE_SAMPLE_CAP) return tsFiles.slice(0, FILE_SAMPLE_CAP);
   const need = FILE_SAMPLE_CAP - tsFiles.length;
   return [...tsFiles, ...jsFiles.slice(0, need)];
@@ -173,10 +137,6 @@ function safeReadCapped(path: string): string | null {
   }
 }
 
-/**
- * Per-line tally pass. Each indicator increments at most once per
- * non-empty line so a single huge file doesn't dominate the result.
- */
 function tallyFile(text: string, fileName: string, t: Tally): void {
   const lines = text.split(/\r?\n/);
   let inBlockComment = false;
@@ -185,7 +145,6 @@ function tallyFile(text: string, fileName: string, t: Tally): void {
     const line = raw;
     if (!line.trim()) continue;
 
-    // Skip comments — micro-style there is just noise.
     if (inBlockComment) {
       if (line.includes("*/")) inBlockComment = false;
       continue;
@@ -196,9 +155,8 @@ function tallyFile(text: string, fileName: string, t: Tally): void {
       continue;
     }
     if (trimmed.startsWith("//")) continue;
-    if (trimmed.startsWith("*")) continue; // jsdoc continuation
+    if (trimmed.startsWith("*")) continue;
 
-    // Indent: detect leading whitespace shape on indented lines only.
     if (/^\s/.test(line)) {
       if (line.startsWith("\t")) {
         t.tabs += 1;
@@ -209,51 +167,34 @@ function tallyFile(text: string, fileName: string, t: Tally): void {
       }
     }
 
-    // Quotes — count occurrences of each form OUTSIDE strings is too
-    // hard without a tokenizer; we accept that template/regex
-    // literals contribute noise and rely on the law of large numbers.
     const sq = (line.match(/'/g) ?? []).length;
     const dq = (line.match(/"/g) ?? []).length;
     if (sq > dq) t.singleQuotes += 1;
     else if (dq > sq) t.doubleQuotes += 1;
 
-    // Semicolons: only inspect lines that end a statement (loose
-    // approximation: ends with `)`, identifier-ish char, or `;`).
-    // We strip trailing line comments first.
     const stripped = line.replace(/\/\/.*$/, "").trimEnd();
     if (stripped.length > 0) {
       const last = stripped[stripped.length - 1];
       if (last === ";") t.endsSemi += 1;
       else if (/[\w)\]]/.test(last)) {
-        // Skip lines that look like control structures (`if (...) {`)
-        // or that end with `{`/`,` / opening structures.
         if (last !== "{" && last !== "," && last !== ":") {
           t.endsBare += 1;
         }
       }
     }
 
-    // Trailing comma in multi-line lists: line ends with `,` followed
-    // by closing bracket/brace on next line is the signal we'd want;
-    // but a single-pass tally checks "ends with `,` and the next
-    // non-empty line starts with `]` or `}`". We simplify by tallying
-    // `,` at end-of-line vs bare end-of-line for lines INSIDE a list
-    // (heuristic: indented lines, since top-level statements rarely
-    // end in `,`).
     if (/^\s/.test(line)) {
       const sLast = stripped[stripped.length - 1];
       if (sLast === ",") t.trailingComma += 1;
       else if (sLast === ")" || sLast === "]" || sLast === "}") t.noTrailingComma += 1;
     }
 
-    // Exports.
     if (/^export\s+default\b/.test(trimmed)) t.defaultExports += 1;
     else if (/^export\s+(?:async\s+)?(?:function|const|let|var|class|interface|type|enum)\b/.test(trimmed)) {
       t.namedExports += 1;
     }
   }
 
-  // File-name casing per extension.
   const dot = fileName.lastIndexOf(".");
   if (dot <= 0) return;
   const ext = fileName.slice(dot).toLowerCase();
@@ -274,11 +215,7 @@ function tallyFile(text: string, fileName: string, t: Tally): void {
 
 export function classifyFileName(stem: string): FileCaseStyle {
   if (!stem) return "unknown";
-  // Strip a trailing test/spec marker for a cleaner classification
   const norm = stem.replace(/\.(test|spec)$/i, "");
-  // PascalCase requires an initial capital AND at least one lowercase
-  // somewhere else — rules out all-caps acronyms ("UPPER", "XHR") which
-  // belong in the `mixed` bucket alongside SCREAMING_SNAKE constants.
   if (/^[A-Z][A-Za-z0-9]*$/.test(norm) && /[a-z]/.test(norm)) return "PascalCase";
   if (/^[a-z]+(-[a-z0-9]+)+$/.test(norm)) return "kebab-case";
   if (/^[a-z][a-zA-Z0-9]*$/.test(norm)) return "camelCase";
@@ -286,16 +223,9 @@ export function classifyFileName(stem: string): FileCaseStyle {
 }
 
 interface MajorityCfg {
-  threshold: number; // ratio in [0,1] required to call a majority
+  threshold: number;
 }
 
-/**
- * Pick the majority option from a tally. Returns `mixed` when no
- * option crosses the threshold and at least 2 options have non-zero
- * counts; returns `unknown` when EVERY option is zero. Threshold
- * default 0.7 — three-quarters of the sample agreeing is a strong
- * enough signal to advise the agent to follow that style.
- */
 export function pickMajority<T extends string>(
   buckets: Array<{ label: T; count: number }>,
   cfg: MajorityCfg = { threshold: 0.7 },
@@ -310,10 +240,6 @@ export function pickMajority<T extends string>(
   return fallbackMixed;
 }
 
-/**
- * Public scan entry. Always returns a fingerprint object, even when
- * the app has no source files (every dimension is `unknown`).
- */
 export function scanStyle(appPath: string): StyleFingerprint {
   const appName = basename(appPath);
   const refreshedAt = new Date().toISOString();
@@ -327,7 +253,6 @@ export function scanStyle(appPath: string): StyleFingerprint {
     tallyFile(text, basename(abs), t);
   }
 
-  // indent
   const indentBuckets = [
     { label: "spaces2" as const, count: t.spaces2 },
     { label: "spaces4" as const, count: t.spaces4 },
@@ -343,10 +268,9 @@ export function scanStyle(appPath: string): StyleFingerprint {
   if (indentWinner === "spaces2") indent = { kind: "spaces", width: 2 };
   else if (indentWinner === "spaces4") indent = { kind: "spaces", width: 4 };
   else if (indentWinner === "tabs") indent = { kind: "tabs", width: 1 };
-  else if (indentWinner === "mixed") indent = { kind: "spaces", width: 2 }; // sane default
+  else if (indentWinner === "mixed") indent = { kind: "spaces", width: 2 };
   else indent = { kind: "unknown", width: 0 };
 
-  // quotes
   const quotes = pickMajority(
     [
       { label: "single" as const, count: t.singleQuotes },
@@ -357,7 +281,6 @@ export function scanStyle(appPath: string): StyleFingerprint {
     "mixed",
   );
 
-  // semicolons
   const semicolons = pickMajority(
     [
       { label: "always" as const, count: t.endsSemi },
@@ -368,7 +291,6 @@ export function scanStyle(appPath: string): StyleFingerprint {
     "mixed",
   );
 
-  // trailing comma
   const trailingComma = pickMajority(
     [
       { label: "all" as const, count: t.trailingComma },
@@ -379,7 +301,6 @@ export function scanStyle(appPath: string): StyleFingerprint {
     "mixed",
   );
 
-  // exports
   const exports = pickMajority(
     [
       { label: "named" as const, count: t.namedExports },
@@ -390,7 +311,6 @@ export function scanStyle(appPath: string): StyleFingerprint {
     "mixed",
   );
 
-  // file naming, per extension
   const tsx = pickMajority(
     [
       { label: "PascalCase" as const, count: t.tsxPascal },

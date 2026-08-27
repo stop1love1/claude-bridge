@@ -1,9 +1,3 @@
-/**
- * Pure logic for the Intent & Planning Gate (Epic A). No I/O — the route
- * layer computes `gateApplies` (config + actor) and reads/writes intake
- * via `libs/meta.ts`. Kept side-effect-free so it unit-tests trivially.
- * See docs/superpowers/specs/2026-06-04-intent-planning-gate-design.md.
- */
 
 export type IntakeStatus =
   | "none"
@@ -12,11 +6,6 @@ export type IntakeStatus =
   | "approved"
   | "error";
 
-/**
- * "unknown" is distinct from "clear": it means the planner produced no
- * usable artifact at all (no intake.json, no non-empty plan.md) — NOT
- * that it looked and found no open questions. See `deriveGateVerdict`.
- */
 export type GateVerdict = "clear" | "needs-decision" | "unknown";
 
 export interface IntakeQuestion {
@@ -44,16 +33,13 @@ export interface IntakeRecord {
   summary: string | null;
   questions: IntakeQuestion[];
   answers: IntakeAnswer[];
-  /** Planner session that produced the current plan, if any. */
   planSessionId: string | null;
   submittedBy: IntakeActorRef | null;
   approvedBy: (IntakeActorRef & { at: string }) | null;
-  /** How many clarify cycles have run (bounded by config.maxClarifyRounds). */
   rounds: number;
   updatedAt: string;
 }
 
-/** Roles that never write source — always allowed to run under the gate. */
 const NON_MUTATING_ROLES = [
   "planner",
   "reviewer",
@@ -63,11 +49,6 @@ const NON_MUTATING_ROLES = [
   "devops",
 ];
 
-/**
- * A role is mutating unless it equals — or is a suffixed variant of
- * (`<base>-...`) — a known analysis role. Handles `coder-phase24`
- * (mutating) and `planner-api` / `ui-tester` (non-mutating).
- */
 export function isMutatingRole(role: string): boolean {
   const r = role.toLowerCase();
   for (const base of NON_MUTATING_ROLES) {
@@ -88,14 +69,12 @@ export function canApprove(actor: ApproverActor): boolean {
 export interface PlanGateInput {
   role: string;
   intakeStatus: IntakeStatus;
-  /** config.operatorEnabled || actor.kind === "guest" — computed by caller. */
   gateApplies: boolean;
 }
 
 export interface PlanGateDecision {
   allowed: boolean;
   reason: string;
-  /** True when the caller should flip intake → planning and kick the coordinator. */
   kickPlanning: boolean;
 }
 
@@ -132,13 +111,11 @@ export function defaultIntake(): IntakeRecord {
 }
 
 export interface PlannerOutput {
-  /** Parsed sessions/<id>/intake.json, or null when absent/corrupt. */
   intakeJson?: {
     verdict?: unknown;
     summary?: unknown;
     questions?: unknown;
   } | null;
-  /** Raw sessions/<id>/plan.md text, or null. */
   planMd?: string | null;
 }
 
@@ -169,7 +146,6 @@ function normalizeQuestions(raw: unknown): IntakeQuestion[] {
   return out;
 }
 
-/** Extract bullet questions under a `## Questions for the user` heading. */
 function parsePlanQuestions(planMd: string): IntakeQuestion[] {
   const lines = planMd.split(/\r?\n/);
   const start = lines.findIndex((l) => /^##\s+questions for the user/i.test(l.trim()));
@@ -177,7 +153,7 @@ function parsePlanQuestions(planMd: string): IntakeQuestion[] {
   const out: IntakeQuestion[] = [];
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (line.startsWith("## ")) break; // next section
+    if (line.startsWith("## ")) break;
     const m = /^[-*]\s+(.*)$/.exec(line);
     if (!m) continue;
     const text = m[1].trim();
@@ -197,18 +173,7 @@ export function deriveGateVerdict(out: PlannerOutput): DerivedVerdict {
       questions,
     };
   }
-  // Fallback: parse plan.md.
   const planMd = out.planMd ?? "";
-  // Reaching this line already means intake.json carries no recognized
-  // verdict — it's absent, unparseable, OR present-but-schema-invalid
-  // (e.g. `{}`, `{"notes":"..."}`), since the `if` above returns early
-  // for the one case that's usable. So the only remaining question is
-  // whether plan.md picks up the slack. A planner that exits 0 with
-  // neither a recognized intake.json verdict NOR a non-empty plan.md
-  // violated its contract — that is NOT evidence of "no open questions".
-  // Failing open here auto-approved tasks with no plan content at all
-  // (audit H5, and a schema-invalid-but-present intake.json is the same
-  // hole through a different door — caught on review). Route to a human.
   if (!planMd) {
     return { verdict: "unknown", summary: null, questions: [] };
   }

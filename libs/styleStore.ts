@@ -1,13 +1,3 @@
-/**
- * P3a / A1 — on-disk cache for `StyleFingerprint` per app.
- *
- * Same shape as `symbolStore.ts` and `profileStore.ts`: single JSON
- * file under `.bridge-state/`, one record per app keyed by name,
- * versioned, with a 24h lazy TTL refresh.
- *
- * Pure mirror of `symbolStore` — see that module's comments for the
- * rationale on TTL and fail-soft behavior.
- */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeJsonAtomic } from "./atomicWrite";
@@ -15,7 +5,7 @@ import { BRIDGE_STATE_DIR } from "./paths";
 import { scanStyle, type StyleFingerprint } from "./styleFingerprint";
 
 export const STYLE_STORE_VERSION = 1;
-export const STYLE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+export const STYLE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface StyleStore {
   version: number;
@@ -41,10 +31,6 @@ function emptyStore(): StyleStore {
   };
 }
 
-// Same in-memory cache pattern as symbolStore — see that module for
-// rationale. Hot path: `ensureFreshStyleFingerprint` is called per
-// spawn alongside symbol-index lookup; without this cache we paid
-// for two redundant readFileSync + JSON.parse on every dispatch.
 const STYLE_CACHE_TTL_MS = 5_000;
 const SG = globalThis as unknown as {
   __bridgeStyleStoreCache?: { value: StyleStore | null; expires: number };
@@ -92,9 +78,6 @@ export function loadStyleStore(): StyleStore | null {
 
 export function saveStyleStore(store: StyleStore): void {
   ensureStateDir();
-  // Shared atomic-write helper with unique tmp suffix — see
-  // libs/atomicWrite.ts. The legacy `${path}.tmp` shared suffix raced
-  // when two style refreshes ran concurrently for different apps.
   writeJsonAtomic(storeFilePath(), store);
   invalidateCache();
 }

@@ -1,13 +1,3 @@
-/**
- * Bridge-side orchestration that runs after a `planner` child exits while
- * a task's intake is in `planning`. Reads the planner's output, derives
- * the gate verdict, and advances intake → approved | awaiting-approval.
- * On auto-approval it continues the coordinator via the same resume path
- * the `continue` route uses, so coding proceeds with the plan injected.
- *
- * Lazy-requires coordinator/resumeSession (matching the other post-exit
- * gate modules) to avoid an import cycle.
- */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readMeta, readIntake, setIntake, emitIntakeAwaitingApproval } from "./meta";
@@ -17,12 +7,6 @@ export function computeNextIntakeStatus(args: {
   verdict: GateVerdict;
   submitterCanApprove: boolean;
 }): Extract<IntakeStatus, "approved" | "awaiting-approval"> {
-  // Single allow-list condition, not a switch: "clear" + self-approve is
-  // the only path to auto-approval. Both "needs-decision" and "unknown"
-  // (no artifact produced at all — audit H5) fall through to the deny
-  // default below regardless of submitterCanApprove. Keep this an
-  // if/return-default shape, not a switch/case per verdict — a switch
-  // missing a case here would silently re-open the fail-open hole.
   if (args.verdict === "clear" && args.submitterCanApprove) return "approved";
   return "awaiting-approval";
 }
@@ -41,12 +25,6 @@ function readPlannerOutput(sessionsDir: string) {
   return { intakeJson: intakeJson as Record<string, unknown> | null, planMd };
 }
 
-/**
- * Called on planner exit. No-op unless the task's intake is in `planning`.
- * Derives verdict, advances status, and (on auto-approval) continues the
- * coordinator. Fail-soft: any error parks intake at `error` so the
- * operator escape hatch shows, never throws into the lifecycle.
- */
 export async function resolvePlanGateAfterPlanner(args: {
   taskId: string;
   sessionsDir: string;
@@ -57,10 +35,6 @@ export async function resolvePlanGateAfterPlanner(args: {
     if (!intake || intake.status !== "planning") return;
 
     const derived = deriveGateVerdict(readPlannerOutput(args.sessionsDir));
-    // The planner exit is a server event with no actor, so only an
-    // operator-submitted task auto-approves a clear plan here. A guest with
-    // the approvePlan grant approves with an explicit click (the approve
-    // endpoint is the only place that capability is checked server-side).
     const submitterCanApprove = intake.submittedBy?.kind === "operator";
 
     const next = computeNextIntakeStatus({ verdict: derived.verdict, submitterCanApprove });
@@ -79,34 +53,21 @@ export async function resolvePlanGateAfterPlanner(args: {
     if (next === "approved") {
       await continueCoordinator(args.taskId, args.sessionsDir, derived.summary);
     } else {
-      // awaiting-approval: ping the operator (Telegram notifier) rather
-      // than silently parking the plan — they need to /plan · /approve
-      // · /replan from wherever they're triaging.
       const title = readMeta(args.sessionsDir)?.taskTitle ?? args.taskId;
       emitIntakeAwaitingApproval({ taskId: args.taskId, taskTitle: title });
     }
   } catch (err) {
     console.error("[plan-gate] resolvePlanGateAfterPlanner failed:", err);
-    try { await setIntake(args.sessionsDir, { status: "error" }); } catch { /* ignore */ }
+    try { await setIntake(args.sessionsDir, { status: "error" }); } catch { }
   }
 }
 
-/**
- * Resume the coordinator (or spawn one) after a plan-gate transition.
- *
- * `opts.replan` distinguishes the two callers: approval (the gate is now
- * open → dispatch coders) vs `request-changes` (re-plan → spawn a fresh
- * planner, gate stays closed). Sending the wrong message — e.g. "gate is
- * now open" on a re-plan — makes the coordinator try to dispatch coders
- * that immediately bounce off the still-closed gate.
- */
 export async function continueCoordinator(
   taskId: string,
   sessionsDir: string,
   summary: string | null,
   opts?: { replan?: boolean },
 ): Promise<void> {
-  // Lazy-require to dodge the import cycle (coordinator → runLifecycle → here).
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { resumeSessionWithLifecycle } = require("./resumeSession") as typeof import("./resumeSession");
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -118,16 +79,12 @@ export async function continueCoordinator(
   if (!meta) return;
 
   const coordinators = meta.runs.filter((r) => r.role === "coordinator");
-  // A live coordinator will react to the gate change on its own turn (its
-  // next coder spawn now passes the gate; the nudge re-drives it on exit).
-  // Resuming it now would race its live stdout — skip.
   if (coordinators.some((r) => r.status === "running" || r.status === "queued")) return;
 
   const msg = opts?.replan
     ? `Re-plan requested for bridge task ${taskId}. ${summary ? `${summary} ` : ""}The planning gate is OPEN AGAIN (intake.status=planning): spawn a FRESH planner, address the feedback, and do NOT dispatch coders until the new plan is approved.`
     : `Plan approved for bridge task ${taskId}. ${summary ? `Goal: ${summary} ` : ""}Read sessions/${taskId}/plan.md (the shared plan) and proceed with implementation — dispatch the coder(s). The bridge gate is now open.`;
 
-  // Resume the most recent finished coordinator if there is one; else spawn.
   const finished = coordinators[coordinators.length - 1];
   if (finished) {
     resumeSessionWithLifecycle({

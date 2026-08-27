@@ -22,21 +22,6 @@ interface AccessBody {
   name?: unknown;
 }
 
-/**
- * POST /api/share/access/<id>
- *
- * Public guest entry point (this path is excluded from the proxy
- * matcher, so it self-gates: demo-mode, CSRF, rate-limit, token).
- *
- * Body: `{ token, name? }`.
- *   - Already-approved device (valid guest cookie for this share) →
- *     re-mints the cookie and returns `{ status: "approved", taskId }`.
- *   - Otherwise creates a pending request and returns
- *     `{ status: "pending", requestId, taskId }` for the guest to poll.
- *
- * Token validity is verified constant-time against the stored hash; an
- * invalid token returns 403 without leaking whether the share exists.
- */
 export async function POST(req: NextRequest, ctx: Ctx) {
   if (DEMO_MODE) {
     return NextResponse.json({ error: "demo mode" }, { status: 503 });
@@ -61,13 +46,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
 
   const share = getShare(id);
-  // Generic 403 whether the share is missing, revoked, expired, or the
-  // token is wrong — don't help a prober distinguish the cases.
   if (!share || !isShareUsable(share) || !verifyShareToken(id, token)) {
     return NextResponse.json({ error: "invalid or expired share link" }, { status: 403 });
   }
 
-  // Already approved on this device? Re-mint the cookie and let them in.
   const actor = verifyRequestActor(req);
   if (actor?.kind === "guest" && actor.share.id === id) {
     const { token: cookie, maxAgeMs } = signGuestSession({

@@ -5,21 +5,10 @@ const COLOR: Record<RunStatus, string> = {
   running: "bg-warning animate-pulse",
   done: "bg-success",
   failed: "bg-destructive",
-  // Neutral, not alarming — an operator-initiated Stop is an expected
-  // outcome, not an error. Same muted token as `queued`.
   cancelled: "bg-fg-dim",
   stale: "bg-info",
 };
 
-/**
- * `orchestrating` = the coordinator's process is terminal but at least
- * one child it spawned is still active. The dot inherits the warning
- * pulse so it visually matches a literal RUNNING dot — operators
- * scanning the row read "this thing is still working" without having
- * to interpret the per-status colour. The aria-label gets the same
- * substitution so screen readers don't say "done" while the badge
- * pulses.
- */
 export function StatusDot({
   status,
   orchestrating = false,

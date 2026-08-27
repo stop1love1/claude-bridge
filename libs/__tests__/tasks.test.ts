@@ -36,10 +36,10 @@ describe("isValidTaskId", () => {
 
   it("rejects malformed shapes", () => {
     expect(isValidTaskId("")).toBe(false);
-    expect(isValidTaskId("t_2026_001")).toBe(false);          // wrong date width
-    expect(isValidTaskId("t_20260425_1")).toBe(false);         // counter not padded
-    expect(isValidTaskId("T_20260425_001")).toBe(false);       // uppercase prefix
-    expect(isValidTaskId("t-20260425-001")).toBe(false);       // hyphens not underscores
+    expect(isValidTaskId("t_2026_001")).toBe(false);
+    expect(isValidTaskId("t_20260425_1")).toBe(false);
+    expect(isValidTaskId("T_20260425_001")).toBe(false);
+    expect(isValidTaskId("t-20260425-001")).toBe(false);
   });
 
   it("rejects non-strings", () => {

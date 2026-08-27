@@ -20,12 +20,6 @@ interface MeResponse {
   expiresAt?: string;
 }
 
-/**
- * Avatar-style header dropdown for the logged-in operator. Shows the
- * username + (when applicable) the trusted-device label, with a logout
- * action. Renders nothing when auth isn't configured (first-run install)
- * so the header doesn't show a stray icon during setup.
- */
 export function UserMenu() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,7 +32,7 @@ export function UserMenu() {
         if (!r.ok) return;
         const data = (await r.json()) as MeResponse;
         if (!ac.signal.aborted) setMe(data);
-      } catch { /* abort or network error — leave me === null, the menu hides */ }
+      } catch { }
     })();
     return () => ac.abort();
   }, []);
@@ -49,9 +43,6 @@ export function UserMenu() {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {
-      // Hard reload to /login — middleware will redirect once the
-      // cookie is gone, but going there directly avoids a flash of
-      // dashboard content first.
       window.location.replace("/login");
     }
   };

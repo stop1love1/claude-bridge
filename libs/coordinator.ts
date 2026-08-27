@@ -15,25 +15,9 @@ import {
 } from "./detect";
 import { buildTeamHint } from "./teamHints";
 
-// Run-lifecycle wiring (succeed/fail flip + post-exit gate cascade)
-// lives in `runLifecycle.ts` so the cycle-breaking lazy-require pattern
-// has a focused home, separate from this file's coordinator-spawn
-// plumbing. Re-exported here so existing importers (`retrySpawn`,
-// `semanticVerifier`, `app/api/tasks/[id]/agents`) keep working
-// unchanged across the split.
 export { wireRunLifecycle } from "./runLifecycle";
 import { wireRunLifecycle } from "./runLifecycle";
 
-/**
- * Build the canonical `## Detected scope` block for the coordinator.
- * Reads the cached scope from `meta.json` (computed at task creation
- * time by `app/api/tasks/route.ts`). On a cache miss (legacy meta /
- * bridge upgrade mid-flight) computes a fresh scope, persists it, and
- * uses that — the coordinator is never starved of context.
- *
- * Replaces the legacy `## Bridge hint` + `## Repo profiles` pair —
- * one block, same shape children see, no drift.
- */
 async function buildDetectedScopeBlock(
   sessionsDir: string,
   task: Pick<Task, "id" | "title" | "body" | "app">,
@@ -51,10 +35,6 @@ async function buildDetectedScopeBlock(
       profiles,
       forCoordinator: true,
     });
-    // Append the team-hint block when the task matches a known pattern
-    // (currently: UX work on an FE-stack repo → coder → ui-tester).
-    // Returns null when no pattern matches → coordinator sees only the
-    // scope block, same as before this feature shipped.
     const hint = buildTeamHint({
       taskBody: task.body,
       detectedScope: scope,
@@ -72,11 +52,6 @@ async function buildDetectedScopeBlock(
   }
 }
 
-/**
- * Splice the `## Detected scope` block in before the coordinator
- * template's `## Your job` heading. Falls back to prepending when the
- * marker is missing (template shape changed).
- */
 function spliceScopeBlock(rendered: string, block: string): string {
   const marker = "## Your job";
   const idx = rendered.indexOf(marker);
@@ -87,32 +62,20 @@ function spliceScopeBlock(rendered: string, block: string): string {
 export async function spawnCoordinatorForTask(
   task: Pick<Task, "id" | "title" | "body"> & {
     app?: string | null;
-    /** Effort tier for the coordinator session (null/absent = claude default). */
     effort?: Task["effort"];
   },
 ): Promise<string | null> {
   const sessionsDir = join(SESSIONS_DIR, task.id);
 
-  // meta.json is created by `createTask` in tasksStore. If it's missing
-  // here something upstream is broken — log and bail rather than spawn
-  // an orphan coordinator that can't register itself.
   if (!readMeta(sessionsDir)) {
     console.error("coordinator spawn skipped: meta.json missing for", task.id);
     return null;
   }
 
   try {
-    // Pre-allocate the coordinator's session UUID so we can render it
-    // into the prompt template. The coordinator used to have to discover
-    // its own session id by listing the newest .jsonl in its project
-    // dir, which races against any other claude session active in the
-    // same cwd — wrong uuid → wrong run patched to "done" → original
-    // bridge-pre-registered run stuck at "running" forever.
     const sessionId = randomUUID();
 
     const template = readFileSync(join(BRIDGE_LOGIC_DIR, "coordinator.md"), "utf8");
-    // Build a one-shot example of `repo` to use in curl snippets so the
-    // template doesn't have to hardcode a project-specific name.
     let exampleRepo = BRIDGE_FOLDER;
     try {
       const md = readBridgeMd();
@@ -121,26 +84,8 @@ export async function spawnCoordinatorForTask(
         .map((r) => r.name);
       if (declared.length > 0) exampleRepo = declared[0];
     } catch {
-      /* fall back to bridge folder name */
     }
 
-    // Substitute STRUCTURAL placeholders first (template-controlled
-    // values), then splice in the auto-generated scope block, then USER
-    // CONTENT last. Ordering matters for two reasons:
-    //
-    //   1. If we ran user content first, a task body containing the
-    //      literal `{{SESSION_ID}}` would be substituted by the next
-    //      pass — leaking the real session uuid into a malicious
-    //      prompt or corrupting the template.
-    //   2. `spliceScopeBlock` searches for the literal `## Your job`
-    //      marker; doing the splice BEFORE the user-content pass means
-    //      a body containing that heading cannot relocate the
-    //      injection site.
-    //
-    // We also pass user content through `sanitizeUserPromptContent`
-    // which fullwidths `{{` / `}}` and degrades any stray `## Your
-    // job` heading via a zero-width space, defending in depth even if
-    // the ordering above is changed in the future.
     const safeTitle = sanitizeUserPromptContent(task.title);
     const safeBody = sanitizeUserPromptContent(task.body);
     const baseRendered = template
@@ -149,9 +94,6 @@ export async function spawnCoordinatorForTask(
       .replaceAll("{{BRIDGE_FOLDER}}", BRIDGE_FOLDER)
       .replaceAll("{{EXAMPLE_REPO}}", exampleRepo)
       .replaceAll("{{TASK_ID}}", task.id);
-    // Inject the canonical `## Detected scope` block — coordinator and
-    // every spawned child see the same scope, no drift between the two.
-    // Replaces the legacy `## Repo profiles` + `## Bridge hint` pair.
     const scopeBlock = await buildDetectedScopeBlock(sessionsDir, {
       id: task.id,
       title: task.title,
@@ -163,10 +105,6 @@ export async function spawnCoordinatorForTask(
       .replaceAll("{{TASK_TITLE}}", safeTitle)
       .replaceAll("{{TASK_BODY}}", safeBody);
 
-    // Append the run BEFORE spawning — H4 orphan-window fix. If
-    // `spawnClaude` throws (claude binary missing, fork EAGAIN, etc.)
-    // we still have a tracked `failed` row in meta.json instead of a
-    // silent gap. `appendRun` is async (per-task lock from cluster B).
     await appendRun(sessionsDir, {
       sessionId,
       role: "coordinator",
@@ -183,27 +121,6 @@ export async function spawnCoordinatorForTask(
         taskId: task.id,
         prompt: renderedPrompt,
         sessionId,
-        // Coordinator runs unattended — there's no TTY for permission
-        // prompts. Without this, the first tool call hangs waiting for
-        // confirmation and the process eventually exits. The free-chat
-        // permission hook is NOT attached here for the same reason.
-        //
-        // `disallowedTools: ["Task"]` is the cwd-isolation contract:
-        // when the coordinator uses Claude Code's built-in Task / Agent
-        // tool, the subagent runs IN-PROCESS sharing the coordinator's
-        // cwd (BRIDGE_ROOT). Any work it does lands in `claude-bridge/`
-        // instead of the target app folder, AND nothing about it is
-        // tracked in `meta.json`. The bridge's only sanctioned dispatch
-        // path is `POST /api/tasks/<id>/agents`, which spawns a real
-        // child claude with cwd = the app's path. Blocking Task at the
-        // CLI level guarantees that a coordinator template change /
-        // prompt drift can't quietly route work back to the in-process
-        // subagent and break the contract.
-        // Effort: the operator's per-task pick. `ultracode` also folds the
-        // bridge fan-out directive into the coordinator's system prompt
-        // (handled in spawnClaude), nudging aggressive dispatch — the
-        // bridge's stand-in for the IDE-only Workflow tool. `undefined`
-        // (no pick) leaves claude's own default untouched.
         settings: {
           mode: "bypassPermissions",
           disallowedTools: ["Task"],
@@ -222,11 +139,6 @@ export async function spawnCoordinatorForTask(
       throw spawnErr;
     }
 
-    // Spawn succeeded — promote queued → running with a real
-    // startedAt. `wireRunLifecycle` then handles running → done/failed
-    // on child exit. Belt-and-suspenders: if the coordinator finishes
-    // cleanly (exit 0) but forgot to PATCH itself to "done" via the
-    // link API, the lifecycle hook flips the run.
     try {
       await updateRun(sessionsDir, sessionId, {
         status: "running",

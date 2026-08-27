@@ -1,29 +1,3 @@
-/**
- * Manual commit endpoint for a single run's worktree.
- *
- * The bridge already runs auto-commit + auto-push after every clean
- * child exit per `bridge.json.apps[].git`. This route exposes the
- * same primitive on demand so an operator reviewing a run's diff in
- * the UI can stage everything and commit with their own message
- * (or with one Claude generated client-side).
- *
- * Request body:
- *   { message: string, push?: boolean }
- *
- * Behavior:
- *   - Resolves the run's working tree (worktree if still on disk,
- *     otherwise the live app tree). Same logic as the diff route so
- *     the operator commits exactly what they reviewed.
- *   - Stages every change (`git add -A`), commits with the supplied
- *     message, and optionally pushes to the tracked upstream.
- *   - "No changes to commit" is a success outcome (returns ok with
- *     an explanatory message), not a 4xx — the caller doesn't need
- *     to special-case it.
- *   - Protected branches (`main`, `master`, `develop`, …) follow the
- *     same `tryPush` rules as auto-commit: commit succeeds, push is
- *     skipped with a warning unless the operator explicitly opted in
- *     via the app's `branchMode`.
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
@@ -72,9 +46,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return badRequest(`message too long (max ${MAX_MESSAGE_BYTES} bytes)`);
   }
   let push = !!body.push;
-  // A task-share guest may push only when the share grants `push`. The
-  // proxy already confirmed the `commit` grant to let this route run;
-  // the push sub-flag is enforced here where we know the actor.
   const actor = verifyRequestActor(req);
   if (actor?.kind === "guest" && !actor.grants.push) push = false;
 
@@ -114,11 +85,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   try {
-    // Borrow the rest of the app's git policy (branch mode, worktree
-    // mode, merge target, integration mode) so the commit honors the
-    // operator's protected-branch settings, but force-enable
-    // `autoCommit` and respect the caller's push intent — this is a
-    // user-initiated commit, they explicitly asked for it.
     const result = await autoCommitAndPush(
       cwd,
       {

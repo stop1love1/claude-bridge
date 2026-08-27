@@ -9,11 +9,6 @@ import { badRequest } from "@/libs/validate";
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * Intent & Planning Gate: return the task's current intake record + the
- * shared plan markdown. Read by both the operator task page and the guest
- * share page (guest authz handled by the proxy via guestAccess allowlist).
- */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");

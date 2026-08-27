@@ -26,10 +26,6 @@ interface PaletteProps {
   onSelectSession: (s: SessionSummary) => void;
 }
 
-// Outer mounts the inner only while the palette is open. That makes
-// every "open" a fresh mount, so search query + cursor state reset
-// for free without a `useEffect` that calls `setQ`/`setCursor`. Keeps
-// the React 19 `set-state-in-effect` rule happy.
 export function CommandPalette({ open, ...rest }: PaletteProps & { open: boolean }) {
   if (!open) return null;
   return <CommandPaletteInner {...rest} />;
@@ -48,8 +44,6 @@ function CommandPaletteInner({
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Focus the input on mount. setTimeout(0) lets the dialog finish
-  // its enter animation / commit before we steal focus.
   useEffect(() => {
     const id = setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearTimeout(id);
@@ -89,10 +83,6 @@ function CommandPaletteInner({
     });
   }, [q, tasks, sessions, onCreateTask, onNavigate, onOpenTask, onSelectSession, onClose]);
 
-  // Clamp at render-time instead of via an effect that calls
-  // setCursor — `cursor` may temporarily exceed `items.length` after
-  // the user filters down, but every event handler reads `effCursor`
-  // and we never index out of bounds.
   const effCursor = items.length === 0 ? 0 : Math.min(cursor, items.length - 1);
 
   const ROLE_ICON: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {

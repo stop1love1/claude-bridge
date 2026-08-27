@@ -20,8 +20,6 @@ import {
 
 const { SHARES_FILE } = _internal;
 
-// shareStore binds its file path to the real `.bridge-state` dir; snapshot
-// and restore so a developer's live shares aren't disturbed by the suite.
 let saved: string | null = null;
 
 const GRANTS: ShareGrants = {
@@ -52,7 +50,6 @@ describe("createShare", () => {
     const { share, token } = createShare({ taskId: "t_1", grants: GRANTS, git: GIT });
     expect(token).toBeTruthy();
     expect(share.tokenHash).toBe(_internal.sha256Hex(token));
-    // The persisted file must not contain the raw token anywhere.
     expect(readFileSync(SHARES_FILE, "utf8")).not.toContain(token);
   });
 
@@ -139,7 +136,6 @@ describe("devices", () => {
     const { share } = createShare({ taskId: "t_1", grants: GRANTS, git: GIT, deviceTtlMs: 1 });
     addDevice(share.id, { did: "gdv_a", label: "Alice", ip: "1.2.3.4" });
     const found = getShare(share.id)!;
-    // expiresAt = now + 1ms; a moment later it's expired.
     expect(findValidDevice(found, "gdv_a", Date.now() + 1000)).toBeNull();
   });
 
@@ -189,22 +185,13 @@ describe("update / revoke / delete / list", () => {
 describe("persistence", () => {
   it("survives a reload from disk", () => {
     const { share, token } = createShare({ taskId: "t_1", grants: GRANTS, git: GIT });
-    // Simulate a fresh process: drop the in-memory cache, force a reload.
     _resetForTestsKeepFile();
     expect(getShare(share.id)?.taskId).toBe("t_1");
     expect(verifyShareToken(share.id, token)).toBe(true);
   });
 });
 
-// Helper: clear the loaded flag WITHOUT wiping the file, to exercise the
-// disk-reload path. We can't import the private `state`, so we re-trigger
-// load by deleting the module-level cache via _resetForTests + re-reading
-// the file the store just wrote. Implemented by re-importing is overkill;
-// instead we rely on the store re-reading because _resetForTests sets an
-// empty in-memory copy with loaded=true. To truly test reload we bypass:
 function _resetForTestsKeepFile(): void {
-  // Re-load from disk by toggling the global cache. Access the same
-  // globalThis stash the store uses.
   const g = globalThis as unknown as {
     __bridgeShareStore?: { data: { shares: unknown[] }; loaded: boolean };
   };

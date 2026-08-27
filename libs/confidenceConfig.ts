@@ -1,8 +1,3 @@
-/**
- * Operator config for the B2 confidence gate. Backed by
- * `.bridge-state/confidence.json`. Mirrors the planGateConfig store
- * pattern (globalThis + atomic write-through).
- */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_STATE_DIR } from "./paths";
@@ -55,7 +50,6 @@ export function writeConfidenceConfig(patch: Partial<ConfidenceGateConfig>): Con
   return { ...state.data };
 }
 
-/** Test-only: reset to defaults without touching disk. */
 export function _resetForTests(): void {
   state.data = { ...DEFAULTS };
   state.loaded = true;

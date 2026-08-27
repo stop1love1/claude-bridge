@@ -10,31 +10,15 @@ import {
 } from "react";
 import { THEME_STORAGE_KEY } from "@/libs/themeBootstrap";
 
-/**
- * Three-state theme preference:
- *   - "system" → follow `prefers-color-scheme` (default for new visitors)
- *   - "dark"   → force dark
- *   - "light"  → force light
- *
- * The *resolved* concrete value applied to the DOM is always either
- * "dark" or "light" — `resolved` exposes it so components can render
- * the correct icon without re-querying the media list.
- */
 export type ThemePref = "dark" | "light" | "system";
 export type ThemeResolved = "dark" | "light";
 
-/** LocalStorage key for theme pref — same string as `NO_FLASH_SCRIPT` in `libs/themeBootstrap`. */
 export const STORAGE_KEY = THEME_STORAGE_KEY;
 
 interface ThemeCtx {
   pref: ThemePref;
   resolved: ThemeResolved;
   setPref: (p: ThemePref) => void;
-  /**
-   * `false` during SSR + the very first client render so consumers can
-   * render a hydration-safe placeholder. Flips to `true` in a post-mount
-   * effect once we've read `localStorage` / `matchMedia`.
-   */
   mounted: boolean;
 }
 
@@ -46,11 +30,6 @@ function applyDom(t: ThemeResolved) {
   document.documentElement.style.colorScheme = t;
 }
 
-// External-store adapters — let `useSyncExternalStore` handle SSR
-// hydration without a `useState` + `useEffect(setX)` ladder, which
-// would trip React 19's `set-state-in-effect` rule. Each adapter
-// returns the current snapshot from the browser API and subscribes
-// to native change events; the *server* snapshot is the SSR default.
 
 function subscribePref(cb: () => void) {
   if (typeof window === "undefined") return () => {};
@@ -64,7 +43,7 @@ function getPrefSnapshot(): ThemePref {
   try {
     const v = window.localStorage.getItem(STORAGE_KEY);
     if (v === "dark" || v === "light" || v === "system") return v;
-  } catch { /* ignore */ }
+  } catch { }
   return "system";
 }
 function getPrefServerSnapshot(): ThemePref { return "system"; }
@@ -82,10 +61,6 @@ function getSystemSnapshot(): ThemeResolved {
 }
 function getSystemServerSnapshot(): ThemeResolved { return "dark"; }
 
-// "Has React handed control over to the client yet?" — the canonical
-// SSR-safe trick. Server snapshot is `false`; client snapshot is
-// `true`; no subscribe needed because the value never changes after
-// hydration.
 function noopSubscribe() { return () => {}; }
 function getMountedClient(): boolean { return true; }
 function getMountedServer(): boolean { return false; }
@@ -109,9 +84,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const resolved: ThemeResolved = pref === "system" ? system : pref;
 
-  // Apply the resolved theme on every change. Skipped before mount so
-  // we don't clobber whatever the no-flash script set during the first
-  // paint (which already matches the user's saved preference).
   useEffect(() => {
     if (!mounted) return;
     applyDom(resolved);
@@ -121,13 +93,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     try {
       if (p === "system") window.localStorage.removeItem(STORAGE_KEY);
       else window.localStorage.setItem(STORAGE_KEY, p);
-    } catch { /* ignore */ }
-    // Manual writes don't fire `storage` (that event is cross-tab
-    // only), so dispatch one ourselves to nudge the
-    // `useSyncExternalStore` subscribers in this tab.
+    } catch { }
     try {
       window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
-    } catch { /* older browsers */ }
+    } catch { }
   }, []);
 
   const value = useMemo(

@@ -1,27 +1,3 @@
-/**
- * Pipeline engine — sequences a Workflow's ordered stages on a single
- * task / working tree.
- *
- * Flow:
- *   - `startWorkflowRun(id)` creates ONE task on the workflow's app and
- *     SNAPSHOTS the workflow's stages into `meta.pipeline` (so later edits /
- *     deletes of the workflow can't change an in-flight run). It moves
- *     TODO→DOING and dispatches stage 0 as an agent run via the agents path.
- *   - The engine subscribes to the meta-change bus. When the current stage's
- *     run reaches a settled terminal state, it advances:
- *       · done + verify passed (or stage.verify=false / no verify) → next stage
- *       · last stage done → finish (status `review`, write READY FOR REVIEW;
- *         NEVER auto-DONE — the user confirms)
- *       · done but verify failed (after the retry ladder exhausted) → BLOCKED
- *       · failed / stale → BLOCKED
- *   - Context carries forward via the shared working tree plus a handoff
- *     header in each stage's prompt. The repo is PINNED from the first stage
- *     so an auto-detect workflow keeps every stage on the same tree.
- *
- * Only the process-lock holder advances pipelines. Re-entrancy is guarded
- * per task, and `scheduleEval` is fired after recording the stage run so a
- * stage that finishes before its sessionId is recorded is never missed.
- */
 
 import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,10 +17,6 @@ import { isLockHolder } from "./processLock";
 import { isValidTaskId } from "./tasks";
 import { logError, logInfo, logWarn } from "./log";
 
-/** Debounce so an exit→retry flip (crash-retry / verify-retry) settles
- *  before we evaluate the stage outcome. Verify/crash retries reuse the
- *  same sessionId (resume), so a brief flip back to `running` lands inside
- *  this window and the eval correctly skips. */
 const EVAL_DEBOUNCE_MS = 2_500;
 
 interface EngineState {
@@ -64,7 +36,6 @@ const state: EngineState =
     advancing: new Set(),
   });
 
-// ── Prompt composition ────────────────────────────────────────────────
 
 export function composeStagePrompt(
   workflowName: string,
@@ -91,7 +62,6 @@ function snapshotStages(stages: PipelineStageSnapshot[]): string {
   return stages.map((s) => s.name).join(" → ");
 }
 
-// ── Pipeline state writes ─────────────────────────────────────────────
 
 async function blockPipeline(taskId: string, reason: string): Promise<void> {
   const dir = join(SESSIONS_DIR, taskId);
@@ -121,8 +91,6 @@ async function finishPipeline(
     meta.pipeline.completedStages = completedStages;
     writeMeta(dir, meta);
   });
-  // READY FOR REVIEW — leave the task in DOING for the user to confirm; the
-  // pipeline NEVER auto-marks DONE.
   try {
     const summary = [
       "READY FOR REVIEW",
@@ -138,16 +106,7 @@ async function finishPipeline(
   logInfo("pipeline", `completed all stages → READY FOR REVIEW`, { taskId });
 }
 
-// ── Stage dispatch ────────────────────────────────────────────────────
 
-/**
- * Dispatch the stage at `stageIndex` (read from the run's snapshot) as an
- * agent run via the agents route (loopback + internal token, so the run
- * gets the full prompt scaffolding + verify chain + retry ladder +
- * lifecycle). Records the run's sessionId + pins the resolved repo, then
- * fires an eval to cover the case where the stage finished before we
- * recorded its sessionId. Returns false on failure.
- */
 async function dispatchStage(taskId: string, stageIndex: number): Promise<boolean> {
   const dir = join(SESSIONS_DIR, taskId);
   const meta = readMeta(dir);
@@ -167,13 +126,11 @@ async function dispatchStage(taskId: string, stageIndex: number): Promise<boolea
       },
       body: JSON.stringify({
         role: stage.role,
-        // Pin the repo from the first stage's resolved repo so every stage
-        // runs on the SAME tree even when the workflow auto-detects.
         repo: p.repo ?? "",
         prompt,
-        allowDuplicate: true, // stages may repeat a role; the engine sequences them
+        allowDuplicate: true,
         requireUserApproval: false,
-        noSpeculative: true, // one run per stage so the engine can track it
+        noSpeculative: true,
       }),
     });
     if (!res.ok) {
@@ -199,7 +156,6 @@ async function dispatchStage(taskId: string, stageIndex: number): Promise<boolea
       m.pipeline.stageIndex = stageIndex;
       m.pipeline.stageRunSessionId = sid;
       m.pipeline.status = "running";
-      // Pin the repo on the first stage that resolves one.
       if (m.pipeline.repo === null && resolvedRepo) m.pipeline.repo = resolvedRepo;
       writeMeta(dir, m);
     });
@@ -207,10 +163,6 @@ async function dispatchStage(taskId: string, stageIndex: number): Promise<boolea
       taskId,
       sessionId: sid,
     });
-    // Close the race where the stage's run reaches a terminal state BEFORE we
-    // wrote stageRunSessionId (a fast stage). Now that the id is recorded,
-    // re-evaluate; if the run already finished the eval advances, otherwise
-    // it harmlessly no-ops and the run's own terminal transition re-triggers.
     scheduleEval(taskId);
     return true;
   } catch (e) {
@@ -219,13 +171,7 @@ async function dispatchStage(taskId: string, stageIndex: number): Promise<boolea
   }
 }
 
-// ── Run lifecycle ─────────────────────────────────────────────────────
 
-/**
- * Start a run of `workflowId`: snapshot its stages onto a new task and
- * dispatch the first stage. Returns the created task id, or null when the
- * workflow is missing / has no stages.
- */
 export async function startWorkflowRun(workflowId: string): Promise<{ taskId: string } | null> {
   const wf = getWorkflow(workflowId);
   if (!wf || wf.stages.length === 0) return null;
@@ -274,12 +220,6 @@ export async function startWorkflowRun(workflowId: string): Promise<{ taskId: st
   return { taskId: task.id };
 }
 
-/**
- * Evaluate a pipeline task whose current stage run just settled. Advance,
- * finish, or block — using the SNAPSHOT in meta.pipeline (never the live
- * workflow), so mid-run edits/deletes can't corrupt sequencing. Guarded
- * against re-entrancy.
- */
 async function advancePipeline(taskId: string): Promise<void> {
   if (state.advancing.has(taskId)) return;
   state.advancing.add(taskId);
@@ -291,16 +231,12 @@ async function advancePipeline(taskId: string): Promise<void> {
     if (!p.stageRunSessionId) return;
     const run = meta.runs.find((r) => r.sessionId === p.stageRunSessionId);
     if (!run) return;
-    // Still in flight (a crash-/verify-retry flipped it back) → wait.
     if (run.status === "running" || run.status === "queued") return;
 
     const stage = p.stages[p.stageIndex];
     const stageName = stage?.name ?? `stage ${p.stageIndex + 1}`;
 
     if (run.status === "cancelled") {
-      // The operator stopped this stage's run — do NOT fall through to
-      // the "done" branch below and silently advance the pipeline as if
-      // it had succeeded (audit C1: a cancelled run is not a success).
       await blockPipeline(taskId, `stage "${stageName}" was cancelled by the operator`);
       return;
     }
@@ -310,8 +246,6 @@ async function advancePipeline(taskId: string): Promise<void> {
       return;
     }
 
-    // run.status === "done". The lifecycle defers the done-flip until after
-    // the verify chain, so run.verify is final here.
     if (stage?.verify && run.verify && run.verify.passed === false) {
       await blockPipeline(taskId, `stage "${stageName}" did not pass verify`);
       return;
@@ -323,8 +257,6 @@ async function advancePipeline(taskId: string): Promise<void> {
       await finishPipeline(taskId, p.workflowName, p.stages.length, completed);
       return;
     }
-    // Persist the advanced index + completed list BEFORE dispatching the next
-    // stage (dispatchStage reads completedStages from meta for the handoff).
     await withTaskLock(dir, () => {
       const m = readMeta(dir);
       if (!m || !m.pipeline) return;
@@ -360,16 +292,13 @@ function onMetaChange(ev: MetaChangeEvent): void {
   if (ev.kind !== "transition") return;
   const status = ev.run?.status;
   if (status !== "done" && status !== "failed" && status !== "cancelled" && status !== "stale") return;
-  if (!isLockHolder()) return; // only the singleton advances pipelines
+  if (!isLockHolder()) return;
   scheduleEval(ev.taskId);
 }
 
-/** Idempotent, HMR-safe installer — call once from instrumentation. */
 export function ensurePipelineEngine(): void {
-  // Re-subscribe cleanly: drop any prior subscription so an HMR reload
-  // doesn't leave a stale `onMetaChange` from the previous module instance.
   if (state.unsubscribe) {
-    try { state.unsubscribe(); } catch { /* ignore */ }
+    try { state.unsubscribe(); } catch { }
     state.unsubscribe = null;
   }
   state.installed = true;
@@ -377,7 +306,6 @@ export function ensurePipelineEngine(): void {
   logInfo("pipeline", "engine installed");
 }
 
-// ── Introspection (for the scheduler cap + UI) ────────────────────────
 
 function listTaskDirs(): string[] {
   if (!existsSync(SESSIONS_DIR)) return [];
@@ -399,7 +327,6 @@ export interface ActivePipelineRun {
   status: "running" | "blocked" | "review";
 }
 
-/** All tasks that currently carry pipeline state (any status). */
 export function listPipelineRuns(): ActivePipelineRun[] {
   const out: ActivePipelineRun[] = [];
   for (const id of listTaskDirs()) {
@@ -416,7 +343,6 @@ export function listPipelineRuns(): ActivePipelineRun[] {
   return out;
 }
 
-/** Number of pipeline runs still executing (status running) — the cap. */
 export function countActivePipelines(): number {
   return listPipelineRuns().filter((r) => r.status === "running").length;
 }

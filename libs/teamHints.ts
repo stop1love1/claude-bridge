@@ -1,24 +1,6 @@
-/**
- * Auto-suggested team shape — surfaces a `## Suggested team` block into
- * the coordinator's prompt when the task body + repo profile combination
- * matches a known pattern that benefits from a specific multi-agent
- * shape.
- *
- * Pattern A — UX/UI work on a frontend-stack repo:
- *   coordinator should default to `coder → ui-tester`. The coder lands
- *   the change; the ui-tester drives the rendered UI through Playwright
- *   MCP to verify the flow actually works end-to-end (typecheck/lint
- *   only catches code-level issues, not whether a button is clickable).
- *
- * The coordinator is free to override — this is a HINT, not a directive.
- * The `## Suggested team` block opens with "Auto-detected suggestion"
- * framing so the coordinator knows it can be overruled by the playbook
- * rubric in §2 when the task body genuinely calls for a different shape.
- */
 import type { DetectedScope } from "./detect/types";
 import type { RepoProfile } from "./repoProfile";
 
-/** Stack tokens that mean "this repo renders user-facing UI". */
 const FE_STACK_TOKENS = new Set([
   "next", "next.js", "nextjs",
   "react",
@@ -31,14 +13,6 @@ const FE_STACK_TOKENS = new Set([
   "chakra", "chakra-ui",
 ]);
 
-/**
- * Keywords that strongly imply user-facing UX work. Mixed Vietnamese
- * + English so a Vietnamese task body ("sửa modal", "trang refunds")
- * matches the same way an English one ("fix the modal", "refunds page")
- * does. Matched case-insensitive, word-boundary OR substring depending
- * on the entry — short tokens use word-boundary, longer phrases match
- * as substrings.
- */
 const UX_KEYWORDS_EN: readonly string[] = [
   "UI", "UX",
   "page", "screen", "view",
@@ -68,14 +42,8 @@ const UX_KEYWORDS_VI: readonly string[] = [
   "điều hướng",
 ];
 
-/** Min UX keyword hits before the suggestion fires. Tunable via env. */
 const MIN_KEYWORD_HITS = 1;
 
-/**
- * True iff at least one repo in the detected scope has an FE-stack
- * signature. Looks at the top-scored repo's profile; falls back to false
- * when no profile is cached for that name (cold start, unregistered repo).
- */
 function hasFrontendStack(
   scope: DetectedScope | null,
   profiles: Record<string, RepoProfile> | undefined,
@@ -96,12 +64,6 @@ function hasFrontendStack(
   return { ok: false, matchedRepo: null, matchedStack: [] };
 }
 
-/**
- * Count UX-keyword hits in the task body. Case-insensitive. English
- * tokens of length ≤4 (UI, UX, tab, form, view, card, …) match on
- * word boundaries to avoid false positives (e.g. "form" inside
- * "format"); longer entries match as plain substrings.
- */
 function countUxHits(body: string): { hits: number; samples: string[] } {
   const text = body || "";
   const lower = text.toLowerCase();
@@ -132,9 +94,7 @@ export interface TeamHintArgs {
 }
 
 export interface TeamHint {
-  /** Markdown block to splice into the coordinator's prompt. */
   block: string;
-  /** Programmatic summary callers can log. */
   summary: {
     suggested: string;
     reason: string;
@@ -144,15 +104,6 @@ export interface TeamHint {
   };
 }
 
-/**
- * Build the `## Suggested team` block for the given task + scope, or
- * return null when no rule matches. Currently surfaces only the
- * coder→ui-tester pattern; add more rules here as patterns emerge.
- *
- * Defaults to null on any parsing failure — this is an opt-in hint, not
- * a hard requirement. A crash here must never block the coordinator from
- * spawning.
- */
 export function buildTeamHint(args: TeamHintArgs): TeamHint | null {
   try {
     const { taskBody, detectedScope, profiles } = args;
@@ -191,7 +142,6 @@ export function buildTeamHint(args: TeamHintArgs): TeamHint | null {
       },
     };
   } catch (err) {
-    // Hint generation never blocks spawning — log and degrade silently.
     console.warn("[team-hint] buildTeamHint crashed (non-fatal)", err);
     return null;
   }

@@ -17,14 +17,6 @@ function summarize(input: unknown): string {
   return s;
 }
 
-/**
- * Inline panel rendered inside the SessionLog (above the composer) that
- * surfaces pending PreToolUse permission requests for THIS session as
- * Allow / Deny cards — instead of an overlay modal that blocks the
- * whole page. Queue / SSE / answer plumbing lives in
- * `usePermissionQueue`; this file just renders one card per pending
- * request.
- */
 export function InlinePermissionRequests({ sessionId }: { sessionId: string | null | undefined }) {
   const { queue, answer } = usePermissionQueue(
     sessionId ? { sessionId } : { sessionId: "" },

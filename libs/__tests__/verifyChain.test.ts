@@ -14,15 +14,7 @@ import type { Run, RunVerify } from "../meta";
 import type { App } from "../apps";
 import { mktmp } from "./helpers/fs";
 
-/**
- * Build a portable shell command that exits with the given code AND
- * prints something to both stdout and stderr. Cross-platform: works in
- * cmd.exe (Windows default) and sh (POSIX). We use `node -e` to dodge
- * shell-builtin differences entirely — `node` is guaranteed present
- * since the test runner itself is node.
- */
 function nodeCmd(script: string): string {
-  // JSON-encode the script so quotes/newlines survive the shell pass.
   return `node -e ${JSON.stringify(script)}`;
 }
 
@@ -234,15 +226,11 @@ describe("runVerifyChain", () => {
         cwd,
         verify: {
           test: nodeCmd("process.exit(0)"),
-          // Lint runs BEFORE test in canonical order — it'll fail and
-          // the chain must stop here without running test.
           lint: nodeCmd("console.log('lint failed'); process.exit(7)"),
           typecheck: nodeCmd("process.exit(0)"),
         },
       });
       expect(result.passed).toBe(false);
-      // format wasn't configured; lint ran and failed; typecheck/test
-      // never ran because the chain stopped at lint.
       expect(result.steps.map((s) => s.name)).toEqual(["lint"]);
       expect(result.steps[0].ok).toBe(false);
       expect(result.steps[0].exitCode).toBe(7);
@@ -274,10 +262,6 @@ describe("runVerifyChain", () => {
   it("treats no configured commands as passed (vacuously true), with empty steps", async () => {
     const cwd = mktmp("empty");
     try {
-      // Callers that need "did we actually verify anything?" should
-      // branch on `steps.length`; `passed` reflects "no failure", not
-      // "we ran something". The commit gate in coordinator.ts is
-      // protected upstream by `hasAnyVerifyCommand`.
       const result = await runVerifyChain({ cwd, verify: {} });
       expect(result.passed).toBe(true);
       expect(result.steps).toEqual([]);
@@ -289,8 +273,6 @@ describe("runVerifyChain", () => {
   it("caps captured output at outputCapBytes and appends a marker", async () => {
     const cwd = mktmp("cap");
     try {
-      // Print 1 KB of 'x' but cap at 100 bytes — output should be
-      // truncated and carry the truncation marker.
       const script = "process.stdout.write('x'.repeat(1024))";
       const result = await runVerifyChain({
         cwd,
@@ -300,7 +282,6 @@ describe("runVerifyChain", () => {
       expect(result.passed).toBe(true);
       const step = result.steps[0];
       expect(step.output).toContain("…(bridge: output truncated at 100 bytes)");
-      // Strip the marker before measuring; what's left should be ≤100 bytes.
       const before = step.output.split("\n\n…(bridge:")[0];
       expect(Buffer.byteLength(before, "utf8")).toBeLessThanOrEqual(100);
     } finally {
@@ -327,9 +308,6 @@ describe("runVerifyChain", () => {
     }
   }, 15_000);
 
-  // execStep now uses treeKill (libs/processKill.ts) which shells out
-  // to `taskkill /T /F` on Windows — so the timeout abort works on
-  // every platform.
   it(
     "aborts a long-running step at the timeout and surfaces a marker",
     async () => {
@@ -356,10 +334,6 @@ describe("runVerifyChain", () => {
   it(
     "reaps grandchildren on timeout (no heartbeat after kill)",
     async () => {
-      // The verify command is a node script that writes a millisecond
-      // heartbeat to <cwd>/beat.txt every 50ms forever. After the
-      // timeout fires, treeKill must reap the entire subtree —
-      // otherwise the grandchild keeps writing past the abort.
       const cwd = mktmp("treekill");
       const beatFile = join(cwd, "beat.txt");
       try {
@@ -375,16 +349,12 @@ describe("runVerifyChain", () => {
         expect(result.passed).toBe(false);
         expect(result.steps[0].output).toContain("aborted after 400ms");
 
-        // Wait past the SIGKILL backstop (2s) + a comfort margin so any
-        // surviving grandchild has plenty of time to write again. Then
-        // sample the heartbeat file and confirm it stays frozen.
         await new Promise((r) => setTimeout(r, 3000));
         const { readFileSync } = await import("node:fs");
         let snapshot: string;
         try {
           snapshot = readFileSync(beatFile, "utf8");
         } catch {
-          // File may never have been created if the kill was very fast.
           snapshot = "";
         }
         await new Promise((r) => setTimeout(r, 600));

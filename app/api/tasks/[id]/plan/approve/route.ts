@@ -22,11 +22,6 @@ interface ApproveBody {
   note?: string;
 }
 
-/**
- * Intent & Planning Gate: approve / request-changes / reject a task's
- * intake plan. Approve requires the operator (or a guest with the
- * `approvePlan` grant — enforced both here and in the guest allowlist).
- */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
@@ -74,9 +69,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   if (action === "request-changes") {
-    // Enforce maxClarifyRounds: cap operator-driven re-plan cycles so an
-    // endless "request changes" loop can't churn the planner forever. Past
-    // the cap the operator must approve or reject the current plan.
     const cfg = readPlanGateConfig();
     if (intake.rounds >= cfg.maxClarifyRounds) {
       return NextResponse.json(
@@ -89,9 +81,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       );
     }
     const rec = await setIntake(sessionsDir, { status: "planning", rounds: intake.rounds + 1 });
-    // Re-dispatch planning with the operator note. `replan` flips the
-    // coordinator message to "re-plan" (NOT "gate is now open") so it
-    // doesn't try to dispatch coders against the still-closed gate.
     await continueCoordinator(
       id,
       sessionsDir,
@@ -101,7 +90,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ ok: true, intake: rec });
   }
 
-  // action === "approve". Idempotent: already approved → no-op 200.
   if (intake.status === "approved") {
     return NextResponse.json({ ok: true, intake, idempotent: true });
   }
@@ -112,7 +100,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         .map((a) => ({ questionId: a.questionId, answer: a.answer.slice(0, 4000), answeredBy: label, at: nowIso }))
     : [];
 
-  // Append answers into plan.md so downstream coders (via loadSharedPlan) see them.
   if (answers.length > 0) {
     try {
       const block =

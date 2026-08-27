@@ -1,48 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 
-/**
- * `spawnCoordinatorForTask` orchestrates four concerns: read the
- * coordinator template, substitute structural placeholders + splice the
- * detected-scope block, sanitize user content, then hand the rendered
- * prompt to `spawnClaude`. We mock every I/O dependency so the test can
- * assert ordering — specifically that:
- *
- *   1. Structural placeholders (`{{SESSION_ID}}`, `{{TASK_ID}}`, etc.)
- *      are filled BEFORE user content (`{{TASK_BODY}}`), so a hostile
- *      task body containing a literal `{{SESSION_ID}}` is treated as
- *      data, not template.
- *   2. `## Detected scope` is spliced in AT the location of the
- *      `## Your job` marker — never before structural substitution and
- *      never after user content (which `sanitizeUserPromptContent`
- *      degrades the marker for, as belt-and-suspenders).
- *   3. When `readBridgeMd` returns "" (BRIDGE.md missing), the example
- *      repo falls back to BRIDGE_FOLDER instead of throwing.
- */
 
-// `spawnClaude` is the exit point we capture — fake child + sessionId.
-// Recorded calls are inspected per-test via the closure below.
 const spawnCalls: Array<{ cwd: string; opts: unknown }> = [];
 
 vi.mock("../spawn", () => ({
   spawnClaude: (cwd: string, opts: unknown) => {
     spawnCalls.push({ cwd, opts });
-    // Minimal ChildProcess stub — `wireRunLifecycle` only attaches
-    // `on("error", …)` / `on("exit", …)` listeners that never fire here.
     const child = {
       on: () => {
-        /* noop */
       },
       once: () => {
-        /* noop */
       },
     } as unknown as ChildProcess;
     return { child, sessionId: (opts as { sessionId?: string }).sessionId ?? "fake-sid" };
   },
 }));
 
-// Meta layer: succeed silently. The coordinator path calls
-// readMeta (must not be null), appendRun, updateRun (queued→running).
 const fakeMeta = {
   taskId: "t_20260424_001",
   taskTitle: "fake task",
@@ -59,18 +33,11 @@ vi.mock("../meta", () => ({
   updateRun: vi.fn().mockResolvedValue({ applied: true, run: null }),
 }));
 
-// runLifecycle.wireRunLifecycle is called after spawn — we don't care
-// about its side effects here, only that it doesn't crash.
 vi.mock("../runLifecycle", () => ({
   wireRunLifecycle: () => {
-    /* noop */
   },
 }));
 
-// Profile store / repos / detect: return empty data so the scope block
-// renders with the deterministic "_(detection layer crashed …)_" or
-// "no detected" fallback. We control the renderDetectedScope output via
-// a dedicated mock below.
 vi.mock("../profileStore", () => ({
   loadProfiles: () => ({ profiles: [] }),
 }));
@@ -115,9 +82,6 @@ describe("spawnCoordinatorForTask — prompt rendering", () => {
     });
 
     const { spawnCoordinatorForTask } = await import("../coordinator");
-    // The body deliberately contains `{{SESSION_ID}}` and a `## Your job`
-    // heading. After the substitution-then-splice flow, neither must
-    // collide with the structural ones.
     const sid = await spawnCoordinatorForTask({
       id: "t_20260424_001",
       title: "title-x",
@@ -129,14 +93,9 @@ describe("spawnCoordinatorForTask — prompt rendering", () => {
     expect(spawnCalls).toHaveLength(1);
     const prompt = (spawnCalls[0].opts as { prompt: string }).prompt;
 
-    // Structural placeholders are filled with real values.
     expect(prompt).toContain(`task=\`t_20260424_001\``);
     expect(prompt).toContain(`sid=\`${sid}\``);
-    // The user-content `{{SESSION_ID}}` was sanitized to fullwidth
-    // braces, so it stays literal — never interpolated.
     expect(prompt).toContain("｛｛SESSION_ID｝｝");
-    // The body's heading was degraded (zero-width space after the
-    // hashes) so the splice never landed there.
     expect(prompt).not.toMatch(/^## Your job heading/m);
   });
 
@@ -169,7 +128,6 @@ describe("spawnCoordinatorForTask — prompt rendering", () => {
     });
 
     const prompt = (spawnCalls[0].opts as { prompt: string }).prompt;
-    // Scope appears between the header and the marker, exactly once.
     const scopeIdx = prompt.indexOf("## Detected scope");
     const jobIdx = prompt.indexOf("## Your job");
     expect(scopeIdx).toBeGreaterThan(0);
@@ -191,8 +149,6 @@ describe("spawnCoordinatorForTask — prompt rendering", () => {
       };
     });
 
-    // Override `readBridgeMd` to throw so the try/catch in
-    // `spawnCoordinatorForTask` exercises its fallback branch.
     vi.doMock("../paths", async () => {
       const actual = await vi.importActual<typeof import("../paths")>("../paths");
       return {
@@ -213,8 +169,6 @@ describe("spawnCoordinatorForTask — prompt rendering", () => {
     });
 
     const prompt = (spawnCalls[0].opts as { prompt: string }).prompt;
-    // Both markers fall back to the bridge folder name when the apps
-    // registry can't be read — never to the unsubstituted literal.
     expect(prompt).toContain(`repo=\`${BRIDGE_FOLDER}\``);
     expect(prompt).toContain(`folder=\`${BRIDGE_FOLDER}\``);
     expect(prompt).not.toContain("{{EXAMPLE_REPO}}");

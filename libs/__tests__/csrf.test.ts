@@ -27,7 +27,6 @@ function makeReq(opts: {
 describe("checkCsrf — safe methods", () => {
   for (const m of ["GET", "HEAD", "OPTIONS", "get", "head", "options"]) {
     it(`accepts ${m} unconditionally`, () => {
-      // No origin / referer / fetch-site headers — should still pass.
       expect(checkCsrf(makeReq({ method: m })).ok).toBe(true);
     });
   }
@@ -59,7 +58,6 @@ describe("checkCsrf — internal-token bypass", () => {
       internalToken: "real-token",
       trustedDevices: [],
     });
-    // Wrong token + same-origin Sec-Fetch-Site → still passes via fetch-site.
     expect(
       checkCsrf(makeReq({
         method: "POST",
@@ -67,7 +65,6 @@ describe("checkCsrf — internal-token bypass", () => {
         fetchSite: "same-origin",
       })).ok,
     ).toBe(true);
-    // Wrong token + cross-site → rejected; header presence alone is not a bypass.
     const r = checkCsrf(makeReq({
       method: "POST",
       internal: "wrong-token",
@@ -83,7 +80,6 @@ describe("checkCsrf — internal-token bypass", () => {
       host: "bridge.local",
       internal: "any-token",
     }));
-    // No origin/referer + no valid token → rejected.
     expect(r.ok).toBe(false);
   });
 });
@@ -126,8 +122,6 @@ describe("checkCsrf — Origin/Referer fallback", () => {
   });
 
   it("ignores port differences in host string", () => {
-    // Origin includes :7777, host header from `host:port`. The check
-    // compares full host (including port), so they must match.
     expect(
       checkCsrf(makeReq({
         method: "POST",

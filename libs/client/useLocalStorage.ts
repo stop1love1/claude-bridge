@@ -1,24 +1,5 @@
 "use client";
 
-/**
- * Cross-tab-aware `localStorage` hook backed by `useSyncExternalStore`,
- * so the SSR → CSR hydration flip happens via React's external-store
- * machinery instead of a `useState` + `useEffect(setX)` pair (which
- * trips React 19's `react-hooks/set-state-in-effect` rule).
- *
- * Why a module-level cache?
- *   `useSyncExternalStore` compares snapshots with `Object.is`. If
- *   `getSnapshot` returns a freshly-parsed object every call, the
- *   store loops forever. The cache hands back the *same reference*
- *   until the value actually changes (cross-tab `storage` event or
- *   our own `setValue` write).
- *
- * Cross-tab semantics:
- *   The browser fires `storage` events on *other* tabs only. We
- *   manually `dispatchEvent(new StorageEvent(...))` from `setValue`
- *   so listeners in the *same* tab get notified too — without that,
- *   a write here wouldn't re-render the consumer.
- */
 
 import { useCallback, useSyncExternalStore } from "react";
 
@@ -39,7 +20,7 @@ function writeRaw(key: string, raw: string | null): void {
   try {
     if (raw === null) window.localStorage.removeItem(key);
     else window.localStorage.setItem(key, raw);
-  } catch { /* quota / disabled */ }
+  } catch { }
 }
 
 function notifyKey(key: string): void {
@@ -48,8 +29,6 @@ function notifyKey(key: string): void {
 
 function ensureSubscribed(key: string): () => void {
   if (typeof window === "undefined") return () => {};
-  // Only install the global storage listener once per key — repeated
-  // subscriptions just join the in-memory set.
   let set = listeners.get(key);
   if (!set) {
     set = new Set();
@@ -62,9 +41,6 @@ function ensureSubscribed(key: string): () => void {
     window.addEventListener("storage", onStorage);
   }
   return () => {
-    // We never tear down the global listener — keys persist for the
-    // lifetime of the page. The per-component listener is enough to
-    // stop notifying unmounted consumers.
   };
 }
 
@@ -77,18 +53,6 @@ function getCachedTyped<T>(key: string, load: Loader<T>): T {
   return value;
 }
 
-/**
- * @param key            localStorage key
- * @param load           parse the raw string (or `null` for "missing")
- *                       into your typed value. Must be referentially
- *                       stable across renders — pass a top-level
- *                       function or `useCallback` it.
- * @param serverValue    snapshot returned during SSR (and the very
- *                       first client render before hydration runs).
- * @param dump           serialize the typed value back to a raw
- *                       string for `setValue`. Optional — omit for
- *                       read-only stores.
- */
 export function useLocalStorage<T>(
   key: string,
   load: Loader<T>,
@@ -123,10 +87,6 @@ export function useLocalStorage<T>(
   return [value, setValue];
 }
 
-/**
- * Convenience for JSON-backed values. Defaults the loader / dumper
- * so callers just pass a key + default.
- */
 export function useLocalStorageJSON<T>(
   key: string,
   defaultValue: T,

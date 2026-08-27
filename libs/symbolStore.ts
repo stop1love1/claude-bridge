@@ -1,19 +1,3 @@
-/**
- * P3a — on-disk cache for `SymbolIndex` per app.
- *
- * Layout: `<BRIDGE_STATE_DIR>/symbol-indexes.json`. Single JSON file
- * keyed by app name, mirroring `profileStore.ts` shape so the same
- * mental model applies. Refresh is on-demand:
- *
- *   - `ensureFreshSymbolIndex(appName, appPath, dirs)` — lazy entry
- *     point. Returns the cached index unless missing or older than
- *     `SYMBOL_TTL_MS`, in which case it triggers a re-scan.
- *   - `refreshSymbolIndex(appName, appPath, dirs)` — explicit force
- *     refresh, used when the operator clicks "rescan" in the UI (P3b).
- *
- * Failure to refresh (any error) is swallowed — the previous cached
- * index is returned, never block a caller on symbol-build.
- */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeJsonAtomic } from "./atomicWrite";
@@ -21,7 +5,6 @@ import { BRIDGE_STATE_DIR } from "./paths";
 import { scanSymbols, type SymbolIndex } from "./symbolIndex";
 
 export const SYMBOL_STORE_VERSION = 1;
-/** Lazy-refresh TTL — same 24h cadence as repo profiles. */
 export const SYMBOL_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface SymbolStore {
@@ -48,17 +31,6 @@ function emptyStore(): SymbolStore {
   };
 }
 
-/**
- * In-memory cache of `loadSymbolStore()`. The store is read on EVERY
- * spawn (`ensureFreshSymbolIndex` + `ensureFreshStyleFingerprint` both
- * loadSymbolStore-equivalent the underlying file), and on a busy
- * dispatch flow that's a `readFileSync` + `JSON.parse` per spawn for
- * the same file. TTL keeps the cache short enough that an external
- * editor / refresh writes are visible quickly. Invalidated explicitly
- * on save so writes from this process see fresh data on the next read.
- *
- * HMR-safe via globalThis like the meta + git queues.
- */
 const SYMBOL_CACHE_TTL_MS = 5_000;
 const SG = globalThis as unknown as {
   __bridgeSymbolStoreCache?: { value: SymbolStore | null; expires: number };
@@ -112,12 +84,7 @@ export function loadSymbolStore(): SymbolStore | null {
 
 export function saveSymbolStore(store: SymbolStore): void {
   ensureStateDir();
-  // Shared atomic-write helper. The legacy `${path}.tmp` suffix raced
-  // under concurrent refreshes (multi-app dispatch) — see
-  // libs/atomicWrite.ts for the rationale on the unique-suffix scheme.
   writeJsonAtomic(storeFilePath(), store);
-  // Drop the cache so the next loadSymbolStore in this process reads
-  // the freshly-written file rather than the pre-write snapshot.
   invalidateCache();
 }
 
@@ -127,11 +94,6 @@ export function getSymbolIndex(appName: string): SymbolIndex | null {
   return store.indexes[appName] ?? null;
 }
 
-/**
- * Force-refresh one app's index regardless of TTL. Used by an explicit
- * "rescan symbols" UI action; also internally by `ensureFreshSymbolIndex`
- * when the cache is stale.
- */
 export function refreshSymbolIndex(
   appName: string,
   appPath: string,
@@ -153,12 +115,6 @@ export function refreshSymbolIndex(
   return fresh;
 }
 
-/**
- * Lazy entry point used by the spawn pipeline. Returns the cached
- * index unless missing or older than `SYMBOL_TTL_MS`, in which case
- * triggers a re-scan. Failure to refresh returns the stale entry
- * (or null when there's nothing cached at all).
- */
 export function ensureFreshSymbolIndex(
   appName: string,
   appPath: string,

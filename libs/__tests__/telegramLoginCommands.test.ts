@@ -1,23 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingLogin } from "../loginApprovals";
 
-/**
- * Telegram device-login approval commands (`/logins`, `/approvelogin`,
- * `/denylogin`) plus the "new device login pending" notifier ping.
- *
- * `loginApprovals` stashes its in-memory map (and, as of Task 10, its
- * pub/sub emitter) on `globalThis` — same HMR-safe trick as
- * `permissionStore` / `spawnRegistry`. We delete that stash AND call
- * `vi.resetModules()` between tests (mirrors `telegramPlanCommands.test.ts`)
- * so every test gets a clean store and a freshly-bound `telegramCommands`
- * module pointing at it.
- *
- * Security note (mirrors the code comment in `telegramCommands.ts`):
- * answering `/approvelogin` / `/denylogin` from Telegram is equivalent
- * to a trusted device clicking Approve/Deny in the web UI's modal — the
- * chat-id allowlist is the ONLY auth boundary, same trust model as
- * `/allow` / `/deny` for permissions.
- */
 
 beforeEach(() => {
   delete (globalThis as { __bridgeLoginApprovals?: unknown }).__bridgeLoginApprovals;
@@ -130,9 +113,6 @@ describe("/approvelogin", () => {
     const { createPendingLogin, answerPendingLogin } = await import("../loginApprovals");
     const entry = createPendingLogin(sampleArgs);
     answerPendingLogin(entry.id, "approved");
-    // listPendingLogins() only returns status=pending, so the already-
-    // answered entry no longer matches ANY prefix — the command should
-    // report "no match", not silently re-approve.
     const { dispatchCommand } = await import("../telegramCommands");
     const out = await dispatchCommand(`/approvelogin ${entry.id.slice(0, 8)}`);
     expect(out).toMatch(/No pending login matching/i);
@@ -218,10 +198,6 @@ describe("renderPendingLoginMessage", () => {
     const out = renderPendingLoginMessage(entry);
     expect(out).toContain("New device login pending");
     expect(out).toContain("iPhone");
-    // The IP is attacker-influenced text headed for the Bot API in
-    // MarkdownV2 mode — assert the dots come out ESCAPED (a literal
-    // `\.` in the output) so a regression in `escapeMarkdownV2` (or a
-    // call site dropping the escaping) fails this test.
     expect(out).toContain("198\\.51\\.100\\.7");
     expect(out).toContain("/approvelogin");
     expect(out).toContain(entry.id.slice(0, 8));

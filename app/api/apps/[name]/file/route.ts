@@ -1,11 +1,3 @@
-/**
- * Read a text file under a registered app root (for Source code preview).
- *
- *   GET /api/apps/<segment>/file?path=relative/path/to/file.ts
- *
- * Caps size, rejects traversal, and refuses likely-binary content
- * (NUL in the scanned prefix).
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";

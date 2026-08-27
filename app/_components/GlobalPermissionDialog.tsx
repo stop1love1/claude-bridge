@@ -27,17 +27,6 @@ function summarize(input: unknown): string {
   return s;
 }
 
-/**
- * Cross-session Allow / Deny dialog. Subscribes to the global
- * `/api/permission` backlog + `/api/permission/stream` SSE, so a popup
- * pops on whichever page the user happens to be on, regardless of which
- * run the bridge is showing in the chat panel. The shared
- * `usePermissionQueue` hook handles backlog fetch, SSE subscribe, and
- * cross-scope deduplication: any request whose session already has a
- * session-scoped consumer mounted (e.g. `<InlinePermissionRequests>` in
- * the visible SessionLog) is skipped here so we never render two
- * dialogs for the same request.
- */
 export function GlobalPermissionDialog() {
   const { queue, answer } = usePermissionQueue({ all: true });
   const [remember, setRemember] = useState(false);
@@ -55,7 +44,7 @@ export function GlobalPermissionDialog() {
   if (!current) return null;
 
   return (
-    <AlertDialog open onOpenChange={() => { /* modal: close only via Allow/Deny */ }}>
+    <AlertDialog open onOpenChange={() => { }}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
@@ -85,8 +74,7 @@ export function GlobalPermissionDialog() {
         </label>
 
         <AlertDialogFooter>
-          {/* Deny is the safer default — see PermissionDialog.tsx for
-              the focus-hierarchy rationale. */}
+          {}
           <AlertDialogCancel
             autoFocus
             onClick={() => void onAnswer("deny")}

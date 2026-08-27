@@ -1,21 +1,11 @@
 export type TaskStatus = "todo" | "doing" | "blocked" | "done";
 export type TaskSection = "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived";
 
-/**
- * Canonical task section strings. Use these constants instead of writing
- * the literal — especially `SECTION_DONE`, whose `"DONE — not yet
- * archived"` text is easy to typo (en-dash variants, missing spaces) and
- * was previously duplicated across ~10 files.
- *
- * Each is `as const` so callers using them as Record keys / switch cases
- * keep literal-type narrowing.
- */
 export const SECTION_TODO = "TODO" as const;
 export const SECTION_DOING = "DOING" as const;
 export const SECTION_BLOCKED = "BLOCKED" as const;
 export const SECTION_DONE = "DONE — not yet archived" as const;
 
-/** Display order used by the kanban + index pages. */
 export const SECTION_ORDER: readonly TaskSection[] = [
   SECTION_TODO,
   SECTION_DOING,
@@ -25,30 +15,16 @@ export const SECTION_ORDER: readonly TaskSection[] = [
 
 export interface Task {
   id: string;
-  date: string;          // YYYY-MM-DD
+  date: string;
   title: string;
-  body: string;          // everything after the title line, excluding blank tail
+  body: string;
   status: TaskStatus;
   section: TaskSection;
-  checked: boolean;      // [x] vs [ ]
-  /** Target app name; `null` means "auto" (coordinator decides). */
+  checked: boolean;
   app?: string | null;
-  /** How the task was created / dispatched. */
   origin?: "manual" | "cron" | "pipeline";
-  /** Originating workflow id when `origin === "cron" | "pipeline"`. */
   workflowId?: string | null;
-  /**
-   * Effort tier the coordinator (and, by default, its children) run at.
-   * `null` / absent means claude's own default. Mirrors `EffortLevel` in
-   * libs/client/types.ts — inlined here to keep this leaf module
-   * import-free.
-   */
   effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | null;
-  /**
-   * Intent & Planning Gate sub-state, surfaced for the board badge.
-   * `none` / absent = gate inert. Inlined union to keep this leaf
-   * module import-free.
-   */
   intakeStatus?: "none" | "planning" | "awaiting-approval" | "approved" | "error" | null;
 }
 
@@ -59,12 +35,6 @@ export const SECTION_STATUS: Record<TaskSection, TaskStatus> = {
   "DONE — not yet archived": "done",
 };
 
-/**
- * Strict task ID format: `t_YYYYMMDD_NNN`. Used as both the slug and a
- * trust gate before any path join under `SESSIONS_DIR` — anything that
- * doesn't match this regex must be rejected to prevent traversal
- * (`../`, `/`, `\`, drive letters, null bytes, …).
- */
 const TASK_ID_RE = /^t_\d{8}_\d{3}$/;
 
 export function isValidTaskId(id: unknown): id is string {

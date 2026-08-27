@@ -7,14 +7,6 @@ interface PutBody {
   authtoken?: unknown;
 }
 
-/**
- * PUT /api/tunnels/providers/ngrok/authtoken
- *
- * Body: `{ authtoken: string }`. Empty string clears the token.
- * Persists to `bridge.json#tunnels.ngrok.authtoken` (mode 0600). The
- * response echoes the current provider statuses so the UI can refresh
- * the ngrok row in one round-trip.
- */
 export async function PUT(req: NextRequest) {
   let body: PutBody;
   try {
@@ -28,10 +20,6 @@ export async function PUT(req: NextRequest) {
       { status: 400 },
     );
   }
-  // Cap the length before it reaches bridge.json. Real ngrok authtokens
-  // are ~49 chars; anything past 1 KB is a typo or an attempt to bloat
-  // the persisted config / spam logs. Trim first so trailing whitespace
-  // from a paste doesn't trip the cap.
   const authtoken = body.authtoken.trim();
   if (authtoken.length > 1024) {
     return NextResponse.json(

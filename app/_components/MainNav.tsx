@@ -32,28 +32,10 @@ const ITEMS: {
   { key: "settings",  href: "/settings",  label: "Settings",  Icon: SettingsIcon },
 ];
 
-/**
- * The four top-level navigations: Apps (registry), Tasks (board),
- * Sessions (raw chats), Settings (config). Renders as a horizontally
- * scrollable pill row at every breakpoint — on mobile the labels
- * collapse to icons-only so all sections fit on a phone without
- * sideways scrolling; the active tab keeps its label so the user
- * always knows where they are. `min-w-0` on the wrapper prevents the
- * row from pushing the header buttons off-screen.
- *
- * `active` highlights the current page; pass `badges` for any per-tab
- * counters (e.g. orphan sessions).
- */
 export function MainNav({
   active,
   badges,
 }: {
-  /**
-   * The currently-active top-level section, if any. Off-nav pages
-   * (e.g. `/usage`, opened from the account menu) pass nothing so no
-   * pill gets highlighted — that's the right UX, since the user isn't
-   * on one of the listed sections.
-   */
   active?: MainNavSection;
   badges?: Partial<Record<MainNavSection, React.ReactNode>>;
 }) {

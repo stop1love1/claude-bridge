@@ -26,26 +26,9 @@ interface PendingApproval {
 
 const POLL_MS = 3000;
 
-/**
- * Polls `/api/auth/approvals` every ~3s and surfaces any pending
- * device-login request as a modal. The signed-in operator can
- * Approve / Deny — the new device's poll picks up the decision and
- * either signs in or shows an error.
- *
- * Mounted once globally (next to the toast provider) so it triggers
- * on whichever page the operator happens to be on. Renders nothing
- * when the queue is empty.
- *
- * Failure modes (network down, 401 because operator just logged out)
- * are silent: we just stop polling for this tick and try again next
- * cycle. Preventing toast spam on transient failures.
- */
 export function LoginApprovalDialog() {
   const [queue, setQueue] = useState<PendingApproval[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
-  // Set of approval ids the operator has already dismissed (denied or
-  // approved) — keeps the dialog from re-opening on the next poll if
-  // the answer hasn't fully propagated to the server side yet.
   const handledRef = useRef<Set<string>>(new Set());
   const toast = useToast();
 
@@ -60,8 +43,6 @@ export function LoginApprovalDialog() {
         const fresh = (data.pending ?? []).filter(
           (p) => !handledRef.current.has(p.id),
         );
-        // Stable update: only setState when the list actually changed
-        // so the modal doesn't flash on every poll.
         setQueue((prev) => {
           if (
             prev.length === fresh.length &&
@@ -72,8 +53,6 @@ export function LoginApprovalDialog() {
           return fresh;
         });
       } catch {
-        // abort during teardown OR a network blip — either way, keep
-        // polling on the next interval tick.
       }
     };
     void tick();
@@ -112,14 +91,11 @@ export function LoginApprovalDialog() {
     }
   };
 
-  // Show only the OLDEST pending request — it's a critical-modal flow,
-  // we don't want a queue of stacked dialogs. The next pending is
-  // surfaced after the current one is resolved.
   const top = queue[0] ?? null;
   if (!top) return null;
 
   return (
-    <Dialog open onOpenChange={() => { /* must answer; no auto-close */ }}>
+    <Dialog open onOpenChange={() => { }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New device sign-in request</DialogTitle>

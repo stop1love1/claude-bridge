@@ -71,7 +71,7 @@ describe("buildHeuristicMessage", () => {
       path: `pkg/x${i}.ts`,
     }));
     const body = buildHeuristicMessage(rows).split("\n").slice(2);
-    expect(body.filter((l) => l.startsWith("- ")).length).toBe(9); // 8 shown + overflow line
+    expect(body.filter((l) => l.startsWith("- ")).length).toBe(9);
     expect(body[body.length - 1]).toBe("- …and 4 more");
   });
 

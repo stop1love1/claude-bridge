@@ -53,16 +53,6 @@ const NGROK_INSPECTOR_URL = "http://localhost:4040";
 const NGROK_AUTHTOKEN_DASHBOARD =
   "https://dashboard.ngrok.com/get-started/your-authtoken";
 
-/**
- * Dev-time public tunnels page. Spawn a tunnel client (localtunnel or
- * ngrok) for any local port and watch its public URL appear in the row.
- * Tunnels are in-memory only — every entry dies when the bridge process
- * exits. The provider Select drives both the spawn command and the
- * accompanying readiness panel (install + authtoken affordances for
- * ngrok). Restarting an ended row, clearing the Ended bucket, copying
- * URLs, and opening the ngrok inspector all happen inline — there's no
- * scenario where the operator has to drop to a terminal.
- */
 function TunnelsPage() {
   const [tunnels, setTunnels] = useState<TunnelEntry[]>([]);
   const [providers, setProviders] = useState<TunnelProviderStatus[]>([]);
@@ -77,10 +67,6 @@ function TunnelsPage() {
   const [autoStartSaving, setAutoStartSaving] = useState(false);
   const toast = useToast();
   const confirm = useConfirm();
-  /**
-   * Tunnel ids we've already toasted "URL ready" for. Without this we'd
-   * re-announce on every poll while the row is still running.
-   */
   const announcedRef = useRef<Set<string>>(new Set());
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -91,7 +77,6 @@ function TunnelsPage() {
         api.bridgeSettings({ signal }),
       ]);
       if (signal?.aborted) return;
-      // Detect starting → running transitions and announce them once.
       for (const row of t.tunnels) {
         if (row.status === "running" && row.url && !announcedRef.current.has(row.id)) {
           announcedRef.current.add(row.id);
@@ -116,7 +101,6 @@ function TunnelsPage() {
         const s = await api.tunnelAutoStart({ signal: ac.signal });
         if (!ac.signal.aborted) setAutoStart(s);
       } catch {
-        // Best-effort — the toggle just renders in its default "off" state.
       }
     })();
     return () => ac.abort();
@@ -149,18 +133,10 @@ function TunnelsPage() {
 
   useEffect(() => {
     const ac = new AbortController();
-    // Defer through a microtask so the initial setLoading-on-success
-    // setStates don't cascade synchronously inside the effect body —
-    // matches the React Compiler "no setState in effect" rule.
     void Promise.resolve().then(() => refresh(ac.signal));
     return () => ac.abort();
   }, [refresh]);
 
-  // Fast poll while any tunnel is in `starting` (we're waiting for the
-  // URL to land); slow poll otherwise to keep the row count fresh.
-  // The AbortController both stops the timer chain AND aborts any
-  // in-flight refresh() — so a teardown that races a network read
-  // never sets state on an unmounted component.
   const tunnelsRef = useRef(tunnels);
   useEffect(() => { tunnelsRef.current = tunnels; }, [tunnels]);
   useEffect(() => {
@@ -250,23 +226,11 @@ function TunnelsPage() {
     }
   };
 
-  /**
-   * Re-spawn a stopped/error tunnel with the same provider + port +
-   * label + subdomain. We purge the old row server-side BEFORE
-   * starting the new one, otherwise a transient DELETE failure left
-   * the old entry counting against `MAX_CONCURRENT` (8) — the new
-   * spawn would later fail with `max … reached` and the operator had
-   * no way to clear the zombie short of a full bridge restart.
-   */
   const restart = async (t: TunnelEntry) => {
     try {
       try {
         await api.stopTunnel(t.id, true);
       } catch (purgeErr) {
-        // Surface but don't abort — the operator's intent is "give me
-        // a working tunnel for this port"; if the old row is already
-        // gone server-side that error is benign. We log to console so
-        // a real failure (e.g. backend down) leaves a breadcrumb.
         console.warn("[tunnels] restart purge failed:", (purgeErr as Error).message);
       }
       announcedRef.current.delete(t.id);
@@ -374,9 +338,7 @@ function TunnelsPage() {
               }}
               className="space-y-3"
             >
-              {/* Row 1 — Provider + Port. Chips moved out of the Port
-                  cell so the two cells are equal-height and the next
-                  row's labels line up across columns. */}
+              {}
               <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
                 <div className="grid gap-1.5">
                   <Label htmlFor="tunnel-provider">Provider</Label>
@@ -419,9 +381,7 @@ function TunnelsPage() {
                 </div>
               </div>
 
-              {/* Row 2 — Subdomain + Label. Helper text wrapped in a
-                  fixed-min-height block so cells stay equal-height even
-                  when one helper is 1 line and the other is 2. */}
+              {}
               <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
                 <div className="grid gap-1.5">
                   <Label htmlFor="tunnel-subdomain">
@@ -569,17 +529,6 @@ function TunnelsPage() {
   );
 }
 
-/**
- * ngrok readiness panel. Three states:
- *
- *   - **Not installed** — Install button (cross-platform via the API
- *     route's installerPlan) or a manual-link fallback.
- *   - **Installed but no authtoken** — input + Save. Persists to
- *     `bridge.json#tunnels.ngrok.authtoken` (mode 0600).
- *   - **Ready** — green check + version + collapsed Edit/Clear actions.
- *     Editing flips the row back into the input UI without forcing a
- *     full clear-then-save round-trip.
- */
 function NgrokStatusPanel({
   status,
   onChanged,
@@ -671,7 +620,6 @@ function NgrokStatusPanel({
     );
   }
 
-  // Installed: either show Saved/Edit actions, OR show input form.
   const showInput = !status.authtokenSet || editingToken;
 
   if (showInput) {
@@ -770,7 +718,6 @@ function TunnelRow({
   onRemove,
 }: {
   t: TunnelEntry;
-  /** True when this tunnel's URL is currently the bridge's publicUrl. */
   isPublicUrl?: boolean;
   onStop: () => void;
   onRestart: () => void;
@@ -939,11 +886,6 @@ function TunnelRow({
   );
 }
 
-/**
- * Status pill. The `starting` variant pulses to make the in-flight
- * state visible at a glance — nothing is more confusing than a static
- * yellow badge that's actually idle.
- */
 function StatusPill({ status }: { status: TunnelEntry["status"] }) {
   const map: Record<TunnelEntry["status"], { label: string; cls: string }> = {
     starting: {

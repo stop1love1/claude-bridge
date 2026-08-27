@@ -23,11 +23,6 @@ interface RepoEntry {
   branch?: string | null;
 }
 
-/**
- * Apps registry page. Lists every app declared in `sessions/init.md`
- * with metadata (path, description, branch, on-disk presence) and
- * exposes Add / Auto-detect / Delete actions.
- */
 function AppsPage() {
   const router = useRouter();
   const [apps, setApps] = useState<App[]>([]);
@@ -58,13 +53,9 @@ function AppsPage() {
       const [t, m] = await Promise.all([api.tasks(), api.allMeta()]);
       setTasks(t);
       setMetaByTask(new Map(Object.entries(m)));
-    } catch { /* stats are best-effort */ }
+    } catch { }
   }, []);
 
-  // Mount-time fetch: scheduled as a microtask so the setState calls
-  // inside `refresh` / `refreshStats` happen after the effect body
-  // returns. Calling them synchronously here would trip
-  // `react-hooks/set-state-in-effect`.
   useEffect(() => {
     void Promise.resolve().then(refresh);
   }, [refresh]);
@@ -72,8 +63,6 @@ function AppsPage() {
     void Promise.resolve().then(refreshStats);
   }, [refreshStats]);
 
-  // Refresh both lists immediately when the user comes back to the tab —
-  // otherwise stats can be stale for up to 15s after a long absence.
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === "visible") {
@@ -85,7 +74,6 @@ function AppsPage() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [refresh, refreshStats]);
 
-  // Live-ish stats: poll faster while any run is active, slower otherwise.
   const metaRef = useRef(metaByTask);
   useEffect(() => { metaRef.current = metaByTask; }, [metaByTask]);
   useEffect(() => {
@@ -117,7 +105,6 @@ function AppsPage() {
       if (t.section === SECTION_DONE) s.done += 1;
       else if (t.section === SECTION_DOING) s.doing += 1;
       else if (t.section === SECTION_TODO) s.idle += 1;
-      // SECTION_BLOCKED is intentionally left out of the three task buckets.
       const meta = metaByTask.get(t.id);
       if (meta) {
         for (const r of meta.runs) {

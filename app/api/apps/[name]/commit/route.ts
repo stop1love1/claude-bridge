@@ -1,12 +1,3 @@
-/**
- * Commit the working tree of an app (manual, user-triggered).
- *
- * Sibling of the per-run `/api/tasks/<id>/runs/<sid>/commit`
- * endpoint, but scoped to the app's live tree (not a worktree).
- * Powers the Commit button on the app detail page.
- *
- * Body: { message: string, push?: boolean }
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { DEFAULT_GIT_SETTINGS, resolveAppFromRouteSegment } from "@/libs/apps";
@@ -30,8 +21,6 @@ const MAX_MESSAGE_BYTES = 4 * 1024;
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { name: segment } = await ctx.params;
 
-  // Each call shells out to git (commit + optional push). Cap it so a
-  // stuck client or a runaway script can't hammer the working tree.
   const denied = checkRateLimit("apps:commit:ip", getClientIp(req.headers), 10, 60_000);
   if (denied) {
     return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
@@ -60,9 +49,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   try {
     const result = await autoCommitAndPush(
       cwd,
-      // Honor the app's git policy (branch protection rules in
-      // `tryPush`, etc.) but force-enable autoCommit and respect the
-      // caller's push intent.
       {
         ...(app.git ?? DEFAULT_GIT_SETTINGS),
         autoCommit: true,

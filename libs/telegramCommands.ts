@@ -1,27 +1,3 @@
-/**
- * Telegram bot command handler.
- *
- * Pairs with `libs/telegramNotifier.ts` (outbound side). This file is
- * the inbound side: long-poll `getUpdates`, parse slash commands, run
- * the matching bridge action, and reply.
- *
- * Why long-polling and not webhook?
- *   - The bridge runs on `localhost:7777`. A webhook needs a public
- *     URL (ngrok / port forward), which is friction for a local tool.
- *   - Long-polling is one outbound HTTPS call every ~25s — cheap, no
- *     inbound network rules required.
- *
- * Security:
- *   - Only messages from the configured `chatId` are processed —
- *     strangers can't operate the bridge by spamming the bot.
- *   - All side-effecting commands log the operator's chatId + the run
- *     they touched, so a leaked token is at least auditable.
- *
- * The command surface is intentionally minimal — Telegram is a triage
- * UI, not a full IDE. The web UI at `/tasks` remains the primary
- * surface; commands here are quick taps when you're away from the
- * machine.
- */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -81,7 +57,7 @@ import { addUsage, sumUsageFromJsonl, type SessionUsage } from "./sessionUsage";
 import { sendTelegramApiMessage } from "./telegramSendRetry";
 
 const TG_HOST = "https://api.telegram.org";
-const POLL_TIMEOUT_S = 25; // long-poll seconds (Telegram caps at 50)
+const POLL_TIMEOUT_S = 25;
 const POLL_RESTART_DELAY_MS = 5_000;
 const REPLY_MAX = 3500;
 
@@ -110,15 +86,6 @@ interface TelegramUpdate {
   };
 }
 
-/**
- * Start the long-poll loop. Idempotent — safe to call after a
- * settings change (already-running loops will be aborted + restarted
- * inside `stopTelegramCommandPoller`).
- *
- * Fire-and-forget: the loop runs until `stopTelegramCommandPoller`
- * aborts it. Errors are caught at the top level so a transient
- * Telegram outage doesn't bubble up and crash the Next.js dev server.
- */
 export function startTelegramCommandPoller(): void {
   if (poller.running) return;
   const cfg = telegramConfig();
@@ -142,8 +109,6 @@ export function stopTelegramCommandPoller(): void {
 
 async function runLoop(cfg: { token: string; chatId: string }): Promise<void> {
   while (poller.running) {
-    // Re-read config each iteration so credential changes take effect
-    // without a server restart. If creds disappear mid-loop we exit.
     const live = telegramConfig();
     if (!live) {
       poller.running = false;
@@ -154,8 +119,6 @@ async function runLoop(cfg: { token: string; chatId: string }): Promise<void> {
     try {
       const updates = await fetchUpdates(cfg.token, poller.offset);
       for (const up of updates) {
-        // Advance offset before handling so a thrown handler can't
-        // re-fire the same update on the next loop.
         if (up.update_id >= poller.offset) {
           poller.offset = up.update_id + 1;
         }
@@ -168,8 +131,6 @@ async function runLoop(cfg: { token: string; chatId: string }): Promise<void> {
     } catch (err) {
       if (!poller.running) break;
       const msg = (err as Error).message;
-      // Aborted on shutdown is expected — silent. Other errors get
-      // logged + a back-off so we don't hammer Telegram on outages.
       if (!/abort/i.test(msg)) {
         console.warn(`[telegram-cmd] poll error:`, msg);
         await delay(POLL_RESTART_DELAY_MS);
@@ -178,20 +139,6 @@ async function runLoop(cfg: { token: string; chatId: string }): Promise<void> {
   }
 }
 
-/**
- * Compose the long-poll request's own deadline with the poller's
- * shutdown signal. `poller.abort` only fires on an explicit
- * `stopTelegramCommandPoller()` call — a connection that stalls
- * without a clean FIN/RST (routine on a laptop that sleeps or drops
- * Wi-Fi) left the bare `poller.abort?.signal` version of this `await
- * fetch` pending forever, so `runLoop`'s `catch` and its
- * `POLL_RESTART_DELAY_MS` backoff never ran and the bot went silent
- * until a manual restart (audit H8). `POLL_TIMEOUT_S` is Telegram's own
- * long-poll window (the `timeout=` query param below); +10s covers
- * round-trip slack so we don't time out AHEAD of a well-behaved
- * response. `deadlineMs` is overridable only so tests can use a short
- * window instead of the real ~35s one.
- */
 export function buildPollSignal(
   shutdown: AbortSignal | undefined,
   deadlineMs: number = POLL_TIMEOUT_S * 1000 + 10_000,
@@ -229,7 +176,6 @@ async function handleUpdate(
 ): Promise<void> {
   const msg = up.message;
   if (!msg || !msg.text) return;
-  // Whitelist by chat id — only the configured chat can run commands.
   if (String(msg.chat.id) !== cfg.chatId) {
     console.warn(
       `[telegram-cmd] ignoring message from non-allowlisted chat ${msg.chat.id}`,
@@ -239,28 +185,17 @@ async function handleUpdate(
   const text = msg.text.trim();
   if (!text) return;
 
-  // smartDispatch handles BOTH slash commands AND free-form NL —
-  // routing the latter through the `libs/telegramIntent` LLM.
   const reply = await smartDispatch(text);
   if (reply) await sendReply(cfg, buildReplyBody(reply), msg.message_id);
 }
 
 export interface CommandDef {
-  /** Without leading slash. */
   name: string;
-  /** Short hint shown by Telegram's autocomplete. */
   description: string;
-  /**
-   * Args after the command. `rawTail` is the verbatim text after the
-   * command name (whitespace-trimmed), for handlers like `/new` that
-   * need the full body unmodified. `args` is `rawTail` split on
-   * whitespace.
-   */
   handler(args: string[], rawTail: string): Promise<string>;
 }
 
 export const COMMANDS: CommandDef[] = [
-  // ─── Read-only ─────────────────────────────────────────────────────
   {
     name: "help",
     description: "List all bridge commands",
@@ -336,7 +271,6 @@ export const COMMANDS: CommandDef[] = [
     description: "Token usage for a task — usage: /usage <id>",
     handler: async (args) => commandUsage(args[0]),
   },
-  // ─── Task lifecycle ────────────────────────────────────────────────
   {
     name: "new",
     description: "Create a new task — usage: /new <description>",
@@ -382,7 +316,6 @@ export const COMMANDS: CommandDef[] = [
     description: "Re-run scope detection — usage: /refresh <id>",
     handler: async (args) => commandRefreshScope(args[0]),
   },
-  // ─── Plan gate ─────────────────────────────────────────────────────
   {
     name: "plan",
     description: "Show plan intake status/summary/questions — usage: /plan <id>",
@@ -401,7 +334,6 @@ export const COMMANDS: CommandDef[] = [
       return commandPlanReplan(id, rest);
     },
   },
-  // ─── Permissions ───────────────────────────────────────────────────
   {
     name: "allow",
     description: "Allow a pending permission — usage: /allow <reqId>",
@@ -412,7 +344,6 @@ export const COMMANDS: CommandDef[] = [
     description: "Deny a pending permission — usage: /deny <reqId>",
     handler: async (args) => commandPermissionAnswer(args[0], "deny"),
   },
-  // ─── Device-login approvals ────────────────────────────────────────
   {
     name: "logins",
     description: "List pending device-login approvals",
@@ -428,7 +359,6 @@ export const COMMANDS: CommandDef[] = [
     description: "Deny a pending device login — usage: /denylogin <idPrefix>",
     handler: async (args) => commandLoginAnswer(args[0], "denied"),
   },
-  // ─── Apps ──────────────────────────────────────────────────────────
   {
     name: "scan",
     description: "Auto-detect siblings, or rescan an app's description — usage: /scan [app]",
@@ -438,29 +368,12 @@ export const COMMANDS: CommandDef[] = [
 
 const COMMAND_BY_NAME = new Map(COMMANDS.map((c) => [c.name, c] as const));
 
-/**
- * Smart dispatcher — accepts EITHER a slash command OR free-form
- * natural-language text. Slash commands go straight to the pure
- * dispatcher; free-form text is routed through the LLM middleware
- * (`libs/telegramIntent`) to pick a command + craft a wrapper reply.
- *
- * The bot path and the user-client inbound path both use this so the
- * NL behavior is consistent across channels.
- *
- * Returns either:
- *   - The dispatcher's raw output (slash path)
- *   - LLM's reply alone (no command picked)
- *   - LLM's reply + a `\n\n` + dispatcher output (command picked)
- *   - A "didn't understand" fallback when LLM call fails entirely
- */
 export async function smartDispatch(rawText: string): Promise<string> {
   const trimmed = rawText.trim();
   if (!trimmed) return "Empty message — send /help for the command list.";
   if (trimmed.startsWith("/")) {
     return dispatchCommand(trimmed);
   }
-  // Lazy import to avoid pulling the LLM module + its child_process
-  // wiring into module-init when callers only ever use slash commands.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { routeNaturalLanguage } = require("./telegramIntent") as typeof import("./telegramIntent");
   let result;
@@ -479,12 +392,9 @@ export async function smartDispatch(rawText: string): Promise<string> {
 
   const { command, reply, confidence } = result;
   if (!command) {
-    // No action picked — relay the LLM's standalone reply.
     return reply || "Send /help to see what I can do.";
   }
 
-  // Action picked → run it. Concatenate the LLM's wrapper + dispatch
-  // output so the operator sees both the explanation and the result.
   let dispatchOut: string;
   try {
     dispatchOut = await dispatchCommand(command);
@@ -498,14 +408,7 @@ export async function smartDispatch(rawText: string): Promise<string> {
   return `${header}${dispatchOut}`;
 }
 
-/**
- * Pure slash-command dispatcher — exported for tests. Splits the raw
- * text into command name + args + rawTail, looks up the handler,
- * returns the reply (or "unknown command" when nothing matches).
- */
 export async function dispatchCommand(rawText: string): Promise<string> {
-  // Telegram supports `/cmd@botname` — strip the @suffix so a bot in a
-  // group with multiple bots still matches its own commands.
   const trimmed = rawText.trim();
   const headEnd = trimmed.search(/\s/);
   const head = headEnd === -1 ? trimmed : trimmed.slice(0, headEnd);
@@ -523,7 +426,6 @@ export async function dispatchCommand(rawText: string): Promise<string> {
   }
 }
 
-// ─── Renderers ────────────────────────────────────────────────────────
 
 function renderHelp(): string {
   const lines = ["*Bridge commands:*", ""];
@@ -533,27 +435,8 @@ function renderHelp(): string {
   return lines.join("\n");
 }
 
-/**
- * List renderers below cap at this many rows before falling back to a
- * `… +K more` summary line, instead of relying on `sendReply`'s
- * pre-HTML truncation (audit H9) to bound an unbounded list — that
- * truncation is meant as a backstop, not the mechanism. Grounded in
- * the worst observed row shape: `renderPendingLogins`'s
- * `🔐 \`id\` · <60-char UA> from \`ip\` · Ns ago` line runs ~140 chars.
- * At `REPLY_MAX` (3500) a header + 25 such rows already exceeds the
- * budget (25×140 ≈ 3500 before even counting the header/footer), so 25
- * was too high to ever act as a real backstop. 20 keeps roughly 500
- * chars of headroom for the header/footer and HTML-conversion overhead
- * even for that renderer.
- */
 export const LIST_CAP = 20;
 
-/**
- * Cap a rendered list's per-item lines at `cap`, appending a
- * `… +K more` summary line rather than a hard cut — the common case
- * (few enough rows to fit) shows everything; only a pathologically
- * large list ever hits the suffix.
- */
 export function capListLines(lines: string[], cap: number): string[] {
   if (lines.length <= cap) return lines;
   return [...lines.slice(0, cap), `… +${lines.length - cap} more`];
@@ -648,7 +531,6 @@ function renderTaskDetail(idArg: string | undefined): string {
   return lines.join("\n");
 }
 
-// ─── Side-effecting commands ──────────────────────────────────────────
 
 async function commandDone(idArg: string | undefined): Promise<string> {
   if (!idArg) return "Usage: `/done t_YYYYMMDD_NNN`";
@@ -690,10 +572,6 @@ async function commandKill(idArg: string | undefined): Promise<string> {
   for (const r of running) {
     if (killChild(r.sessionId)) killed += 1;
   }
-  // Also flip the meta rows so the UI doesn't keep showing them as
-  // running while the OS-level kill propagates. `cancelled`, not
-  // `failed` — this is an operator-initiated /kill, not a crash, and
-  // `failed` would trip auto-retry, undoing the kill (audit C1).
   await applyManyRuns(
     join(SESSIONS_DIR, idArg),
     running.map((r) => ({
@@ -715,17 +593,12 @@ async function commandDelete(idArg: string | undefined): Promise<string> {
 async function commandNew(rawTail: string): Promise<string> {
   const trimmed = rawTail.trim();
   if (!trimmed) return "Usage: `/new <description>` \\(first line becomes the title\\)";
-  // Mirror app/api/tasks/route.ts: derive a one-line title from the
-  // first non-empty line, then create the task and (concurrently) run
-  // heuristic detection + spawn the coordinator.
   const firstLine = trimmed.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
   const title = firstLine
     ? (firstLine.length > 100 ? firstLine.slice(0, 100).trimEnd() + "…" : firstLine)
     : "(untitled)";
   const task = createTask({ title, body: trimmed, app: null });
 
-  // Detection: heuristic now, persist, then fire-and-forget LLM upgrade
-  // when the configured mode includes it. Same flow tasks/route.ts uses.
   try {
     const sessionsDir = join(SESSIONS_DIR, task.id);
     const detectInput = loadDetectInput({
@@ -750,9 +623,6 @@ async function commandNew(rawTail: string): Promise<string> {
     console.warn("[telegram-cmd] /new detection failed (non-fatal):", err);
   }
 
-  // Spawn coordinator. Don't await — return the task id immediately so
-  // the user gets the confirmation fast; the spawn lifecycle hooks
-  // post follow-up notifications.
   void spawnCoordinatorForTask(task);
   return `📝 Created \`${task.id}\`: ${escapeMarkdownV2(truncate(task.title, 80))}`;
 }
@@ -765,7 +635,6 @@ async function commandContinue(idArg: string | undefined): Promise<string> {
   const meta = readMeta(join(SESSIONS_DIR, idArg));
   const coord = meta?.runs.find((r) => r.role === "coordinator");
   if (coord) {
-    // Mirror app/api/tasks/<id>/continue logic.
     const message =
       `Continue from where you left off for bridge task ${idArg}. Read sessions/${idArg}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per prompts/coordinator-playbook.md §5. Otherwise re-orchestrate as needed.`;
     resumeClaude(BRIDGE_ROOT, coord.sessionId, message, { mode: "bypassPermissions" });
@@ -781,8 +650,6 @@ async function commandClear(idArg: string | undefined): Promise<string> {
   if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
   const task = getTask(idArg);
   if (!task) return `Task not found: \`${idArg}\``;
-  // /clear keeps the run history (matches app/api/tasks/<id>/clear) and
-  // forcibly spawns a fresh coordinator.
   const sid = await spawnCoordinatorForTask(task);
   if (!sid) return `Spawn failed for \`${idArg}\` \\(see server logs\\)`;
   return `🧹 Cleared \`${idArg}\`: spawned fresh coordinator \\(\`${sid.slice(0, 8)}\`\\)`;
@@ -795,9 +662,6 @@ async function commandSummary(idArg: string | undefined): Promise<string> {
   if (!existsSync(path)) return `No summary yet for \`${idArg}\``;
   const text = readFileSync(path, "utf8").trim();
   if (!text) return `Summary is empty for \`${idArg}\``;
-  // Telegram has no markdown bullet/heading → escape and rely on plain
-  // monospace blocks for code regions. Cap so a runaway summary doesn't
-  // blow past the 4096-char Telegram message limit.
   return [
     `*Summary \\(\`${idArg}\`\\):*`,
     "",
@@ -807,11 +671,6 @@ async function commandSummary(idArg: string | undefined): Promise<string> {
   ].join("\n");
 }
 
-// Acceptable role identifiers — matches the conventions used by the
-// coordinator playbooks (coder, reviewer, doc-writer, devops, …).
-// Bounding length and character set keeps an over-eager Telegram user
-// from sending pathological input (e.g. a 100kB string, traversal
-// segments) that the file-listing match has to walk.
 const ROLE_ARG_RE = /^[a-z0-9_-]{1,32}$/i;
 
 async function commandReport(
@@ -827,8 +686,6 @@ async function commandReport(
   }
   const dir = join(SESSIONS_DIR, idArg, "reports");
   if (!existsSync(dir)) return `No reports dir for \`${idArg}\``;
-  // Reports are named `<role>-<repo>.md`. Match by role prefix to save
-  // the user typing the repo too.
   let files: string[] = [];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith(".md"));
@@ -910,15 +767,7 @@ async function commandRefreshScope(idArg: string | undefined): Promise<string> {
   ].join("\n");
 }
 
-// ─── Plan gate ─────────────────────────────────────────────────────────
-//
-// Mirror the exact state machine of `app/api/tasks/[id]/plan/approve/
-// route.ts` — same libs (`readIntake` / `setIntake` / `continueCoordinator`
-// / `readPlanGateConfig`), called directly rather than over HTTP. Kept as
-// three small handlers (not a single `/plan-action` dispatcher) so each
-// has an unambiguous Telegram usage string.
 
-/** Split "<id> <rest of the text>" on the first whitespace run. */
 function splitIdAndRest(rawTail: string): { id: string | undefined; rest: string | undefined } {
   const trimmed = rawTail.trim();
   if (!trimmed) return { id: undefined, rest: undefined };
@@ -965,7 +814,6 @@ export async function commandPlanApprove(idArg: string | undefined): Promise<str
   if (!intake || intake.status === "none") {
     return `⚠️ No plan to act on for \`${idArg}\``;
   }
-  // Idempotent: already approved → no-op, same as the HTTP route.
   if (intake.status === "approved") {
     return `✅ Plan already approved for \`${idArg}\``;
   }
@@ -993,27 +841,15 @@ export async function commandPlanReplan(
   if (!intake || intake.status === "none") {
     return `⚠️ No plan to act on for \`${idArg}\``;
   }
-  // Enforce maxClarifyRounds the same way the HTTP route does — past the
-  // cap the operator must approve or reject the current plan instead of
-  // looping /replan forever.
   const cfg = readPlanGateConfig();
   if (intake.rounds >= cfg.maxClarifyRounds) {
     return `🚫 \`${idArg}\`: re-planning is capped at ${cfg.maxClarifyRounds} round(s) — approve or reject the current plan`;
   }
   const rec = await setIntake(dir, { status: "planning", rounds: intake.rounds + 1 });
-  // `replan:true` flips the coordinator message to "re-plan" (gate stays
-  // closed) instead of "gate is now open" — matches the approve route.
   await continueCoordinator(idArg, dir, `Operator feedback: ${note}`, { replan: true });
   return `🔁 Re-plan requested for \`${idArg}\` \\(round ${rec?.rounds ?? intake.rounds + 1}/${cfg.maxClarifyRounds}\\)`;
 }
 
-/**
- * `/allow <reqId>` / `/deny <reqId>`. The user copy-pastes the
- * `requestId` from the most recent 🔐 ping. We accept either a full
- * UUID or a short prefix (≥6 chars) and look it up across all pending
- * requests — `requestId` is unique by itself, so no `sessionId` arg
- * needed.
- */
 async function commandPermissionAnswer(
   reqIdArg: string | undefined,
   decision: "allow" | "deny",
@@ -1043,21 +879,6 @@ async function commandPermissionAnswer(
   return `${icon} ${decision === "allow" ? "Allowed" : "Denied"} \`${escapeMarkdownV2(target.tool)}\` for session \`${target.sessionId.slice(0, 8)}\``;
 }
 
-/**
- * `/approvelogin <idPrefix>` / `/denylogin <idPrefix>`. Same
- * unique-prefix UX as `commandPermissionAnswer` above (≥6 chars,
- * ambiguity error when more than one pending login shares a prefix).
- * `PendingLogin.id` is a 16-char hex string, so a 6-char prefix is
- * already extremely unlikely to collide.
- *
- * Security note: answering here is EQUIVALENT to an existing trusted
- * device clicking Approve/Deny in the web UI's approval modal — the
- * Telegram chat-id allowlist checked in `handleUpdate` above is the
- * ONLY auth boundary. Anyone who can message the configured chat can
- * trust a brand-new device onto the account, same trust model as
- * `/allow` / `/deny` for tool permissions and `/approve` for the plan
- * gate.
- */
 async function commandLoginAnswer(
   idArg: string | undefined,
   decision: "approved" | "denied",
@@ -1090,7 +911,6 @@ async function commandLoginAnswer(
 }
 
 async function commandScan(appArg: string | undefined): Promise<string> {
-  // No arg → auto-detect siblings of the bridge folder.
   if (!appArg) {
     const r = await autoDetectApps();
     if (r.added.length === 0) {
@@ -1099,7 +919,6 @@ async function commandScan(appArg: string | undefined): Promise<string> {
     const names = r.added.map((a) => `\`${escapeMarkdownV2(a.name)}\``).join(", ");
     return `📦 Auto-detected ${r.added.length} app\\(s\\): ${names}`;
   }
-  // With an arg → re-scan that app's description with claude.
   const apps = loadApps();
   const target = apps.find((a) => a.name === appArg);
   if (!target) return `App not found: \`${escapeMarkdownV2(appArg)}\``;
@@ -1156,11 +975,6 @@ function renderPending(): string {
   return lines.join("\n");
 }
 
-/**
- * `/logins` — list pending device-login approvals (id-prefix, UA, IP,
- * age) so the operator can decide from the phone without opening the
- * approval modal in the web UI.
- */
 function renderPendingLogins(): string {
   const pending = listPendingLogins();
   if (pending.length === 0) return "🟢 No pending device logins";
@@ -1183,7 +997,6 @@ function renderPendingLogins(): string {
   return lines.join("\n");
 }
 
-// ─── Telegram helpers ─────────────────────────────────────────────────
 
 function telegramConfig(): { token: string; chatId: string } | null {
   const s = getManifestTelegramSettings();
@@ -1191,19 +1004,6 @@ function telegramConfig(): { token: string; chatId: string } | null {
   return { token: s.botToken, chatId: s.chatId };
 }
 
-/**
- * Send a reply. `text` is expected to already be the final HTML body —
- * `buildReplyBody` truncates the pre-HTML markdown-lite text and THEN
- * converts it, so this function only sends; it doesn't truncate.
- *
- * Resilience (429 backoff, 5xx retry, and a plain-text resend on a
- * parse_mode 400) is shared with `telegramNotifier.sendViaBot` via
- * `sendTelegramApiMessage` — before this, a single failed attempt here
- * was only `console.warn`'d, so a transient Telegram hiccup dropped
- * the operator's command reply with no retry at all (audit H9). No
- * per-chat send queue here on purpose — see `telegramSendRetry.ts`'s
- * header comment for why that asymmetry is a known, deferred gap.
- */
 export async function sendReply(
   cfg: { token: string; chatId: string },
   text: string,
@@ -1216,12 +1016,6 @@ export async function sendReply(
       const body: Record<string, unknown> = {
         chat_id: cfg.chatId,
         text,
-        // HTML mode has only THREE reserved chars (`<`, `>`, `&`) vs
-        // MarkdownV2's nineteen. Renderers below emit `<b>` / `<code>` /
-        // `<pre>` directly and escape user-supplied content via
-        // `escapeHtml`. Far harder to break than the MD escape
-        // ratchet — the original implementation kept hitting 400 on
-        // unescaped parentheses inside command descriptions.
         ...(plainFallbackUsed ? {} : { parse_mode: "HTML" }),
         disable_web_page_preview: true,
       };
@@ -1232,11 +1026,6 @@ export async function sendReply(
   );
 }
 
-/**
- * Tell BotFather what commands this bot exposes so Telegram's "/" UI
- * shows autocomplete + descriptions. Idempotent — safe to call on
- * every poller start; the API just overwrites the previous list.
- */
 async function publishCommandsToBotFather(token: string): Promise<void> {
   const commands = COMMANDS.map((c) => ({
     command: c.name,
@@ -1254,7 +1043,6 @@ async function publishCommandsToBotFather(token: string): Promise<void> {
   }
 }
 
-// ─── Misc utilities ──────────────────────────────────────────────────
 
 function sectionIcon(section: TaskSection): string {
   switch (section) {
@@ -1270,11 +1058,6 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + "…";
 }
 
-/**
- * Escape user-supplied content for Telegram HTML mode. Only `<`, `>`,
- * and `&` are reserved — everything else passes through verbatim. Far
- * less error-prone than MarkdownV2's 19-char ratchet.
- */
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -1282,45 +1065,16 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;");
 }
 
-/**
- * The renderers in this file were originally written against
- * MarkdownV2 (`*bold*`, `` `code` ``, `\(`, `\.`, `\!` …). Telegram
- * keeps tightening MarkdownV2's reserved-char list and we kept hitting
- * `Bad Request: Character '(' is reserved …` from the API.
- *
- * Rather than audit every template literal, we converted the BOT's
- * `parse_mode` to HTML and run all rendered output through this
- * shim. It:
- *   1. Strips the leftover MarkdownV2 escape backslashes (`\(` → `(`)
- *      so the parens / dots / etc. show up as plain text.
- *   2. Tokenizes into backtick + asterisk + plain runs.
- *   3. Emits `<code>…</code>` and `<b>…</b>` with the inner text
- *      HTML-escaped, plus HTML-escapes the plain runs.
- *
- * Pure function. Safe for `escapeMarkdownV2`-prefixed content — the
- * old escaper added `\\` before reserved chars, which step 1 strips
- * before HTML-escaping the result.
- */
 function mdLiteToHtml(input: string): string {
-  // Step 1 — drop leftover MarkdownV2 escape backslashes. The legacy
-  // `escapeMarkdownV2` (now an alias of `escapeHtml`) used to insert
-  // these; older render code still emits literal `\(`, `\)`, `\.`,
-  // etc. They become plain chars in HTML mode.
   const stripped = input.replace(/\\([_*[\]()~`>#+\-=|{}.!\\])/g, "$1");
 
-  // Step 2 — tokenize. We walk char-by-char and respect backtick
-  // boundaries strictly (no nesting), then handle `*…*` only inside
-  // plain segments. Backticks have higher precedence — `*foo*` inside
-  // `` `code *with stars* ` `` stays literal inside <code>.
   const out: string[] = [];
   let i = 0;
   while (i < stripped.length) {
     const ch = stripped[i];
     if (ch === "`") {
-      // Find matching closing backtick on the same logical run.
       const close = stripped.indexOf("`", i + 1);
       if (close === -1) {
-        // Unbalanced — emit the lone backtick as plain text.
         out.push(escapeHtml("`"));
         i += 1;
         continue;
@@ -1338,7 +1092,6 @@ function mdLiteToHtml(input: string): string {
         continue;
       }
       const inner = stripped.slice(i + 1, close);
-      // Avoid empty `**` collapsing into <b></b>.
       if (inner.length === 0) {
         out.push(escapeHtml("**"));
         i = close + 1;
@@ -1348,7 +1101,6 @@ function mdLiteToHtml(input: string): string {
       i = close + 1;
       continue;
     }
-    // Plain run — read until next `*` or `` ` `` and HTML-escape it.
     let j = i + 1;
     while (j < stripped.length && stripped[j] !== "`" && stripped[j] !== "*") {
       j += 1;
@@ -1359,32 +1111,17 @@ function mdLiteToHtml(input: string): string {
   return out.join("");
 }
 
-/**
- * Truncate the pre-HTML markdown-lite reply text, THEN convert via
- * `mdLiteToHtml` above — never the reverse. The tokenizer treats any
- * backtick/asterisk it can't find a matching close for as literal
- * plain text (see the "Unbalanced" branches above), so a cut landing
- * mid-span just degrades that one span to plain text — it can never
- * emit an orphan `<code>`/`<b>` tag. Truncating the ALREADY-converted
- * HTML (the old behavior) had no such guarantee: a cut could land
- * between an opening and closing tag, and Telegram's
- * `parse_mode: "HTML"` rejected the WHOLE `sendMessage` with 400
- * "can't parse entities" — so a long `/tasks` reply got no answer at
- * all (audit H9).
- */
 export function buildReplyBody(raw: string): string {
   const truncated = raw.length > REPLY_MAX ? raw.slice(0, REPLY_MAX) + "…" : raw;
   return mdLiteToHtml(truncated);
 }
 
-/** @deprecated alias — see escapeHtml. Kept so existing call sites compile. */
 const escapeMarkdownV2 = escapeHtml;
 
 function delay(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
 
-// ─── Inbound via user-client (gram-js) ─────────────────────────────────
 
 interface UserListenerState {
   unsubscribe: (() => void) | null;
@@ -1397,41 +1134,14 @@ const userListener: UserListenerState = (() => {
   return G.__bridgeTelegramUserListener;
 })();
 
-/**
- * Allowlist for user-client inbound: only messages FROM the operator's
- * own user account are dispatched as commands. We don't want a random
- * person who DMs the operator's bot to be able to run `/delete` on the
- * bridge. The check uses `isPrivate` + `senderId === selfId`.
- *
- * `selfId` is read from the configured `targetChatId` when it's a
- * numeric user id; otherwise we fall back to "any private chat" — the
- * operator can override this by editing `targetChatId` to their own
- * user id (visible in `/api/telegram/user/test`'s `me.id` response).
- */
 async function shouldDispatchUserMessage(msg: InboundMessage): Promise<boolean> {
-  // We accept BOTH slash commands AND free-form natural-language text
-  // (the latter goes through `libs/telegramIntent` for LLM routing).
-  // Filter only on the channel-level constraints below.
   if (!msg.text.trim()) return false;
-  // Only private chats (1-on-1 with the operator). Group / channel
-  // messages are ignored — too easy to accidentally trigger a command
-  // by typing `/help` (or just chatting) in an unrelated group.
   if (!msg.isPrivate) return false;
   const target = (await import("./apps")).getManifestTelegramSettings().user.targetChatId;
-  // Hard requirement: a numeric chat id must be configured before the
-  // user-client listener will dispatch any command. Without it we have
-  // no way to verify the sender is the operator — anyone who DMs the
-  // operator's Telegram account would otherwise be able to run
-  // `/delete`, `/kill`, `/new`, etc.
   if (!/^-?\d+$/.test(target)) return false;
   return msg.senderId === target || msg.chatId === target;
 }
 
-/**
- * Start the user-client inbound listener. Idempotent — if already
- * subscribed, the second call is a no-op. Safe to call before the
- * client is connected; gram-js queues the handler attach.
- */
 export async function startTelegramUserCommandListener(): Promise<void> {
   if (userListener.unsubscribe) return;
   if (!isUserClientConfigured()) return;
@@ -1440,17 +1150,10 @@ export async function startTelegramUserCommandListener(): Promise<void> {
     if (!(await shouldDispatchUserMessage(msg))) return;
     let reply: string;
     try {
-      // smartDispatch routes both slash commands AND natural-language
-      // text — same UX as the bot path.
       reply = await smartDispatch(msg.text);
     } catch (err) {
       reply = `Error: ${(err as Error).message}`;
     }
-    // Match the bot path: convert MarkdownV2-style render output to
-    // HTML before posting. gram-js's `parseMode: "html"` parses the
-    // resulting `<b>` / `<code>` tags into Telegram's native bold +
-    // monospace, so the operator sees the same formatting whether
-    // they DM the bot or DM their own user account.
     try {
       await sendUserMessage(mdLiteToHtml(reply), {
         target: msg.chatId,
@@ -1470,6 +1173,6 @@ export async function stopTelegramUserCommandListener(): Promise<void> {
   const fn = userListener.unsubscribe;
   userListener.unsubscribe = null;
   if (fn) {
-    try { fn(); } catch { /* ignore */ }
+    try { fn(); } catch { }
   }
 }

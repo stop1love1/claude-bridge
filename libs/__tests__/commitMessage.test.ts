@@ -128,7 +128,6 @@ describe("parseLLMResponse", () => {
     ].join("\n");
     const out = parseLLMResponse(raw);
     expect(out).not.toBeNull();
-    // No 3+ consecutive newlines in the result.
     expect(out!.includes("\n\n\n")).toBe(false);
     expect(out).toContain("First body paragraph.");
     expect(out).toContain("Second body paragraph.");
@@ -178,39 +177,25 @@ describe("buildPrompt", () => {
   });
 
   it("pushes hard against file-list-shaped messages (the actual failure mode)", () => {
-    // The reason this prompt was rewritten: the model kept emitting
-    // `chore: update N files` because the rules section didn't spell
-    // out that file-mechanics descriptions are forbidden. Lock it in.
     const p = buildPrompt({ cwd: "/x" });
     expect(p).toMatch(/SEMANTIC/i);
-    // Mechanical-description ban appears verbatim in the rules and in
-    // the BAD example — both should survive prompt edits.
     expect(p.toLowerCase()).toContain("updated 5 files");
   });
 
   it("anchors quality with few-shot GOOD vs BAD examples", () => {
-    // Few-shots are the single most reliable lever for shifting LLM
-    // output shape. If someone deletes them, this test catches it.
     const p = buildPrompt({ cwd: "/x" });
     expect(p).toMatch(/\bGOOD\b/);
     expect(p).toMatch(/\bBAD\b/);
-    // At least one canonical good example present.
     expect(p).toContain("fix(payments):");
   });
 
   it("requires the body to lead with the why, not restate the diff", () => {
     const p = buildPrompt({ cwd: "/x" });
     expect(p).toMatch(/WHY/);
-    // Body must be allowed to drop entirely on trivial changes —
-    // important so the model doesn't pad header-only commits with
-    // boilerplate prose.
     expect(p.toLowerCase()).toMatch(/header alone is acceptable/);
   });
 
   it("disambiguates feat vs refactor vs fix so the model doesn't default to chore", () => {
-    // The other recurring failure: `feat: …` slapped on every commit
-    // that added a file, even refactors and bugfixes. The type-by-type
-    // guidance prevents that.
     const p = buildPrompt({ cwd: "/x" });
     expect(p).toMatch(/feat = user-visible/);
     expect(p).toMatch(/fix = corrects a bug/);
@@ -269,7 +254,6 @@ describe("isFileListShaped", () => {
   });
 
   it("does NOT flag a real noun even with a generic verb", () => {
-    // "update auth retry budget" is a specific noun, not a filename.
     expect(isFileListShaped("fix(auth): update retry budget ceiling")).toBe(false);
   });
 });
@@ -282,9 +266,6 @@ describe("word-boundary subject truncation", () => {
     const first = out!.split("\n")[0];
     expect(first.length).toBeLessThanOrEqual(72);
     expect(first.endsWith("…")).toBe(true);
-    // The stem (everything before the ellipsis) must be a prefix of the
-    // original that ends exactly at a word boundary — i.e. the next char
-    // in the original is whitespace. That proves we didn't slice mid-word.
     const stem = first.slice(0, -1);
     expect(subject.startsWith(stem)).toBe(true);
     expect(/\s/.test(subject[stem.length] ?? "")).toBe(true);

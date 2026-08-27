@@ -1,15 +1,3 @@
-/**
- * Commit-message suggester for a single run's worktree.
- *
- * Resolves the run's working tree (worktree if still on disk, else the
- * live app tree), then tries the LLM generator first — claude reads the
- * actual diff (embedded in the prompt) and writes a Conventional Commits
- * message with body — and falls back to the local heuristic when the LLM
- * is disabled / times out / fails.
- *
- * Change collection + the heuristic generator live in
- * `libs/commitHeuristic.ts` (shared with the app-scoped suggest route).
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
@@ -75,7 +63,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // `?heuristic=1` → skip the LLM entirely (UI toggle / tests).
   const wantHeuristic = req.nextUrl.searchParams.get("heuristic") === "1";
 
   try {
@@ -85,12 +72,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return NextResponse.json({ message: "chore: no changes", fileCount: 0, cwd, source: "heuristic" });
     }
 
-    // Try LLM first (unless explicitly disabled). Pass the task title for
-    // "what was supposed to ship" context plus the embedded diff so the
-    // model grounds the subject in the actual change, in one pass.
     if (!wantHeuristic) {
-      // Dedupe concurrent generations for the same tree so two button
-      // clicks / tabs never spawn two `claude -p` children at once.
       const llm = await withInFlight("commit-suggest", cwd, () =>
         generateCommitMessageWithLLM({
           cwd,

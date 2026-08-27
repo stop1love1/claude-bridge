@@ -12,13 +12,6 @@ import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/workflows
- *
- * One-shot snapshot for the Workflows page: the workflow list, global
- * scheduler settings (cron + concurrency cap), the 24/7 scheduler status,
- * and the current pipeline runs (so the UI can show which stage each is on).
- */
 export function GET() {
   return NextResponse.json({
     workflows: listWorkflows(),
@@ -36,7 +29,6 @@ interface CreateBody {
   schedule?: CronSchedule | null;
 }
 
-/** POST /api/workflows — create a multi-stage workflow. */
 export async function POST(req: NextRequest) {
   let body: CreateBody;
   try {

@@ -86,13 +86,11 @@ describe("parseRole", () => {
   });
 
   it("does not strip role-trailing digits that aren't valid attempt numbers", () => {
-    // `coder-v2` is NOT a retry — the 2 is part of the role, no suffix match.
     expect(parseRole("coder-v2")).toEqual({
       baseRole: "coder-v2",
       gate: null,
       attempt: 0,
     });
-    // 22 is out of [2..MAX_RETRY_PER_GATE] range — restored.
     expect(parseRole("coder-vretry22")).toEqual({
       baseRole: "coder-vretry22",
       gate: null,
@@ -101,8 +99,6 @@ describe("parseRole", () => {
   });
 
   it("matches longest suffix first (svretry before vretry)", () => {
-    // `coder-svretry` ends with both `-vretry` and `-svretry`. The latter
-    // must win — otherwise we'd parse it as `coder-s` + `verify` gate.
     expect(parseRole("coder-svretry")).toEqual({
       baseRole: "coder",
       gate: "semantic",
@@ -148,14 +144,11 @@ describe("maxAttemptsFor", () => {
     expect(maxAttemptsFor(retry, "verify")).toBe(3);
     expect(maxAttemptsFor(retry, "style")).toBe(2);
     expect(maxAttemptsFor(retry, "crash")).toBe(0);
-    expect(maxAttemptsFor(retry, "claim")).toBe(1); // unset → default
+    expect(maxAttemptsFor(retry, "claim")).toBe(1);
   });
 
   it("clamps high values to MAX_RETRY_PER_GATE; rejects negatives → default", () => {
     expect(maxAttemptsFor({ verify: 99 }, "verify")).toBe(MAX_RETRY_PER_GATE);
-    // Negative values are treated as "invalid input" → fall back to default
-    // (1) rather than disabling the gate. Operators wanting to disable a
-    // gate should set it to 0 explicitly.
     expect(maxAttemptsFor({ verify: -3 }, "verify")).toBe(1);
     expect(maxAttemptsFor({ verify: 0 }, "verify")).toBe(0);
   });
@@ -200,8 +193,6 @@ describe("countRetryAttempts", () => {
         baseRun({ role: "coder-cretry", sessionId: "a" }),
       ],
     };
-    // -cretry is parsed as `claim` gate. Counting against `preflight`
-    // gate must include it because the two share the budget slot.
     expect(countRetryAttempts(meta, PARENT, "coder", "preflight")).toBe(1);
     expect(countRetryAttempts(meta, PARENT, "coder", "claim")).toBe(1);
   });
@@ -242,16 +233,12 @@ describe("checkEligibility", () => {
   });
 
   it("allows preflight↔claim cross-flow (shared -cretry slot)", () => {
-    // A run that's a -cretry (claim) can still trigger another preflight retry
-    // up to the shared budget. With default budget=1, the existing -cretry
-    // counts against preflight too — so the second attempt is blocked.
     const r = checkEligibility({
       finishedRun: baseRun({ role: "coder-cretry" }),
       meta: { runs: [] },
       gate: "preflight",
       retry: undefined,
     });
-    // Under default budget of 1, the run itself is attempt 1 → no retry.
     expect(r.eligible).toBe(false);
   });
 
@@ -271,7 +258,7 @@ describe("checkEligibility", () => {
       finishedRun: baseRun({ role: "coder" }),
       meta: { runs: [baseRun({ role: "coder" })] },
       gate: "verify",
-      retry: undefined, // default 1
+      retry: undefined,
     });
     expect(r.eligible).toBe(true);
     expect(r.nextAttempt).toBe(1);
@@ -343,13 +330,11 @@ describe("checkEligibility", () => {
   });
 
   it("uses the role-derived attempt count when meta is empty (test fixture quirk)", () => {
-    // When meta.runs lacks the finishedRun (rare race), the parsed
-    // attempt number from the role string still gates the budget.
     const r = checkEligibility({
       finishedRun: baseRun({ role: "coder-vretry" }),
       meta: { runs: [] },
       gate: "verify",
-      retry: undefined, // default 1
+      retry: undefined,
     });
     expect(r.eligible).toBe(false);
   });
@@ -420,7 +405,7 @@ describe("totalCapFor", () => {
   });
   it("respects an explicit totalCap override", () => {
     expect(totalCapFor({ totalCap: 6 })).toBe(6);
-    expect(totalCapFor({ totalCap: 0 })).toBe(0); // 0 disables cap
+    expect(totalCapFor({ totalCap: 0 })).toBe(0);
   });
   it("ignores invalid totalCap (negative, NaN)", () => {
     expect(totalCapFor({ totalCap: -3 })).toBe(DEFAULT_MAX_RETRIES_PER_TASK);
@@ -436,7 +421,7 @@ describe("totalRetriesInTask", () => {
     const runs: Run[] = [
       baseRun({ role: "coder-vretry", retryAttempt: 1 }),
       baseRun({ sessionId: "b", role: "fixer-cretry2", retryAttempt: 2 }),
-      baseRun({ sessionId: "c" }), // base run, no retryAttempt
+      baseRun({ sessionId: "c" }),
     ];
     expect(totalRetriesInTask({ runs })).toBe(3);
   });
@@ -452,7 +437,6 @@ describe("totalRetriesInTask", () => {
 
 describe("checkEligibility — per-task ceiling", () => {
   it("blocks retry when total cap already reached", () => {
-    // 4 retries already fired across siblings → at the default cap.
     const runs: Run[] = [
       baseRun({ sessionId: "a", role: "coder-vretry2", retryAttempt: 2 }),
       baseRun({ sessionId: "b", role: "fixer-cretry2", retryAttempt: 2 }),
@@ -465,7 +449,7 @@ describe("checkEligibility — per-task ceiling", () => {
       finishedRun,
       meta: { runs: [...runs, finishedRun] },
       gate: "crash",
-      retry: undefined, // default cap = 4
+      retry: undefined,
     });
     expect(res.eligible).toBe(false);
     expect(res.reason).toContain("per-task ceiling");
@@ -487,8 +471,6 @@ describe("checkEligibility — per-task ceiling", () => {
   });
 
   it("respects totalCap=0 (cap disabled)", () => {
-    // 100 retries fired but cap disabled → eligibility falls through to
-    // per-gate budget.
     const runs: Run[] = Array.from({ length: 50 }, (_, i) =>
       baseRun({ sessionId: `s${i}`, role: "coder-vretry2", retryAttempt: 2 }),
     );
@@ -511,7 +493,7 @@ describe("checkEligibility — per-task ceiling", () => {
       finishedRun,
       meta: { runs: [...runs, finishedRun] },
       gate: "crash",
-      retry: { totalCap: 8 }, // 5 < 8 → eligible
+      retry: { totalCap: 8 },
     });
     expect(res.eligible).toBe(true);
   });

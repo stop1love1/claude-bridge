@@ -20,36 +20,9 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * The new device polls this endpoint roughly once per second while the
- * operator decides on the approval. 30/minute/IP keeps the legitimate
- * polling cadence comfortably (typical: 60 polls in 60s but the entry
- * is consumed on terminal status, so real usage averages well below).
- * The cap mostly stops a hostile client from enumerating valid pending
- * IDs — pending IDs are random UUIDs, but rate-limiting still raises
- * the cost of any future ID-shape weakening.
- */
 const PENDING_WINDOW_MS = 60 * 1000;
 const PENDING_LIMIT_PER_IP = 30;
 
-/**
- * GET /api/auth/login/pending/[id]
- *
- * The new device polls this URL after `POST /api/auth/login` returned
- * `202 { status: "pending", pendingId }`. We return one of:
- *
- *   - 202 `{ status: "pending" }`        — still waiting on the operator
- *   - 200 `{ status: "approved" }`       — operator approved; the cookie
- *                                          is set on THIS response so the
- *                                          new device is logged in by
- *                                          the time it redirects.
- *   - 403 `{ status: "denied", reason }` — operator denied
- *   - 410 `{ status: "expired" }`        — the 3-min window passed
- *
- * Each terminal state is delivered exactly once; we `consumePendingLogin`
- * after delivery so a stale poll can't replay a stale approval. The new
- * device is expected to stop polling on any non-202 response.
- */
 export async function GET(req: NextRequest, ctx: Ctx) {
   if (DEMO_MODE) {
     return NextResponse.json({ error: "demo mode" }, { status: 503 });
@@ -100,14 +73,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // Approved — but only hand the cookie to the SAME device that
-  // initiated the login. An attacker who learned the pendingId (it
-  // appears in the 202 response body) could otherwise race the poll and
-  // capture the session the moment the operator approves. Bind on the
-  // user-agent (always available) and the IP when it's known (it's
-  // "unknown" for both sides unless BRIDGE_TRUSTED_PROXY is set, so this
-  // never produces a false mismatch on plain localhost). A mismatch gets
-  // a harmless 202 and the entry is left intact for the real device.
   const uaMatch = (req.headers.get("user-agent") ?? "") === entry.userAgent;
   const ipKnown = ip !== "unknown" && entry.remoteIp !== "unknown";
   const ipMatch = !ipKnown || ip === entry.remoteIp;
@@ -118,8 +83,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // sign the cookie + (optionally) record a trusted device entry,
-  // mirroring the post-credentials path of /api/auth/login.
   let deviceId: string | undefined;
   if (entry.trust) {
     const { device } = addTrustedDevice(entry.deviceLabel);
@@ -127,7 +90,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   }
   const ttl = entry.trust ? TRUSTED_TTL_MS : SESSION_TTL_MS;
   const exp = Date.now() + ttl;
-  // Re-load the secret in case `addTrustedDevice` re-read the file.
   const secret = loadAuthConfig()?.secret ?? cfg.secret;
   const token = signSession(
     { sub: entry.email, exp, did: deviceId },

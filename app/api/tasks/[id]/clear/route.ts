@@ -9,12 +9,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * Force-spawn a fresh coordinator for the task, regardless of any
- * existing runs. The old run entries stay in `meta.json` (so the user
- * can scroll back to them); a brand-new session takes over as the
- * active conversation.
- */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");

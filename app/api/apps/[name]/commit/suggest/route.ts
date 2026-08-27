@@ -1,16 +1,3 @@
-/**
- * Commit-message suggester for an app's live tree. Tries the LLM
- * generator first (claude reads the actual diff — now embedded in the
- * prompt — and writes a Conventional Commits message with body); falls
- * back to the local heuristic when the LLM is disabled / times out /
- * fails.
- *
- * The `?heuristic=1` query param forces the heuristic path (used by the
- * UI toggle and by tests that don't want to spawn claude).
- *
- * Change collection + the heuristic generator live in
- * `libs/commitHeuristic.ts` (shared with the run-scoped suggest route).
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -33,7 +20,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "not a git repo", cwd }, { status: 404 });
   }
 
-  // `?heuristic=1` → skip the LLM entirely (UI toggle / tests).
   const wantHeuristic = req.nextUrl.searchParams.get("heuristic") === "1";
 
   try {
@@ -43,13 +29,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return NextResponse.json({ message: "chore: no changes", fileCount: 0, cwd, source: "heuristic" });
     }
 
-    // Try LLM first (unless explicitly disabled). The diff is embedded in
-    // the prompt so the model writes a semantic message in one pass.
     if (!wantHeuristic) {
-      // Dedupe concurrent generations for the same tree (button-mash / two
-      // tabs) so we never run two `claude -p` children at once. If one is
-      // already in flight, withInFlight returns null → fall through to the
-      // heuristic rather than spawning a duplicate.
       const llm = await withInFlight("commit-suggest", cwd, () =>
         generateCommitMessageWithLLM({ cwd, nameStatus, diff, diffTruncated }),
       );

@@ -1,9 +1,3 @@
-/**
- * Operator-level config for the Intent & Planning Gate. Backed by
- * `.bridge-state/plan-gate.json`. Mirrors the shareStore globalThis +
- * atomic-write pattern (single-process bridge → authoritative in-memory
- * copy, write-through on mutation).
- */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_STATE_DIR } from "./paths";
@@ -12,9 +6,7 @@ import { writeJsonAtomic } from "./atomicWrite";
 const CONFIG_FILE = join(BRIDGE_STATE_DIR, "plan-gate.json");
 
 export interface PlanGateConfig {
-  /** When true, the gate also applies to the operator (smart mode). Guests are always gated regardless. */
   operatorEnabled: boolean;
-  /** Max clarify cycles before forcing awaiting-approval (>= 1). */
   maxClarifyRounds: number;
 }
 
@@ -42,8 +34,6 @@ function load(): void {
 }
 
 function normalize(c: PlanGateConfig): PlanGateConfig {
-  // Only fall back to the default for non-numeric input; a real 0 / negative
-  // must clamp UP to 1, not get treated as falsy and replaced by the default.
   const n = Math.floor(Number(c.maxClarifyRounds));
   return {
     operatorEnabled: !!c.operatorEnabled,
@@ -63,7 +53,6 @@ export function writePlanGateConfig(patch: Partial<PlanGateConfig>): PlanGateCon
   return { ...state.data };
 }
 
-/** Test-only: reset to defaults without touching disk. */
 export function _resetForTests(): void {
   state.data = { ...DEFAULTS };
   state.loaded = true;

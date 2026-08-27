@@ -13,30 +13,11 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
 
-/**
- * Stop a running claude subprocess attached to this session — the
- * "stop" button in the chat composer hits this.
- *
- * Works for both task-linked runs (we patch meta.json's run row to
- * `cancelled` if it was still `running`) and free/orphan sessions
- * (no meta.json scan needed). SIGTERM, escalates to SIGKILL after
- * 3s — see `spawnRegistry.killChild`.
- *
- * Idempotent: returns 404 with `no live process` if the registry
- * has nothing for this id.
- */
 export async function POST(_req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
 
   const killed = killChild(sessionId);
-  // Stop = "abort everything I had pending here". Drop any messages
-  // the user queued behind the in-flight turn — keeping them would
-  // surprise the user (they hit Stop expecting silence; instead the
-  // queued message would fire moments later under a fresh resume).
-  // Always run, even if `killed` is false — the queue can hold
-  // entries while the session has just transitioned idle but the
-  // operator's intent is still "cancel pending work for this id".
   const dropped = clearQueue(sessionId);
   if (dropped > 0) {
     logInfo(
@@ -51,11 +32,6 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // Best-effort: if this session is linked to a task, flip its run
-  // entry to `cancelled` — distinct from `failed` so this operator-
-  // initiated Stop doesn't read as a crash and doesn't trip auto-retry
-  // (audit C1). Free/orphan sessions don't have a meta.json, and
-  // that's fine — we just skip.
   if (existsSync(SESSIONS_DIR)) {
     for (const taskId of readdirSync(SESSIONS_DIR)) {
       const dir = join(SESSIONS_DIR, taskId);

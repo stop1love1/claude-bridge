@@ -11,13 +11,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * Task 6: this route already served JSON (`{summary}`), never raw text —
- * `libs/client/api.ts`'s `summary()` helper types the response as
- * `{summary: string}` and calls `.json()`. Adding `gateStatus` here is
- * purely additive: existing consumers that only destructure `summary`
- * keep working unchanged.
- */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");

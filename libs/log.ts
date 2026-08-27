@@ -1,34 +1,3 @@
-/**
- * Tiny structured logger.
- *
- * The bridge had 175 `console.*` calls scattered across 39 files with
- * no consistent format and (in 17 places) error patterns like
- * `console.error("...", (err as Error).message)` that drop stack
- * traces — making post-incident debugging painful.
- *
- * This file introduces a uniform shape:
- *
- *   logInfo("verify",  "chain passed", { tag, taskId });
- *   logWarn("verify",  "chain failed", { tag, failedStep });
- *   logError("verify", "chain crashed", err, { tag });
- *
- * Output strategy:
- *   - Default (dev): `[bridge:verify] chain passed { tag: ... }` — same
- *     visual rhythm as the existing `[bridge] ...` startup banner, easy
- *     to grep via `[bridge:`.
- *   - `BRIDGE_JSON_LOGS=1` (or any truthy value): one JSON object per
- *     line with `{ ts, level, scope, msg, ...meta }` plus an `err`
- *     object on errors with `{ name, message, stack }`. Designed for
- *     `pm2`/`docker`-style log shippers that JSON-parse stdout.
- *
- * Migration is opt-in. Existing `console.*` calls keep working; new
- * code (and future migrations of the worst offenders) should reach for
- * these helpers. Errors should ALWAYS go through `logError` so stacks
- * survive: `(err as Error).message` is a footgun.
- *
- * No external deps — zero install cost, zero bundle impact on the
- * client (server-only file).
- */
 
 type Meta = Record<string, unknown> | undefined;
 
@@ -57,8 +26,6 @@ function emit(level: "info" | "warn" | "error", scope: string, msg: string, meta
     fn(JSON.stringify(line));
     return;
   }
-  // Pretty mode: keep stack traces intact by passing the raw Error to
-  // console.error — Node prints `Error: ... \n    at ...` for us.
   const tag = `[bridge:${scope}]`;
   const metaStr = meta ? ` ${JSON.stringify(meta)}` : "";
   if (level === "error") {
@@ -79,10 +46,6 @@ export function logWarn(scope: string, msg: string, meta?: Meta): void {
   emit("warn", scope, msg, meta);
 }
 
-/**
- * Always pass the raw `err` (not `err.message`) so the stack survives.
- * `meta` carries the correlation context (taskId, sessionId, tag).
- */
 export function logError(scope: string, msg: string, err?: unknown, meta?: Meta): void {
   emit("error", scope, msg, meta, err);
 }

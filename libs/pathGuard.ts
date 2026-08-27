@@ -1,18 +1,3 @@
-/**
- * Filesystem-path validators used by routes / stores that accept a path
- * from the operator and then hand it to git, claude, exec, fs.read, …
- *
- * Two layers of defense:
- *   1. Charset / shape — reject null bytes, control chars, obvious garbage.
- *   2. Containment    — when `BRIDGE_ALLOWED_ROOTS` is set, the resolved
- *      absolute path must sit underneath one of the listed roots.
- *
- * `BRIDGE_ALLOWED_ROOTS` is a `;`-separated list of absolute directories
- * (Windows-friendly: `C:\dev\repos;D:\code`). Empty / unset means
- * "trust the operator", which is the default for localhost dev. Operators
- * exposing the bridge over a tunnel should set it explicitly so a
- * compromised cookie can't make `addApp` register `C:\Windows\System32`.
- */
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
 
@@ -30,7 +15,6 @@ export type PathGuardFail = {
 };
 export type PathGuardResult = PathGuardOk | PathGuardFail;
 
-/** Tunable knobs — exposed for tests. */
 export const PATH_MAX_BYTES = 4096;
 
 function getAllowedRoots(): string[] {
@@ -51,33 +35,12 @@ function isInside(child: string, parent: string): boolean {
   return c.startsWith(withSep);
 }
 
-/**
- * Validate an app working-tree path supplied by the operator. Used by
- * `addApp` (POST /api/apps) and any future "edit app path" endpoint.
- *
- * Caller passes the raw string from the request body (already trimmed).
- * On success the caller stores `rawPath` as-is and uses `resolvedPath`
- * for `existsSync` / `spawn(cwd)` / etc.
- *
- * Two important notes:
- *   - Relative paths are accepted (resolved against `process.cwd()`),
- *     because the bridge UI's "Add app" flow lets the operator type a
- *     sibling-folder name like `../my-app`. Containment still applies
- *     after resolution, so `../../etc` still gets caught when
- *     `BRIDGE_ALLOWED_ROOTS` is set.
- *   - Existence is checked here so the route can reject early. Race vs
- *     post-validation `rmdir` is fine — downstream callers already gate
- *     `existsSync(cwd)` again before spawning.
- */
 export function validateAppPath(rawPath: string): PathGuardResult {
   const path = rawPath.trim();
   if (!path) return { ok: false, reason: "empty" };
   if (path.length > PATH_MAX_BYTES) {
     return { ok: false, reason: "empty", detail: "path too long" };
   }
-  // Reject NUL and ASCII control chars — these break path APIs in
-  // platform-dependent ways (Windows treats `\0` as terminator, POSIX
-  // refuses, both can confuse downstream tools).
   if (/[\x00-\x1f]/.test(path)) {
     return { ok: false, reason: "control-char" };
   }
@@ -112,11 +75,6 @@ export function validateAppPath(rawPath: string): PathGuardResult {
   return { ok: true, resolvedPath };
 }
 
-/**
- * Stricter variant for routes that ONLY accept absolute paths (e.g.
- * `repos/[name]/raw?path=` if it ever evolves). Mostly future-facing —
- * `validateAppPath` is what the current addApp flow needs.
- */
 export function requireAbsolutePathInsideRoots(rawPath: string): PathGuardResult {
   const base = validateAppPath(rawPath);
   if (!base.ok) return base;

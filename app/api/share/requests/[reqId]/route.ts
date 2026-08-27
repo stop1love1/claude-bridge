@@ -13,14 +13,6 @@ interface AnswerBody {
   reason?: string;
 }
 
-/**
- * POST /api/share/requests/<reqId>
- *
- * Operator approves or denies a pending guest access request. On
- * approval the request's candidate device id is written into the share's
- * device list (with the share's TTL), so the guest's poll can mint a
- * scoped cookie. Operator-only (proxy-gated; CSRF runs in the proxy).
- */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { reqId } = await ctx.params;
   let body: AnswerBody;
@@ -39,7 +31,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   if (body.decision === "approved") {
-    // The share must still be usable at approval time.
     const share = getShare(pending.shareId);
     if (!share || !isShareUsable(share)) {
       answerShareRequest(reqId, "denied", "share no longer available");

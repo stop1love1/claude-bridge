@@ -15,12 +15,6 @@ import type { ChatSettings } from "@/libs/client/types";
 const MIN_H = 34;
 const MAX_H = 220;
 const STORAGE_KEY = "bridge.chat.settings";
-// Operator opt-in: when `NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS=1` is set, treat
-// "Skip permissions" as the implicit default for any session that has
-// not yet picked a mode. Otherwise a brand-new task starts in `default`
-// (Ask-before-edits) and the user keeps seeing the popup despite having
-// opted in at the env layer. Explicit picks still win — the loader only
-// fills in the mode when the stored object has none.
 const COMPOSER_DEFAULT_MODE =
   process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS === "1" ? "bypassPermissions" : undefined;
 const EMPTY_SETTINGS: ChatSettings = COMPOSER_DEFAULT_MODE
@@ -33,17 +27,12 @@ interface Attachment {
   path: string;
   size: number;
   isImage: boolean;
-  /** Pixel dimensions for images, populated client-side after upload. */
   width?: number;
   height?: number;
 }
 
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 
-/**
- * Read pixel dimensions from a File without uploading. Returns null
- * for non-images or unreadable files.
- */
 function readImageDimensions(file: File): Promise<{ w: number; h: number } | null> {
   if (!file.type.startsWith("image/") && !IMG_EXT.test(file.name)) {
     return Promise.resolve(null);
@@ -64,18 +53,12 @@ function readImageDimensions(file: File): Promise<{ w: number; h: number } | nul
 }
 
 function settingsKey(taskId?: string): string {
-  // Per-task settings live under their own key so a task-specific
-  // override (e.g. `effort: max` for a heavy refactor) doesn't leak
-  // into a sibling task. Free-form sessions keep the legacy key so
-  // existing prefs survive the upgrade.
   return taskId ? `${STORAGE_KEY}.task.${taskId}` : STORAGE_KEY;
 }
 
 function MessageComposerInner({
   sessionId,
   repo,
-  // Kept in the prop signature so the parent can pass it for future
-  // features (e.g. context-aware mention completion); not consumed yet.
   repoPath: _repoPath,
   role,
   taskId,
@@ -89,17 +72,7 @@ function MessageComposerInner({
   repoPath?: string;
   role: string;
   taskId?: string;
-  /** Claude is mid-response (a tail event landed within the last few
-   *  seconds). When true, the Send button is replaced with a Stop
-   *  button that SIGTERMs the underlying claude subprocess. */
   isResponding?: boolean;
-  /**
-   * Fired after a successful POST /message. Receives the user-visible
-   * text that was sent so the parent can optimistically append a user
-   * row to the chat log without waiting for the tail event to echo it
-   * back from the .jsonl. Empty string when only attachments were
-   * sent (no text). Not invoked on send failure or queue clear.
-   */
   onSent?: (text: string) => void;
   onClearConversation?: () => void;
   onRewindRequest?: () => void;
@@ -107,39 +80,22 @@ function MessageComposerInner({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
-  /**
-   * Local mirror of the server-side message queue length. Bumped each
-   * time `api.sendMessage` returns `queued: true`, decremented when
-   * the in-flight turn flips idle (assumes the server drained one,
-   * which it does — first-in-first-out). Also reset to 0 on Stop
-   * because the kill route clears the queue server-side. Pure UX
-   * surface; doesn't affect submit behavior.
-   */
   const [queuedCount, setQueuedCount] = useState(0);
-  // Settings come from localStorage via `useSyncExternalStore` so the
-  // SSR snapshot ({}) and the client snapshot (real prefs) align
-  // through React's external-store machinery — no `useState +
-  // useEffect(setX)` pair to trigger React 19's set-state-in-effect
-  // rule. The custom loader honours the legacy "fall back to the
   // global key on first render of a brand-new task" behaviour.
   const loadComposerSettings = useCallback(
     (raw: string | null): ChatSettings => {
-      // Apply the env-based default mode if the loaded object doesn't
-      // have one yet. Without this, a stored `{effort: "high"}` from an
-      // older session leaves `mode` undefined and the request falls back
-      // to "default" on the server even though BRIDGE_ALLOW_BYPASS is on.
       const withDefaultMode = (s: ChatSettings): ChatSettings =>
         s.mode === undefined && COMPOSER_DEFAULT_MODE
           ? { ...s, mode: COMPOSER_DEFAULT_MODE }
           : s;
       if (raw) {
-        try { return withDefaultMode(JSON.parse(raw) as ChatSettings); } catch { /* fallthrough */ }
+        try { return withDefaultMode(JSON.parse(raw) as ChatSettings); } catch { }
       }
       if (taskId && typeof window !== "undefined") {
         try {
           const fallback = window.localStorage.getItem(STORAGE_KEY);
           if (fallback) return withDefaultMode(JSON.parse(fallback) as ChatSettings);
-        } catch { /* fallthrough */ }
+        } catch { }
       }
       return EMPTY_SETTINGS;
     },
@@ -157,24 +113,17 @@ function MessageComposerInner({
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [interim, setInterim] = useState("");
   const [slashPaletteOpen, setSlashPaletteOpen] = useState(false);
-  /** Bumps only when "/" opens the palette so the subtree remounts with a cleared filter (controlled open skips Radix open handler). */
   const [slashPaletteMountKey, setSlashPaletteMountKey] = useState(0);
   const lastSentRef = useRef<string>("");
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
 
-  /** True when caret is at the start of a line (whole message or after newline), optionally with leading spaces — matches where Claude opens the `/` palette. */
   const isCaretAtLogicalLineStart = useCallback((beforeCaret: string) => {
     const ls = beforeCaret.lastIndexOf("\n") + 1;
     return beforeCaret.slice(ls).trim() === "";
   }, []);
 
-  // Stop the in-flight claude subprocess for this session. 404 ("no
-  // live process") is benign — the run finished a moment ago and the
-  // registry already cleaned up. Anything else is surfaced as a toast.
-  // Always reset the local queued counter — the kill route clears the
-  // server-side queue, so the badge would otherwise lie.
   const handleStop = useCallback(async () => {
     if (stopping) return;
     setStopping(true);
@@ -189,13 +138,6 @@ function MessageComposerInner({
     }
   }, [sessionId, stopping, toast]);
 
-  // Decrement the queue badge when the in-flight turn flips idle: the
-  // server drains one queued message per exit, so each `isResponding`
-  // edge from true→false consumes exactly one slot. We can't observe
-  // the drain directly (it's a server-side child exit + spawn) but
-  // FIFO discipline + this edge detector keeps the badge in sync
-  // without any extra round trip. Hard floor at 0 — the counter is a
-  // hint, never authoritative.
   const prevRespondingRef = useRef(isResponding);
   useEffect(() => {
     if (prevRespondingRef.current && !isResponding) {
@@ -211,16 +153,10 @@ function MessageComposerInner({
     const natural = el.scrollHeight;
     const h = Math.min(MAX_H, Math.max(MIN_H, natural));
     el.style.height = `${h}px`;
-    // Phantom scrollbar fix: when content fits the auto-grown height,
-    // suppress the scrollbar entirely. Browsers (esp. Windows Chrome at
-    // fractional DPI) round scrollHeight up by 1px on an empty textarea
-    // and render a useless scroll track. Only re-enable scrolling when
-    // we actually clamped to MAX_H.
     el.style.overflowY = natural > MAX_H ? "auto" : "hidden";
   }, []);
   useEffect(resize, [draft, interim, resize]);
 
-  // -- Mention detection: track caret position vs the most recent `@`.
   const detectMention = useCallback(() => {
     const el = taRef.current;
     if (!el) return;
@@ -228,7 +164,6 @@ function MessageComposerInner({
     const upTo = draft.slice(0, caret);
     const at = upTo.lastIndexOf("@");
     if (at < 0) { setMention(null); return; }
-    // require @ to be at start or after whitespace
     const prev = at === 0 ? " " : upTo[at - 1];
     if (!/\s/.test(prev)) { setMention(null); return; }
     const after = upTo.slice(at + 1);
@@ -256,7 +191,6 @@ function MessageComposerInner({
     });
   }, [draft, mention]);
 
-  // -- Voice input --
   const handleTranscript = useCallback((text: string, isFinal: boolean) => {
     if (isFinal) {
       setInterim("");
@@ -266,14 +200,9 @@ function MessageComposerInner({
     }
   }, []);
 
-  // -- File attach --
   const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
   const onPickFile = () => fileRef.current?.click();
 
-  // Upload a single File (from picker, paste, or future drag-drop) and
-  // append the resulting attachment chip. Centralized so the picker
-  // and paste paths can't drift — both need identical size-cap, image-
-  // dimension, progress, and toast behavior.
   const uploadOneFile = useCallback(async (f: File) => {
     if (f.size > MAX_UPLOAD_BYTES) {
       toast("error", `File too large (${(f.size / 1024 / 1024).toFixed(1)} MB) — max 25 MB`);
@@ -315,15 +244,6 @@ function MessageComposerInner({
     await uploadOneFile(f);
   };
 
-  // Clipboard paste handler. Browsers expose pasted images as
-  // ClipboardItem files (PNG screenshot blob has no `name`, just type
-  // `image/png`); we synthesize a stable filename from the mime type
-  // and a timestamp so the attachment chip + server-side path stay
-  // unique. Pasted text falls through to the textarea's default
-  // behavior — only intercept when there's at least one image in the
-  // clipboard, otherwise plain copy/paste of code or URLs would lose
-  // its native handler. Uploads run in parallel for multi-image pastes
-  // (rare but cheap to support).
   const onPaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items || items.length === 0) return;
@@ -333,10 +253,6 @@ function MessageComposerInner({
       if (!item.type.startsWith("image/")) continue;
       const blob = item.getAsFile();
       if (!blob) continue;
-      // Pasted PNG screenshots come through as `image.png` with a
-      // generic name. Stamp the filename with the current time +
-      // mime-derived extension so concurrent pastes don't collide
-      // on the server's content-addressed upload path.
       const ext = item.type.split("/")[1]?.split("+")[0] ?? "bin";
       const stamped = blob.name && blob.name !== "image.png"
         ? blob
@@ -345,10 +261,6 @@ function MessageComposerInner({
     }
     if (imageFiles.length === 0) return;
     e.preventDefault();
-    // Sequential to keep the upload-progress strip readable (parallel
-    // would race the single uploadProgress slot and you'd see flicker
-    // between filenames). Multi-image paste is rare; one-at-a-time is
-    // fine UX.
     for (const f of imageFiles) {
       await uploadOneFile(f);
     }
@@ -358,16 +270,7 @@ function MessageComposerInner({
     setAttachments((prev) => prev.filter((a) => a.path !== path));
   };
 
-  // -- Submit --
   const submit = useCallback(async () => {
-    // The textarea ref is the authoritative source: when an IME
-    // composition (e.g. Vietnamese Telex/VNI) commits as part of the
-    // click → blur sequence, the resulting `onChange` schedules a
-    // setDraft that hasn't applied yet by the time the form submit
-    // handler runs. Reading state-only would drop the last-typed
-    // syllable and only flush it on the *next* send. The DOM value
-    // already includes draft + interim because that's what we feed
-    // into `value={composedMessage}`.
     const live = (taRef.current?.value ?? (draft + (interim ? (draft ? " " : "") + interim : ""))).trim();
     if ((!live && attachments.length === 0) || sending) return;
     setSending(true);
@@ -384,9 +287,6 @@ function MessageComposerInner({
       setAttachments([]);
       setInterim("");
       if (res.queued) {
-        // Server queued behind an in-flight turn — surface the
-        // position so the user understands their message hasn't been
-        // dropped, just held until the current turn finishes.
         setQueuedCount(res.position ?? (queuedCount + 1));
         toast(
           "info",
@@ -395,9 +295,6 @@ function MessageComposerInner({
             : "Queued — will send when current turn finishes",
         );
       }
-      // Pass the user-visible text (not the finalMsg with attachment
-      // prelude) so the optimistic row reads exactly as the user typed.
-      // Empty string is fine — parent will skip the optimistic append.
       onSent?.(live);
     } catch (err) {
       toast("error", (err as Error).message);
@@ -407,7 +304,7 @@ function MessageComposerInner({
   }, [draft, interim, attachments, sending, sessionId, repo, settings, onSent, toast]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mention) return; // MentionPicker handles ↑↓↵Esc
+    if (mention) return;
     if (
       e.key === "/" &&
       !e.shiftKey &&
@@ -439,7 +336,6 @@ function MessageComposerInner({
     }
   };
 
-  // -- Actions menu wiring --
   const insertAtCaret = useCallback((text: string) => {
     setInterim("");
     const el = taRef.current;
@@ -468,10 +364,6 @@ function MessageComposerInner({
   const composedMessage = draft + (interim ? (draft ? " " : "") + interim : "");
   const canSend = !!composedMessage.trim() || attachments.length > 0;
 
-  // Focus state lifts the composer's outer ring so the user sees a
-  // single bordered "card" instead of two stacked rectangles
-  // (textarea border + form border-t). When focused we also dim the
-  // top border so the card visually merges with the chat above.
   const [focused, setFocused] = useState(false);
 
   const onSlashPaletteOpenChange = useCallback((open: boolean) => {
@@ -493,8 +385,7 @@ function MessageComposerInner({
         onChange={onFileChange}
       />
 
-      {/* In-flight upload progress strip — surfaces percent + name so the
-          user knows the file is going up, not silently lost. */}
+      {}
       {uploadProgress && (
         <div className="mb-2 rounded-md border border-border bg-secondary px-2 py-1.5">
           <div className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground mb-1">
@@ -511,9 +402,7 @@ function MessageComposerInner({
         </div>
       )}
 
-      {/* Composer card: textarea + chips + action row live inside one
-          rounded surface so the composer reads as a single control,
-          not three stacked widgets. Border lifts on focus. */}
+      {}
       <div
         className={`relative rounded-xl border bg-background transition-colors overflow-visible ${
           focused
@@ -521,8 +410,7 @@ function MessageComposerInner({
             : "border-border"
         }`}
       >
-        {/* Attachment chips inside the card — image dimensions inline,
-            like Claude's composer. */}
+        {}
         {attachments.length > 0 && (
           <ul className="flex flex-wrap gap-1.5 px-2 pt-2">
             {attachments.map((a) => (
@@ -558,17 +446,12 @@ function MessageComposerInner({
           </ul>
         )}
 
-        {/* Textarea with mic anchored at top-right corner, Claude-style. */}
+        {}
         <div className="relative">
           <textarea
             ref={taRef}
             value={composedMessage}
             onChange={(e) => {
-              // During an IME composition (CJK input methods, accented
-              // dead keys, etc.) `onChange` fires per syllable while the
-              // candidate is still being chosen. Clearing `interim` and
-              // setting the draft mid-composition drops the in-flight
-              // syllable; defer until composition end.
               const native = e.nativeEvent as InputEvent & { isComposing?: boolean };
               if (native.isComposing) return;
               setInterim("");
@@ -600,9 +483,7 @@ function MessageComposerInner({
           </div>
         </div>
 
-        {/* Action row inside the card so the whole control reads as one
-            surface. Subtle top divider only when content above is
-            non-trivial (textarea always is). */}
+        {}
         <div className="flex items-center gap-1.5 px-1.5 pb-1.5 pt-1">
           <QuickAddMenu
             onAttach={onPickFile}
@@ -621,8 +502,7 @@ function MessageComposerInner({
           />
           {uploading && <Loader2 size={12} className="text-muted-foreground animate-spin" />}
 
-          {/* Hint sits between the action menus and the send button on
-              wider viewports; hidden on mobile to keep the row tidy. */}
+          {}
           <span
             className="hidden sm:inline text-[10px] text-muted-foreground/60 ml-1 truncate"
             aria-hidden="true"
@@ -630,13 +510,7 @@ function MessageComposerInner({
             Enter to send · Shift+Enter newline · @ mention · / commands
           </span>
 
-          {/* Mode pill + Send live on the right edge, like Claude.
-              Send takes priority over Stop the moment the user has
-              anything to send — even while the agent is mid-response,
-              so the queued-message workflow ("Queue another message…"
-              placeholder) is reachable. Stop only surfaces when the
-              draft is empty AND something is in flight, which is the
-              only time the user genuinely has no other action. */}
+          {}
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
             {queuedCount > 0 && (
               <span
@@ -691,13 +565,6 @@ function MessageComposerInner({
   );
 }
 
-// Outer wrapper keys the inner by `sessionId` so switching to a
-// different session naturally remounts the composer — clearing the
-// draft / attachments / mention / interim state without an effect
-// that calls setState on prop change (which the React 19 hooks rule
-// rejects for legitimate reasons: it's a recipe for cascading
-// renders when the component happens to render twice for unrelated
-// reasons).
 function MessageComposerOuter(
   props: React.ComponentProps<typeof MessageComposerInner>,
 ) {

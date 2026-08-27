@@ -1,36 +1,3 @@
-/**
- * Natural-language → bridge command middleware.
- *
- * Why this exists:
- *   The Telegram surface (`telegramCommands.ts`) only understands
- *   exact slash commands. But operators chatting from their phone
- *   don't want to remember `/done t_20260427_001`; they want to say
- *   "đánh dấu task review code xong" or "mark the latest one done".
- *
- * This module sits between the inbound text and `dispatchCommand`:
- *
- *   user message → routeNaturalLanguage()
- *                    │
- *                    ├─ already starts with `/` ──► null (caller dispatches normally)
- *                    │
- *                    └─ free-form text ──► claude -p with command
- *                                          catalog + recent task list
- *                                       ──► returns:
- *                                            { command: "/done t_…",
- *                                              reply: "Marked the
- *                                                review-code task as
- *                                                done.",
- *                                              confidence: "high" }
- *
- * Caller (`telegramCommands.smartDispatch`) then runs the command,
- * concatenates the LLM's explanation with the dispatch output, and
- * sends both back to the operator.
- *
- * Why `claude -p` and not the Anthropic SDK:
- *   Same reason as `libs/scanApp.ts` and `libs/detect/llm.ts` —
- *   zero new dependency, reuses the operator's existing Claude
- *   credentials, no separate API key provisioning.
- */
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -47,44 +14,18 @@ const STDERR_CAP_BYTES = 8 * 1024;
 const MAX_TASKS_IN_PROMPT = 30;
 
 export interface IntentResult {
-  /**
-   * The slash command the caller should run, e.g. `/done t_20260427_001`.
-   * `null` when the LLM decided no action is appropriate (chit-chat,
-   * a question, or genuinely ambiguous input).
-   */
   command: string | null;
-  /**
-   * A short natural-language wrapper to send back to the operator.
-   * Always present. When `command` is set, this explains what the
-   * bridge is about to do; when not, it's the standalone reply.
-   */
   reply: string;
-  /**
-   * - `high`   — model was confident; safe to auto-execute.
-   * - `medium` — model picked something but flagged uncertainty; the
-   *              caller still executes but should make this visible.
-   * - `low`    — model wasn't confident enough to dispatch; `command`
-   *              should be `null` here. Caller just relays `reply`.
-   */
   confidence: "high" | "medium" | "low";
 }
 
-/**
- * Route a free-form chat message into a bridge command + reply.
- * Returns null when the message starts with `/` (= already a slash
- * command, no LLM round-trip needed) or when the LLM call fails.
- *
- * Failure mode is intentional: the caller falls back to "Send /help
- * if you didn't mean to chat" so a flaky claude CLI doesn't make the
- * Telegram bot stop working entirely.
- */
 export async function routeNaturalLanguage(
   text: string,
 ): Promise<IntentResult | null> {
   if (!existsSync(BRIDGE_ROOT)) return null;
   const trimmed = text.trim();
   if (!trimmed) return null;
-  if (trimmed.startsWith("/")) return null; // not our problem
+  if (trimmed.startsWith("/")) return null;
 
   const prompt = buildPrompt(trimmed);
   const raw = await runClaude(prompt);
@@ -93,14 +34,6 @@ export async function routeNaturalLanguage(
   return parseResponse(raw);
 }
 
-/**
- * Build the structured prompt. Includes:
- *   1. Available bridge commands with their argument schemas.
- *   2. The most recent ~30 tasks (id, title, section, app) so the
- *      model can resolve fuzzy refs like "task review code" or
- *      "the latest one".
- *   3. Strict JSON output contract.
- */
 function buildPrompt(userText: string): string {
   const tasks = listTasks().slice(0, MAX_TASKS_IN_PROMPT);
   const lines: string[] = [];
@@ -262,7 +195,6 @@ function parseResponse(raw: string): IntentResult | null {
         ? "medium"
         : "low";
 
-  // Sanity: low confidence with a command set is contradictory — drop.
   if (confidence === "low" && command) {
     return { command: null, reply, confidence: "low" };
   }
@@ -285,12 +217,8 @@ const COMMAND_NAMES: Set<string> = (() => {
 })();
 
 function isKnownCommand(text: string): boolean {
-  // Pull off the command name (after the slash, before whitespace or
-  // `@botname`) and verify it's in the catalog.
   const head = text.replace(/^\//, "").split(/[\s@]/)[0];
   return COMMAND_NAMES.has(head.toLowerCase());
 }
 
-// Re-export `Task` so importers don't need to reach into tasksStore
-// just to type the recent-task list.
 export type { Task };

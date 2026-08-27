@@ -46,36 +46,15 @@ interface FileHunk {
 }
 
 export interface FileDiffEntry {
-  /** Canonical post-image path — what most reviewers care about ("where the change ended up"). */
   path: string;
-  /** Pre-image path for renames; null otherwise. */
   oldPath: string | null;
   status: "added" | "deleted" | "modified" | "renamed";
   hunks: FileHunk[];
   added: number;
   removed: number;
-  /** Full raw diff for this file, including the diff/index/+++/--- headers — used by Copy. */
   raw: string;
 }
 
-/**
- * Parse a `git diff` blob into per-file entries. The unified diff
- * starts each file with `diff --git a/<path> b/<path>` and continues
- * until the next `diff --git` (or EOF). Within each file:
- *   - `index <hash>..<hash> <mode>` — metadata, ignored for our shape
- *   - `--- a/<path>` / `+++ b/<path>` — pre/post paths. `--- /dev/null`
- *     means added; `+++ /dev/null` means deleted.
- *   - `@@ ... @@` — start of a hunk; subsequent lines are body until
- *     the next `@@` or end of file.
- *
- * Renames produce `rename from`/`rename to` lines instead of paths in
- * `---`/`+++`. Pure-rename (no body) cases still produce a single
- * entry with zero hunks.
- *
- * Defensive: any input that doesn't start with `diff --git` falls
- * through as a single synthetic entry so the pane still has something
- * to show (e.g. binary diff summaries, or our own truncation marker).
- */
 export function parseUnifiedDiff(diff: string): FileDiffEntry[] {
   const out: FileDiffEntry[] = [];
   if (!diff.trim()) return out;
@@ -83,8 +62,6 @@ export function parseUnifiedDiff(diff: string): FileDiffEntry[] {
   const blocks = diff.split(/\n(?=diff --git )/g);
   for (const block of blocks) {
     if (!block.startsWith("diff --git ")) {
-      // Tail / unknown content — surface as a synthetic entry so it's
-      // visible in the file list rather than swallowed.
       if (block.trim().length > 0) {
         out.push({
           path: "(other)",
@@ -109,8 +86,6 @@ export function parseUnifiedDiff(diff: string): FileDiffEntry[] {
     let isAddition = false;
     let isDeletion = false;
 
-    // Pull paths from the `diff --git a/<x> b/<y>` header — robust
-    // against quoted paths with spaces (`a/"path with spaces"`).
     const headerMatch = /^diff --git (?:"([^"]+)"|(\S+)) (?:"([^"]+)"|(\S+))/.exec(lines[0] ?? "");
     if (headerMatch) {
       const a = (headerMatch[1] ?? headerMatch[2] ?? "").replace(/^a\//, "");
@@ -175,12 +150,6 @@ export function parseUnifiedDiff(diff: string): FileDiffEntry[] {
   return out;
 }
 
-/**
- * Build a directory tree from a flat list of file paths. Mirrors the
- * left-side file pane in GitHub / Bitbucket / IDE review tools. Each
- * directory node aggregates child + / - counts so an operator can
- * see at a glance which subtree carries the bulk of the change.
- */
 export interface TreeDir {
   kind: "dir";
   name: string;
@@ -244,7 +213,6 @@ export function buildFileTree(entries: FileDiffEntry[]): TreeDir {
     }
   }
 
-  // Roll counts up + sort: dirs before files, then alphabetical.
   const finalize = (dir: TreeDir): { added: number; removed: number; fileCount: number } => {
     let added = 0;
     let removed = 0;
@@ -274,12 +242,6 @@ export function buildFileTree(entries: FileDiffEntry[]): TreeDir {
   return root;
 }
 
-/**
- * Squash dirs that have a single dir child — `app/components/ui` shows
- * as one entry rather than three nested toggles when none of the
- * intermediate directories carry their own files. Standard behavior
- * for GitHub / VS Code / Bitbucket diff trees.
- */
 export function squashSingleDir(node: TreeDir): TreeDir {
   if (
     node.children.length === 1 &&
@@ -329,18 +291,7 @@ function DiffViewerBody({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  // Commit composer state — user types or generates a message, then
-  // commits via POST /commit. We deliberately don't auto-fill the
-  // message on mount: the operator should always confirm wording
-  // before a commit lands.
   const [commitMsg, setCommitMsg] = useState("");
-  /**
-   * Tracks whether the last auto-generate result came from the LLM
-   * (high-quality) or the heuristic fallback (file-list stub). Used
-   * to render the inline "needs edit" badge next to the textarea so
-   * the operator knows the suggestion is not commit-ready.
-   * `null` = no auto-generate run yet, or the user manually typed.
-   */
   const [msgSource, setMsgSource] = useState<"llm" | "heuristic" | null>(null);
   const [committing, setCommitting] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -369,8 +320,6 @@ function DiffViewerBody({
     setAttempt((a) => a + 1);
   }, []);
 
-  // Hoist data?.diff to a stable local so the React Compiler infers the
-  // narrowest dependency rather than the whole `data` object.
   const dataDiff = data?.diff;
   const entries = useMemo(
     () => (dataDiff ? parseUnifiedDiff(dataDiff) : []),
@@ -380,8 +329,6 @@ function DiffViewerBody({
     () => (entries.length > 0 ? squashSingleDir(buildFileTree(entries)) : null),
     [entries],
   );
-  // Derive default selection during render — avoids set-state-in-effect.
-  // When the user hasn't picked a file yet, fall back to entries[0].
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   const selected =
     entries.find((e) => e.path === pickedPath) ?? entries[0] ?? null;
@@ -406,11 +353,6 @@ function DiffViewerBody({
       const r = await api.suggestCommit(taskId, sessionId);
       setCommitMsg(r.message);
       setMsgSource(r.source);
-      // The heuristic fallback ships a file-list-shaped message
-      // (e.g. `feat(scope): add 3 files`) — useful as a starting
-      // point but not commit-quality. Surface that with both a toast
-      // and a persistent inline badge below the textarea so the
-      // operator doesn't ship it as-is thinking it came from the LLM.
       if (r.source === "heuristic") {
         toast(
           "info",
@@ -437,8 +379,6 @@ function DiffViewerBody({
       toast("success", r.message);
       setCommitMsg("");
       setMsgSource(null);
-      // Refresh the diff so the just-committed changes drop out of
-      // the working-tree view immediately.
       setLoading(true);
       setError(null);
       setAttempt((a) => a + 1);
@@ -482,19 +422,13 @@ function DiffViewerBody({
         </DialogDescription>
       </DialogHeader>
 
-      {/* Commit composer — sits above the file tree / hunks split so
-          it's always visible. Mirrors VSCode's CHANGES panel: textarea
-          + Generate (sparkle) + Commit. Disabled when there's nothing
-          changed in the working tree. */}
+      {}
       <div className="rounded-md border border-border bg-background p-2 space-y-1.5">
         <div className="relative">
           <textarea
             value={commitMsg}
             onChange={(e) => {
               setCommitMsg(e.target.value);
-              // Any manual edit invalidates the "this came from
-              // heuristic" badge — once the operator has touched it,
-              // the message is theirs regardless of how it started.
               if (msgSource !== null) setMsgSource(null);
             }}
             placeholder={
@@ -534,10 +468,6 @@ function DiffViewerBody({
             Push after commit
           </label>
           {msgSource === "heuristic" && (
-            // Persistent inline marker — toast fades, badge doesn't. Keeps
-            // pressure on the operator to edit the file-list stub before
-            // shipping. Cleared by the textarea's onChange (manual edit
-            // = ownership) and by a successful commit (msgSource reset).
             <span
               className="inline-flex items-center gap-1 text-[10.5px] text-amber-600 dark:text-amber-400 leading-none"
               title="Claude was unavailable — this is a file-list stub from the heuristic fallback. Please edit before committing."
@@ -563,7 +493,7 @@ function DiffViewerBody({
       </div>
 
       <div className="flex-1 min-h-0 grid grid-cols-[minmax(220px,32%)_1fr] gap-3 overflow-hidden">
-        {/* Sidebar: file tree */}
+        {}
         <aside className="min-h-0 overflow-auto rounded-md border border-border bg-background">
           {loading && (
             <div className="p-3 space-y-2">
@@ -586,7 +516,7 @@ function DiffViewerBody({
           )}
         </aside>
 
-        {/* Main pane: hunks for the selected file */}
+        {}
         <div className="min-h-0 overflow-auto rounded-md border border-border bg-background">
           {loading && (
             <div className="p-6 space-y-2">
@@ -635,18 +565,7 @@ function DiffViewerBody({
   );
 }
 
-/* ─────────────────────────── File tree sidebar ─────────────────────────── */
 
-/**
- * File-type icon picked from the path's extension. Mirrors the
- * VSCode "Seti / Material Icon" convention loosely: TS / TSX get a
- * cyan code icon, JS / MJS / CJS get a yellow code icon, JSON gets
- * the braces icon, MD / TXT get the document icon, .env gets the
- * type icon. Anything else falls back to the generic FileText.
- *
- * Returning a component (not JSX) lets the caller pass `size` /
- * className without a wrapping span.
- */
 function FileTypeIcon({ name, size = 12 }: { name: string; size?: number }) {
   const ext = (name.match(/\.([^.]+)$/)?.[1] ?? "").toLowerCase();
   switch (ext) {
@@ -693,11 +612,6 @@ function FileTypeIcon({ name, size = 12 }: { name: string; size?: number }) {
   }
 }
 
-/**
- * Single-letter VSCode-style status badge. Sits on the right edge of
- * a file row and is colored to match the CHANGES panel: yellow M,
- * green A, red D, blue R.
- */
 function StatusBadge({ status }: { status: FileDiffEntry["status"] }) {
   const map: Record<FileDiffEntry["status"], { letter: string; cls: string; label: string }> = {
     modified: { letter: "M", cls: "text-yellow-400", label: "Modified" },
@@ -728,9 +642,7 @@ export function FileTreeView({
 }) {
   return (
     <div>
-      {/* VSCode-style "Changes" header — pinned to the top of the
-          sidebar so the count and aggregate +/- are always visible
-          even after scrolling deep into a long tree. */}
+      {}
       <header className="sticky top-0 z-10 px-2 py-1.5 bg-background/95 backdrop-blur border-b border-border flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold text-fg-dim">
         <span>Changes</span>
         <span className="ml-auto inline-flex items-center gap-2">
@@ -770,9 +682,6 @@ function TreeItem({
   selectedPath: string | null;
   onSelect: (path: string) => void;
 }) {
-  // Directories default to open. Users can collapse manually; depth
-  // doesn't auto-collapse — most diffs touch a few dirs and the
-  // operator wants to see all of them at once.
   const [open, setOpen] = useState(true);
 
   if (node.kind === "file") {
@@ -856,7 +765,6 @@ function TreeItem({
   );
 }
 
-/* ─────────────────────────── Hunk pane ─────────────────────────── */
 
 function colorizeLine(line: string): { cls: string; text: string } {
   if (line.startsWith("@@")) return { cls: "text-info bg-info/5", text: line };

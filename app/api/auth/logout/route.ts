@@ -11,15 +11,6 @@ import { DEMO_MODE } from "@/libs/demoMode";
 
 export const dynamic = "force-dynamic";
 
-/**
- * POST /api/auth/logout
- *
- * Clears the `bridge_session` cookie. If the cookie was tied to a
- * trusted device (`payload.did`) we also remove that entry from the
- * server-side allowlist so the long-lived cookie cannot be reused
- * even if it leaked. Always returns `{ ok: true }` — logging out is
- * idempotent.
- */
 export function POST(req: NextRequest) {
   if (DEMO_MODE) {
     return NextResponse.json({ error: "demo mode" }, { status: 503 });
@@ -37,12 +28,10 @@ export function POST(req: NextRequest) {
     const payload = verifySession(token, cfg.secret);
     if (payload?.did) {
       try { revokeTrustedDevice(payload.did); }
-      catch { /* best-effort */ }
+      catch { }
     }
   }
   const res = NextResponse.json({ ok: true });
-  // maxAge: 0 ⇒ immediate clear. Reuse the same secure/sameSite/path
-  // attributes the cookie was set with so browsers actually drop it.
   res.cookies.set(COOKIE_NAME, "", sessionCookieOptions(0));
   return res;
 }

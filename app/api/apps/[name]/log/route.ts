@@ -1,15 +1,3 @@
-/**
- * Recent commit log for an app. Returns up to `limit` commits in
- * chronological-newest-first order with author, subject, and short
- * hash — what the operator needs to scan history without leaving
- * the bridge UI.
- *
- *   GET /api/apps/<name>/log?limit=20
- *
- * Format: `git log --pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1e`
- * (unit separator + record separator) so subjects with arbitrary
- * punctuation parse cleanly.
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -31,7 +19,6 @@ interface LogEntry {
   shortSha: string;
   author: string;
   email: string;
-  /** Unix epoch seconds. */
   at: number;
   subject: string;
 }

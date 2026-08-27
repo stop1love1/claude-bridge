@@ -7,20 +7,6 @@ import { Button } from "../_components/ui/button";
 import { Input } from "../_components/ui/input";
 import { Label } from "../_components/ui/label";
 
-/**
- * Single-user login screen. Two flows:
- *
- *   - **Setup** — when the bridge has no `auth` block in bridge.json
- *     yet, the page renders an in-UI form (email + password +
- *     confirm). The backend at `POST /api/auth/setup` enforces
- *     loopback-only + once-only semantics so a LAN visitor can't race
- *     to claim the password. On success the operator is auto-signed
- *     in (trust=true cookie) and redirected to `?next=…` (or `/`).
- *
- *   - **Login** — email + password + "Trust this device" toggle.
- *     On success the API sets `bridge_session` and we redirect to
- *     `?next=…` (or `/`).
- */
 export default function LoginPage() {
   const [setupMode, setSetupMode] = useState<boolean | null>(null);
   const [email, setEmail] = useState("");
@@ -40,8 +26,6 @@ export default function LoginPage() {
         }
         const data = (await r.json()) as { configured?: boolean; user?: unknown };
         if (ac.signal.aborted) return;
-        // If the operator is already authed, redirect away — same UX
-        // as most apps: the login page is a no-op for logged-in users.
         if (data.configured && data.user) {
           window.location.replace(nextDest());
           return;
@@ -54,7 +38,6 @@ export default function LoginPage() {
     return () => ac.abort();
   }, []);
 
-  /** Pending-state info when login was held for trusted-device approval. */
   const [pending, setPending] = useState<{
     id: string;
     deviceLabel: string;
@@ -72,9 +55,6 @@ export default function LoginPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password, trust }),
       });
-      // 202 = device-approval gate. Server has accepted credentials but
-      // is waiting for an existing trusted device to approve. Switch
-      // the UI into a poll-and-wait state.
       if (r.status === 202) {
         const data = (await r.json()) as {
           pendingId: string;
@@ -106,9 +86,6 @@ export default function LoginPage() {
     }
   };
 
-  // While in pending state, poll the server every 2s for the operator's
-  // decision. Stop on any non-202 response (approved → cookie set →
-  // redirect; denied / expired → surface the reason and reset the form).
   useEffect(() => {
     if (!pending) return;
     const ac = new AbortController();
@@ -119,13 +96,11 @@ export default function LoginPage() {
           signal: ac.signal,
         });
         if (ac.signal.aborted) return;
-        if (r.status === 202) return; // still pending — keep polling
+        if (r.status === 202) return;
         if (r.status === 200) {
-          // approved + cookie attached
           window.location.replace(nextDest());
           return;
         }
-        // 403 (denied), 410 (expired), other errors — surface message.
         let msg = `Login canceled (${r.status})`;
         try {
           const data = (await r.json()) as { reason?: string; status?: string };
@@ -138,12 +113,10 @@ export default function LoginPage() {
           } else if (data.reason) {
             msg = data.reason;
           }
-        } catch { /* keep generic msg */ }
+        } catch { }
         setError(msg);
         setPending(null);
       } catch {
-        // Abort during teardown OR a network blip — keep polling on
-        // the next interval tick.
       }
     };
     const handle = setInterval(() => { void tick(); }, 2000);
@@ -253,19 +226,6 @@ export default function LoginPage() {
   );
 }
 
-/**
- * First-run setup form rendered when `auth` isn't yet configured in
- * bridge.json. POSTs to `/api/auth/setup` which:
- *   - requires the one-time setup token printed in the bridge boot
- *     banner (defends against Host-header spoofing on LAN-bound
- *     bridges — see `libs/setupToken.ts`),
- *   - keeps the loopback Host check as defense-in-depth so the LAN
- *     case is awkward even before a token is acquired,
- *   - refuses to overwrite an existing `auth` block (to rotate the
- *     password the operator must run `bun scripts/set-password.ts`),
- *   - hashes the password with scrypt + signs a 30-day cookie so the
- *     post-setup redirect lands already-authenticated.
- */
 function SetupForm({ onDone }: { onDone(): void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -413,15 +373,6 @@ function SetupForm({ onDone }: { onDone(): void }) {
   );
 }
 
-/**
- * Rendered while the new device is waiting for an existing trusted
- * device to approve the login request. Shows:
- *   - live countdown until the 3-min approval window expires
- *   - the device label that was registered
- *   - a copyable CLI command (`bun run approve:login <id>`) so the
- *     operator can authorize from a terminal on the bridge host
- *     without needing another browser session
- */
 function PendingApprovalNotice({
   pendingId,
   deviceLabel,
@@ -451,8 +402,6 @@ function PendingApprovalNotice({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // Clipboard API may be unavailable on http: — fall through, the
-      // command stays selectable in the <code> block.
     }
   };
 
@@ -512,11 +461,6 @@ function PendingApprovalNotice({
   );
 }
 
-/**
- * Resolve the post-login redirect target. Honors `?next=…` when it's
- * a same-origin path, otherwise falls back to `/`. Prevents open-
- * redirect by rejecting absolute URLs and protocol-relative `//foo`.
- */
 function nextDest(): string {
   if (typeof window === "undefined") return "/";
   const sp = new URLSearchParams(window.location.search);

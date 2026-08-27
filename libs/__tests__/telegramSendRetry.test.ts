@@ -1,18 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { sendTelegramApiMessage, parseRetryAfter } from "../telegramSendRetry";
 
-/**
- * Shared retry/backoff policy extracted from `telegramNotifier.sendViaBot`
- * (the pre-existing correct implementation) so `telegramCommands.sendReply`
- * can reuse it instead of reimplementing it — before this extraction
- * `sendReply` was a single attempt whose failure was only
- * `console.warn`'d server-side, so a transient 429/5xx or a parse_mode
- * mismatch silently dropped the operator's command reply (audit H9).
- *
- * These tests exercise the policy directly, independent of either
- * caller, so both `sendViaBot` and `sendReply` inherit coverage from
- * one place.
- */
 
 function jsonResponse(
   status: number,
@@ -104,8 +92,6 @@ describe("sendTelegramApiMessage", () => {
       "[test]",
     );
 
-    // Attempt 0 uses the fallback; attempt 1 is already plain-text and
-    // still gets a 400, so the loop gives up instead of retrying forever.
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalled();
   });

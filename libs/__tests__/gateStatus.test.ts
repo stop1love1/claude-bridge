@@ -91,7 +91,6 @@ describe("computeGateStatus", () => {
     ]);
     const status = computeGateStatus(m);
     expect(status.allGreen).toBe(false);
-    // Only ONE verify entry should surface — from the newest (s2) attempt.
     const verifyEntries = status.gates.filter((g) => g.name === "verify");
     expect(verifyEntries).toHaveLength(1);
     expect(verifyEntries[0].verdict).toBe("fail");
@@ -180,7 +179,6 @@ describe("computeGateStatus", () => {
       }),
     ]);
     const status = computeGateStatus(m);
-    // Per runLifecycle.ts:498-499 style blocks only on `alien` — drift ships.
     expect(status.allGreen).toBe(true);
     expect(status.gates.find((g) => g.name === "style")?.verdict).toBe("drift");
   });
@@ -198,7 +196,6 @@ describe("computeGateStatus", () => {
       }),
     ]);
     const status = computeGateStatus(m);
-    // Per runLifecycle.ts:583-584 semantic blocks only on `broken` — drift ships.
     expect(status.allGreen).toBe(true);
     expect(status.gates.find((g) => g.name === "semantic")?.verdict).toBe("drift");
   });

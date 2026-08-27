@@ -26,11 +26,6 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const run = meta.runs.find((r) => r.sessionId === sessionId);
   if (!run) return NextResponse.json({ error: "run not found" }, { status: 404 });
 
-  // CRIT-5 belt-and-suspenders: even though /link + /agents now reject
-  // dirty role/repo at write time, meta.json files written before this
-  // patch could still contain something nasty. Re-validate before
-  // templating into a filename, and confirm the resolved path stays
-  // inside the task directory.
   if (!isValidAgentRole(run.role) || !isValidRepoLabel(run.repo)) {
     return NextResponse.json({ error: "run has invalid role/repo" }, { status: 500 });
   }

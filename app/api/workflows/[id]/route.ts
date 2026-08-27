@@ -20,7 +20,6 @@ interface PatchBody {
   stages?: StageInput[];
 }
 
-/** PATCH /api/workflows/[id] — update fields / stages / toggle enabled. */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!getWorkflow(id)) {
@@ -41,7 +40,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   }
 }
 
-/** DELETE /api/workflows/[id]. */
 export async function DELETE(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const removed = deleteWorkflow(id);

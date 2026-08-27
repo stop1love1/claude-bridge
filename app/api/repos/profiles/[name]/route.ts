@@ -8,13 +8,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ name: string }> };
 
-/**
- * GET /api/repos/profiles/<name>
- *
- * Returns a single repo profile. 404 if the repo isn't declared in
- * BRIDGE.md or its folder is missing on disk. Auto-builds the cache
- * lazily (same path as `/api/repos/profiles`).
- */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const { name } = await ctx.params;
   if (!name) {

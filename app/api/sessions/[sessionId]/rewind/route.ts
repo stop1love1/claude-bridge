@@ -16,17 +16,9 @@ type Ctx = { params: Promise<{ sessionId: string }> };
 
 interface RewindBody {
   repo: string;
-  /** Drop every entry whose `uuid` comes after this one. The targeted
-   *  entry itself is kept — think "rewind to here, this is now my latest
-   *  turn". */
   uuid: string;
 }
 
-/**
- * Truncate a session's .jsonl after a given entry uuid. The next time
- * the user resumes the session, claude sees the conversation as if the
- * later turns never happened — same idea as `/rewind` in claude code.
- */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
   if (!isValidSessionId(sessionId)) return badRequest("invalid sessionId");
@@ -35,13 +27,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "repo and uuid required" }, { status: 400 });
   }
 
-  // A live `claude` child holds the .jsonl open and appends to it. If we
-  // truncate while it's mid-write, either the in-progress turn is lost or
-  // the child writes at a now-invalid offset and corrupts the file. Refuse
-  // the rewind until the operator stops or finishes the run.
-  // `getChild` only knows about bridge-spawned children; `isAlive` also
-  // covers externally-spawned / IDE / heartbeat-only sessions and
-  // bridge children whose registry entry was dropped by an HMR reload.
   if (getChild(sessionId) || isAlive(sessionId)) {
     return NextResponse.json(
       { error: "session is still running — stop the run before rewinding" },
@@ -64,12 +49,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     try {
       const obj = JSON.parse(lines[i]) as { uuid?: string };
       if (obj.uuid === body.uuid) { cutoff = i; break; }
-    } catch { /* skip malformed */ }
+    } catch { }
   }
   if (cutoff === -1) return NextResponse.json({ error: "uuid not found in session" }, { status: 404 });
 
-  // Atomic write: stage to a sibling tmp file then rename. A crash
-  // mid-write leaves the original file intact rather than truncated.
   const kept = lines.slice(0, cutoff + 1).join("\n");
   const payload = kept.endsWith("\n") ? kept : kept + "\n";
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;

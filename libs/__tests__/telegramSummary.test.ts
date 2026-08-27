@@ -3,19 +3,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-/**
- * The lifecycle notifier sends ONE consolidated Telegram message on
- * coordinator completion — composed from `summary.md` instead of the
- * legacy "✅ coordinator completed" stub. These tests pin the verdict
- * classifier, the file reader, and the rendered MarkdownV2 message
- * shape so a refactor can't silently regress operator-visible output.
- *
- * The two FS-touching helpers (`readSummaryMd`) resolve their path via
- * `SESSIONS_DIR`, which is captured at module load from
- * `process.cwd()`. We chdir → resetModules → import so each test sees
- * the temp dir as its bridge root. Same trick the
- * `forwardChatImportantPatterns` tests use for `homedir()`.
- */
 
 let tempRoot: string;
 let originalCwd: string;
@@ -33,7 +20,6 @@ afterEach(() => {
   try {
     rmSync(tempRoot, { recursive: true, force: true });
   } catch {
-    /* best-effort */
   }
 });
 
@@ -123,13 +109,9 @@ describe("renderCoordinatorSummaryMessage", () => {
       summary: "READY FOR REVIEW — shipped checkout flow.\n\nDetails follow.",
       status: "done",
     });
-    // Header has the verdict icon + escaped label + escaped taskId
     expect(out).toContain("🎉");
     expect(out).toContain("Ready for review");
-    // MarkdownV2 escapes the `_` in the task id
     expect(out).toMatch(/`t\\_20260514\\_001`/);
-    // Body is MarkdownV2-escaped (the literal `.` after "flow" must be
-    // backslash-escaped so Telegram doesn't try to parse it).
     expect(out).toContain("shipped checkout flow\\.");
   });
 
@@ -137,8 +119,6 @@ describe("renderCoordinatorSummaryMessage", () => {
     const { renderCoordinatorSummaryMessage } = await import("../telegramNotifier");
     const out = renderCoordinatorSummaryMessage({
       taskId: "t_20260514_002",
-      // Body could be anything — verdict classifier is overridden by
-      // the failed-status branch.
       summary: "READY FOR REVIEW — shipped",
       status: "failed",
     });
@@ -154,10 +134,7 @@ describe("renderCoordinatorSummaryMessage", () => {
       summary: `READY FOR REVIEW\n\n${huge}`,
       status: "done",
     });
-    // Truncation marker present
     expect(out).toContain("…");
-    // Stays under Telegram's MAX_TEXT (3500 + small overhead is fine,
-    // but the source caps the body so this is a safety check).
     expect(out.length).toBeLessThan(5_000);
   });
 });

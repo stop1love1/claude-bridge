@@ -1,36 +1,3 @@
-/**
- * Bridge auth — single-user username/password login + signed session
- * cookie + a server-side trusted-device allowlist (revocable).
- *
- * Storage lives in `~/.claude/bridge.json` under the `auth` key (same
- * file as apps + telegram settings, so a `git pull` on the bridge
- * repo never touches credentials):
- *
- *   {
- *     "auth": {
- *       "username": "admin",
- *       "passwordHash": "scrypt$<N>$<r>$<p>$<saltB64>$<hashB64>",
- *       "secret": "<random 32B base64url>",            // HMAC signing key
- *       "internalToken": "<random 32B base64url>",     // child-agent bypass
- *       "trustedDevices": [
- *         { id, label?, createdAt, lastSeenAt, expiresAt }
- *       ]
- *     }
- *   }
- *
- * Cookie format (compact + edge-runtime friendly):
- *   <base64url(JSON payload)>.<base64url(HMAC-SHA256(secret, payload))>
- *
- * Payload: `{ sub, exp, did? }` — `did` = trusted-device id when the
- * operator ticked "Trust this device". The middleware re-checks `did`
- * against the allowlist on every request so revocation is instant.
- *
- * Two TTL classes:
- *   - "session" (untrusted device) — short cookie life, browser-session
- *     scoped if possible. Re-login required after restart.
- *   - "trusted" — 30-day cookie + matching trustedDevices entry. Operator
- *     can revoke per-device from `/settings`.
- */
 
 import {
   randomBytes,
@@ -65,47 +32,20 @@ const scrypt = promisify(scryptCb) as (
   opts?: ScryptOpts,
 ) => Promise<Buffer>;
 
-// Tightened from N=16384 to N=131072 (2^17) — matches OWASP 2024+
-// recommendation for server-side scrypt. ~150ms verify on a modern
-// laptop, ~10x harder to bruteforce a leaked hash. Backward compat is
-// preserved: `verifyPassword` parses N/r/p from the stored hash, so
-// pre-existing 16384 hashes keep working until the operator next runs
-// `set-password` (which always re-hashes with the current params).
 const SCRYPT_N = 131072;
 const SCRYPT_r = 8;
 const SCRYPT_p = 1;
 const SCRYPT_KEYLEN = 64;
 const SALT_BYTES = 16;
-/** Sane upper bound on stored N to refuse pathological hashes. */
 const SCRYPT_MAX_N = 1 << 20;
 
-/** Lower-bound for any new password set via the bridge UI / CLI. */
 export const MIN_PASSWORD_LENGTH = 12;
 
 export const COOKIE_NAME = "bridge_session";
-/** Default session TTL when "Trust this device" is OFF — 12 hours. */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-/** Trusted-device TTL — 30 days. */
 export const TRUSTED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-/** Internal header child agents send so middleware can bypass auth. */
 export const INTERNAL_TOKEN_HEADER = "x-bridge-internal-token";
 
-/**
- * Constant-time equality for two opaque ASCII secrets (HMAC keys,
- * bypass tokens, etc.). Returns false on any null/undefined/empty
- * input or length mismatch — both branches are O(1) so they leak no
- * timing information about the secret. The inner comparison goes
- * through `crypto.timingSafeEqual` which is constant-time for buffers
- * of equal length.
- *
- * Use this everywhere a request-supplied string must be compared
- * against a server-side secret. Plain `===` short-circuits at the
- * first byte mismatch and lets a network-adjacent attacker recover
- * the secret one byte at a time via response-latency measurements.
- */
-// Per-process random key for the length-blinding HMAC below. Fresh each
-// boot; never persisted — it only has to make the two HMAC digests
-// uncorrelated with the raw inputs within a single run.
 const CT_BLIND_KEY = randomBytes(32);
 
 export function constantTimeStringEqual(
@@ -114,30 +54,11 @@ export function constantTimeStringEqual(
 ): boolean {
   if (typeof a !== "string" || typeof b !== "string") return false;
   if (a.length === 0 || b.length === 0) return false;
-  // HMAC both inputs to a FIXED 32-byte digest before comparing. The old
-  // code returned early on `bufA.length !== bufB.length`, which is a
-  // length oracle: an attacker probing latency could learn the secret's
-  // byte-length. Hashing to equal-length digests removes that branch —
-  // timingSafeEqual now always runs over 32 bytes regardless of input
-  // length, and a digest match implies an input match (collision-safe).
   const digA = createHmac("sha256", CT_BLIND_KEY).update(a, "utf8").digest();
   const digB = createHmac("sha256", CT_BLIND_KEY).update(b, "utf8").digest();
   return timingSafeEqual(digA, digB);
 }
 
-/**
- * Centralized cookie attribute set so every auth route — login, setup,
- * pending-approval, logout — agrees on flags. `secure` flips on under
- * `NODE_ENV === "production"` because the bridge is now meant to be
- * runnable behind a public TLS terminator (`.env.production` shows the
- * deployed `claude.stop1love1.online` origin), not just localhost. Dev
- * stays insecure-cookie OK because `next dev` listens on plain HTTP.
- *
- * Caller passes `maxAgeMs` (or 0 for an immediate clear). `path: "/"`
- * + `httpOnly: true` + `sameSite: "lax"` are constants — every cookie
- * the bridge issues uses the same path so logout reliably clears
- * whatever was set by login / setup / pending-approval.
- */
 export function sessionCookieOptions(maxAgeMs: number): {
   httpOnly: true;
   sameSite: "lax";
@@ -154,9 +75,6 @@ export function sessionCookieOptions(maxAgeMs: number): {
   };
 }
 
-// -----------------------------------------------------------------------------
-// auth section (atop the shared bridge.json IO in ./bridgeManifest)
-// -----------------------------------------------------------------------------
 
 export interface TrustedDevice {
   id: string;
@@ -167,7 +85,6 @@ export interface TrustedDevice {
 }
 
 export interface AuthConfig {
-  /** Operator email — used as the login identifier. */
   email: string;
   passwordHash: string;
   secret: string;
@@ -180,13 +97,6 @@ export function isValidEmail(s: string): boolean {
   return EMAIL_RE.test(s.trim());
 }
 
-// Short-lived derived cache for loadAuthConfig(). Distinct from the
-// raw-manifest cache in bridgeManifest.ts because the normalize step
-// (validating shape, projecting trustedDevices) is non-trivial. Drop
-// it whenever ANY module rewrites bridge.json — apps.ts changing git
-// settings shouldn't force loadAuthConfig() to re-normalize, but it
-// also can't be allowed to serve a stale auth payload after a tunnels
-// authtoken save (which goes through a different path).
 const AUTH_CACHE_TTL_MS = 1000;
 let authCache: { value: AuthConfig | null; expires: number } | null = null;
 onBridgeManifestWrite(() => { authCache = null; });
@@ -225,25 +135,18 @@ export function loadAuthConfig(): AuthConfig | null {
 
 export function saveAuthConfig(next: AuthConfig): void {
   updateBridgeManifest((m) => ({ ...m, auth: next as unknown }));
-  // onBridgeManifestWrite already nuked authCache; nothing else to do.
 }
 
-/** True when `auth` is configured (operator has set a password). */
 export function isAuthConfigured(): boolean {
   return loadAuthConfig() !== null;
 }
 
-// -----------------------------------------------------------------------------
-// Password hashing (scrypt, node-only)
-// -----------------------------------------------------------------------------
 
 export async function hashPassword(plain: string): Promise<string> {
   if (!plain || typeof plain !== "string") {
     throw new Error("password must be a non-empty string");
   }
   const salt = randomBytes(SALT_BYTES);
-  // Match the maxmem we use for verifyPassword so N=131072 doesn't trip
-  // Node's default 32 MiB ceiling.
   const maxmem = 256 * SCRYPT_N * SCRYPT_r;
   const hash = await scrypt(plain, salt, SCRYPT_KEYLEN, {
     N: SCRYPT_N,
@@ -269,48 +172,26 @@ export async function verifyPassword(plain: string, stored: string): Promise<boo
   const r = Number(parts[2]);
   const p = Number(parts[3]);
   if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p)) return false;
-  // Refuse pathological / hostile params: a leaked bridge.json that's
-  // been tampered with shouldn't be able to coerce us into a multi-
-  // gigabyte scrypt call. Lower bound mirrors the historical N=16384.
   if (N < 16384 || N > SCRYPT_MAX_N || r < 1 || r > 32 || p < 1 || p > 16) return false;
-  // N must be a power of two — required by the scrypt spec.
   if ((N & (N - 1)) !== 0) return false;
   let salt: Buffer; let expected: Buffer;
   try {
     salt = Buffer.from(parts[4], "base64");
     expected = Buffer.from(parts[5], "base64");
   } catch { return false; }
-  // Use the params from the stored hash — this is what makes the
-  // SCRYPT_N bump backward-compatible. Older 16384 hashes still
-  // verify; a future `set-password` call rolls them forward to the
-  // current SCRYPT_N. Pass `maxmem` because Node enforces a default
-  // 32 MiB ceiling that N=131072 (~128 MiB) blows past.
   const maxmem = 256 * N * r;
   const actual = await scrypt(plain, salt, expected.length, { N, r, p, maxmem });
   if (actual.length !== expected.length) return false;
   return timingSafeEqual(actual, expected);
 }
 
-// -----------------------------------------------------------------------------
-// Cookie sign/verify (HMAC-SHA256 via node:crypto — middleware uses
-// `runtime: 'nodejs'` so we can share this code path)
-// -----------------------------------------------------------------------------
 
 export interface SessionPayload {
-  /** Subject — username (operator) or `"guest"` for share sessions. */
   sub: string;
-  /** Expiry epoch milliseconds. */
   exp: number;
-  /** Trusted device id, set when "Trust this device" was checked. */
   did?: string;
-  /**
-   * Actor discriminator. Absent / `"operator"` = the single operator.
-   * `"guest"` = a task-share guest, scoped to one task by `sid`/`tid`.
-   */
   kind?: "operator" | "guest";
-  /** Guest only: the share id this session was issued for. */
   sid?: string;
-  /** Guest only: the task id the share is scoped to. */
   tid?: string;
 }
 
@@ -329,14 +210,6 @@ export function signSession(payload: SessionPayload, secret: string): string {
   return `${body}.${mac}`;
 }
 
-/**
- * Verify a session token. Returns the payload on success, or null if
- * the signature is invalid, the token is malformed, or it has expired.
- *
- * Note: this only checks signature + expiry. Trusted-device revocation
- * is checked separately by the middleware, which compares `payload.did`
- * against the live `trustedDevices` allowlist on every request.
- */
 export function verifySession(token: string, secret: string): SessionPayload | null {
   if (!token || typeof token !== "string") return null;
   const dot = token.indexOf(".");
@@ -347,7 +220,6 @@ export function verifySession(token: string, secret: string): SessionPayload | n
   try {
     expectedMac = b64urlEncode(createHmac("sha256", secret).update(body).digest());
   } catch { return null; }
-  // Constant-time compare — convert to equal-length buffers first.
   const a = Buffer.from(mac);
   const b = Buffer.from(expectedMac);
   if (a.length !== b.length) return null;
@@ -361,9 +233,6 @@ export function verifySession(token: string, secret: string): SessionPayload | n
   return payload;
 }
 
-// -----------------------------------------------------------------------------
-// Trusted-device allowlist
-// -----------------------------------------------------------------------------
 
 export function addTrustedDevice(label: string | undefined): {
   cfg: AuthConfig;
@@ -403,8 +272,6 @@ export function touchTrustedDevice(id: string): void {
   const now = new Date();
   const idx = cfg.trustedDevices.findIndex((d) => d.id === id);
   if (idx < 0) return;
-  // Avoid thrashing the file: only rewrite when lastSeenAt is more than
-  // 5 minutes old, since middleware runs on every request.
   const last = Date.parse(cfg.trustedDevices[idx].lastSeenAt);
   if (Number.isFinite(last) && now.getTime() - last < 5 * 60 * 1000) return;
   const next: AuthConfig = {
@@ -430,9 +297,6 @@ export function pruneExpired(list: TrustedDevice[]): TrustedDevice[] {
   return list.filter((d) => Date.parse(d.expiresAt) > now);
 }
 
-// -----------------------------------------------------------------------------
-// First-time install helper (used by scripts/set-password.ts)
-// -----------------------------------------------------------------------------
 
 export async function setOperatorCredentials(
   emailOrUsername: string,
@@ -457,18 +321,6 @@ export async function setOperatorCredentials(
   return next;
 }
 
-/**
- * Verify a request is authenticated. Used by the routes under
- * `/api/auth/approvals` (which the proxy whitelists alongside the
- * rest of `/api/auth/`, so we have to gate them ourselves) and any
- * future endpoint that needs auth without going through the proxy
- * matcher.
- *
- * Returns the session payload on success, or null on any of:
- *   - auth not configured
- *   - cookie missing / invalid signature / expired
- *   - cookie carries a `did` for a trusted device that has been revoked
- */
 export interface RequestLike {
   cookies: { get(name: string): { value: string } | undefined };
   headers?: { get(name: string): string | null };
@@ -480,25 +332,10 @@ export function verifyRequestAuth(req: RequestLike): SessionPayload | null {
   if (!token) return null;
   const payload = verifySession(token, cfg.secret);
   if (!payload) return null;
-  // If the cookie is bound to a trusted-device id, it must still be
-  // in the allowlist — same revocation-on-every-request semantic the
-  // proxy uses.
   if (payload.did && !findTrustedDevice(payload.did)) return null;
   return payload;
 }
 
-/**
- * Like `verifyRequestAuth` but ALSO honors the per-install internal
- * bypass token (`INTERNAL_TOKEN_HEADER`). Use on routes a CLI helper
- * needs to hit — `scripts/approve-login.ts` reads the token directly
- * from `~/.claude/bridge.json#auth.internalToken` and calls back to
- * the running bridge with it, so a terminal user can approve a
- * pending device login without having a browser cookie.
- *
- * Same return shape as `verifyRequestAuth`. The internal-token path
- * returns a synthetic payload (`sub: cfg.email, exp: ∞`) so callers
- * that read `payload.sub` keep working uniformly.
- */
 export function verifyRequestAuthOrInternal(
   req: RequestLike,
 ): SessionPayload | null {
@@ -514,23 +351,9 @@ export function verifyRequestAuthOrInternal(
   };
 }
 
-// -----------------------------------------------------------------------------
-// Guest (task-share) sessions
-// -----------------------------------------------------------------------------
 
-/**
- * Cookie lifetime for a guest with no device TTL (share remembers the
- * device "forever"). The cookie is identity-only — authorization is
- * re-checked against the live share on every request — so a long cookie
- * life is safe: revoking the share or the device kills access instantly.
- */
 export const GUEST_COOKIE_MAX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/**
- * Sign a scoped guest session cookie. Returns the token and the
- * `maxAgeMs` to hand to `sessionCookieOptions`. `exp` is clamped to the
- * device TTL when one is set, else the 30-day cap.
- */
 export function signGuestSession(args: {
   shareId: string;
   taskId: string;
@@ -554,15 +377,6 @@ export function signGuestSession(args: {
   return { token: signSession(payload, cfg.secret), maxAgeMs };
 }
 
-/**
- * Resolved actor behind a request: the single operator (cookie or
- * internal token) or a task-share guest validated against the live
- * store. `null` when neither holds.
- *
- * The guest branch re-reads the share on every call (not the cookie's
- * stale claims), so revocation / expiry / grant edits take effect
- * immediately — the cookie only proves which share + device.
- */
 export type Actor =
   | { kind: "operator"; payload: SessionPayload }
   | { kind: "guest"; share: Share; taskId: string; did: string; grants: ShareGrants };
@@ -571,7 +385,6 @@ export function verifyRequestActor(req: RequestLike): Actor | null {
   const cfg = loadAuthConfig();
   if (!cfg) return null;
 
-  // Internal-token callers (child agents / CLI) act with operator scope.
   const internal = req.headers?.get(INTERNAL_TOKEN_HEADER);
   if (internal && cfg.internalToken && constantTimeStringEqual(internal, cfg.internalToken)) {
     return { kind: "operator", payload: { sub: cfg.email, exp: Number.MAX_SAFE_INTEGER } };
@@ -586,22 +399,14 @@ export function verifyRequestActor(req: RequestLike): Actor | null {
     return resolveGuest(payload);
   }
 
-  // Operator cookie — same trusted-device revocation check the proxy uses.
   if (payload.did && !findTrustedDevice(payload.did)) return null;
   return { kind: "operator", payload };
 }
 
-/**
- * Validate a guest cookie payload against the live share store. Returns
- * a guest actor only when the share exists, is usable (not revoked /
- * expired), the cookie's task matches the share, and the device is still
- * an approved, unexpired member.
- */
 function resolveGuest(payload: SessionPayload): Actor | null {
   if (!payload.sid || !payload.tid || !payload.did) return null;
   const share = getShare(payload.sid);
   if (!share || !isShareUsable(share)) return null;
-  // Defense-in-depth: the cookie's task must match the share's task.
   if (share.taskId !== payload.tid) return null;
   if (!findValidDevice(share, payload.did)) return null;
   return {
@@ -613,17 +418,6 @@ function resolveGuest(payload: SessionPayload): Actor | null {
   };
 }
 
-/**
- * Persist the live bridge's HTTP origin into `bridge.json#runtime` so
- * CLI scripts (`scripts/approve-login.ts` etc.) can find the running
- * server without the operator having to remember which port `bun
- * dev` vs `bun start` bound to. Called once per startup from
- * `instrumentation.ts`.
- *
- * Failures are swallowed — this is metadata for convenience, not
- * load-bearing config. If we can't write it, the script falls back to
- * BRIDGE_URL / PORT env vars.
- */
 export function writeRuntimeMeta(args: { url: string; port: number }): void {
   try {
     updateBridgeManifest((m) => ({
@@ -640,20 +434,10 @@ export function writeRuntimeMeta(args: { url: string; port: number }): void {
   }
 }
 
-/**
- * Read or generate the internal-bypass token. The bridge process injects
- * this into spawned-child env so the permission hook + coordinator self-
- * register calls can pass auth without a cookie. We auto-create on first
- * read so existing installs upgrade transparently — no migration script
- * required.
- */
 export function getOrCreateInternalToken(): string {
   const existing = loadAuthConfig();
   if (existing && existing.internalToken) return existing.internalToken;
   if (!existing) {
-    // Auth isn't configured yet (no password set). Return an empty
-    // string — middleware also short-circuits when auth isn't set,
-    // so children don't need to send anything.
     return "";
   }
   const internalToken = b64urlEncode(randomBytes(32));

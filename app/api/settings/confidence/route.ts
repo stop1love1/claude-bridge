@@ -5,7 +5,6 @@ import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
-/** Operator-only config for the B2 confidence gate (proxy gates /api/settings). */
 export function GET() {
   return NextResponse.json(readConfidenceConfig());
 }

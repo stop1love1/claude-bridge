@@ -1,22 +1,3 @@
-/**
- * P3b / B1 — preflight check: did the agent actually read enough of
- * the codebase before editing?
- *
- * Reads the child's `<sessionId>.jsonl` transcript and counts Read
- * tool calls that occur BEFORE the first Edit/Write/MultiEdit/
- * NotebookEdit call. If the count is below `MIN_READS_BEFORE_EDIT`
- * (default 3) and the agent did make code changes, we mark the run
- * as preflight-failed and the caller spawns a `-cretry` follow-up.
- *
- * Skipped for:
- *   - read-only roles (`reviewer`, anything with "review" in the role)
- *   - retries (`-retry`, `-vretry`, `-cretry` already)
- *   - runs that produced no Edit/Write at all (analysis-only is fine)
- *
- * Pure heuristic — no LLM call. Catches the common "agent jumped
- * straight to writing code without reading the existing patterns"
- * mode that produces alien-looking output.
- */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Run } from "./meta";
@@ -24,11 +5,7 @@ import { projectDirFor } from "./sessions";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
 
-/** Default required Read count before any Edit/Write. Overridable per
- * app via `App.preflightReads`. */
 export const DEFAULT_MIN_READS_BEFORE_EDIT = 3;
-/** Tools the agent can call without "counting" — these don't change
- * code so they bypass the gate entirely. */
 const READ_TOOLS = new Set(["Read", "Grep", "Glob", "LS"]);
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
@@ -37,11 +14,8 @@ export type PreflightVerdict = "pass" | "skipped" | "fail";
 export interface PreflightResult {
   verdict: PreflightVerdict;
   reason: string;
-  /** Read tool calls observed before the first Edit/Write. */
   readsBeforeEdit: number;
-  /** Total Edit/Write calls in the session (0 = analysis-only). */
   editCount: number;
-  /** Required minimum (the threshold we compared against). */
   required: number;
   retryScheduled?: boolean;
 }
@@ -56,13 +30,6 @@ interface ToolUseBlock {
   name?: string;
 }
 
-/**
- * Walk the transcript forward, counting tool_use events by name.
- * Returns the count of read-tool calls observed before the FIRST
- * edit-tool call, plus the total edit-tool count for the whole
- * session (so we can distinguish "analysis only" from "edited but
- * skipped reads").
- */
 export function countReadsBeforeEdit(jsonlText: string): {
   readsBeforeEdit: number;
   editCount: number;
@@ -102,27 +69,14 @@ export function countReadsBeforeEdit(jsonlText: string): {
 
 export interface RunPreflightOptions {
   finishedRun: Run;
-  /** Absolute cwd of the target app — used to locate the .jsonl. */
   appPath: string;
-  /** Override the default minimum read count (per-app via
-   *  `App.preflightReads`). */
   minReadsBeforeEdit?: number;
 }
 
-/**
- * Top-level entry. Locates the child's `.jsonl`, parses tool calls,
- * and emits a verdict. `skipped` covers all preconditions that
- * disqualify a run from preflight check (retries, read-only roles,
- * missing transcript). Never throws.
- */
 export function runPreflight(opts: RunPreflightOptions): PreflightResult {
   const { finishedRun, appPath } = opts;
   const required = opts.minReadsBeforeEdit ?? DEFAULT_MIN_READS_BEFORE_EDIT;
 
-  // Coordinator never edits source — skip. Retry runs are no longer
-  // skipped here; checking the agent re-read what it needed on the fix
-  // is exactly what preflight is for. Runaway loop prevention lives in
-  // `checkEligibility` inside `spawnPreflightRetry`.
   if (finishedRun.role === "coordinator") {
     return {
       verdict: "skipped",
@@ -132,7 +86,6 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
       required,
     };
   }
-  // Read-only role names — case-insensitive match on common verbs.
   if (/review|audit|inspect/i.test(finishedRun.role)) {
     return {
       verdict: "skipped",
@@ -170,8 +123,6 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
 
   const { readsBeforeEdit, editCount } = countReadsBeforeEdit(text);
 
-  // Analysis-only runs (no Edit/Write at all) trivially pass — there
-  // was no code to read context for.
   if (editCount === 0) {
     return {
       verdict: "pass",
@@ -201,12 +152,6 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
   };
 }
 
-/**
- * Render the retry-context block prepended to a `-cretry` prompt
- * spawned because of a preflight failure. Same `## Auto-retry context`
- * heading as the other retry paths so the agent sees a consistent
- * contract regardless of why we re-ran.
- */
 export function renderPreflightRetryContextBlock(
   preflight: PreflightResult,
 ): string {
@@ -231,12 +176,6 @@ export function renderPreflightRetryContextBlock(
   ].join("\n");
 }
 
-/**
- * Eligibility for a preflight-driven retry. Delegates to the central
- * ladder against gate=`preflight`, which shares the `-cretry` suffix /
- * budget slot with claim-vs-diff retries (legacy behavior — both
- * gates signal "agent didn't follow process").
- */
 export function isEligibleForPreflightRetry(args: {
   finishedRun: Run;
   meta: { runs: Run[] };
@@ -250,12 +189,6 @@ export function isEligibleForPreflightRetry(args: {
   }).eligible;
 }
 
-/**
- * Spawn a preflight-fail retry. Same shape as crash/verify/claim/style
- * retries — see `libs/retrySpawn.ts`. The preflight gate routes through
- * the `-cretry` budget slot; the rendered context block lists what the
- * preflight checker found wrong.
- */
 export async function spawnPreflightRetry(args: {
   taskId: string;
   finishedRun: Run;

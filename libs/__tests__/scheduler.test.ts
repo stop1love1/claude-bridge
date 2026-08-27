@@ -22,10 +22,10 @@ describe("dueWorkflows", () => {
   it("returns enabled, scheduled workflows whose nextRunAt has passed", () => {
     const list = [
       wf({ id: "a", nextRunAt: 500 }),
-      wf({ id: "b", nextRunAt: 2000 }),                  // future
-      wf({ id: "c", enabled: false, nextRunAt: 500 }),   // disabled
-      wf({ id: "d", schedule: null, nextRunAt: 500 }),   // manual-only
-      wf({ id: "e", nextRunAt: null }),                  // no next time
+      wf({ id: "b", nextRunAt: 2000 }),
+      wf({ id: "c", enabled: false, nextRunAt: 500 }),
+      wf({ id: "d", schedule: null, nextRunAt: 500 }),
+      wf({ id: "e", nextRunAt: null }),
     ];
     expect(dueWorkflows(list, 1000).map((w) => w.id)).toEqual(["a"]);
   });

@@ -5,18 +5,7 @@ import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { Run } from "../meta";
 
-/**
- * `runAgentGate` infra-failure paths must ping the operator via
- * `notifyGateInfraSkip`; the legit precondition skips (coordinator role
- * exempt, app not registered, playbook missing) must stay silent.
- * Everything I/O-ish is mocked — no real spawn, no real meta writes,
- * no real Telegram.
- */
 
-// SESSIONS_DIR is read at module load; point it at a temp dir so the
-// happy-path test can drop a real verdict file without touching the
-// bridge's live sessions/ folder. vi.hoisted so the factory (which is
-// hoisted above imports) can see it.
 const TMP_SESSIONS = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { mkdtempSync } = require("node:fs") as typeof import("node:fs");
@@ -37,7 +26,6 @@ vi.mock("../gateEscalation", () => ({
   notifyGateInfraSkip: (opts: unknown) => notifyGateInfraSkip(opts),
 }));
 
-// Meta writes: no-ops (the gate's run-row bookkeeping isn't under test).
 vi.mock("../meta", () => ({
   appendRun: vi.fn().mockResolvedValue(undefined),
   updateRun: vi.fn().mockResolvedValue(undefined),
@@ -53,7 +41,6 @@ vi.mock("../playbooks", () => ({
   loadPlaybook: (role: string) => loadPlaybookMock(role),
 }));
 
-// Context-bundle loaders: inert stubs.
 vi.mock("../houseRules", () => ({ loadHouseRules: () => null }));
 vi.mock("../memory", () => ({ topMemoryEntries: () => [] }));
 vi.mock("../symbolStore", () => ({ ensureFreshSymbolIndex: () => null }));
@@ -98,8 +85,6 @@ function baseOpts() {
   };
 }
 
-/** Fake claude child: an EventEmitter that exits with `code` on the
- *  next macrotask (after runAgentGate has attached its listeners). */
 function fakeChildExiting(code: number): ChildProcess {
   const ee = new EventEmitter() as unknown as ChildProcess & EventEmitter;
   setImmediate(() => ee.emit("exit", code));
@@ -116,7 +101,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  try { rmSync(TMP_SESSIONS, { recursive: true, force: true }); } catch { /* best-effort */ }
+  try { rmSync(TMP_SESSIONS, { recursive: true, force: true }); } catch { }
 });
 
 describe("runAgentGate — infra failures notify", () => {
@@ -159,7 +144,6 @@ describe("runAgentGate — infra failures notify", () => {
       child: fakeChildExiting(0),
       sessionId: "gate-sid",
     }));
-    // No verdict file written under TMP_SESSIONS/<taskId>/.
 
     const outcome = await runAgentGate(baseOpts());
 

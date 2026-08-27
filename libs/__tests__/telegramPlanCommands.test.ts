@@ -4,20 +4,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { IntakeRecord } from "../planGate";
 
-/**
- * Telegram plan-gate approval commands (`/plan`, `/approve`, `/replan`)
- * plus the "plan awaiting approval" notifier ping.
- *
- * Follows the chdir + resetModules + dynamic-import convention used by
- * `telegramSummary.test.ts` / `metaIntake.test.ts`: `libs/paths.ts`
- * captures `SESSIONS_DIR` from `process.cwd()` at module load, so each
- * test needs a fresh module graph pointed at its own temp "bridge root".
- *
- * `continueCoordinator` is mocked so these tests never touch the real
- * coordinator spawn / resume machinery — only the plan-gate state
- * machine (mirrors `app/api/tasks/[id]/plan/approve/route.ts`) is under
- * test here.
- */
 
 vi.mock("../planGateLifecycle", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../planGateLifecycle")>();
@@ -37,10 +23,6 @@ beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), "bridge-tg-plan-"));
   process.chdir(tempRoot);
   vi.resetModules();
-  // The mocked `continueCoordinator` is created once inside the
-  // `vi.mock` factory and reused across `resetModules()` cycles (only
-  // the module *cache* is cleared, not the mock fn's call history) —
-  // clear it per-test so assertions don't see calls from prior tests.
   vi.clearAllMocks();
 });
 
@@ -50,14 +32,9 @@ afterEach(() => {
   try {
     rmSync(tempRoot, { recursive: true, force: true });
   } catch {
-    /* best-effort */
   }
 });
 
-/**
- * Create a task's meta.json under the temp sessions dir, optionally
- * patching its intake record. Returns the task's sessions dir.
- */
 async function makeTask(intakePatch?: Partial<IntakeRecord>): Promise<string> {
   const { createMeta, setIntake } = await import("../meta");
   const dir = join(tempRoot, "sessions", TASK_ID);
@@ -264,16 +241,6 @@ describe("plan-gate awaiting-approval notification hook", () => {
     expect(ev?.taskTitle).toBe("Test task");
   });
 
-  // NOTE: the "verdict=clear + submitter can self-approve" branch is
-  // deliberately NOT exercised here — it drives `continueCoordinator`
-  // down the REAL (non-mocked) path, because `resolvePlanGateAfterPlanner`
-  // is spread from `importOriginal()` and its internal call to
-  // `continueCoordinator` binds directly to the module's own local
-  // function rather than the mocked export (an inherent limitation of
-  // partial `vi.mock(..., { ...actual })` on same-module self-calls).
-  // That path is already covered by `planGateLifecycle.test.ts`
-  // (`computeNextIntakeStatus`) and the approve route's own tests; this
-  // suite only needs to prove the awaiting-approval branch emits.
 });
 
 describe("renderPlanAwaitingApprovalMessage", () => {

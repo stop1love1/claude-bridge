@@ -79,9 +79,6 @@ describe("stripSystemTags", () => {
   });
 
   it("collapses 3+ blank lines left after stripping a tag", () => {
-    // The function only runs the newline-collapse pass when a `<` is
-    // present (fast-path otherwise), so we anchor the test on a real
-    // strippable tag and verify the collapse cleans up afterwards.
     const text = "a\n<system-reminder>x</system-reminder>\n\n\n\nb";
     expect(stripSystemTags(text)).toBe("a\n\nb");
   });
@@ -107,15 +104,11 @@ describe("stripSystemTags", () => {
   });
 
   it("strips orphan inner tags the assistant echoes standalone", () => {
-    // Real-world leak: model paraphrases the bridge envelope in prose
-    // and emits naked `<task-id>…</task-id>` without the wrapper.
     const text = "the <task-id>t_20260504_001</task-id> just landed";
     expect(stripSystemTags(text)).toBe("the  just landed");
   });
 
   it("strips an unclosed open tag from a streaming partial", () => {
-    // SSE chunk arrives with the open tag but the close hasn't streamed
-    // yet — the paired-strip would miss it, the orphan-strip catches it.
     expect(stripSystemTags("foo <system-reminder>bar baz")).toBe(
       "foo bar baz",
     );
@@ -298,7 +291,7 @@ describe("parseAskUserQuestion", () => {
     });
     expect(out).toHaveLength(2);
     expect(out![0].multiSelect).toBe(true);
-    expect(out![1].multiSelect).toBe(false); // absent → false
+    expect(out![1].multiSelect).toBe(false);
     expect(out![1].options[0]).toEqual({ label: "z", description: undefined });
   });
 

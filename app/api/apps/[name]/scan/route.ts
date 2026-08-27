@@ -6,33 +6,11 @@ import { getClientIp } from "@/libs/clientIp";
 import { checkRateLimit } from "@/libs/rateLimit";
 
 export const dynamic = "force-dynamic";
-// Claude scans can run up to ~90s in scanApp.ts; give the route a
-// matching ceiling. Default Next.js request timeout is generous, but
-// some hosts cap shorter — be explicit.
 export const maxDuration = 120;
 
-/**
- * Each scan spawns `claude -p` in the app's working tree (~90s of CPU
- * + LLM cost). 3 scans per 5-minute window per IP is far above what a
- * legitimate operator needs (you scan an app once, occasionally re-
- * scan after big changes), and prevents an authenticated browser
- * context being abused to fan out child-process floods.
- */
 const SCAN_WINDOW_MS = 5 * 60 * 1000;
 const SCAN_LIMIT_PER_IP = 3;
 
-/**
- * Run `claude -p` inside the app's working directory and ask the
- * model for a one-sentence description of what the project does.
- * Persist the answer back to `~/.claude/bridge.json` so the next
- * coordinator dispatch sees the better description.
- *
- * The response shape is:
- *   - 200 { ok: true,  app, scanned: true,  description: <new> }
- *   - 200 { ok: true,  app, scanned: false, description: <unchanged>, reason }
- *   - 400 { error }
- *   - 404 { error }
- */
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ name: string }> },
@@ -54,10 +32,6 @@ export async function POST(
     );
   }
 
-  // D2 backfill: a rescan is the natural point to pick up verify
-  // commands for apps registered before auto-detect existed, or whose
-  // repo has since grown a package.json / build tooling. Never touches
-  // an app that already has any verify command configured.
   const verifyBackfilled = backfillAppVerifyIfEmpty(app.name) ?? app;
 
   const summary = await scanAppWithClaude(app.path);

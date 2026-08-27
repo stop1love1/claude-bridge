@@ -15,33 +15,16 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ sessionId: string }> };
 
-/**
- * In-process replay buffer per `<repoPath>::<sessionId>`. Holds the
- * last N parsed lines (with their byte offsets) so a reconnecting
- * client passing `?since=<offset>` gets the gap served from memory
- * instead of re-reading the file. Without this, every reconnect
- * triggers a full disk read up to EOF on a potentially-large jsonl.
- *
- * Stashed on `globalThis` so Next.js dev HMR doesn't drop the cache
- * across module reloads. Same trick as `spawnRegistry` / `permissionStore`.
- */
 interface ReplayEntry {
-  /** Byte offset where this line BEGINS in the .jsonl (parallel to `lineOffsets`). */
   offset: number;
   line: unknown;
 }
 interface ReplayBuffer {
-  /** EOF byte offset reached by the last drain — also the next `since` cursor. */
   endOffset: number;
-  /** Newest-last; capped at REPLAY_MAX. */
   entries: ReplayEntry[];
 }
 const REPLAY_MAX = 500;
 const DEBOUNCE_MS = 250;
-// Cap how many sessions are tracked in the replay map. Without this,
-// every session ever opened lives in `globalThis` until the process
-// restarts — a long-lived bridge with thousands of sessions slowly
-// accumulates ~500 entries × 1 KiB each per session in heap.
 const REPLAY_SESSIONS_MAX = 100;
 
 const G = globalThis as unknown as { __bridgeTailReplay?: Map<string, ReplayBuffer> };
@@ -51,16 +34,12 @@ G.__bridgeTailReplay = replay;
 function getBuffer(key: string): ReplayBuffer {
   let b = replay.get(key);
   if (b) {
-    // LRU touch: re-insert so the most-recently-used keys live at the
-    // tail of the iteration order. Map preserves insertion order, so
-    // delete + set is the canonical cheap LRU bump.
     replay.delete(key);
     replay.set(key, b);
     return b;
   }
   b = { endOffset: 0, entries: [] };
   replay.set(key, b);
-  // Evict the oldest entries until we're back under the cap.
   while (replay.size > REPLAY_SESSIONS_MAX) {
     const oldest = replay.keys().next().value;
     if (oldest === undefined) break;
@@ -84,11 +63,6 @@ function appendToBuffer(
   buf.endOffset = endOffset;
 }
 
-/**
- * Slice the buffer for entries at-or-after `since`. Returns `null`
- * when `since` is older than the oldest cached offset (cache miss —
- * the caller should fall back to reading the file).
- */
 function replayFrom(
   buf: ReplayBuffer,
   since: number,
@@ -105,56 +79,12 @@ function replayFrom(
   return { lines, offset: buf.endOffset, lineOffsets };
 }
 
-/**
- * Streaming tail for a Claude session `.jsonl`. Replaces the polling
- * loop that called `/api/sessions/<id>/tail` every 1–30s with a single
- * SSE connection driven by `fs.watch`.
- *
- * Wire format (mirrors the REST tail response, plus two live channels):
- *   - `event: tail`     data: { lines, offset, lineOffsets }
- *   - `event: partial`  data: { messageId, index, text }
- *                          → assistant text deltas streamed by claude
- *                            (`--include-partial-messages`). Lets the
- *                            UI render the reply token-by-token before
- *                            the canonical `tail` line lands.
- *   - `event: alive`    data: { alive: boolean }
- *                          → process lifecycle. Emitted on connect with
- *                            the current registry state, then again
- *                            whenever a child spawns/exits for this
- *                            session. The Stop button uses this so it
- *                            stays visible across long tool calls.
- *   - `event: status`   data: { kind, label? }
- *                          → activity indicator above the composer.
- *                            "thinking" while the API is responding,
- *                            "running" with a tool description while a
- *                            Bash / tool / sub-task executes, "idle"
- *                            on message_stop / child exit.
- *
- * Initial connect emits one `tail` event with everything from `since`
- * to current EOF (so the client can populate without a separate REST
- * call). After that, every file mutation re-reads from the last known
- * offset and pushes a fresh `tail` event with only the new lines.
- *
- * Backward paging (`/tail?before=…`) stays REST — it's user-driven,
- * not a stream. fs.watch can be wonky on some platforms (e.g. network
- * drives, WSL→Windows mounts); the client should still keep a slow
- * polling fallback as a safety net.
- */
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { sessionId } = await ctx.params;
   const { searchParams } = new URL(req.url);
   const repoPath = searchParams.get("repo");
   const since = Number(searchParams.get("since") ?? 0) || 0;
 
-  // C4 follow-up (task 6 review, defence in depth) — same fix as the
-  // REST /tail route (see its comment + guestSessionRepo.ts): `?repo=`
-  // is checked only against "is this SOME registered app", never
-  // against the session's actual owner, so a guest could otherwise
-  // stream any of their task's session ids through a different app's
-  // project dir. Discard the query value for a guest and use the repo
-  // recorded on the session's own run instead; operators keep today's
-  // query-driven behaviour (needed for "free chat" sessions with no
-  // owning run).
   const actor = verifyRequestActor(req);
   let effectiveRepoPath = repoPath;
   if (actor?.kind === "guest") {
@@ -168,9 +98,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     });
   }
 
-  // Whitelist repo against registered apps (and the bridge root) before
-  // hitting resolveSessionFile. Otherwise an authed cookie could tail
-  // JSONL files for unrelated Claude Code projects under ~/.claude/projects/.
   if (!isRegisteredRepoPath(effectiveRepoPath)) {
     return new Response("invalid session repo", { status: 400 });
   }
@@ -178,37 +105,21 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!file) {
     return new Response("invalid session repo", { status: 400 });
   }
-  // Concurrent-SSE cap. A buggy / hostile script can otherwise spawn
-  // thousands of EventSource handles and exhaust file descriptors.
   const releaseSlot = acquireSseSlot(req);
   if (!releaseSlot) {
     return new Response("too many concurrent streams", { status: 429 });
   }
-  // Keyed by the resolved path, not the raw query value — for a guest
-  // those two can legitimately differ (see above), and keying by the
-  // untrusted query value would let a guest pick which cache bucket
-  // their session's replay lands in.
   const bufferKey = `${effectiveRepoPath}::${sessionId}`;
   const buffer = getBuffer(bufferKey);
 
   const encoder = new TextEncoder();
 
-  // Hoisted so the stream's `cancel()` hook can run the same teardown as
-  // the abort listener — the runtime can cancel a ReadableStream
-  // independently of `req.signal` (e.g. on a server reload), and without
-  // this the keepalive interval / session listener / fs.watch would leak.
   let closeRef: (() => void) | null = null;
 
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
       let offset = since;
-      // fs.watch fires multiple events per write on some platforms; a
-      // small debounce coalesces a burst of `change` events into one
-      // tailJsonl read. Long enough (250ms) that a model streaming
-      // tokens fast still produces ~4 events/sec, short enough that
-      // the latency cost is invisible to humans. Without this we'd
-      // spam reads on every chunk claude flushes to disk.
       let pending: ReturnType<typeof setTimeout> | null = null;
       let inFlight = false;
       let watcher: FSWatcher | null = null;
@@ -222,7 +133,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
             encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
           );
         } catch {
-          /* client disconnected mid-write */
         }
       };
 
@@ -237,16 +147,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
           if (result.lines.length > 0) {
             appendToBuffer(buffer, result.lines, result.lineOffsets, result.offset);
           }
-          // Always emit (even with 0 lines) on the first call so the
-          // client knows the connection is live and gets the current
-          // offset cursor; afterwards skip empty drains to keep the
-          // stream quiet.
           if (result.lines.length > 0 || !primed) {
             primed = true;
             send("tail", result);
           }
         } catch {
-          /* file vanished mid-read; next watcher tick will retry */
         } finally {
           inFlight = false;
         }
@@ -265,11 +170,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         try {
           watcher = watch(file, { persistent: false }, () => scheduleDrain());
           watcher.on("error", () => {
-            // fs.watch can die on file rename / EPERM on Windows when
-            // the writer flips the file. Tear it down and let the
-            // wait-for-file loop spin it back up if/when the file
-            // reappears.
-            try { watcher?.close(); } catch { /* ignore */ }
+            try { watcher?.close(); } catch { }
             watcher = null;
             waitForFile();
           });
@@ -279,9 +180,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         }
       };
 
-      // If the .jsonl doesn't exist yet (session was registered but the
-      // first claude write hasn't landed), poll every 2s for it to
-      // appear, then promote to fs.watch.
       const waitForFile = () => {
         if (closed || watcher) return;
         if (existsSync(file)) {
@@ -289,30 +187,17 @@ export async function GET(req: NextRequest, ctx: Ctx) {
           void drain();
           return;
         }
-        // Re-check `closed` inside the timer callback so a close()
-        // that fires AFTER setTimeout but BEFORE the callback runs
-        // doesn't re-arm the polling loop indefinitely. close()
-        // clears `waitTimer` synchronously, but the OS-level timer
-        // may still fire its callback if it was already on the
-        // event-loop's ready queue when clearTimeout landed.
         waitTimer = setTimeout(() => {
           if (closed) return;
           waitForFile();
         }, 2000);
       };
 
-      // Replay-buffer fast path: if the cached endOffset is past the
-      // client's `since`, we can serve the gap from memory and skip
-      // the disk read. Cache misses (since older than oldest entry)
-      // fall through to a normal drain.
       const cached = since > 0 ? replayFrom(buffer, since) : null;
       if (cached) {
         offset = cached.offset;
         primed = true;
         send("tail", cached);
-        // Still drain once to catch anything written between the buffer's
-        // endOffset and the file's actual EOF (e.g. a very recent write
-        // that hasn't fired the watcher yet).
         void drain().then(() => {
           if (closed) return;
           if (existsSync(file)) startWatcher();
@@ -331,13 +216,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         try {
           controller.enqueue(encoder.encode(`: keepalive\n\n`));
         } catch {
-          /* ignore */
         }
       }, 15000);
 
-      // Live channels: partial text deltas + process alive state. The
-      // pub/sub is global (per session id) — every connected SSE client
-      // receives the same fan-out.
       send("alive", { alive: isAlive(sessionId) });
       const unsub = subscribeSession(sessionId, {
         onPartial: (p: PartialEvent) => send("partial", p),
@@ -351,22 +232,17 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         if (pending) { clearTimeout(pending); pending = null; }
         if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
         clearInterval(ka);
-        try { unsub(); } catch { /* ignore */ }
-        try { watcher?.close(); } catch { /* ignore */ }
-        try { controller.close(); } catch { /* already closed */ }
-        try { releaseSlot(); } catch { /* idempotent */ }
-        // Idempotent listener removal so repeated aborts (defensive
-        // double-call from req.signal + controller.close upstream)
-        // don't accumulate stale listeners on the AbortSignal.
-        try { req.signal.removeEventListener("abort", close); } catch { /* ignore */ }
+        try { unsub(); } catch { }
+        try { watcher?.close(); } catch { }
+        try { controller.close(); } catch { }
+        try { releaseSlot(); } catch { }
+        try { req.signal.removeEventListener("abort", close); } catch { }
       };
 
       closeRef = close;
       req.signal.addEventListener("abort", close);
     },
     cancel() {
-      // Runtime-initiated cancel (not via req.signal). Run the same
-      // idempotent teardown so nothing is left dangling.
       closeRef?.();
     },
   });

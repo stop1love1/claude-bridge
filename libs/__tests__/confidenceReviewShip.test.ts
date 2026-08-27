@@ -1,33 +1,7 @@
-/**
- * H6 (audit) — the confidence review route's live-tree `ship` branch
- * calls `autoCommitAndPush` and, on a REJECTED push (`{ok:false}`,
- * not a throw), used to fall through to the unconditional
- * `updateRun({confidence:{heldAt:null}})` at the bottom of the route —
- * clearing the hold on work that never left this machine. The
- * worktree branch a few lines above already gets this right: on a
- * failure it early-returns and keeps the hold. This test drives the
- * actual route handler (not a proxy/helper) because the bug lives in
- * its control flow, not in any extracted pure function.
- *
- * Review follow-up: the first fix kept the hold correctly but mislabeled
- * every failure as a push failure ("commit landed but push failed"),
- * even though `autoCommitAndPush` here runs autoCommit+autoPush as one
- * combined step whose result can't be attributed to a specific git
- * sub-step. The second test below pins the corrected, honest wording.
- *
- * Everything I/O-ish except `../meta` is mocked (git ops, app lookup,
- * devops, auth, csrf) — `../meta` is left real so the assertions read
- * the actual on-disk effect of `markMergeNotPushed` / `updateRun`,
- * matching the rigor of `confidenceWorktree.test.ts`'s approach to the
- * sibling worktree path.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 
-// SESSIONS_DIR is read at module load; point it at a temp dir so this
-// test never touches the bridge's live sessions/ folder. vi.hoisted so
-// the factory below (hoisted above imports) can see it.
 const TMP_SESSIONS = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { mkdtempSync } = require("node:fs") as typeof import("node:fs");
@@ -150,7 +124,7 @@ describe("confidence review route — live-tree ship (H6)", () => {
     autoCommitAndPushMock.mockReset();
   });
   afterEach(() => {
-    try { rmSync(taskDir(), { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(taskDir(), { recursive: true, force: true }); } catch { }
   });
 
   async function ship() {
@@ -165,9 +139,6 @@ describe("confidence review route — live-tree ship (H6)", () => {
         body: JSON.stringify({ action: "ship" }),
       },
     );
-    // NextRequest at runtime is a superset of the Fetch Request the
-    // route handler only reads .json()/.method/.headers from — POST's
-    // declared param type is NextRequest, this satisfies it structurally.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return POST(req as any, { params: Promise.resolve({ id: TASK_ID, sessionId: SID }) });
   }
@@ -190,13 +161,6 @@ describe("confidence review route — live-tree ship (H6)", () => {
     expect(run?.mergeNotPushed?.error).toBe("non-fast-forward");
   });
 
-  // Review follow-up: autoCommitAndPush runs autoCommit:true + autoPush:true
-  // as ONE combined step here (unlike the worktree branch's push-only call),
-  // so a rejected result can equally mean `git add`/`git commit` never
-  // landed. The route must not tell the operator "push failed" / "commit
-  // landed" for a failure it can't actually attribute to a specific git
-  // sub-step — that claim would be wrong exactly as often as the original
-  // heldAt-clearing bug was.
   it("does not claim a specific git sub-step failed when the underlying failure is a commit, not a push", async () => {
     await seedHeldRun();
     autoCommitAndPushMock.mockResolvedValue({
@@ -208,8 +172,6 @@ describe("confidence review route — live-tree ship (H6)", () => {
     const res = await ship();
     expect(res.status).toBe(409);
     const body = await res.json();
-    // "push" alone (§stage was hardcoded "push" pre-fix) would misreport
-    // this specific case, where the underlying git message says "commit".
     expect(body.stage).not.toBe("push");
     expect(body.error).not.toMatch(/push failed/i);
 
@@ -217,11 +179,8 @@ describe("confidence review route — live-tree ship (H6)", () => {
     const run = readMeta(taskDir())?.runs.find((r) => r.sessionId === SID);
     expect(run?.confidence?.heldAt).toBeTruthy();
     expect(run?.mergeNotPushed?.message).toContain("SHIP-INCOMPLETE:");
-    // The old wording ("commit landed but push failed") is exactly the
-    // false claim under test here — assert it's gone.
     expect(run?.mergeNotPushed?.message).not.toMatch(/commit landed/i);
     expect(run?.mergeNotPushed?.message).not.toMatch(/push failed:/i);
-    // The real, unattributed git message must still reach the operator.
     expect(run?.mergeNotPushed?.message).toContain("git commit failed");
   });
 

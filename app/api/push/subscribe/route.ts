@@ -12,26 +12,11 @@ import {
 export const dynamic = "force-dynamic";
 
 interface SubscribeBody {
-  /** Present + valid → register/refresh this subscription. */
   subscription?: PushSubscriptionJSON;
-  /** Present alongside `unsubscribe: true` → drop this endpoint. */
   endpoint?: string;
   unsubscribe?: boolean;
 }
 
-/**
- * Register or remove a browser's Web Push subscription. Same auth
- * shape as `app/api/tasks/[id]/plan/approve/route.ts`: CSRF check →
- * rate limit → actor auth. OPERATOR-ONLY: `sendPushToAll`
- * (libs/webPush.ts) fans every notification out to EVERY subscribed
- * browser — coordinator summaries, permission pings, and login-approval
- * pings (UA + IP) across ALL tasks, not just one — so letting a
- * task-scoped guest subscribe would pierce the single-task boundary
- * `libs/guestAccess.ts` otherwise enforces. `libs/guestAccess.ts`
- * already excludes this route from the guest allowlist (the proxy
- * denies a guest cookie before the request reaches here); this check is
- * the route-level backstop for anything that calls in directly.
- */
 export async function POST(req: NextRequest) {
   const csrf = checkCsrf(req);
   if (!csrf.ok) {

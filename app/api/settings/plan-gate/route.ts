@@ -5,11 +5,6 @@ import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Operator-only config for the Intent & Planning Gate. The proxy gates
- * `/api/settings` behind the operator session cookie, so there's no extra
- * authz here — but state-changing PUT still gets the standard CSRF check.
- */
 export function GET() {
   return NextResponse.json(readPlanGateConfig());
 }

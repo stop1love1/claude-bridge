@@ -10,12 +10,6 @@ import { relativeTime } from "@/libs/client/time";
 import { EmptyState } from "./ui/empty-state";
 import { NewSessionDialog } from "./NewSessionDialog";
 
-/**
- * Render an absolute path the way VS Code does in its sessions panel:
- * forward slashes, lower-case drive letter, no trailing slash. We don't
- * try to abbreviate — the user wants to see exactly which folder owns
- * the session.
- */
 function displayPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/\/+$/, "");
 }
@@ -45,9 +39,6 @@ export function SessionsBrowser({
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  // Bulk-delete mode is opt-in: the operator clicks the toolbar toggle
-  // to reveal checkboxes + the action bar. Default view stays clean
-  // with per-row delete buttons only.
   const [deleteMode, setDeleteMode] = useState(false);
 
   const q = query.trim().toLowerCase();
@@ -62,10 +53,6 @@ export function SessionsBrowser({
       )
     : sessions;
 
-  // Group by absolute folder path so the panel mirrors VS Code's
-  // CLAUDE SESSIONS view (one row per project dir on disk, full path
-  // as the header). Sessions for a folder not in BRIDGE.md still get
-  // their own group thanks to /api/sessions/all's discovery.
   const byPath = new Map<string, SessionSummary[]>();
   for (const s of filtered) {
     const key = s.repoPath || s.repo;

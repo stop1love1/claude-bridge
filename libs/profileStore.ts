@@ -1,14 +1,3 @@
-/**
- * Phase G — on-disk cache for `RepoProfile`s.
- *
- * Layout: `<BRIDGE_STATE_DIR>/repo-profiles.json` (already gitignored
- * via `.bridge-state/` in .gitignore). Single file holding a versioned
- * record keyed by repo folder name. Refresh is on-demand:
- *   - `ensureFreshOrAuto` is the lazy entrypoint (auto-builds on first
- *     hit, refreshes if older than 24h).
- *   - `refreshAll` / `refreshOne` are explicit force-refresh paths.
- * No background timer; staleness is bounded by usage.
- */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,7 +6,7 @@ import { BRIDGE_STATE_DIR } from "./paths";
 import { scanRepoIfExists, type RepoProfile } from "./repoProfile";
 
 export const PROFILE_STORE_VERSION = 1;
-export const PROFILE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+export const PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface ProfileStore {
   version: number;
@@ -66,19 +55,9 @@ export function loadProfiles(): ProfileStore | null {
 
 export function saveProfiles(store: ProfileStore): void {
   ensureStateDir();
-  // writeJsonAtomic handles mkdir + unique tmp suffix (so concurrent
-  // writers can't trample the same `.tmp` staging) + cleanup on
-  // rename failure. The legacy ad-hoc helper here used a shared
-  // `${path}.tmp` suffix which raced under load.
   writeJsonAtomic(profileFilePath(), store);
 }
 
-/**
- * Re-scan every repo from `repos` whose folder exists, merging the
- * fresh profile into the store. Repos absent from disk are LEFT in the
- * cache as-is (so a temporarily missing sibling doesn't blow away its
- * last known profile). Saves and returns the new store.
- */
 export function refreshAll(repos: RepoLike[]): ProfileStore {
   const store = loadProfiles() ?? emptyStore();
   for (const r of repos) {
@@ -112,13 +91,6 @@ export function getProfile(name: string): RepoProfile | null {
   return store.profiles[name] ?? null;
 }
 
-/**
- * Lazy entrypoint. Returns the cached store unless it's missing or
- * older than `PROFILE_TTL_MS`, in which case it triggers a refresh.
- *
- * Failure to refresh (any error) is swallowed and the stale store is
- * returned — never block a caller on profile-build.
- */
 export function ensureFreshOrAuto(repos: RepoLike[]): ProfileStore {
   const store = loadProfiles();
   const ttl = PROFILE_TTL_MS;

@@ -17,15 +17,6 @@ interface CreateBody {
 
 const VALID_PROVIDERS: ReadonlySet<TunnelProvider> = new Set(["localtunnel", "ngrok"]);
 
-/**
- * POST /api/tunnels
- *
- * Body: `{ port: number, provider: "localtunnel" | "ngrok", label?: string }`.
- * Spawns the appropriate client; the tunnel starts in `starting`
- * state and flips to `running` once stdout reveals the public URL.
- * Auth gating is handled by `proxy.ts` — this route inherits the same
- * cookie/CSRF checks every other `/api/*` endpoint uses.
- */
 export async function POST(req: NextRequest) {
   let body: CreateBody;
   try {

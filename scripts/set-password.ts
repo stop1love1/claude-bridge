@@ -1,23 +1,3 @@
-/**
- * One-time bridge auth setup.
- *
- *   bun scripts/set-password.ts
- *
- * Prompts for an email + password, hashes the password with scrypt,
- * and writes the result to `~/.claude/bridge.json#auth`. Also generates
- * a fresh HMAC signing secret and an internal-bypass token if the
- * install doesn't have them yet — both are stable across re-runs so
- * existing browser sessions keep working when you rotate the password.
- *
- * Re-running this script:
- *   - replaces the password (every existing browser cookie still
- *     verifies because the HMAC secret is preserved — log out from
- *     "Trusted devices" if you want to force a re-login everywhere).
- *   - lets you change the email; only one operator account exists.
- *
- * Pass `--rotate-secret` to also re-roll the HMAC + internal tokens
- * (use after a suspected leak; this invalidates every active session).
- */
 
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -37,9 +17,6 @@ async function ask(prompt: string): Promise<string> {
 }
 
 async function askPassword(prompt: string): Promise<string> {
-  // Best-effort masking: zero-width replacement on each keystroke so
-  // the password isn't echoed. Falls back to plain readline if the
-  // stdin isn't a TTY (CI / piped input).
   if (!input.isTTY) {
     return await rl.question(`${prompt}: `);
   }
@@ -48,9 +25,7 @@ async function askPassword(prompt: string): Promise<string> {
     let buf = "";
     const onData = (chunk: Buffer) => {
       const c = chunk.toString("utf8");
-      // Ctrl-C
       if (c === "") { output.write("\n"); process.exit(130); }
-      // Enter
       if (c === "\r" || c === "\n") {
         input.setRawMode(false);
         input.removeListener("data", onData);
@@ -59,7 +34,6 @@ async function askPassword(prompt: string): Promise<string> {
         resolve(buf);
         return;
       }
-      // Backspace
       if (c === "" || c === "\b") {
         if (buf.length > 0) {
           buf = buf.slice(0, -1);
@@ -115,8 +89,6 @@ async function main() {
       ...next,
       secret: b64url(randomBytes(32)),
       internalToken: b64url(randomBytes(32)),
-      // Drop every trusted device — they can't be verified after the
-      // secret rotates anyway, but explicit > implicit.
       trustedDevices: [],
     };
     saveAuthConfig(rotated);

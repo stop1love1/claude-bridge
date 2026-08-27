@@ -9,9 +9,6 @@ import {
 
 const { LOCK_FILE, isPidAlive } = _internal;
 
-// processLock binds its lock path to the real `.bridge-state` dir at
-// import time, so we snapshot/restore any pre-existing lock to avoid
-// disturbing a bridge that might be running on this machine.
 let saved: string | null = null;
 
 beforeEach(() => {
@@ -66,14 +63,12 @@ describe("acquireProcessLock", () => {
   });
 
   it("refuses to steal a lock held by a live foreign process", async () => {
-    // Spawn a real, live child so we have a foreign pid that's alive.
     const child: ChildProcess = spawn(
       process.execPath,
       ["-e", "setInterval(() => {}, 1000)"],
       { stdio: "ignore" },
     );
     try {
-      // Wait until the child is actually spawned (pid assigned).
       await new Promise<void>((res, rej) => {
         child.once("spawn", () => res());
         child.once("error", rej);
@@ -86,7 +81,6 @@ describe("acquireProcessLock", () => {
       expect(r.acquired).toBe(false);
       expect(r.heldBy?.pid).toBe(foreignPid);
       expect(r.heldBy?.url).toBe("http://other");
-      // The foreign holder's record must be left untouched.
       expect(JSON.parse(readFileSync(LOCK_FILE, "utf8")).pid).toBe(foreignPid);
     } finally {
       child.kill("SIGKILL");

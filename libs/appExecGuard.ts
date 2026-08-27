@@ -1,22 +1,8 @@
-/**
- * Shared guardrails for app-scoped shell surfaces (one-shot HTTP exec
- * and the interactive PTY WebSocket). Policies live in the bridge repo
- * — not in each registered app — so every workspace gets the same
- * "foot-gun" rails.
- *
- * These checks are **best-effort** heuristics (regex), not a security
- * boundary against a determined operator with shell access.
- */
 
 export function execLocked(): boolean {
   return process.env.BRIDGE_LOCK_EXEC === "1";
 }
 
-/**
- * Ordered roughly from most specific / least false-positive first.
- * Used for full one-shot command lines and for a rolling PTY stdin
- * buffer (substring match).
- */
 export const BLOCKLIST: Array<{ pattern: RegExp; reason: string }> = [
   {
     pattern: /\brm\s+(-[rRfF]+|--recursive|--force)\b.*\s(?:\/|~\/?)\s*$/m,
@@ -42,7 +28,6 @@ export const BLOCKLIST: Array<{ pattern: RegExp; reason: string }> = [
     pattern: /\bwget\s.+\|\s*(?:bash|sh|zsh|fish)\b/,
     reason: "wget | shell blocked",
   },
-  // Privilege elevation from the bridge context (targets host, not repo).
   {
     pattern: /\b(?:sudo|doas)\s+/i,
     reason: "sudo/doas blocked in bridge shell",
@@ -51,7 +36,6 @@ export const BLOCKLIST: Array<{ pattern: RegExp; reason: string }> = [
     pattern: /\bsu\s+(?:-|\/s|\[)/i,
     reason: "su blocked in bridge shell",
   },
-  // Disk / volume destruction outside normal project file ops.
   {
     pattern: /\bdd\b[\s\\].*\bof=\/dev\/(?!(null|zero|random|urandom)\b)/i,
     reason: "dd to block device blocked",
@@ -72,7 +56,6 @@ export const BLOCKLIST: Array<{ pattern: RegExp; reason: string }> = [
     pattern: /\bcipher\s+\/w\b/i,
     reason: "cipher /w blocked",
   },
-  // Sensitive host paths (not app trees).
   {
     pattern: /\/etc\/(?:shadow|sudoers|gshadow)\b/i,
     reason: "system credential paths blocked",
@@ -96,11 +79,6 @@ export function checkBlocklist(command: string): { ok: true } | { ok: false; rea
 
 const PTY_INPUT_BUF_MAX = 8192;
 
-/**
- * Updates a rolling stdin buffer and returns whether the latest chunk
- * may be forwarded to the PTY. On block, clears the buffer and the
- * caller should not write `chunk` to the PTY.
- */
 export function filterPtyStdinChunk(
   state: { buf: string },
   chunk: string,

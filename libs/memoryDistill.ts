@@ -1,28 +1,3 @@
-/**
- * Auto-memory distillation.
- *
- * Spawned by `coordinator.ts:postExitFlow` AFTER all post-exit gates
- * pass on a successful run, only when the target app has opted in via
- * `bridge.json.apps[].memory.distill = true`. The distill agent reads
- * the run's report, the diff, the task body, and any prior memory
- * entries, then proposes 1-3 NEW durable rules in the form
- * `When X → do Y because Z` for `<appPath>/.bridge/memory.md`.
- *
- * The bridge appends those entries via `appendMemory`, which already
- * dedupes against the most-recent line and caps the file size. So a
- * runaway distiller can't blow up the file or duplicate yesterday's
- * rule by accident.
- *
- * Skipped (no entries written) when:
- *   - the run is itself a retry (the coder we'd judge wasn't the
- *     primary attempt — the lesson belongs to the original)
- *   - the run produced no diff (read-only / planning runs)
- *   - the agent's verdict file is missing or malformed
- *   - the agent returned 0 entries (judged "nothing worth saving")
- *
- * Cost: opt-in per app, ~5-30K tokens per task on top of the coder.
- * Operators with token budget concerns leave it off by default.
- */
 import { join } from "node:path";
 import { appendMemory, topMemoryEntries } from "./memory";
 import type { Run } from "./meta";
@@ -51,11 +26,8 @@ const BRIEF_BODY = [
 ].join("\n");
 
 export interface MemoryDistillResult {
-  /** Number of entries actually appended (some may be deduped against prior). */
   appended: number;
-  /** sessionId of the spawned distill agent — for cross-ref + UI surfacing. */
   distillSessionId: string | null;
-  /** One-line human summary; surfaced in logs / future UI. */
   reason: string;
   durationMs: number;
 }
@@ -68,12 +40,6 @@ export interface RunMemoryDistillOptions {
   taskBody: string;
 }
 
-/**
- * Validate the agent-supplied JSON shape `{entries: string[]}`. Defensive
- * against an LLM that wrote extra fields, missed the array, or stuffed
- * non-strings. Returns `null` on bad shape so the caller can skip
- * cleanly.
- */
 export function parseDistillVerdict(
   raw: unknown,
 ): { entries: string[] } | null {
@@ -88,11 +54,6 @@ export function parseDistillVerdict(
   return { entries: cleaned.slice(0, ENTRIES_CAP) };
 }
 
-/**
- * Run the distillation gate end-to-end. Always returns — failures are
- * surfaced as `{appended: 0, reason: ...}` so the caller can log and
- * move on. Never throws.
- */
 export async function runMemoryDistill(
   opts: RunMemoryDistillOptions,
 ): Promise<MemoryDistillResult> {
@@ -111,11 +72,6 @@ export async function runMemoryDistill(
   if (!app) return skipped("app not registered");
   if (!app.memory.distill) return skipped("memory.distill disabled for app");
 
-  // Inject the current memory snapshot into the brief so the distiller
-  // can avoid duplicating prior rules. `appendMemory` also dedupes
-  // against the very newest line, but giving the agent the full visible
-  // set lets it skip semantically-equivalent rules earlier in the file
-  // too.
   const priorEntries = topMemoryEntries(app.path);
   const priorBlock =
     priorEntries.length > 0
@@ -161,11 +117,6 @@ export async function runMemoryDistill(
   }
 
   let appended = 0;
-  // appendMemory mutates the file head-first and dedupes against the
-  // current top entry. Multiple writes in sequence work correctly: each
-  // appended entry becomes the new head and the next dedup compares
-  // against it. So if the LLM proposed two near-identical rules, the
-  // second is dropped automatically.
   for (const entry of parsed.entries) {
     const written = appendMemory(app.path, entry);
     if (written) appended += 1;
@@ -182,12 +133,10 @@ export async function runMemoryDistill(
   };
 }
 
-/** Test-only export — verdict file basename. */
 export function _verdictFileName(): string {
   return VERDICT_FILE;
 }
 
-/** Test-only export — sessions dir helper. */
 export function _verdictPath(taskId: string, sessionsDir: string): string {
   return join(sessionsDir, taskId, VERDICT_FILE);
 }

@@ -56,11 +56,6 @@ import {
 } from "@/libs/permissionStore";
 
 export const dynamic = "force-dynamic";
-// `waitForSpawnApproval` blocks for up to APPROVAL_TIMEOUT_MS (180s) when
-// the caller opted in to user mediation. Next.js' default request
-// timeout is plenty on bare-metal Node, but some serverless hosts cap
-// shorter. Be explicit and pad past the 180s ceiling so we never get
-// the 504 racing with the deny-on-timeout path.
 export const maxDuration = 200;
 
 const execFileP = promisify(execFile);
@@ -71,62 +66,10 @@ interface AgentBody {
   prompt: string;
   parentSessionId?: string;
   requireUserApproval?: boolean;
-  /**
-   * Escape hatch for the (parentSessionId, role, repo) dedup check.
-   * Default `false` → if the same coordinator already has an active
-   * (queued/running) child with the same role + repo, the spawn is
-   * rejected with 409. Set to `true` for the rare case where two
-   * agents really should target the same repo with the same role
-   * (caller must have a good reason — usually it's a coordinator bug).
-   */
   allowDuplicate?: boolean;
-  /**
-   * Force-disable speculative fan-out for this dispatch even when the
-   * app has `dispatch.speculative.enabled = true`. Used by retry
-   * spawners (`-vretry`, `-cretry`, …) so a verify-failure retry
-   * doesn't itself fan out — that would multiply the retry budget by
-   * `n` and clog the agent tree. Default `false`.
-   */
   noSpeculative?: boolean;
-  /**
-   * Dispatch shape:
-   *   - `"spawn"` (default) — fresh child Claude session via
-   *     `spawnFreeSession`. Repo context is pre-warmed, the brief is
-   *     wrapped with the full child-prompt scaffolding, branch is
-   *     prepared, and a worktree is allocated when worktree mode is on.
-   *   - `"resume"` — continuation turn for a child that has already
-   *     finished. The bridge looks up the prior run by
-   *     `(parentSessionId, role, repo)`, calls `claude --resume <sid>`
-   *     with the operator's brief as the new user message, and reuses
-   *     the same `sessionId` / worktree (when still on disk). Skips
-   *     pre-warm + branch prep + the long child-prompt preamble since
-   *     the child already has all that context in its transcript.
-   *     Rejected when no completed prior run exists or when an active
-   *     duplicate is still running.
-   */
   mode?: "spawn" | "resume";
-  /**
-   * Effort tier for this child (low|medium|high|xhigh|max|ultracode).
-   * Absent → the child inherits the task's effort (meta `taskEffort`), so
-   * a task created at a given effort fans out children at the same effort
-   * without the coordinator having to thread it on every spawn. The
-   * coordinator can still override per-child by setting this explicitly.
-   * `ultracode` resolves to `--effort xhigh` plus the bridge fan-out
-   * directive — see libs/systemPrompt.ts.
-   */
   effort?: EffortLevel;
-  /**
-   * Resume target override (only consulted when `mode: "resume"`).
-   * When set, the bridge resumes THIS exact session id instead of
-   * looking up the prior run by `(parentSessionId, role, repo)`. Lets
-   * the coordinator reuse a child across role-relabels — e.g. continue
-   * the original `coder` session under the new label `coder-phase24`
-   * without spawning a fresh agent. The `role` field becomes the new
-   * display label written back to meta.json. Validated: must exist in
-   * this task's runs[], must match the request's `repo`, must not be
-   * queued/running, must not be a speculative loser. Caller normally
-   * takes the value from a previous spawn's `{sessionId}` response.
-   */
   priorSessionId?: string;
 }
 
@@ -139,59 +82,9 @@ interface SpeculativeDecision {
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/**
- * Prompt-caching split. On by default — set `BRIDGE_PROMPT_CACHE=0` to
- * disable and fall back to the legacy monolithic prompt. When on, the
- * agents route splits the child prompt into:
- *
- *   - **System append** (stable per-app): house rules, house style,
- *     memory, repo profile, available helpers, pinned files, verify
- *     commands. Written to a content-addressed file under
- *     `.bridge-state/cache/sys-prompts/<sha256>.txt` and passed via
- *     `claude --append-system-prompt-file <path>`. Same content =
- *     same file = same Anthropic API cache hit, so siblings + future
- *     spawns for the same app reuse the cache.
- *   - **User message** (task-specific): everything else (header, task
- *     body, detected scope, shared plan, role brief, repo context git
- *     log, references, self-register, report contract, spawn signals).
- *     Fed via stdin as today.
- *
- * The two together carry the same content as the legacy
- * `buildChildPrompt` output — no behavioral change beyond moving stable
- * bits into the cacheable system-prompt slot.
- */
 const PROMPT_CACHE_ENABLED = process.env.BRIDGE_PROMPT_CACHE !== "0";
 
-// `ensureSystemPromptFile` (content-addressed cache writer) now lives in
-// `@/libs/systemPrompt` so the spawn layer can share it for the ultracode
-// directive. Same `.bridge-state/cache/sys-prompts/<sha256>.txt` path.
 
-/**
- * Spawn a child Claude agent for a task. Centralizes what the coordinator
- * used to do via raw `claude -p` Bash calls. The bridge:
- *
- *  1. Validates the request and resolves the target repo.
- *  2. Pre-mints the session UUID (no .jsonl race like the old path).
- *  3. Pre-warms the prompt with `git status / log / ls-files` from the
- *     target repo so the child opens with cheap context.
- *  4. (Optionally) blocks on a "spawn_agent" permission popup the user
- *     answers from the parent coordinator's existing SSE stream.
- *  5. Spawns the child via `spawnFreeSession` (which auto-registers it
- *     in the in-process spawn registry for kill / liveness checks).
- *  6. Appends a `running` run to the task's meta.json with the
- *     parent->child link captured so the agent tree can render it.
- *  7. Wires lifecycle so the run flips to done/failed on exit.
- *
- * Returns 201 `{ sessionId, action: "spawned" }` on success.
- */
-/**
- * Git settings to use for THIS spawn. For an operator it's the app's own
- * policy. For a task-share guest, the share's branch config wins
- * (branchMode / branch name / autoCommit / autoPush), push is downgraded
- * unless the share grants it, and post-success integration (auto-merge /
- * PR) is forced off — a guest's work never lands on a protected branch or
- * opens a PR/MR on the operator's behalf.
- */
 function effectiveGitForActor(
   appGit: AppGitSettings,
   actor: Actor | null,
@@ -199,11 +92,6 @@ function effectiveGitForActor(
 ): AppGitSettings {
   if (actor?.kind !== "guest") return appGit;
   const g = actor.share.git;
-  // Multi-coder isolation (Epic D): a guest on `auto-create` in the LIVE
-  // tree gets their OWN branch `claude/<task>-g<did6>` instead of the shared
-  // `claude/<task>`, so two guests coding the same task concurrently don't
-  // clobber each other's commits. Worktree mode already isolates per-run, so
-  // skip the override there; `fixed`/`current` shares keep their branch.
   const isolate = g.branchMode === "auto-create" && appGit.worktreeMode !== "enabled";
   const guestSeg = actor.did.replace(/[^a-z0-9]/gi, "").slice(-6) || "guest";
   return {
@@ -224,11 +112,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
 
-  // Each spawn launches a `claude` child (real CPU + LLM spend). The cap
-  // is generous so a coordinator's legitimate fan-out (many children in
-  // a burst) isn't blocked, but a runaway loop / hostile script can't
-  // spin up unbounded agents. Keyed by IP; internal children share the
-  // bridge host's IP so this also bounds recursive self-dispatch.
   const denied = checkRateLimit("tasks:agents:ip", getClientIp(req.headers), 60, 60_000);
   if (denied) {
     return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
@@ -248,22 +131,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     typeof body.parentSessionId === "string" && body.parentSessionId
       ? body.parentSessionId
       : undefined;
-  // H1: parentSessionId is written into meta.json and used as the
-  // permissionStore key when blocking on user-approval. Same threat
-  // shape as every other sessionId — gate it before it lands in either.
   if (parentSessionId !== undefined && !isValidSessionId(parentSessionId)) {
     return badRequest("invalid parentSessionId");
   }
-  // Default OFF: spawning is auto-approved unless the caller explicitly
-  // sets `requireUserApproval: true`. CLI / programmatic callers without
-  // a parent session id implicitly skip it too, since there's nowhere
-  // to surface the dialog.
   const requireUserApproval = body.requireUserApproval === true;
   const allowDuplicate = body.allowDuplicate === true;
   const noSpeculative = body.noSpeculative === true;
-  // Mode validation: only "spawn" / "resume" or absent are accepted. An
-  // unknown string would silently fall through to the spawn path with
-  // the wrong intent — fail loud instead.
   let mode: "spawn" | "resume" = "spawn";
   if (body.mode !== undefined) {
     if (body.mode !== "spawn" && body.mode !== "resume") {
@@ -271,10 +144,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
     mode = body.mode;
   }
-  // Optional resume-target override. Validated as a sessionId so it
-  // can't smuggle path or shell content into the lookup. Only meaningful
-  // when mode==="resume" — in spawn mode we reject it loudly so a
-  // confused caller doesn't think the field worked.
   const priorSessionId =
     typeof body.priorSessionId === "string" && body.priorSessionId
       ? body.priorSessionId
@@ -287,9 +156,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return badRequest("priorSessionId is only valid with mode: 'resume'");
     }
   }
-  // Effort tier for this child. An unknown value is rejected loudly
-  // rather than silently dropped; absent falls back to the task's effort
-  // once meta is loaded (see `effectiveEffort` below).
   if (body.effort !== undefined && !isValidEffort(body.effort)) {
     return badRequest("invalid effort");
   }
@@ -300,10 +166,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!role) {
     return NextResponse.json({ error: "role is required" }, { status: 400 });
   }
-  // CRIT-5 / M4: gate role to a tight charset before it gets templated
-  // into filenames (see prompt route's `${run.role}-${run.repo}.prompt.txt`)
-  // and meta.json. We only validate role here; repo is validated below
-  // against the BRIDGE.md repo list, which is itself a closed set.
   if (!isValidAgentRole(role)) {
     return badRequest("invalid role");
   }
@@ -311,33 +173,16 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "prompt is required" }, { status: 400 });
   }
 
-  // BRIDGE.md is the canonical Repos-table source, but the bridge has
-  // to keep working in fresh checkouts where it hasn't been written yet
-  // (the apps registry in `bridge.json` is the actual source of truth
-  // post-Phase-G). Empty string = "no repos declared via BRIDGE.md",
-  // which is the same fallback `resolveRepos` already handles.
   const md = readBridgeMd();
   const profileStore = loadProfiles();
   const profilesMap = profileStore?.profiles;
 
-  // Read the task's pre-detected scope (computed at task creation time
-  // by `app/api/tasks/route.ts`). On a cache miss (e.g. a legacy task
-  // created before the detect layer existed) we fall back to live
-  // detection on the task body, persisting the result so subsequent
-  // spawns see the same scope. Coordinator and every child read this
-  // same cache — no drift.
   const sessionsDir = join(SESSIONS_DIR, id);
   const meta = readMeta(sessionsDir);
   if (!meta) {
     return NextResponse.json({ error: "task not found" }, { status: 404 });
   }
-  // Hoisted: the plan gate (below) and `effectiveGitForActor` (further down)
-  // both need the actor. Computed once here.
   const actor = verifyRequestActor(req);
-  // Effort the child actually runs at: the explicit per-dispatch pick,
-  // else the task's effort (so a task created at e.g. `ultracode` fans
-  // out children at the same tier without per-spawn threading), else
-  // claude's own default.
   const effectiveEffort: EffortLevel | undefined =
     requestedEffort ?? meta.taskEffort ?? undefined;
   let detectedScope: DetectedScope | null = null;
@@ -354,10 +199,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     console.warn("[detect] agents route: scope load failed (non-fatal):", err);
   }
 
-  // When the caller didn't pin a repo, prefer the cached scope's top
-  // pick — this is the standardized contract: detection happens once
-  // per task, not per spawn. Live re-detection per spawn would race
-  // the LLM upgrade and produce non-deterministic dispatch.
   let repo = explicitRepo;
   let autoDetected = false;
   let autoDetectReason: string | null = null;
@@ -380,25 +221,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     autoDetectScore = top.score;
   }
 
-  // C4: a task-share guest's `spawnAgent` grant is scoped to the share's
-  // taskId only (libs/guestAccess.ts) — it never inspects `body.repo`,
-  // so an unchecked `repo` here would resolve to ANY app registered in
-  // bridge.json, not just the one the guest's task is pinned to, and the
-  // resulting session would then be readable via the task-scoped tail
-  // route (sessionBelongsToTask only checks task membership, not repo).
-  // Must run before `resolveRepoCwd` below is used for any side effect —
-  // this covers BOTH the spawn path (continues past this point) and the
-  // resume path (`handleResume` is invoked further down with this same
-  // already-checked `repo`/`repoCwd`, and never re-resolves a repo of
-  // its own). An unpinned task (`meta.taskApp` null) denies rather than
-  // allows — no pin means no bound to enforce.
   if (
     !guestMayTargetRepo({
-      // A null `actor` (no/invalid session) folds to "operator" here,
-      // same as the plan-gate ternaries below (:424, :439) — this route
-      // is never reachable unauthenticated in the first place (the
-      // proxy's auth gate runs first), so "not proven guest" is the
-      // only case this local ternary ever needs to distinguish.
       actorKind: actor?.kind === "guest" ? "guest" : "operator",
       repo,
       taskApp: meta.taskApp ?? null,
@@ -418,12 +242,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // ─── Intent & Planning Gate ─────────────────────────────────────────
-  // Block mutating roles (coder/fixer/…) until the task's plan is approved.
-  // Non-mutating roles (planner/reviewer/…) always pass so the gate can
-  // produce a plan. Guests are always gated; the operator gate is
-  // configurable. Runs BEFORE worktree alloc / prompt build / spawn so a
-  // blocked call does no wasted work. Covers spawn AND resume.
   {
     const cfg = readPlanGateConfig();
     const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
@@ -435,9 +253,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     });
     if (!decision.allowed) {
       if (decision.kickPlanning) {
-        // No plan yet → open planning and ensure a coordinator is running
-        // to drive the planner. The contributor (or the coordinator) re-
-        // issues the mutating spawn after approval.
         await setIntake(sessionsDir, {
           status: "planning",
           submittedBy:
@@ -445,8 +260,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
               ? { kind: "guest", label: "guest" }
               : { kind: "operator", label: "operator" },
         });
-        // Only skip when a LIVE coordinator exists — a finished one can't
-        // react to the gate transition, so we still need to drive planning.
         const hasActiveCoordinator = meta.runs.some(
           (r) => r.role === "coordinator" && (r.status === "running" || r.status === "queued"),
         );
@@ -472,22 +285,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // ─── Resume branch ──────────────────────────────────────────────────
-  // When mode==="resume" we do NOT spawn a fresh child. The bridge looks
-  // up the prior run by (parentSessionId, role, repo), reuses its
-  // sessionId, and calls `claude --resume <sid>` so the child continues
-  // its existing conversation with the operator's brief as the new user
-  // message. Saves the full child-prompt preamble (~5KB) plus repo
-  // pre-warm + git branch prep, since the child already has all that
-  // context in its transcript from the original spawn.
-  //
-  // Constraints:
-  //   - Exactly one *finished* (`done` / `failed`) prior run must match.
-  //     If zero match, the caller has no session to resume — return 400.
-  //   - No active sibling (`queued` / `running`) for the same triple
-  //     can be live; resuming alongside one would race the kid's stdout.
-  //   - Speculative losers are not resumable (their worktree was
-  //     destroyed by the winner-claim path).
   if (mode === "resume") {
     return handleResume({
       sessionsDir,
@@ -505,12 +302,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     });
   }
 
-  // Early dedup fast-path: rejects the common "coordinator double-POSTed
-  // the same agent in one turn" case BEFORE we allocate a worktree, write
-  // a per-session settings file, or build the prompt context. The
-  // canonical, race-safe check still runs inside the per-task lock at
-  // `appendRunIfNotDuplicate` further down — this is a pure optimization
-  // to avoid wasted work for the overwhelmingly common case.
   if (!allowDuplicate) {
     const dup = meta.runs.find(
       (r) =>
@@ -535,22 +326,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // Per-app git workflow: if the resolved repo matches a registered
-  // app, honor its `git.branchMode` before the child sees the tree.
-  // Failures abort the spawn — we don't want a child editing the wrong
-  // branch silently.
-  // P4/F1 — when worktreeMode is enabled, the worktree owns its
-  // branch (createWorktreeForRun runs `git worktree add -b <branch>`).
-  // Running prepareBranch in the LIVE tree first would either move HEAD
-  // unnecessarily or, worse, claim the same branch the worktree wants
-  // to check out (branches can't be checked out in two places at once).
-  // Skip prepareBranch in worktree mode — the worktree handles branch
-  // policy via `resolveTargetBranch` in `libs/worktrees.ts`.
   const app = getApp(repo);
-  // For a task-share guest, the share's git config overrides the app's
-  // (branch + commit/push), so the guest's work lands where the operator
-  // scoped it. Operators keep the app's own policy. `actor` was hoisted to
-  // the top of the handler so the plan gate could read it too.
   const effGit = app ? effectiveGitForActor(app.git, actor, id) : null;
   const useWorktree = !!(app && effGit && effGit.worktreeMode === "enabled");
   if (app && effGit && effGit.branchMode !== "current" && !useWorktree) {
@@ -568,12 +344,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // Near-duplicate role detection (1b). When the coordinator POSTs
-  // `fixer-cashier` and a finished `fixer` already exists for the same
-  // (parent, repo), surface a warning in the response so the model sees
-  // it on its next turn and learns to use `mode:"resume"` instead. The
-  // spawn still proceeds — we can't know whether the variant role is
-  // genuinely a different area; we only flag the likely waste.
   const nearDuplicate = !allowDuplicate
     ? findNearDuplicateRole({
         runs: meta.runs,
@@ -583,12 +353,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       })
     : null;
 
-  // Decide whether to fan out N speculative siblings. Requires:
-  //   - app.dispatch.speculative.enabled === true
-  //   - role is in the configured roles set (default ["coder"])
-  //   - worktree mode is on (live-tree fan-out would race the shared HEAD)
-  //   - caller didn't opt out via noSpeculative or allowDuplicate
-  // Falls through to single-spawn (n=1) when any precondition fails.
   const speculative = decideSpeculative({
     app,
     role,
@@ -597,8 +361,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     allowDuplicate,
   });
 
-  // Per-sibling outputs the loop accumulates. Used to build the response
-  // and to clean up partial state if a mid-loop spawn fails.
   const spawned: Array<{
     sessionId: string;
     repo: string;
@@ -607,21 +369,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }> = [];
 
   for (let variantIndex = 0; variantIndex < speculative.n; variantIndex++) {
-  // Pre-mint the child session UUID. Same fix as coordinator: avoids the
-  // "newest .jsonl in project dir" race when other claude sessions are
-  // active in the same cwd.
   const sessionId = randomUUID();
 
-  // P4/F1 — when worktree mode is enabled, create a private worktree
-  // BEFORE spawning so the child's cwd is the isolated copy.
-  //
-  // SAFETY: when `worktreeMode === "enabled"` we must NOT silently
-  // fall back to the live tree on create failure — that would let an
-  // agent edit the operator's working copy in spite of the explicit
-  // isolation contract. Instead, surface a 500 with the failure detail
-  // so the operator notices and can investigate (stale `.worktrees/`
-  // leftovers, locked file handles on Windows, etc.). The pruner mops
-  // up any partial state on the next API hit.
   let spawnCwd = repoCwd;
   let worktreePath: string | null = null;
   let worktreeBranch: string | null = null;
@@ -655,42 +404,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // Pre-warm: cheap repo context the child can read without burning a
-  // tool call. All commands fail-soft — a fresh / non-git repo simply
-  // gets a fallback string. We use `execFile` (no shell) so the same
-  // path works on Windows + bash + PowerShell parents.
   const contextBlock = await buildRepoContextBlock(spawnCwd);
 
-  // Wrap the coordinator-authored brief with the standard scaffolding
-  // (task header, language directive, profile, context, self-register
-  // snippet, report contract). The coordinator now passes ONLY the
-  // role-specific instructions in `body.prompt` — the bridge owns the
-  // boilerplate so children get a consistent, structured prompt
-  // regardless of which coordinator wrote them.
-  // P1 — opt-in agentic-coder layers. Each loader returns null when
-  // the underlying file / config is absent so existing apps without any
-  // of these set behave exactly as before.
   const houseRules = loadHouseRules(app?.path ?? null);
   const memoryEntries = topMemoryEntries(app?.path ?? null);
   const playbookBody = loadPlaybook(role);
   const verifyHint = app?.verify ?? null;
-  // Shared plan from a prior `planner` run, if any. Injected for every
-  // role — including the planner itself on re-dispatch, so it can refine
-  // instead of starting from scratch. Coordinator decides when to spawn
-  // the planner; the bridge only flows the artifact downstream.
   const sharedPlan = loadSharedPlan(id);
-  // Cross-cutting observations earlier siblings appended to
-  // `sessions/<task>/notes.md`. Injected as `## Peer notes` so a
-  // later-spawning sibling sees what the earlier ones already
-  // discovered (contracts they chose, footguns they hit). Append-only;
-  // children are told in the report contract to add their own bullet.
   const peerNotes = loadPeerNotes(id);
 
-  // P3a — symbol index + style fingerprint + pinned files. All gated
-  // on `app !== null` because they need the registered app's path. The
-  // `ensureFresh*` calls are lazy: cache hit if recent, else re-scan
-  // synchronously (file walks are bounded by FILE_WALK_CAP). Pinned
-  // files are read fresh per spawn (small list, cheap).
   const symbolIndex = app
     ? ensureFreshSymbolIndex(app.name, app.path, app.symbolDirs)
     : null;
@@ -699,11 +421,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     : null;
   const pinnedFiles = app ? loadPinnedFiles(app.path, app.pinnedFiles) : [];
 
-  // P3b — auto-attach reference files (B2) heuristically picked from
-  // the symbol index by task-body keyword overlap, plus recent-direction
-  // git log (B4) for the focus dir we infer from the same heuristic.
-  // Both gated on `app !== null` (need cwd + index). Pinned paths are
-  // excluded so we don't waste an attach slot duplicating pinned content.
   const attachedReferences = app && symbolIndex
     ? attachReferences({
         appPath: app.path,
@@ -720,20 +437,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       })
     : null;
 
-  // For speculative siblings, inject a tiny variant nudge into the
-  // coordinator-supplied brief so the children explore *different*
-  // angles instead of all running the same path. The variant header is
-  // intentionally short — the agent's playbook + brief still does the
-  // heavy lifting; we just bias attention slightly. The bridge picks
-  // the first run that passes all post-exit gates as the winner.
   const variantPrompt = speculative.enabled
     ? renderSpeculativeVariantPrefix({
         index: variantIndex,
         total: speculative.n,
         groupId: speculative.groupId ?? "",
-        // Per-app custom angles, falling back to the built-in defaults
-        // inside the renderer. Empty / undefined → built-ins are used,
-        // preserving back-compat for apps without an `angles` override.
         angles: app?.dispatch?.speculative?.angles,
       }) + "\n\n" + prompt
     : prompt;
@@ -764,12 +472,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     peerNotes,
   };
 
-  // Prompt-cache split (on by default; opt out via `BRIDGE_PROMPT_CACHE=0`).
-  // When on, stable per-app sections are written to a content-addressed
-  // file and passed via `--append-system-prompt-file` so the Anthropic
-  // API can cache them across spawns. The user message (stdin) keeps
-  // only the task-specific content. When off, everything goes via
-  // stdin exactly as before.
   let prependedPrompt: string;
   let systemPromptFile: string | undefined;
   if (PROMPT_CACHE_ENABLED) {
@@ -780,13 +482,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     prependedPrompt = buildChildPrompt(childPromptOpts);
   }
 
-  // User mediation. We only ask if (a) the caller didn't opt out AND
-  // (b) we have a parent session id to route the popup back to. Without
-  // a parent, there's no SSE stream to fire on, so we'd just hang — fail
-  // open in that case (CLI / programmatic invocation).
-  // Speculative path: skip the popup. Asking N times for one logical
-  // dispatch is awful UX, and the operator already opted in to
-  // speculative at app-config time.
   if (requireUserApproval && parentSessionId && !speculative.enabled) {
     const decision = await waitForSpawnApproval({
       parentSessionId,
@@ -803,39 +498,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  // Per-session settings file with the PreToolUse permission hook
-  // attached, so the child's tool calls show up in the same UI stream
-  // as a free chat session would. The child still runs in
-  // `bypassPermissions` mode so it doesn't deadlock if the bridge UI
-  // is down — the hook fails open on timeout.
-  // TODO(phase-c): when grandchildren spawn each other via the same
-  // endpoint, consider whether to inherit / fan out the hook differently.
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
-  // Append the run BEFORE spawning so a spawn failure can never produce
-  // an alive-but-untracked child. The flow is:
-  //   1. record `queued` (with dedup check against active siblings),
-  //   2. try spawn,
-  //   3a. success → `updateRun({status:"running", startedAt: now})`
-  //   3b. failure → `updateRun({status:"failed", endedAt: now})` and bail.
-  // wireRunLifecycle will then take over and flip running → done/failed
-  // on child exit as before.
-  //
-  // Dedup: same (parentSessionId, role, repo) where status is queued or
-  // running → reject with 409. Coordinators occasionally retry their
-  // spawn POST in the same turn (LLM lapses, network hiccup); without
-  // this check both calls succeed and the user sees two children doing
-  // the same job. `allowDuplicate: true` is the escape hatch.
   const dedupKey = {
     parentSessionId: parentSessionId ?? null,
     role,
     repo,
   };
-  // For speculative siblings 1..N-1 we bypass dedup — they intentionally
-  // share (parent, role, repo) with their sibling at index 0, and the
-  // group is identified by `speculativeGroup`. Sibling 0 still runs the
-  // normal dedup so a *different* group (e.g. a stale one from a prior
-  // dispatch) still 409s correctly.
   const skipDedup = allowDuplicate || (speculative.enabled && variantIndex > 0);
   const dedupResult = await appendRunIfNotDuplicate(
     sessionsDir,
@@ -860,10 +529,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       (existing.status === "queued" || existing.status === "running"),
   );
   if (!dedupResult.inserted) {
-    // Race: the early fast-path check passed but a sibling POST raced
-    // ahead of us and won the lock. Clean up the worktree we just
-    // created AND the per-session settings dir we wrote — neither
-    // will ever be used because the session never started.
     if (worktreePath && app) {
       try {
         await removeWorktree({ appPath: app.path, worktreePath });
@@ -878,7 +543,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { cleanupSessionSettings } = require("@/libs/permissionSettings") as typeof import("@/libs/permissionSettings");
       cleanupSessionSettings(sessionId);
-    } catch { /* ignore */ }
+    } catch { }
     return NextResponse.json(
       {
         error: "duplicate spawn",
@@ -915,9 +580,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return NextResponse.json(serverError(e, "tasks:agent-spawn"), { status: 500 });
   }
 
-  // Spawn succeeded — promote queued → running and stamp startedAt now
-  // that we actually have a live child. wireRunLifecycle handles the
-  // running → done / failed transition on exit.
   try {
     await updateRun(sessionsDir, sessionId, {
       status: "running",
@@ -935,11 +597,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     worktreePath: worktreePath ?? null,
     variantIndex,
   });
-  } // end speculative for-loop
+  }
 
-  // Build the optional `warning` block once — same shape on both the
-  // single-spawn and speculative paths so the coordinator's parser
-  // doesn't have to care which path it hit.
   const warningPayload = nearDuplicate
     ? {
         warning: {
@@ -963,8 +622,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // Single-spawn path: preserve the legacy response shape so existing
-  // callers (coordinator playbook curl, scripts, tests) keep working.
   if (!speculative.enabled) {
     const only = spawned[0];
     return NextResponse.json(
@@ -981,10 +638,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  // Speculative path: aggregate response with the group id + every
-  // sibling's sessionId. The first sessionId is the "primary" from
-  // the caller's perspective so coordinators that hardcode `.sessionId`
-  // still pick something sensible to track.
   return NextResponse.json(
     {
       sessionId: spawned[0]?.sessionId,
@@ -1004,14 +657,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   );
 }
 
-/**
- * Decide whether speculative fan-out applies to this dispatch. Falls
- * back to a single spawn (n=1, enabled=false) on any precondition miss.
- *
- * Live-tree fan-out is refused: prepareBranch + auto-create branch
- * names mutate the shared HEAD, so two parallel siblings would race.
- * Worktree mode is the only safe substrate.
- */
 function decideSpeculative(args: {
   app: ReturnType<typeof getApp> | null;
   role: string;
@@ -1050,14 +695,6 @@ function decideSpeculative(args: {
   };
 }
 
-/**
- * Build the small variant-nudge block prepended to each speculative
- * sibling's coordinator brief. Intentionally short — the coordinator's
- * own brief and the role playbook still drive the agent. We just bias
- * each sibling toward a different angle so the bridge gets divergent
- * attempts to pick from instead of N near-identical clones.
- */
-/** Built-in default angles used when the app didn't supply its own. */
 const DEFAULT_SPECULATIVE_ANGLES: ReadonlyArray<{ label: string; nudge: string }> = [
   {
     label: "Conservative",
@@ -1081,12 +718,6 @@ export function renderSpeculativeVariantPrefix(args: {
   index: number;
   total: number;
   groupId: string;
-  /**
-   * Per-app angles override. Empty / undefined → built-in defaults.
-   * The renderer rotates through whichever list is in use by
-   * `index % len`, so providing < total angles is fine (siblings
-   * past `len` cycle back to the start, mirroring built-in behavior).
-   */
   angles?: ReadonlyArray<{ label: string; nudge: string }>;
 }): string {
   const angles =
@@ -1121,21 +752,6 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
   }
 }
 
-/**
- * Build a small markdown context block from `git status / log / ls-files`.
- * Each command runs with a 3s timeout and fails soft to an empty string,
- * so non-git repos / missing-binary boxes still get a (mostly empty) block
- * rather than 500ing the whole spawn request.
- *
- * We use `execFile` (no shell), which works identically whether the
- * Next.js process was launched from bash or PowerShell.
- *
- * Cached for 5 seconds per cwd: when a coordinator dispatches multiple
- * children at once (multi-repo task), each spawn would otherwise pay
- * for 3 git commands × N children. The cache keeps it to one set per
- * cwd per burst — git activity rarely changes inside a 5s window from
- * the bridge's perspective, and a stale row in the prompt is fine.
- */
 const REPO_CONTEXT_TTL_MS = 5_000;
 const RG = globalThis as unknown as {
   __bridgeRepoContextCache?: Map<string, { value: string; expires: number }>;
@@ -1157,7 +773,6 @@ async function buildRepoContextBlock(cwd: string): Promise<string> {
 
   const statusBlock = status || "(clean)";
   const logBlock = log || "(no commits)";
-  // `git ls-files | head -40` equivalent — keep the first 40 lines.
   const filesTrimmed = files
     ? files.split(/\r?\n/).slice(0, 40).join("\n")
     : "(no tracked files)";
@@ -1171,8 +786,6 @@ async function buildRepoContextBlock(cwd: string): Promise<string> {
     filesTrimmed,
   ].join("\n");
   repoContextCache.set(cwd, { value: block, expires: now + REPO_CONTEXT_TTL_MS });
-  // Bound the cache so a long-running bridge with many spawn cwds
-  // doesn't accumulate entries beyond what TTL alone evicts.
   if (repoContextCache.size > 64) {
     const oldest = repoContextCache.keys().next().value;
     if (oldest !== undefined) repoContextCache.delete(oldest);
@@ -1185,17 +798,8 @@ interface ApprovalDecision {
   reason?: string;
 }
 
-const APPROVAL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+const APPROVAL_TIMEOUT_MS = 3 * 60 * 1000;
 
-/**
- * Fire a "spawn_agent" pending request on the parent coordinator's
- * permissionStore stream and block until the user answers (allow / deny)
- * or the 3-minute timeout elapses (which we treat as deny — fail safe).
- *
- * Reuses the existing PendingRequest plumbing the PreToolUse hook UI
- * already listens on, so the bridge UI's permission dialog renders the
- * spawn request alongside any tool call requests.
- */
 function waitForSpawnApproval(args: {
   parentSessionId: string;
   role: string;
@@ -1217,7 +821,6 @@ function waitForSpawnApproval(args: {
     const unsubscribe = subscribe(
       args.parentSessionId,
       () => {
-        // pending broadcasts — not interested here
       },
       (answered: PendingRequest) => {
         if (answered.requestId !== requestId) return;
@@ -1249,34 +852,6 @@ function waitForSpawnApproval(args: {
   });
 }
 
-/**
- * Handle the `mode: "resume"` dispatch path. Two ways to pick the
- * target session:
- *
- *   - **By id (`priorSessionId` set)** — the coordinator passes the
- *     exact sessionId it wants to continue. Bypasses the role-based
- *     lookup so the same child can be resumed under a renamed role
- *     (e.g. continue `coder` as `coder-phase24` without spawning a
- *     fresh agent). The row's `role` is rewritten to the requested
- *     `role` after the resume succeeds.
- *
- *   - **By triple (`priorSessionId` absent — legacy path)** — the
- *     bridge looks up the most recent completed run matching
- *     `(parentSessionId, role, repo)`. Same row mutates: the role
- *     stays put, status flips back to running.
- *
- * Either way the bridge calls `resumeClaude` with the operator's brief
- * as the new user message and reuses the existing `sessionId` /
- * worktree.
- *
- * Failure modes (all return JSON with the bridge's standard error
- * shape):
- *   - 400 — no prior completed run found / priorSessionId mismatched
- *           the request's repo.
- *   - 409 — the picked run is queued/running (sibling or itself).
- *   - 410 — the picked run is a speculative loser (worktree destroyed).
- *   - 500 — `resumeClaude` threw (claude binary missing, EAGAIN, …).
- */
 async function handleResume(args: {
   sessionsDir: string;
   taskId: string;
@@ -1289,7 +864,6 @@ async function handleResume(args: {
   parentSessionId: string | null;
   priorSessionId: string | null;
   runs: Run[];
-  /** Effort tier for the resumed turn (already resolved: dispatch pick → task default). */
   effort?: EffortLevel;
 }): Promise<NextResponse> {
   const {
@@ -1307,11 +881,6 @@ async function handleResume(args: {
 
   let prior: Run;
   if (priorSessionId) {
-    // Direct lookup. The coordinator already knows the sessionId from a
-    // previous spawn's response, so we don't need to match by triple.
-    // Validate that the target exists in THIS task and resolves to the
-    // same repo the request specified — a mistyped sessionId from a
-    // different task would otherwise cross-resume into the wrong agent.
     const found = runs.find((r) => r.sessionId === priorSessionId);
     if (!found) {
       return NextResponse.json(
@@ -1365,8 +934,6 @@ async function handleResume(args: {
       r.role === role &&
       r.repo === repo;
 
-    // Reject if a sibling is still running. Resuming alongside an active
-    // run would race the .jsonl tail and confuse both turns' transcripts.
     const liveSibling = runs.find(
       (r) => matchTriple(r) && (r.status === "queued" || r.status === "running"),
     );
@@ -1383,14 +950,6 @@ async function handleResume(args: {
       );
     }
 
-    // Pick the most recent completed prior run. `done` ranks above
-    // `failed`/`cancelled` so we don't accidentally resume the failure
-    // (or the stopped attempt) when a successful turn followed it (rare;
-    // the post-exit gates can flip status mid-flight). `cancelled` is
-    // included alongside `failed` — an operator-stopped child (audit C1)
-    // is exactly the case an operator later wants to resume via this
-    // same-triple auto-match, same as it always was when kills wrote
-    // `failed`. Among same-status candidates, the latest endedAt wins.
     const completed = runs.filter(
       (r) => matchTriple(r) && (r.status === "done" || r.status === "failed" || r.status === "cancelled"),
     );
@@ -1414,10 +973,6 @@ async function handleResume(args: {
       return (b.endedAt ?? "").localeCompare(a.endedAt ?? "");
     })[0];
 
-    // Speculative losers had their worktree destroyed during winner
-    // selection. Their .jsonl transcript still exists, but the cwd they
-    // referenced is gone — resuming would either error on file ops or
-    // worse, edit the live tree as if it were the worktree.
     if (picked.speculativeOutcome === "lost") {
       return NextResponse.json(
         {
@@ -1432,21 +987,11 @@ async function handleResume(args: {
     prior = picked;
   }
 
-  // Pick spawn cwd: prefer the prior worktree when it still exists on
-  // disk (failure path that didn't run cleanup, or worktree mode + no
-  // post-exit merge yet). Otherwise fall back to repoCwd — the live
-  // tree typically holds the merged result of the prior turn anyway.
   let spawnCwd = repoCwd;
   if (prior.worktreePath && existsSync(prior.worktreePath)) {
     spawnCwd = prior.worktreePath;
   }
 
-  // Flip the prior run's status back to running. We DO NOT append a
-  // new run — resume reuses the same sessionId, same row. The .jsonl
-  // gets a new turn appended, the meta.json row's startedAt updates,
-  // endedAt clears. When the caller renamed the agent (priorSessionId
-  // path with a different `role`), the row's role walks too so the
-  // AgentTree picks up the new label.
   const priorRoleChanged = prior.role !== role;
   try {
     await updateRun(sessionsDir, prior.sessionId, {
@@ -1463,9 +1008,6 @@ async function handleResume(args: {
     );
   }
 
-  // Per-session settings file with the same PreToolUse permission hook
-  // as the spawn path. The original spawn's settings file was reaped on
-  // exit, so we always write a fresh one for the resume turn.
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(prior.sessionId));
 
   const resumePrompt = buildResumePrompt({
@@ -1486,10 +1028,6 @@ async function handleResume(args: {
       settingsPath,
     );
   } catch (e) {
-    // Roll the meta row back to its prior terminal state so the UI
-    // doesn't show a phantom-running row. Restore the prior role too
-    // when the resume had renamed it — a half-applied "running with
-    // new label, no live process" row would lie about both.
     try {
       await updateRun(sessionsDir, prior.sessionId, {
         status: prior.status,

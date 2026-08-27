@@ -38,10 +38,6 @@ function safeFit(host: HTMLElement, fit: FitAddon): boolean {
   }
 }
 
-/**
- * Colours from the live `:root` palette so toggling light/dark updates xterm
- * (xterm resolves theme strings once; `var(--…)` alone does not follow DOM changes).
- */
 function buildXtermThemeResolved(): ITheme {
   if (typeof document === "undefined") {
     return { background: "#0b0d12", foreground: "#e3e6ec" };
@@ -93,7 +89,6 @@ function applyXtermTheme(term: Terminal) {
   try {
     term.clearTextureAtlas();
   } catch {
-    /* ignore */
   }
 }
 
@@ -124,11 +119,6 @@ type TicketResult =
   | { ok: true; ticket?: string; ptyReady: boolean }
   | { ok: false; diag: Diag };
 
-/**
- * One unified call site for the ticket POST so every non-OK status maps
- * to a clear, actionable diagnostic instead of falling through to a
- * cryptic 1006. The returned Diag is what the toolbar banner renders.
- */
 async function fetchTicket(): Promise<TicketResult> {
   let r: Response;
   try {
@@ -196,20 +186,11 @@ async function fetchTicket(): Promise<TicketResult> {
   };
 }
 
-/**
- * xterm + PTY WebSocket — toolbar, connection status, copy/clear/focus.
- */
 export function AppInteractiveTerminal({ appSegment, active }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  /**
-   * One-shot retry guard: 1006 closes that never even opened are usually
-   * transient (ticket consumed by a stale tab, double-mount in dev). We
-   * silently retry once before raising a banner. Reset on successful
-   * open and on manual Reconnect.
-   */
   const retriedRef = useRef(false);
   const [diag, setDiag] = useState<Diag | null>(null);
   const [connUi, setConnUi] = useState<ConnUi>("checking");
@@ -283,10 +264,6 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
     let disposeWs: (() => void) | null = null;
 
     const wireWebSocket = async () => {
-      // Tear down any prior wiring first. The 1006 retry path re-invokes
-      // this function; without disposing here, the previous `term.onData`
-      // listener leaks (it lives until term.dispose() on unmount) and
-      // every keystroke would fan out to every dead socket's send path.
       disposeWs?.();
       disposeWs = null;
       setConnUi("opening");
@@ -331,17 +308,12 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
       };
       ws.onerror = () => {
         if (released) return;
-        // Don't surface a banner here — the close handler runs next and
-        // has the actual close code (1006 vs 1011 vs …) we want to
-        // explain. Setting status alone keeps the pill in sync.
         setConnUi("offline");
       };
       ws.onclose = (ev) => {
         wsRef.current = null;
         if (released) return;
         setConnUi("offline");
-        // Silent one-shot retry on transient 1006 (handshake never
-        // opened). Covers StrictMode double-mount + stale-ticket races.
         if (ev.code === 1006 && !opened && !retriedRef.current) {
           retriedRef.current = true;
           window.setTimeout(() => {
@@ -376,7 +348,6 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
         try {
           ws.close();
         } catch {
-          /* ignore */
         }
         wsRef.current = null;
       };
@@ -413,7 +384,6 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
     };
   }, [appSegment, active, reconnectKey]);
 
-  /** ThemeProvider updates `data-theme` in an effect — observe the DOM so we always repaint after it. */
   useEffect(() => {
     if (!active) return;
     const sync = () => {
@@ -486,7 +456,6 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
   );
 }
 
-/* ─────────────────────────── Toolbar ─────────────────────────── */
 
 function Toolbar({
   connUi,
@@ -590,7 +559,6 @@ function Toolbar({
   );
 }
 
-/* ─────────────────────────── Status pill ─────────────────────────── */
 
 function StatusPill({ connUi, hasError }: { connUi: ConnUi; hasError: boolean }) {
   const cfg =
@@ -647,7 +615,6 @@ function statusTitleFor(c: ConnUi): string {
         : "Disconnected";
 }
 
-/* ─────────────────────────── Diagnostic banner ─────────────────────────── */
 
 function DiagBanner({
   diag,

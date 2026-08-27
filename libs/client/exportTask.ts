@@ -1,11 +1,5 @@
 import type { Meta, Task } from "./types";
 
-/**
- * Render a task + its meta as a single Markdown document the user can
- * paste into a doc, attach to a ticket, or hand off to another tool.
- * Run history is summarized; the per-message conversation export lives
- * in `exportSessionMarkdown`.
- */
 export function exportTaskMarkdown(task: Task, meta: Meta | null): string {
   const lines: string[] = [];
   lines.push(`# ${task.title}`);
@@ -42,11 +36,6 @@ export function exportTaskMarkdown(task: Task, meta: Meta | null): string {
   return lines.join("\n");
 }
 
-/**
- * Render a Claude `.jsonl`-style log as Markdown — user/assistant turns
- * inlined, tool calls collapsed to one-line summaries, system noise
- * dropped. Suitable for sharing or attaching to a PR.
- */
 interface MinimalEntry {
   type?: string;
   timestamp?: string;
@@ -65,9 +54,6 @@ interface MinimalEntry {
   };
 }
 
-// Both the envelope tags and the inner field tags the assistant
-// sometimes echoes standalone — kept in sync with
-// `app/_components/SessionLog/helpers.ts`.
 const SYSTEM_TAG_RE =
   /<\/?(system-reminder|task-notification|ide_opened_file|ide_selection|command-message|command-name|local-command-stdout|local-command-stderr|command-stdout|command-stderr|task-id|task-title|task-body|task-section|task-status|task-app|task-checked)\b[^>]*>/gi;
 
@@ -154,10 +140,6 @@ export function exportSessionMarkdown(
   return lines.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
-/**
- * Trigger a browser download of `text` as `<filename>` with the given
- * MIME type. Cleans up the object URL on the next animation frame.
- */
 export function downloadFile(filename: string, text: string, mime = "text/markdown"): void {
   const blob = new Blob([text], { type: `${mime};charset=utf-8` });
   const url = URL.createObjectURL(blob);

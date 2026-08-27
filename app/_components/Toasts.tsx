@@ -16,10 +16,6 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
-// Each kind gets a solid LEFT-border accent so the toast itself can stay
-// fully opaque (bg-card) — the previous `bg-{kind}/10` overlay made
-// toasts look washed-out on translucent / blurred backdrops, especially
-// on mobile where the small surface needs maximum contrast.
 const KIND_STYLE: Record<ToastKind, { icon: React.ComponentType<{ size?: number; className?: string }>; accent: string }> = {
   success: { icon: CheckCircle2, accent: "border-l-success" },
   error:   { icon: AlertTriangle, accent: "border-l-destructive" },
@@ -28,9 +24,6 @@ const KIND_STYLE: Record<ToastKind, { icon: React.ComponentType<{ size?: number;
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  // Track outstanding auto-dismiss timers so we can clear them on
-  // unmount (and on manual dismiss) — leaving them queued would fire
-  // setState on an unmounted provider during HMR / app-shell teardown.
   const timersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const push = useCallback((kind: ToastKind, message: string) => {
@@ -63,19 +56,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={push}>
       {children}
-      {/*
-       * Two stacked regions instead of one:
-       *   - role="alert" + aria-live="assertive" for errors → screen
-       *     readers interrupt and announce immediately, matching the
-       *     visual urgency of a destructive-accent toast.
-       *   - role="status" + aria-live="polite" for success/info →
-       *     announce on next idle moment so the user isn't yanked
-       *     out of whatever they were narrating.
-       *
-       * Splitting by kind avoids the announcement-merge bug where a
-       * single live region rendering both kinds re-announces every
-       * remaining toast whenever any one is added/removed.
-       */}
+      {}
       <div
         className="fixed top-3 right-3 z-50 flex flex-col gap-2 pointer-events-none max-w-[calc(100vw-1.5rem)]"
         aria-label="Notifications"
@@ -95,13 +76,6 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-/**
- * Single toast row. Pulled into its own component so the dismiss
- * callback's `timersRef` access stays inside an event handler — the
- * React Compiler refuses to trace ref reads through a plain helper
- * function called inside `.map()` and emits a `Cannot access refs
- * during render` error if we inline it.
- */
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
   const { icon: Icon, accent } = KIND_STYLE[toast.kind];
   return (

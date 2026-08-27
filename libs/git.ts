@@ -1,21 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/**
- * Read the currently checked-out branch for a working tree without
- * shelling out to `git`. Reads `.git/HEAD` directly:
- *
- *   - `ref: refs/heads/<branch>` → branch name
- *   - bare SHA → "(detached HEAD)"
- *
- * Falls back to `null` if the path isn't a git repo. We don't follow
- * worktrees (`gitdir:` redirection) here — keep it simple, the bridge
- * just wants a label to print.
- */
 export function readGitBranch(repoPath: string): string | null {
   const headPath = join(repoPath, ".git", "HEAD");
   if (!existsSync(headPath)) {
-    // Worktree pointer: .git is a file with `gitdir: <path>`
     const dotGit = join(repoPath, ".git");
     if (existsSync(dotGit)) {
       try {
@@ -28,7 +16,7 @@ export function readGitBranch(repoPath: string): string | null {
           const inner = join(target, "HEAD");
           if (existsSync(inner)) return parseHead(readFileSync(inner, "utf8"));
         }
-      } catch { /* ignore */ }
+      } catch { }
     }
     return null;
   }

@@ -6,11 +6,6 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string; did: string }> };
 
-/**
- * DELETE /api/share/<id>/devices/<did> — revoke a single approved guest
- * device. The guest's next request fails the proxy's live device check
- * immediately. Operator-only (proxy-gated).
- */
 export async function DELETE(_req: NextRequest, ctx: Ctx) {
   const { id, did } = await ctx.params;
   if (!revokeDevice(id, did)) {

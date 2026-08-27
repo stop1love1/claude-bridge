@@ -3,16 +3,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-/**
- * `webPush.ts` derives its state-dir paths from `BRIDGE_STATE_DIR`,
- * which itself derives from `process.cwd()` (see `libs/paths.ts`).
- * Each test redirects cwd to a fresh temp dir, then re-imports the
- * module so the constants pick up the new path — same pattern as
- * `setupToken.test.ts` / `gateEscalation.test.ts`.
- *
- * `web-push` is mocked so tests never hit the network and can assert
- * on exactly what the lib passes to `sendNotification` / `setVapidDetails`.
- */
 const generateVAPIDKeys = vi.fn();
 const setVapidDetails = vi.fn();
 const sendNotification = vi.fn();
@@ -40,7 +30,6 @@ afterEach(() => {
   try {
     rmSync(tempCwd, { recursive: true, force: true });
   } catch {
-    /* best-effort */
   }
 });
 
@@ -63,7 +52,6 @@ describe("ensureVapidKeys", () => {
       expect(mode).toBe(0o600);
     }
 
-    // Idempotent: second call reuses the persisted pair, no re-generate.
     const b = ensureVapidKeys();
     expect(b.publicKey).toBe("PUB");
     expect(generateVAPIDKeys).toHaveBeenCalledTimes(1);

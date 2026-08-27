@@ -1,18 +1,3 @@
-/**
- * Cron scheduler for Workflows.
- *
- * One interval tick (~30s), run ONLY on the process-lock holder: for every
- * enabled workflow with a schedule whose `nextRunAt` has passed, start a
- * pipeline run — provided the number of in-flight runs is under the
- * configured concurrency cap. The pipeline engine (`libs/pipelineEngine.ts`)
- * then sequences that run's stages.
- *
- * Manual "Run now" goes straight through the API → `startWorkflowRun`; the
- * scheduler is only the time-based trigger. The decision helper
- * (`dueWorkflows`) is pure and unit-tested.
- *
- * HMR-safe: state + timer live on `globalThis`, installed once.
- */
 
 import { isLockHolder, readLockHolder } from "./processLock";
 import { startWorkflowRun, countActivePipelines } from "./pipelineEngine";
@@ -46,9 +31,7 @@ const state: SchedulerState =
     lastError: null,
   });
 
-// ── Pure decision logic (unit-tested) ─────────────────────────────────
 
-/** Enabled, scheduled workflows whose next fire time has arrived. */
 export function dueWorkflows(workflows: Workflow[], nowMs: number): Workflow[] {
   return workflows.filter(
     (w) =>
@@ -59,17 +42,12 @@ export function dueWorkflows(workflows: Workflow[], nowMs: number): Workflow[] {
   );
 }
 
-// ── Tick ──────────────────────────────────────────────────────────────
 
 async function runCron(nowMs: number): Promise<void> {
   const settings = getSchedulerSettings();
   if (!settings.cronEnabled) return;
   const due = dueWorkflows(listWorkflows(), nowMs);
   for (const wf of due) {
-    // Respect the concurrency cap. countActivePipelines re-reads from disk,
-    // so each started run is reflected before the next iteration. When at
-    // the cap we leave nextRunAt in the past so the run fires on a later
-    // tick once a slot frees.
     if (countActivePipelines() >= settings.maxConcurrentRuns) {
       logInfo("scheduler", `at concurrency cap (${settings.maxConcurrentRuns}) — deferring "${wf.name}"`);
       break;
@@ -84,7 +62,7 @@ async function runCron(nowMs: number): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  if (!isLockHolder()) return; // only the singleton triggers runs
+  if (!isLockHolder()) return;
   if (state.ticking) return;
   state.ticking = true;
   const now = Date.now();
@@ -96,12 +74,6 @@ async function tick(): Promise<void> {
     state.lastError = (e as Error).message;
     logError("scheduler", "tick failed", e);
   }
-  // Auto-queue (autonomous TODO dispatch) is a separate concern from
-  // cron workflows, gated on the same process-lock + ticking guard
-  // above but run unconditionally so a `runCron` failure this tick
-  // can't starve it. Its own try/catch keeps a failure here from
-  // clobbering `state.lastError`, which is reserved for cron. No-ops
-  // immediately when disabled (the default) — see libs/autoQueue.ts.
   try {
     await autoQueueTick();
   } catch (e) {
@@ -111,11 +83,7 @@ async function tick(): Promise<void> {
   }
 }
 
-/** Idempotent, HMR-safe installer — call once from instrumentation. */
 export function ensureScheduler(): void {
-  // Guard on BOTH flags: a crash that left `installed=true` but `timer=null`
-  // on the globalThis stash must still recreate the timer rather than
-  // silently pausing all scheduled runs.
   if (state.installed && state.timer !== null) return;
   state.installed = true;
 
@@ -146,7 +114,6 @@ export interface SchedulerStatus {
   holder: { pid: number; bootAt: number; uptimeMs: number } | null;
 }
 
-/** Snapshot for the 24/7 status panel. */
 export function getSchedulerStatus(): SchedulerStatus {
   const holderRec = readLockHolder();
   return {

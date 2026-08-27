@@ -1,21 +1,3 @@
-/**
- * One-time Telegram MTProto login flow.
- *
- *   bun scripts/telegram-login.ts
- *
- * Prompts for `apiId`, `apiHash`, phone number, the SMS/app code, and
- * (when enabled on the account) the 2FA password. On success:
- *
- *   1. Prints the resulting StringSession to stdout — you can copy it
- *      manually if the auto-save fails.
- *   2. Writes apiId / apiHash / session into
- *      `~/.claude/bridge.json.telegram.user` so the running bridge
- *      picks it up the next time `getTelegramUserClient()` is called.
- *
- * Re-running this script overwrites the existing session — use that to
- * rotate credentials or recover from a "session no longer authorized"
- * error after a Telegram security event.
- */
 
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -29,10 +11,6 @@ import {
 const rl = createInterface({ input, output });
 
 async function ask(prompt: string, opts: { mask?: boolean } = {}): Promise<string> {
-  // We don't bother with true terminal-level masking — printing to
-  // stdout would leak past `bun run` anyway. The `mask` flag here just
-  // signals to the user that the input is sensitive; on TTY runs the
-  // shell history is the operator's responsibility.
   const suffix = opts.mask ? " (input hidden — paste once and press Enter)" : "";
   const v = (await rl.question(`${prompt}${suffix}: `)).trim();
   return v;
@@ -111,7 +89,6 @@ async function main(): Promise<void> {
     "✓ Saved to ~/.claude/bridge.json. The bridge will pick up the new session on next request.",
   );
 
-  // Quick sanity check: send a hello to confirm the channel works.
   try {
     await client.sendMessage(targetChatId || "me", {
       message: "✅ Claude Bridge user-client login OK",

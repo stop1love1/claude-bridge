@@ -1,14 +1,7 @@
-/**
- * Task templates the New Task dialog can pre-fill from. Built-in
- * templates cover the most common patterns (bug fix, feature, refactor,
- * doc, security review). User-defined templates are persisted to
- * localStorage so they survive reloads but stay private to the browser.
- */
 export interface TaskTemplate {
   id: string;
   label: string;
   body: string;
-  /** Set to true on built-ins so the UI can hide the delete button. */
   builtin?: boolean;
 }
 
@@ -123,7 +116,7 @@ export function loadUserTemplates(): TaskTemplate[] {
 export function saveUserTemplates(list: TaskTemplate[]): void {
   if (typeof window === "undefined") return;
   try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list.filter((t) => !t.builtin))); }
-  catch { /* quota */ }
+  catch { }
 }
 
 export function addUserTemplate(label: string, body: string): TaskTemplate {

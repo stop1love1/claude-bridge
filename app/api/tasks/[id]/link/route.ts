@@ -21,35 +21,10 @@ interface LinkBody {
   sessionId: string;
   role: string;
   repo: string;
-  // Was a hand-duplicated literal union missing "cancelled" (Task 4
-  // added it to RUN_STATUSES without updating this field — runtime
-  // validation via isValidRunStatus already accepted it, but the type
-  // lied about its own domain). Using RunStatus directly keeps this
-  // in permanent sync with libs/runStatus.ts.
   status?: RunStatus;
-  /**
-   * Coordinator session id that spawned this child. Required for
-   * non-coordinator roles so the agent tree can render parent/child
-   * edges. The bridge usually pre-registers spawned children with
-   * this field already populated; supply it here ONLY when self-
-   * registering a child the bridge didn't pre-register (rare).
-   */
   parentSessionId?: string | null;
 }
 
-/**
- * Attach an existing Claude Code session to a task's meta.json.
- *
- * Idempotent: if the session is already in the task's runs, the entry is
- * updated in place (role/repo/status). Otherwise a new run is appended,
- * but ONLY when the caller explicitly passes a parentSessionId (or the
- * role is "coordinator") — without that constraint, an orphan run
- * would land in the agent tree disconnected from any parent.
- *
- * Always preserves bridge-set fields (`startedAt`, `parentSessionId`,
- * `worktreePath`, etc.) on the existing-row branch — child curls only
- * carry role/repo/status.
- */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
@@ -66,9 +41,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 400 },
     );
   }
-  // CRIT-4 / CRIT-5 / M3: gate every untrusted body field before it
-  // hits meta.json (where it ends up serialized into per-task state)
-  // or the prompt route's `${role}-${repo}.prompt.txt` filename template.
   if (!isValidSessionId(body.sessionId)) return badRequest("invalid sessionId");
   if (!isValidAgentRole(body.role)) return badRequest("invalid role");
   if (!isValidRepoLabel(body.repo)) return badRequest("invalid repo");
@@ -84,11 +56,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const meta = readMeta(dir);
   if (!meta) return NextResponse.json({ error: "task not found" }, { status: 404 });
 
-  // Cross-task guard: if the child supplied a parentSessionId, that
-  // parent MUST already be registered as a run on THIS task. Without
-  // this, a compromised child running for task A could call
-  // POST /api/tasks/<task-B>/link and inject itself (or pollute the
-  // agent tree of) any other task whose id it can guess.
   if (body.parentSessionId) {
     const parentInTask = meta.runs.some(
       (r) => r.sessionId === body.parentSessionId,
@@ -103,15 +70,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   const existing = meta.runs.find((r) => r.sessionId === body.sessionId);
   if (existing) {
-    // Existing-row branch: ONLY patch the fields the child supplied.
-    // Never overwrite startedAt / parentSessionId / worktreePath that
-    // the bridge set when it pre-registered the run via /agents.
-    //
-    // Precondition: a late self-register (e.g. a child's curl arriving
-    // after the process already exited and another writer flipped the
-    // row to done/failed/cancelled/stale) must not resurrect it back to
-    // running/queued — that produces a zombie row the coordinator waits
-    // on and the reaper won't touch for its full cutoff (audit H4).
     await updateRun(
       dir,
       body.sessionId,
@@ -123,10 +81,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       (r) => !body.status || !isBackwardStatusTransition(r.status, body.status),
     );
   } else {
-    // Refuse to land a child run that has no parent: it would orphan
-    // forever in the agent tree. Coordinators are the one role that
-    // legitimately self-registers without a parent (they ARE the
-    // parent), so allow that path through.
     if (body.role !== "coordinator" && !body.parentSessionId) {
       return NextResponse.json(
         {

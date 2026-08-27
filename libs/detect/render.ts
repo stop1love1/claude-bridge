@@ -1,34 +1,8 @@
-/**
- * Render a `DetectedScope` into a single canonical markdown block.
- *
- * One renderer is used by both the coordinator prompt
- * (`libs/coordinator.ts`) and every child prompt (`libs/childPrompt.ts`),
- * so coordinator and children always see the SAME detected scope.
- * This is the contract that closes the drift between the two layers.
- *
- * Replaces the legacy:
- *   - `## Bridge hint`     (coordinator prompt)
- *   - `## Repo profiles`   (coordinator prompt)
- * with a single `## Detected scope` heading.
- *
- * The block is intentionally compact — coordinator agents read it once
- * and decide; children read it as background. We use sentence-shaped
- * bullets rather than tables for tokenizer-friendliness.
- */
 import type { RepoProfile } from "../repoProfile";
 import type { DetectedScope } from "./types";
 
 export interface RenderOpts {
-  /**
-   * Per-repo profiles (one bullet per profile is appended after the
-   * scope summary so the coordinator sees what each candidate repo
-   * actually looks like). Optional — block still works without.
-   */
   profiles?: Record<string, RepoProfile>;
-  /**
-   * When true, append a longer "How to read this" footer suitable for
-   * the coordinator prompt. Children get the terse version.
-   */
   forCoordinator?: boolean;
 }
 
@@ -37,21 +11,6 @@ const MAX_FEATURES = 12;
 const MAX_ENTITIES = 12;
 const MAX_FILES = 8;
 
-/**
- * Build the `## Detected scope` markdown block. Pure function — no I/O.
- *
- * Output shape (sections marked OPT-IN are skipped when empty):
- *   ## Detected scope
- *   - Source: heuristic | llm | user-pinned
- *   - Confidence: high | medium | low
- *   - Reason: <one-line>
- *   ### Repos
- *   - <name> (score N) — <reason>     # OPT-IN
- *   ### Features                       # OPT-IN
- *   ### Entities                       # OPT-IN
- *   ### Files mentioned                # OPT-IN
- *   ### Repo profiles                  # OPT-IN, only when profiles passed
- */
 export function renderDetectedScope(
   scope: DetectedScope,
   opts: RenderOpts = {},
@@ -119,10 +78,6 @@ export function renderDetectedScope(
     lines.push("");
   }
 
-  // Repo profiles — only emitted when caller supplied them. The
-  // coordinator passes them so it sees the full contract surface;
-  // children typically don't need them since they only run in one
-  // repo and already have its profile rendered separately.
   if (opts.profiles) {
     const names = Object.keys(opts.profiles).sort();
     if (names.length > 0) {

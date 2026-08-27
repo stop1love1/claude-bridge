@@ -16,7 +16,6 @@ const CLAUDE_DOCS = "https://docs.claude.com/claude-code";
 const CLAUDE_CONSOLE = "https://console.anthropic.com/settings/usage";
 const CLAUDE_GH_ISSUES = "https://github.com/anthropics/claude-code/issues";
 
-/** Shown when a Claude Code REPL slash has no stdin equivalent (`claude -p` treats your text as plain prompt). */
 const MSG_NO_REPL_SLASH =
   "This bridge runs one-shot prompts (stdin to claude -p), not an interactive terminal. Slash commands like /compact only run in live `claude` REPL — open Terminal and run `claude` there, or use menus here.";
 
@@ -38,11 +37,6 @@ interface MenuAction {
   run: () => void;
 }
 
-/**
- * Composer `/` palette — Claude-style filter + grouped actions (matches
- * the multi-section menu from Claude Desktop tabs). Anchors to the `/`
- * Trigger and pops upward, left-aligned with the trigger.
- */
 export function SlashActionsPalette({
   open,
   onOpenChange,
@@ -55,7 +49,6 @@ export function SlashActionsPalette({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** App folder name (`bridge.json`); drives `/api/repos/<repo>/slash-commands`. */
   repo: string;
   onSlashInsert: (text: string) => void;
   onAttach: () => void;
@@ -78,7 +71,6 @@ export function SlashActionsPalette({
     [onOpenChange],
   );
 
-  /** Always clears the filter bar — callers must never use bare `onOpenChange(false)` or reopening leaks the previous query. */
   const close = useCallback(() => {
     handleOpenChange(false);
   }, [handleOpenChange]);

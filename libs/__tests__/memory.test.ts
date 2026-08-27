@@ -18,7 +18,7 @@ beforeEach(() => {
   appPath = mkdtempSync(join(tmpdir(), "bridge-mem-"));
 });
 afterEach(() => {
-  try { rmSync(appPath, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { rmSync(appPath, { recursive: true, force: true }); } catch { }
 });
 
 describe("memoryFilePath", () => {
@@ -130,7 +130,6 @@ describe("renderMemorySection", () => {
     const out = renderMemorySection(["- one", "two"]);
     expect(out).toContain("## Memory");
     expect(out).toContain("- one");
-    // Plain entry without leading dash gets prefixed.
     expect(out).toContain("- two");
   });
 });

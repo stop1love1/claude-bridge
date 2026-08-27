@@ -9,16 +9,6 @@ import { DEMO_MODE } from "@/libs/demoMode";
 
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/auth/me
- *
- * Returns the current logged-in user. Used by the UI to decide whether
- * to show a logout button + the trusted-device label, and by the login
- * page to redirect away if the operator is already authed.
- *
- * Note: middleware also gates this route, so an unauthenticated caller
- * gets a 401 without ever hitting the handler.
- */
 export function GET(req: NextRequest) {
   if (DEMO_MODE) {
     return NextResponse.json({ error: "demo mode" }, { status: 503 });
@@ -29,13 +19,6 @@ export function GET(req: NextRequest) {
   if (!token) return NextResponse.json({ configured: true, user: null });
   const payload = verifySession(token, cfg.secret);
   if (!payload) return NextResponse.json({ configured: true, user: null });
-  // If the cookie carries a `did`, it MUST still be in the trusted-
-  // device allowlist. A revoked device that retains the cookie would
-  // otherwise be reported as "logged in" here while proxy.ts treats
-  // the same request as unauthenticated — `/login` then auto-redirects
-  // to `/`, proxy bounces back to `/login`, infinite reload loop.
-  // Treat the revoked case as logged-out so the login page renders
-  // its form instead.
   if (payload.did && !findTrustedDevice(payload.did)) {
     return NextResponse.json({ configured: true, user: null });
   }

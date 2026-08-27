@@ -4,12 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { Monitor, ExternalLink, RotateCw } from "lucide-react";
 import { api } from "@/libs/client/api";
 
-/**
- * Live App Preview (Epic C). Embeds the running app's UI in a sandboxed
- * iframe. The operator can set/update the per-app preview URL inline; a
- * guest sees it read-only (only when the share grants `viewPreview`).
- * Always offers an "open in new tab" fallback for framing-restricted apps.
- */
 export function LivePreview({
   taskId,
   mode,
@@ -30,8 +24,6 @@ export function LivePreview({
   const open = useRef(false);
 
   useEffect(() => {
-    // Guest without the grant: no fetch (the GET would 403 anyway); the
-    // read-only "not shared" note renders below without needing `loaded`.
     if (mode === "guest" && !canView) return;
     const ac = new AbortController();
     void (async () => {
@@ -41,7 +33,6 @@ export function LivePreview({
         setUrl(r.url);
         setDraft(r.url ?? "");
       } catch {
-        /* 403 for guest w/o grant, or no app yet — handled by empty state */
       } finally {
         if (!ac.signal.aborted) setLoaded(true);
       }
@@ -63,13 +54,6 @@ export function LivePreview({
     }
   }
 
-  /**
-   * Expose a local dev port to a public URL via localtunnel (no signup),
-   * then set it as this task's preview so guests can reach it. Note: the
-   * first hit on a localtunnel URL shows an interstitial that breaks iframe
-   * embedding — the "Open in new tab" link still works, and so does sharing
-   * the URL with a guest.
-   */
   async function expose() {
     const p = Number(port);
     if (!Number.isInteger(p) || p < 1 || p > 65535) { setErr("invalid port"); return; }
@@ -77,7 +61,6 @@ export function LivePreview({
     setErr(null);
     try {
       const { tunnel } = await api.startTunnel({ port: p, provider: "localtunnel", label: `preview ${taskId}` });
-      // Poll for the public URL (localtunnel emits it on stdout after a beat).
       let found: string | null = null;
       for (let i = 0; i < 16 && !found; i++) {
         await new Promise((r) => setTimeout(r, 1500));
@@ -97,7 +80,6 @@ export function LivePreview({
     }
   }
 
-  // Guest without the grant: a quiet note, never the URL.
   if (mode === "guest" && !canView) {
     return (
       <div className="rounded-lg border border-border bg-card/50 p-3 text-xs text-muted-foreground">
@@ -106,7 +88,6 @@ export function LivePreview({
     );
   }
   if (!loaded) return null;
-  // Guest with grant but nothing configured: stay out of the way.
   if (mode === "guest" && !url) return null;
 
   return (

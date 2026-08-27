@@ -23,18 +23,10 @@ import { HeaderShell } from "../_components/HeaderShell";
 import { useToast } from "../_components/Toasts";
 import { EmptyState } from "../_components/ui/empty-state";
 
-/**
- * Pretty-print large integers with thousand separators. Uses the user's
- * locale via `toLocaleString` so European number formats just work.
- */
 function fmt(n: number): string {
   return n.toLocaleString();
 }
 
-/**
- * Compact byte-style integer: 1_234_567 → "1.23M", 4321 → "4.32K".
- * Used in the dense per-model table where the full number wouldn't fit.
- */
 function compact(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 2 : 1) + "K";
@@ -42,10 +34,6 @@ function compact(n: number): string {
   return (n / 1_000_000_000).toFixed(2) + "B";
 }
 
-/**
- * "1h 10m", "45s", "3d 2h" — the longest-session card needs a quick
- * read on duration without dragging in a date library.
- */
 function formatDuration(ms: number): string {
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return `${sec}s`;
@@ -57,17 +45,11 @@ function formatDuration(ms: number): string {
   return `${day}d ${hr - day * 24}h`;
 }
 
-/**
- * "Resets Sat 9:00 PM" / "Resets in 55 min" shape — matches claude.ai's
- * settings page. Local timezone, since the operator is reading it.
- */
 function formatResetsAt(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
   const diffMs = d.getTime() - Date.now();
-  // Within 24h → "in 55 min" / "in 3h" so the eye latches on the
-  // urgency. Beyond → calendar shape.
   if (diffMs < 24 * 60 * 60 * 1000 && diffMs > 0) {
     const min = Math.round(diffMs / 60_000);
     if (min < 60) return `in ${min} min`;
@@ -96,18 +78,10 @@ function timeAgo(iso: string | null): string {
   return `${mo}mo ago`;
 }
 
-/**
- * Strip the `claude-` prefix and any trailing date suffix so the table
- * shows `opus-4-7` instead of `claude-opus-4-7-20251015`.
- */
 function shortModel(id: string): string {
   return id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
 }
 
-/**
- * Sum every token bucket on a model row — used to compute the share %
- * that drives the bar widths in the model table.
- */
 function modelTotal(m: UsageModel): number {
   return (
     m.inputTokens +
@@ -123,9 +97,6 @@ export default function UsagePage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // `force` bypasses the server-side cache for the manual refresh button.
-  // Background polls always reuse cache so we stay well under Anthropic's
-  // per-minute rate limit on `/api/oauth/usage`.
   const refresh = async (force = false) => {
     setRefreshing(true);
     try {
@@ -139,13 +110,7 @@ export default function UsagePage() {
   };
 
   useEffect(() => {
-    // Defer the initial refresh through a microtask so the React
-    // Compiler doesn't flag the synchronous setState-in-effect cascade
-    // (`refresh` calls `setRefreshing` immediately).
     void Promise.resolve().then(() => refresh());
-    // Server-side cache for the snapshot is 60 s on success / 8 s on
-    // error, so polling more aggressively wastes round-trips. 60 s is
-    // the natural cadence — quota %s don't move faster than that.
     const t = setInterval(() => { void refresh(); }, 60_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,9 +135,6 @@ export default function UsagePage() {
     lifetimeTokens.cacheRead +
     lifetimeTokens.cacheCreate;
 
-  // Last 30 days of activity, oldest → newest, padding missing days with 0
-  // so the bars line up on the time axis instead of clumping on whichever
-  // days the CLI happened to record.
   const dailyBars = useMemo(() => {
     if (!snap || snap.dailyActivity.length === 0) return [];
     const byDate = new Map(snap.dailyActivity.map((d) => [d.date, d.messageCount]));
@@ -226,10 +188,7 @@ export default function UsagePage() {
             </span>
           </header>
 
-          {/* ─── Live quota panels ─── Same data claude.ai/settings/usage
-              and the CLI's `/usage › Usage` tab show. Pulled from
-              `/api/oauth/usage` server-side; OAuth token never leaves the
-              bridge process. */}
+          {}
           {snap?.quota && <QuotaSections quota={snap.quota} onRefresh={() => void refresh(true)} />}
 
           {loading && !snap ? (
@@ -245,7 +204,7 @@ export default function UsagePage() {
             />
           ) : (
             <>
-              {/* ─── Lifetime summary tiles ─── */}
+              {}
               <section className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <Tile
                   icon={Activity}
@@ -273,7 +232,7 @@ export default function UsagePage() {
                 />
               </section>
 
-              {/* ─── Daily activity bars (last 30 days) ─── */}
+              {}
               <section className="rounded-md border border-border bg-card p-3">
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-[12.5px] font-semibold">Daily activity</h3>
@@ -307,7 +266,7 @@ export default function UsagePage() {
                 </div>
               </section>
 
-              {/* ─── Per-model breakdown ─── */}
+              {}
               <section className="rounded-md border border-border bg-card p-3">
                 <h3 className="text-[12.5px] font-semibold mb-2">By model</h3>
                 <div className="space-y-2">
@@ -352,7 +311,7 @@ export default function UsagePage() {
                 </div>
               </section>
 
-              {/* ─── Longest session ─── */}
+              {}
               {snap.longestSession && (
                 <section className="rounded-md border border-border bg-card p-3 flex items-start gap-3">
                   <Trophy size={14} className="text-warning shrink-0 mt-0.5" />
@@ -376,9 +335,7 @@ export default function UsagePage() {
                 </section>
               )}
 
-              {/* Footer line — first session + cache recompute date so
-                  the user can tell if they're looking at fresh stats or
-                  a snapshot the CLI hasn't updated in a few days. */}
+              {}
               <p className="text-[10.5px] text-muted-foreground text-center pt-1">
                 First session{" "}
                 {snap.firstSessionDate ? timeAgo(snap.firstSessionDate) : "—"}
@@ -428,10 +385,6 @@ function Stat({ label, value, fullValue }: { label: string; value: string; fullV
   );
 }
 
-/**
- * Color the bar by utilization band — green/amber/red mirrors how
- * claude.ai's UI nudges attention as you approach the cap.
- */
 function utilizationColor(pct: number): string {
   if (pct >= 85) return "bg-destructive";
   if (pct >= 60) return "bg-warning";
@@ -442,7 +395,6 @@ interface QuotaRow {
   title: string;
   sub?: string;
   window: QuotaWindow | null;
-  /** Hide the row entirely when the window is null (server-side default). */
   hideWhenNull?: boolean;
 }
 
@@ -518,12 +470,6 @@ function ExtraUsageBar({ extra }: { extra: ExtraUsage }) {
   );
 }
 
-/**
- * The three-section panel that mirrors claude.ai/settings/usage:
- * "Plan usage limits" (5h session) → "Weekly limits" (per-model bands) →
- * "Additional features" (extra usage + future routine credits when an
- * endpoint exists for those).
- */
 function QuotaSections({
   quota,
   onRefresh,

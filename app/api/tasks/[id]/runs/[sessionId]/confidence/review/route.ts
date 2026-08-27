@@ -1,35 +1,3 @@
-/**
- * Reliability Amplifier (B2) — resolve a low-confidence HOLD.
- *
- * When a run scored below the confidence threshold, postExitFlow committed
- * locally but skipped the outward push/integration and stamped
- * `run.confidence.heldAt`. This operator-only endpoint clears that hold:
- *
- *   - `action: "ship"`    → live-tree run: push the held work
- *                           (autoCommitAndPush, push on) then re-run the
- *                           integration postExitFlow skipped. Worktree run
- *                           (Task 7, opt-in via `holdWorktree`): the local
- *                           commit already happened inside the worktree
- *                           before the hold — `ship` performs the deferred
- *                           merge-back via `performWorktreeMergeBack`, the
- *                           SAME code path postExitFlow uses for an unheld
- *                           worktree run (merge into base, worktree-mode
- *                           integration, live-tree push). If the MERGE
- *                           stage fails (e.g. conflict), the hold is NOT
- *                           cleared — the response reports the failure so
- *                           the operator can resolve and retry ship.
- *                           Integration/push failures after a landed
- *                           merge DO clear the hold but are surfaced in
- *                           the response (and, for push failures, via
- *                           `mergeNotPushed` on the run).
- *   - `action: "dismiss"` → just clear the hold (operator reviewed, will
- *                           ship later via the per-run commit UI). For a
- *                           worktree run this leaves the worktree PARKED
- *                           — no merge, no removal — since dismissing
- *                           isn't the same as approving; the operator (or
- *                           the stale-worktree pruner, eventually) decides
- *                           what happens to it next.
- */
 import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -57,7 +25,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!csrf.ok) {
     return NextResponse.json({ error: "csrf check failed", reason: csrf.reason ?? null }, { status: 403 });
   }
-  // Operator-only — confidence holds are the operator's call, never a guest's.
   const actor = verifyRequestActor(req);
   if (actor?.kind !== "operator") {
     return NextResponse.json({ error: "operator only" }, { status: 403 });
@@ -80,12 +47,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   let pushResult: { ok: boolean; message: string; error?: string | null } | null = null;
   let integrationResult: { kind: string; ok: boolean; message: string } | null = null;
   if (action === "ship" && run.worktreePath) {
-    // Held WORKTREE run (Task 7): the local commit already happened inside
-    // the worktree before the hold kicked in (postExitFlow always
-    // auto-commits worktree runs regardless of held status). Do NOT run
-    // autoCommitAndPush directly against the worktree here — that would
-    // push the throwaway per-run worktree branch, not merge the work into
-    // the base branch. Instead replay the exact deferred merge-back.
     const app = getApp(run.repo);
     if (!app) {
       return NextResponse.json({ error: "app not found for this run's repo" }, { status: 404 });
@@ -94,8 +55,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       return NextResponse.json({ error: "worktree no longer exists" }, { status: 404 });
     }
     const message = `[${id}] ${meta.taskTitle} (operator-approved after low-confidence review)`;
-    // No try/catch: performWorktreeMergeBack is fail-soft by contract —
-    // it never throws, it reports failures via its status result.
     const mb = await performWorktreeMergeBack({
       app,
       run,
@@ -106,10 +65,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       message,
     });
     if (!mb.ok && mb.stage === "merge") {
-      // The worktree branch never landed in the base branch — clearing
-      // the hold here would be irreversible (a retry would 409 on "run
-      // is not held" while nothing shipped). Keep `heldAt` intact and
-      // report the failure so the operator can resolve + retry ship.
       return NextResponse.json(
         {
           ok: false,
@@ -145,22 +100,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         message,
       );
       if (!r.ok) {
-        // H6: autoCommitAndPush REJECTING (not throwing) must not fall
-        // through to the unconditional heldAt:null clear below — that
-        // would render the gate green over code that never left this
-        // machine. Mirror the worktree branch above: stamp the marker,
-        // keep the hold, and report the failure instead of clearing it.
-        //
-        // Review follow-up: unlike the worktree branch's push (which
-        // runs autoCommit:false against an already-merged, already-clean
-        // tree, so a failure there can ONLY be the push), this call is
-        // autoCommit:true + autoPush:true as one combined step.
-        // autoCommitAndPushLocked's GitOpResult doesn't say which git
-        // sub-step failed — "not a git repo", `git add -A`, `git commit`,
-        // and `git push` all come back through the same {ok:false,
-        // message, error} shape (see gitOps.ts) — so neither the stamped
-        // marker nor this response may claim "push failed" specifically;
-        // that would be as wrong as clearing the hold was.
         await markMergeNotPushed(
           dir,
           sessionId,
@@ -189,8 +128,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       );
     }
 
-    // Re-run the post-success integration that the hold skipped.
-    // Failures here are surfaced, not fatal: the push already landed.
     if (app && app.git.integrationMode !== "none" && app.git.mergeTargetBranch.trim()) {
       try {
         const sourceBranch = await readCurrentBranch(cwd);

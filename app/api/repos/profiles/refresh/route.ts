@@ -8,19 +8,11 @@ import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
-/**
- * POST /api/repos/profiles/refresh
- *
- * Body: optionally `{ repo: string }` to refresh a single repo. With no
- * body (or no `repo`) refreshes every declared repo from BRIDGE.md.
- * Returns the updated store.
- */
 export async function POST(req: NextRequest) {
   let body: { repo?: string } = {};
   try {
     body = (await req.json()) as { repo?: string };
   } catch {
-    /* empty body is fine — refresh all */
   }
 
   const md = readBridgeMd();
@@ -32,12 +24,6 @@ export async function POST(req: NextRequest) {
   }));
 
   if (body.repo !== undefined && body.repo !== null && body.repo !== "") {
-    // M8: gate the repo name through `isValidAppName` before using it
-    // as a key into the registry. Even though `find()` later catches
-    // unknown names, an unbounded string here previously meant a caller
-    // could probe with arbitrary payloads and shape the error response;
-    // tightening to the slug charset (≤ 64 chars, `[A-Za-z0-9._-]+`)
-    // matches every other entry-point in this audit pass.
     if (!isValidAppName(body.repo)) return badRequest("invalid repo");
     const target = repos.find((r) => r.name === body.repo);
     if (!target) {

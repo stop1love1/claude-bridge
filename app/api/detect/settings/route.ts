@@ -7,23 +7,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/detect/settings
- *
- * Returns the bridge-wide detect source setting from
- * `~/.claude/bridge.json.detect.source`. Defaults to `auto` when the
- * key is missing.
- */
 export function GET() {
   return NextResponse.json({ source: getManifestDetectSource() });
 }
 
-/**
- * PUT /api/detect/settings
- *
- * Body: `{ source: "auto" | "llm" | "heuristic" }`. Persists into
- * `bridge.json` so the next task creation reads the new value.
- */
 export async function PUT(req: NextRequest) {
   let body: { source?: unknown };
   try {

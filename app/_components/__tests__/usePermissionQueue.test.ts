@@ -25,7 +25,7 @@ describe("reduceQueue (H11)", () => {
   it("dedupes a pending event by requestId (idempotent)", () => {
     const seed = [req("r1")];
     const out = reduceQueue(seed, { kind: "pending", req: req("r1") });
-    expect(out).toBe(seed); // same reference - no mutation, no copy
+    expect(out).toBe(seed);
     expect(out.length).toBe(1);
   });
 

@@ -90,8 +90,6 @@ describe("scanStyle", () => {
   it("detects 2-space indent + named exports + semicolons + double quotes", () => {
     const root = mktmp("twospace");
     try {
-      // 5 files all with the same micro-style — well past every
-      // pickMajority threshold.
       const sample = [
         'import { foo } from "./foo";',
         "",
@@ -162,7 +160,6 @@ describe("scanStyle", () => {
         "lib/b.js": "module.exports = 2",
       });
       const files = __test.sampleFiles(root);
-      // `.ts` always appears first when present.
       expect(files[0]?.endsWith("a.ts")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });

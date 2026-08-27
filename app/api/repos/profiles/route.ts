@@ -6,13 +6,6 @@ import { ensureFreshOrAuto, type RepoLike } from "@/libs/profileStore";
 
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/repos/profiles
- *
- * Returns the cached `ProfileStore`, auto-building on the first hit (or
- * when the cache is older than the TTL). Used by the bridge UI / by
- * coordinator-prompt rendering paths that want a synchronous read.
- */
 export function GET() {
   const md = readBridgeMd();
   const declared = resolveRepos(md, BRIDGE_ROOT);

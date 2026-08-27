@@ -14,14 +14,6 @@ export async function GET(
   return ok({ tunnel: t });
 }
 
-/**
- * DELETE /api/tunnels/<id>
- *
- * `?purge=1` removes the entry from the list entirely. Without it, we
- * just send SIGTERM and leave the row visible (status `stopped`) so
- * the operator can see exit logs. Idempotent — deleting an already-
- * stopped tunnel is a no-op.
- */
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },

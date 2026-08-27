@@ -29,7 +29,7 @@ describe("aggregatePanel (N=3 majority)", () => {
   });
 
   it("inconclusive (fewer than majority usable) is skipped, never blocks", () => {
-    const r = aggregatePanel([v("a", "broken", "x")], 3); // only 1 of 3 judges reported
+    const r = aggregatePanel([v("a", "broken", "x")], 3);
     expect(r.verdict).toBe("skipped");
   });
 
@@ -40,7 +40,7 @@ describe("aggregatePanel (N=3 majority)", () => {
       3,
     );
     expect(r.concerns.length).toBeLessThanOrEqual(10);
-    expect(new Set(r.concerns).size).toBe(r.concerns.length); // unique
+    expect(new Set(r.concerns).size).toBe(r.concerns.length);
   });
 });
 
