@@ -52,6 +52,7 @@ import {
   teardownTelegramChatForwarder,
 } from "./telegramChatForwarder";
 import { sendPushToAll } from "./webPush";
+import { sendTelegramApiMessage } from "./telegramSendRetry";
 
 /**
  * Task 9: best-effort Web Push fan-out beside the key Telegram notify
@@ -201,8 +202,6 @@ function enqueueBotSend(
   return next;
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
 async function sendViaBot(
   cfg: { token: string; chatId: string },
   text: string,
@@ -210,96 +209,26 @@ async function sendViaBot(
   const truncated = text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) + "…" : text;
   const url = `${TG_HOST}/bot${encodeURIComponent(cfg.token)}/sendMessage`;
 
-  await enqueueBotSend(cfg.chatId, async () => {
-    // Up to 4 attempts. 429 honors `parameters.retry_after`; 5xx and
-    // network errors back off exponentially (0.5s, 1s, 2s) so a flaky
-    // network or transient Telegram outage doesn't drop notifications.
-    let plainFallbackUsed = false;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            chat_id: cfg.chatId,
-            text: truncated,
-            // After a MarkdownV2 parse error we resend without parse_mode
-            // so the user still sees the message — better a raw message
-            // than silently dropped formatting noise.
-            ...(plainFallbackUsed ? {} : { parse_mode: "MarkdownV2" }),
-            disable_web_page_preview: true,
-          }),
-          // 10s upper bound: Telegram is fast in the happy path; we
-          // don't want a slow connection to wedge the queue.
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (r.ok) return;
-
-        const bodyText = await r.text().catch(() => "");
-        // 429 — Telegram tells us how long to wait via the parsed body.
-        if (r.status === 429) {
-          const retryAfter = parseRetryAfter(bodyText, r.headers.get("retry-after"));
-          if (attempt < 3) {
-            await sleep(retryAfter);
-            continue;
-          }
-        }
-        // 5xx / 502 / 504 — transient. Back off and retry.
-        if (r.status >= 500 && attempt < 3) {
-          await sleep(500 * Math.pow(2, attempt));
-          continue;
-        }
-        // 400 with "can't parse entities" → MarkdownV2 escaping went
-        // sideways for some payload; resend as plain text instead of
-        // dropping the notification entirely.
-        if (
-          r.status === 400 &&
-          /can't parse entities|can't find end of/i.test(bodyText) &&
-          !plainFallbackUsed &&
-          attempt < 3
-        ) {
-          plainFallbackUsed = true;
-          continue;
-        }
-        console.warn(`[telegram] send failed: ${r.status} ${bodyText.slice(0, 200)}`);
-        return;
-      } catch (err) {
-        // AbortError / network error — retry with backoff.
-        if (attempt < 3) {
-          await sleep(500 * Math.pow(2, attempt));
-          continue;
-        }
-        console.warn(`[telegram] send error: ${(err as Error).message}`);
-        return;
-      }
-    }
-  });
-}
-
-/**
- * Telegram returns 429 like:
- *   { ok:false, error_code:429, parameters:{ retry_after: 5 } }
- * Some proxies also surface a `Retry-After` header. Prefer the body
- * field (more accurate), fall back to the header, default to 1s. Cap
- * at 30s so a misconfigured server can't park the queue forever.
- */
-function parseRetryAfter(body: string, header: string | null): number {
-  try {
-    const parsed = JSON.parse(body) as {
-      parameters?: { retry_after?: unknown };
-    };
-    const ra = parsed.parameters?.retry_after;
-    if (typeof ra === "number" && ra > 0) {
-      return Math.min(30_000, Math.ceil(ra * 1000));
-    }
-  } catch { /* not JSON */ }
-  if (header) {
-    const n = Number(header);
-    if (Number.isFinite(n) && n > 0) {
-      return Math.min(30_000, Math.ceil(n * 1000));
-    }
-  }
-  return 1000;
+  // Retry/backoff policy (429 honors `retry_after`; 5xx and network
+  // errors back off exponentially; a parse-mode 400 resends once
+  // plain) lives in `telegramSendRetry.ts`, shared with
+  // `telegramCommands.sendReply` — see that module's header comment.
+  // The per-chat serialization queue stays local to this file.
+  await enqueueBotSend(cfg.chatId, () =>
+    sendTelegramApiMessage(
+      url,
+      (plainFallbackUsed) => ({
+        chat_id: cfg.chatId,
+        text: truncated,
+        // After a MarkdownV2 parse error we resend without parse_mode
+        // so the user still sees the message — better a raw message
+        // than silently dropped formatting noise.
+        ...(plainFallbackUsed ? {} : { parse_mode: "MarkdownV2" }),
+        disable_web_page_preview: true,
+      }),
+      "[telegram]",
+    ),
+  );
 }
 
 async function sendViaUserClient(text: string): Promise<void> {

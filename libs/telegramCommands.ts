@@ -78,6 +78,7 @@ import { updateAppDescription } from "./apps";
 import { resolveRepoCwd } from "./repos";
 import { projectDirFor } from "./sessions";
 import { addUsage, sumUsageFromJsonl, type SessionUsage } from "./sessionUsage";
+import { sendTelegramApiMessage } from "./telegramSendRetry";
 
 const TG_HOST = "https://api.telegram.org";
 const POLL_TIMEOUT_S = 25; // long-poll seconds (Telegram caps at 50)
@@ -177,7 +178,29 @@ async function runLoop(cfg: { token: string; chatId: string }): Promise<void> {
   }
 }
 
-async function fetchUpdates(
+/**
+ * Compose the long-poll request's own deadline with the poller's
+ * shutdown signal. `poller.abort` only fires on an explicit
+ * `stopTelegramCommandPoller()` call — a connection that stalls
+ * without a clean FIN/RST (routine on a laptop that sleeps or drops
+ * Wi-Fi) left the bare `poller.abort?.signal` version of this `await
+ * fetch` pending forever, so `runLoop`'s `catch` and its
+ * `POLL_RESTART_DELAY_MS` backoff never ran and the bot went silent
+ * until a manual restart (audit H8). `POLL_TIMEOUT_S` is Telegram's own
+ * long-poll window (the `timeout=` query param below); +10s covers
+ * round-trip slack so we don't time out AHEAD of a well-behaved
+ * response. `deadlineMs` is overridable only so tests can use a short
+ * window instead of the real ~35s one.
+ */
+export function buildPollSignal(
+  shutdown: AbortSignal | undefined,
+  deadlineMs: number = POLL_TIMEOUT_S * 1000 + 10_000,
+): AbortSignal {
+  const deadline = AbortSignal.timeout(deadlineMs);
+  return shutdown ? AbortSignal.any([shutdown, deadline]) : deadline;
+}
+
+export async function fetchUpdates(
   token: string,
   offset: number,
 ): Promise<TelegramUpdate[]> {
@@ -188,7 +211,7 @@ async function fetchUpdates(
     `&allowed_updates=${encodeURIComponent(JSON.stringify(["message"]))}`;
   const r = await fetch(url, {
     method: "GET",
-    signal: poller.abort?.signal,
+    signal: buildPollSignal(poller.abort?.signal),
   });
   if (!r.ok) {
     throw new Error(`getUpdates HTTP ${r.status}`);
@@ -219,7 +242,7 @@ async function handleUpdate(
   // smartDispatch handles BOTH slash commands AND free-form NL —
   // routing the latter through the `libs/telegramIntent` LLM.
   const reply = await smartDispatch(text);
-  if (reply) await sendReply(cfg, mdLiteToHtml(reply), msg.message_id);
+  if (reply) await sendReply(cfg, buildReplyBody(reply), msg.message_id);
 }
 
 export interface CommandDef {
@@ -510,6 +533,32 @@ function renderHelp(): string {
   return lines.join("\n");
 }
 
+/**
+ * List renderers below cap at this many rows before falling back to a
+ * `… +K more` summary line, instead of relying on `sendReply`'s
+ * pre-HTML truncation (audit H9) to bound an unbounded list — that
+ * truncation is meant as a backstop, not the mechanism. Grounded in
+ * the worst observed row shape: `renderPendingLogins`'s
+ * `🔐 \`id\` · <60-char UA> from \`ip\` · Ns ago` line runs ~140 chars.
+ * At `REPLY_MAX` (3500) a header + 25 such rows already exceeds the
+ * budget (25×140 ≈ 3500 before even counting the header/footer), so 25
+ * was too high to ever act as a real backstop. 20 keeps roughly 500
+ * chars of headroom for the header/footer and HTML-conversion overhead
+ * even for that renderer.
+ */
+export const LIST_CAP = 20;
+
+/**
+ * Cap a rendered list's per-item lines at `cap`, appending a
+ * `… +K more` summary line rather than a hard cut — the common case
+ * (few enough rows to fit) shows everything; only a pathologically
+ * large list ever hits the suffix.
+ */
+export function capListLines(lines: string[], cap: number): string[] {
+  if (lines.length <= cap) return lines;
+  return [...lines.slice(0, cap), `… +${lines.length - cap} more`];
+}
+
 function renderTasks(sections: TaskSection[]): string {
   const all = listTasks();
   const filtered = all
@@ -518,13 +567,14 @@ function renderTasks(sections: TaskSection[]): string {
   if (filtered.length === 0) {
     return `(no tasks in ${sections.join(" / ")})`;
   }
-  const lines: string[] = [`*${filtered.length} task(s):*`, ""];
+  const rows: string[] = [];
   for (const t of filtered) {
     const icon = sectionIcon(t.section);
     const app = t.app ? ` · \`${t.app}\`` : "";
     const titleEsc = escapeMarkdownV2(truncate(t.title, 80));
-    lines.push(`${icon} \`${t.id}\`${escapeMarkdownV2(app)} — ${titleEsc}`);
+    rows.push(`${icon} \`${t.id}\`${escapeMarkdownV2(app)} — ${titleEsc}`);
   }
+  const lines: string[] = [`*${filtered.length} task(s):*`, "", ...capListLines(rows, LIST_CAP)];
   return lines.join("\n");
 }
 
@@ -562,16 +612,17 @@ function renderApps(): string {
   const apps = loadApps();
   if (apps.length === 0) return "(no apps registered)";
   const all = listTasks();
-  const lines: string[] = [`*${apps.length} app(s):*`, ""];
+  const rows: string[] = [];
   for (const a of apps) {
     const own = all.filter((t) => t.app === a.name);
     const doing = own.filter((t) => t.section === "DOING").length;
     const todo = own.filter((t) => t.section === "TODO").length;
     const blocked = own.filter((t) => t.section === "BLOCKED").length;
-    lines.push(
+    rows.push(
       `📦 \`${escapeMarkdownV2(a.name)}\` — ${doing} doing · ${todo} todo · ${blocked} blocked`,
     );
   }
+  const lines: string[] = [`*${apps.length} app(s):*`, "", ...capListLines(rows, LIST_CAP)];
   return lines.join("\n");
 }
 
@@ -1066,7 +1117,7 @@ function renderRuns(idArg: string | undefined): string {
   const meta = readMeta(join(SESSIONS_DIR, idArg));
   if (!meta) return `Task not found: \`${idArg}\``;
   if (meta.runs.length === 0) return `No runs yet for \`${idArg}\``;
-  const lines: string[] = [`*${meta.runs.length} run\\(s\\) for \`${idArg}\`:*`, ""];
+  const rows: string[] = [];
   for (const r of meta.runs) {
     const icon =
       r.status === "running" ? "🟢" :
@@ -1075,22 +1126,33 @@ function renderRuns(idArg: string | undefined): string {
       r.status === "queued"  ? "⏳" : "💤";
     const role = escapeMarkdownV2(r.role);
     const repo = escapeMarkdownV2(r.repo);
-    lines.push(`${icon} ${role} @ ${repo} \\(\`${r.sessionId.slice(0, 8)}\`\\)`);
+    rows.push(`${icon} ${role} @ ${repo} \\(\`${r.sessionId.slice(0, 8)}\`\\)`);
   }
+  const lines: string[] = [
+    `*${meta.runs.length} run\\(s\\) for \`${idArg}\`:*`,
+    "",
+    ...capListLines(rows, LIST_CAP),
+  ];
   return lines.join("\n");
 }
 
 function renderPending(): string {
   const pending = listAllPending();
   if (pending.length === 0) return "🟢 No pending permissions";
-  const lines: string[] = [`*${pending.length} pending:*`, ""];
+  const rows: string[] = [];
   for (const p of pending) {
     const tool = escapeMarkdownV2(p.tool);
-    lines.push(
+    rows.push(
       `🔐 \`${tool}\` · session \`${p.sessionId.slice(0, 8)}\` · req \`${p.requestId.slice(0, 8)}\``,
     );
   }
-  lines.push("", "Reply with `/allow <reqId>` or `/deny <reqId>` \\(8\\-char prefix is enough\\)\\.");
+  const lines: string[] = [
+    `*${pending.length} pending:*`,
+    "",
+    ...capListLines(rows, LIST_CAP),
+    "",
+    "Reply with `/allow <reqId>` or `/deny <reqId>` \\(8\\-char prefix is enough\\)\\.",
+  ];
   return lines.join("\n");
 }
 
@@ -1102,19 +1164,22 @@ function renderPending(): string {
 function renderPendingLogins(): string {
   const pending = listPendingLogins();
   if (pending.length === 0) return "🟢 No pending device logins";
-  const lines: string[] = [`*${pending.length} pending device login\\(s\\):*`, ""];
+  const rows: string[] = [];
   for (const p of pending) {
     const ua = escapeMarkdownV2(truncate(p.userAgent, 60));
     const ip = escapeMarkdownV2(p.remoteIp);
     const ageSec = Math.max(0, Math.round((Date.now() - Date.parse(p.createdAt)) / 1000));
-    lines.push(
+    rows.push(
       `🔐 \`${p.id.slice(0, 8)}\` · ${ua} from \`${ip}\` · ${ageSec}s ago`,
     );
   }
-  lines.push(
+  const lines: string[] = [
+    `*${pending.length} pending device login\\(s\\):*`,
+    "",
+    ...capListLines(rows, LIST_CAP),
     "",
     "Reply with `/approvelogin <id>` or `/denylogin <id>` \\(8\\-char prefix is enough\\)\\.",
-  );
+  ];
   return lines.join("\n");
 }
 
@@ -1126,41 +1191,45 @@ function telegramConfig(): { token: string; chatId: string } | null {
   return { token: s.botToken, chatId: s.chatId };
 }
 
-async function sendReply(
+/**
+ * Send a reply. `text` is expected to already be the final HTML body —
+ * `buildReplyBody` truncates the pre-HTML markdown-lite text and THEN
+ * converts it, so this function only sends; it doesn't truncate.
+ *
+ * Resilience (429 backoff, 5xx retry, and a plain-text resend on a
+ * parse_mode 400) is shared with `telegramNotifier.sendViaBot` via
+ * `sendTelegramApiMessage` — before this, a single failed attempt here
+ * was only `console.warn`'d, so a transient Telegram hiccup dropped
+ * the operator's command reply with no retry at all (audit H9). No
+ * per-chat send queue here on purpose — see `telegramSendRetry.ts`'s
+ * header comment for why that asymmetry is a known, deferred gap.
+ */
+export async function sendReply(
   cfg: { token: string; chatId: string },
   text: string,
   replyTo?: number,
 ): Promise<void> {
   const url = `${TG_HOST}/bot${encodeURIComponent(cfg.token)}/sendMessage`;
-  const body: Record<string, unknown> = {
-    chat_id: cfg.chatId,
-    text: text.length > REPLY_MAX ? text.slice(0, REPLY_MAX) + "…" : text,
-    // HTML mode has only THREE reserved chars (`<`, `>`, `&`) vs
-    // MarkdownV2's nineteen. Renderers below emit `<b>` / `<code>` /
-    // `<pre>` directly and escape user-supplied content via
-    // `escapeHtml`. Far harder to break than the MD escape
-    // ratchet — the original implementation kept hitting 400 on
-    // unescaped parentheses inside command descriptions.
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-  };
-  if (replyTo) body.reply_to_message_id = replyTo;
-  try {
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!r.ok) {
-      const desc = await r.text().catch(() => "");
-      console.warn(
-        `[telegram-cmd] sendMessage ${r.status}: ${desc.slice(0, 200)}`,
-      );
-    }
-  } catch (err) {
-    console.warn(`[telegram-cmd] sendMessage error:`, (err as Error).message);
-  }
+  await sendTelegramApiMessage(
+    url,
+    (plainFallbackUsed) => {
+      const body: Record<string, unknown> = {
+        chat_id: cfg.chatId,
+        text,
+        // HTML mode has only THREE reserved chars (`<`, `>`, `&`) vs
+        // MarkdownV2's nineteen. Renderers below emit `<b>` / `<code>` /
+        // `<pre>` directly and escape user-supplied content via
+        // `escapeHtml`. Far harder to break than the MD escape
+        // ratchet — the original implementation kept hitting 400 on
+        // unescaped parentheses inside command descriptions.
+        ...(plainFallbackUsed ? {} : { parse_mode: "HTML" }),
+        disable_web_page_preview: true,
+      };
+      if (replyTo) body.reply_to_message_id = replyTo;
+      return body;
+    },
+    "[telegram-cmd]",
+  );
 }
 
 /**
@@ -1288,6 +1357,24 @@ function mdLiteToHtml(input: string): string {
     i = j;
   }
   return out.join("");
+}
+
+/**
+ * Truncate the pre-HTML markdown-lite reply text, THEN convert via
+ * `mdLiteToHtml` above — never the reverse. The tokenizer treats any
+ * backtick/asterisk it can't find a matching close for as literal
+ * plain text (see the "Unbalanced" branches above), so a cut landing
+ * mid-span just degrades that one span to plain text — it can never
+ * emit an orphan `<code>`/`<b>` tag. Truncating the ALREADY-converted
+ * HTML (the old behavior) had no such guarantee: a cut could land
+ * between an opening and closing tag, and Telegram's
+ * `parse_mode: "HTML"` rejected the WHOLE `sendMessage` with 400
+ * "can't parse entities" — so a long `/tasks` reply got no answer at
+ * all (audit H9).
+ */
+export function buildReplyBody(raw: string): string {
+  const truncated = raw.length > REPLY_MAX ? raw.slice(0, REPLY_MAX) + "…" : raw;
+  return mdLiteToHtml(truncated);
 }
 
 /** @deprecated alias — see escapeHtml. Kept so existing call sites compile. */
