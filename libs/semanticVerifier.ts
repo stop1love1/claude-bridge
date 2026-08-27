@@ -272,10 +272,10 @@ export async function spawnSemanticVerifierRetry(args: {
     }
   }
 
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
-
   let childHandle;
+  let retryRun: Run;
   try {
+    const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
     childHandle = spawnFreeSession(
       spawnCwd,
       retryPrompt,
@@ -283,6 +283,19 @@ export async function spawnSemanticVerifierRetry(args: {
       settingsPath,
       sessionId,
     );
+    retryRun = {
+      sessionId,
+      role: nextRetryRole(parsed.baseRole, "semantic", elig.nextAttempt),
+      repo: finishedRun.repo,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      parentSessionId: finishedRun.parentSessionId ?? null,
+      retryOf: finishedRun.sessionId,
+      retryAttempt: elig.nextAttempt,
+      ...inheritWorktreeFields(finishedRun),
+    };
+    await appendRun(sessionsDir, retryRun);
   } catch (e) {
     console.error(
       "semantic-retry spawn failed for",
@@ -294,19 +307,6 @@ export async function spawnSemanticVerifierRetry(args: {
     return null;
   }
 
-  const retryRun: Run = {
-    sessionId,
-    role: nextRetryRole(parsed.baseRole, "semantic", elig.nextAttempt),
-    repo: finishedRun.repo,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    parentSessionId: finishedRun.parentSessionId ?? null,
-    retryOf: finishedRun.sessionId,
-    retryAttempt: elig.nextAttempt,
-    ...inheritWorktreeFields(finishedRun),
-  };
-  await appendRun(sessionsDir, retryRun);
   wireRunLifecycle(
     sessionsDir,
     sessionId,

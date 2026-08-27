@@ -193,6 +193,48 @@ describe("spawnSemanticVerifierRetry — reservation transfer to the fresh retry
     expect(currentReservation("fake-semantic-app")).toBeNull();
   });
 
+  it("releases the freshly-transferred reservation when appendRun throws AFTER the child already spawned", async () => {
+    const metaModule = await import("../meta");
+    const { createMeta, appendRun } = metaModule;
+    const { spawnSemanticVerifierRetry } = await import("../semanticVerifier");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(taskDir(), HEADER);
+    const sid = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+    const finishedRun = {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-semantic-app",
+      status: "done" as const,
+      startedAt: "2026-08-27T10:00:01Z",
+      endedAt: "2026-08-27T10:00:05Z",
+      parentSessionId: "parent-1",
+    };
+    await appendRun(taskDir(), finishedRun);
+    acquireRepoReservation("fake-semantic-app", sid);
+
+    const appendRunSpy = vi
+      .spyOn(metaModule, "appendRun")
+      .mockImplementationOnce(async () => {
+        throw new Error("meta.json missing — task dir vanished mid-write");
+      });
+
+    const result = await spawnSemanticVerifierRetry({
+      taskId: TASK_ID,
+      finishedRun,
+      verifier: VERIFIER,
+    });
+
+    expect(result).toBeNull();
+    expect(spawnFreeSessionMock).toHaveBeenCalledTimes(1);
+    // Without widening the try, this reservation would be parked forever under
+    // a sessionId that has no meta row and (per its child mock) is not tracked
+    // by any lifecycle wiring either.
+    expect(currentReservation("fake-semantic-app")).toBeNull();
+
+    appendRunSpy.mockRestore();
+  });
+
   it("does not touch the reservation store for a worktree run", async () => {
     const { createMeta, appendRun } = await import("../meta");
     const { spawnSemanticVerifierRetry } = await import("../semanticVerifier");
