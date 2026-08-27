@@ -156,19 +156,35 @@ describe("parseChangedFiles", () => {
       expect(parseChangedFiles(md)).toEqual([]);
     });
 
-    it("drops a prose token with neither a slash nor a dot", () => {
-      const md = ["## Changed files", "- nothing"].join("\n");
-      expect(parseChangedFiles(md)).toEqual([]);
-    });
-
     it("keeps real paths on the lines around a dropped token", () => {
       const md = [
         "## Changed files",
-        "- nothing",
+        "- (no files were touched)",
         "- src/real-file.ts — edited",
       ].join("\n");
       expect(parseChangedFiles(md)).toEqual(["src/real-file.ts"]);
     });
+
+    it("still returns [] for the bulleted (none) sentinel", () => {
+      const md = ["## Changed files", "- (none — analysis only)"].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+  });
+
+  describe("extension-less root files", () => {
+    const names = ["Makefile", "Dockerfile", "LICENSE", "CODEOWNERS"];
+
+    for (const name of names) {
+      it(`keeps a backticked \`${name}\``, () => {
+        const md = ["## Changed files", `- \`${name}\` — edited`].join("\n");
+        expect(parseChangedFiles(md)).toEqual([name]);
+      });
+
+      it(`keeps a bare ${name}`, () => {
+        const md = ["## Changed files", `- ${name} — edited`].join("\n");
+        expect(parseChangedFiles(md)).toEqual([name]);
+      });
+    }
   });
 });
 
@@ -266,6 +282,23 @@ describe("deriveVerdict", () => {
     const v = deriveVerdict({ claimed, actual: [] });
     expect(v.verdict).toBe("pass");
     expect(v.reason).toBe("analysis-only run — no diff, no claims, nothing to verify");
+  });
+
+  it("passes a report whose only claim is an extension-less root file", () => {
+    const md = [
+      "# coder @ app-web",
+      "",
+      "## Changed files",
+      "- `Makefile` — added the lint target",
+      "",
+      "## How to verify",
+      "Run make lint.",
+    ].join("\n");
+    const claimed = parseChangedFiles(md);
+    expect(claimed).toEqual(["Makefile"]);
+    const v = deriveVerdict({ claimed, actual: ["Makefile"] });
+    expect(v.verdict).toBe("pass");
+    expect(v.unmatchedClaims).toEqual([]);
   });
 });
 

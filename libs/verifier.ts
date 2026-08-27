@@ -41,8 +41,7 @@ function isNoneSentinel(line: string): boolean {
 
 function isPlausiblePath(token: string): boolean {
   if (!token) return false;
-  if (token.startsWith("(")) return false;
-  return token.includes("/") || token.includes(".");
+  return !token.startsWith("(");
 }
 
 export function parseChangedFiles(report: string): string[] {
