@@ -257,6 +257,14 @@ function AgentNode({
                 {run.confidence.heldAt ? "⏸ " : ""}{run.confidence.score}
               </span>
             )}
+            {run.mergeNotPushed && (
+              <span
+                className="text-[9px] font-mono font-semibold px-1 py-px rounded bg-warning/20 text-warning"
+                title={run.mergeNotPushed.message}
+              >
+                needs push
+              </span>
+            )}
             {dur && <span className="text-fg-dim text-[10px]">{dur}</span>}
             <StatusPill run={run} />
           </span>
