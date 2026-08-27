@@ -1,5 +1,27 @@
-import { describe, it, expect } from "vitest";
-import { countReadsBeforeEdit, renderPreflightRetryContextBlock, type PreflightResult } from "../preflightCheck";
+import { describe, it, expect, vi } from "vitest";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  countReadsBeforeEdit,
+  renderPreflightRetryContextBlock,
+  runPreflight,
+  type PreflightResult,
+} from "../preflightCheck";
+import type { Run } from "../meta";
+
+const TMP_PROJECT_DIR = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mkdtempSync } = require("node:fs") as typeof import("node:fs");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { join } = require("node:path") as typeof import("node:path");
+  return mkdtempSync(join(tmpdir(), "bridge-preflight-project-"));
+});
+
+vi.mock("../sessions", () => ({
+  projectDirFor: () => TMP_PROJECT_DIR,
+}));
 
 function jsonl(toolNames: string[]): string {
   return toolNames
@@ -150,6 +172,28 @@ describe("countReadsBeforeEdit", () => {
       expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(2);
     },
   );
+
+  it("counts editFilesCount as distinct edited files, not edit tool calls", () => {
+    const text = jsonlWithInput([
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+    ]);
+    const got = countReadsBeforeEdit(text);
+    expect(got.editCount).toBe(3);
+    expect(got.editFilesCount).toBe(1);
+  });
+
+  it("counts editFilesCount across multiple distinct edited files", () => {
+    const text = jsonlWithInput([
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+      { name: "Edit", input: { file_path: "/b.ts" } },
+      { name: "Edit", input: { file_path: "/c.ts" } },
+    ]);
+    expect(countReadsBeforeEdit(text).editFilesCount).toBe(3);
+  });
 });
 
 describe("renderPreflightRetryContextBlock", () => {
@@ -179,5 +223,85 @@ describe("renderPreflightRetryContextBlock", () => {
     };
     const out = renderPreflightRetryContextBlock(result);
     expect(out).toContain("**Grep / Read at least 3 relevant files**");
+  });
+});
+
+describe("runPreflight", () => {
+  let seq = 0;
+
+  function toolUse(
+    name: string,
+    input?: Record<string, unknown>,
+  ): { name: string; input?: Record<string, unknown> } {
+    return { name, input };
+  }
+
+  function runFrom(
+    entries: Array<{ name: string; input?: Record<string, unknown> }>,
+    role = "coder",
+  ): Run {
+    const sessionId = `test-session-${seq++}`;
+    writeFileSync(join(TMP_PROJECT_DIR, `${sessionId}.jsonl`), jsonlWithInput(entries), "utf8");
+    return {
+      sessionId,
+      role,
+      repo: "test-repo",
+      status: "done",
+      startedAt: null,
+      endedAt: null,
+    };
+  }
+
+  it("a one-file task passes when the agent read that one file", () => {
+    const entries = [
+      toolUse("Read", { file_path: "/repo/math.ts" }),
+      toolUse("Edit", { file_path: "/repo/math.ts" }),
+    ];
+    const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
+    expect(result.verdict).not.toBe("fail");
+    expect(result.required).toBe(1);
+  });
+
+  it("still fails a one-file task where the agent edited without reading anything", () => {
+    const entries = [toolUse("Edit", { file_path: "/repo/math.ts" })];
+    const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
+    expect(result.verdict).toBe("fail");
+    expect(result.required).toBe(1);
+    expect(result.reason).toBe(
+      "agent made 0 Read call(s) before the first Edit/Write — minimum is 1",
+    );
+  });
+
+  it("still requires the configured minimum on a wide-footprint task", () => {
+    const entries = [
+      toolUse("Read", { file_path: "/repo/a.ts" }),
+      toolUse("Edit", { file_path: "/repo/a.ts" }),
+      toolUse("Edit", { file_path: "/repo/b.ts" }),
+      toolUse("Edit", { file_path: "/repo/c.ts" }),
+    ];
+    const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
+    expect(result.verdict).toBe("fail");
+    expect(result.required).toBe(3);
+    expect(result.reason).toBe(
+      "agent made 1 Read call(s) before the first Edit/Write — minimum is 3",
+    );
+  });
+
+  it("a two-file task requires exactly two distinct reads", () => {
+    const entries = [
+      toolUse("Read", { file_path: "/repo/a.ts" }),
+      toolUse("Read", { file_path: "/repo/b.ts" }),
+      toolUse("Edit", { file_path: "/repo/a.ts" }),
+      toolUse("Edit", { file_path: "/repo/b.ts" }),
+    ];
+    const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
+    expect(result.verdict).not.toBe("fail");
+    expect(result.required).toBe(2);
+  });
+
+  it("never lowers the floor below 1 even when editFilesCount cannot be identified", () => {
+    const entries = [toolUse("Edit")];
+    const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
+    expect(result.required).toBeGreaterThanOrEqual(1);
   });
 });

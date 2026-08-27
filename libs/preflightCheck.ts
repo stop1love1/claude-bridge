@@ -51,11 +51,14 @@ function readIdentityKey(name: string, input: unknown, fallbackId: string): stri
 export function countReadsBeforeEdit(jsonlText: string): {
   readsBeforeEdit: number;
   editCount: number;
+  editFilesCount: number;
 } {
   let editCount = 0;
   let firstEditSeen = false;
   const readKeys = new Set<string>();
-  let unidentifiedCount = 0;
+  const editFileKeys = new Set<string>();
+  let unidentifiedReadCount = 0;
+  let unidentifiedEditCount = 0;
 
   for (const line of jsonlText.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -76,14 +79,15 @@ export function countReadsBeforeEdit(jsonlText: string): {
       const name = b.name;
       if (EDIT_TOOLS.has(name)) {
         editCount += 1;
-        if (!firstEditSeen) firstEditSeen = true;
+        firstEditSeen = true;
+        editFileKeys.add(readIdentityKey(name, b.input, ` edit#${unidentifiedEditCount++}`));
       } else if (READ_TOOLS.has(name) && !firstEditSeen) {
-        readKeys.add(readIdentityKey(name, b.input, ` #${unidentifiedCount++}`));
+        readKeys.add(readIdentityKey(name, b.input, ` #${unidentifiedReadCount++}`));
       }
     }
   }
 
-  return { readsBeforeEdit: readKeys.size, editCount };
+  return { readsBeforeEdit: readKeys.size, editCount, editFilesCount: editFileKeys.size };
 }
 
 export interface RunPreflightOptions {
@@ -94,7 +98,7 @@ export interface RunPreflightOptions {
 
 export function runPreflight(opts: RunPreflightOptions): PreflightResult {
   const { finishedRun, appPath } = opts;
-  const required = opts.minReadsBeforeEdit ?? DEFAULT_MIN_READS_BEFORE_EDIT;
+  const configuredMin = opts.minReadsBeforeEdit ?? DEFAULT_MIN_READS_BEFORE_EDIT;
 
   if (finishedRun.role === "coordinator") {
     return {
@@ -102,7 +106,7 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
       reason: `role \`${finishedRun.role}\` is exempt from preflight`,
       readsBeforeEdit: 0,
       editCount: 0,
-      required,
+      required: configuredMin,
     };
   }
   if (/review|audit|inspect/i.test(finishedRun.role)) {
@@ -111,7 +115,7 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
       reason: `read-only role pattern in \`${finishedRun.role}\` — preflight does not apply`,
       readsBeforeEdit: 0,
       editCount: 0,
-      required,
+      required: configuredMin,
     };
   }
 
@@ -123,7 +127,7 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
       reason: "transcript .jsonl missing — cannot inspect tool sequence",
       readsBeforeEdit: 0,
       editCount: 0,
-      required,
+      required: configuredMin,
     };
   }
 
@@ -136,11 +140,11 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
       reason: "transcript .jsonl unreadable",
       readsBeforeEdit: 0,
       editCount: 0,
-      required,
+      required: configuredMin,
     };
   }
 
-  const { readsBeforeEdit, editCount } = countReadsBeforeEdit(text);
+  const { readsBeforeEdit, editCount, editFilesCount } = countReadsBeforeEdit(text);
 
   if (editCount === 0) {
     return {
@@ -148,9 +152,11 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
       reason: "analysis-only run (no Edit/Write tool calls) — preflight n/a",
       readsBeforeEdit,
       editCount,
-      required,
+      required: configuredMin,
     };
   }
+
+  const required = Math.max(1, Math.min(configuredMin, editFilesCount));
 
   if (readsBeforeEdit < required) {
     return {
