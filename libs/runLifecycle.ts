@@ -783,7 +783,23 @@ async function postExitFlow(args: {
     if (held) {
       logInfo("confidence", "worktree run held — merge-back deferred pending operator review", { tag: t });
     } else {
-      await performWorktreeMergeBack({ app, run, tid, title, t, dir, message });
+      const mb = await performWorktreeMergeBack({ app, run, tid, title, t, dir, message });
+      if (!mb.ok && mb.stage === "merge") {
+        logWarn("worktree", `automatic merge-back conflicted — worktree kept, escalating: ${mb.detail ?? ""}`, { tag: t });
+        await markMergeNotPushed(
+          dir,
+          run.sessionId,
+          `MERGE-CONFLICT: automatic worktree merge-back failed to land — worktree kept, resolve and retry: ${mb.detail ?? "see server logs"}`,
+          mb.detail,
+        );
+        await escalateGateBlock({
+          taskId: tid,
+          sessionsDir: dir,
+          gate: "merge",
+          reason: mb.detail ?? "automatic worktree merge-back conflicted",
+          retryScheduled: false,
+        });
+      }
     }
   }
 

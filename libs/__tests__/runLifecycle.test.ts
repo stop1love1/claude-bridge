@@ -688,6 +688,96 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
   });
 });
 
+describe("postExitFlow — automatic worktree merge-back call site acts on failure (Task 25)", () => {
+  const REAL_APP = {
+    name: "real-app",
+    path: "/tmp/fake-app",
+    git: { branchMode: "current", worktreeMode: "auto", autoCommit: false, autoPush: false, mergeTargetBranch: "", integrationMode: "none" },
+    verify: {},
+    quality: { critic: false, verifier: false },
+    retry: {},
+    memory: { distill: false },
+  };
+
+  async function driveWorktreeExit() {
+    const { createMeta, appendRun } = await import("../meta");
+    const worktrees = await import("../worktrees");
+    const ge = await import("../gateEscalation");
+    const gitOps = await import("../gitOps");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    vi.mocked(ge.escalateGateBlock).mockClear();
+    vi.mocked(gitOps.autoCommitAndPush).mockResolvedValue({ ok: true, message: "committed" });
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+      parentSessionId: "00000000-0000-0000-0000-000000000000",
+      worktreePath: "/tmp/fake-app/.worktrees/sid",
+      worktreeBranch: "claude/wt/x",
+      worktreeBaseBranch: "main",
+    });
+    getAppMock.mockReturnValue(REAL_APP);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 0, null);
+    await flushAsync(10);
+
+    return { escalateCalls: vi.mocked(ge.escalateGateBlock).mock.calls, worktrees };
+  }
+
+  it("stamps the run and escalates when the automatic merge-back conflicts at the merge stage", async () => {
+    const { worktrees } = await (async () => {
+      const w = await import("../worktrees");
+      vi.mocked(w.mergeAndRemoveWorktree).mockResolvedValue({
+        ok: false,
+        message: "merge of claude/wt/x into main failed (aborted; worktree kept at /tmp/fake-app/.worktrees/sid)",
+        error: "CONFLICT (content): Merge conflict in foo.ts",
+      });
+      return { worktrees: w };
+    })();
+
+    const { escalateCalls } = await driveWorktreeExit();
+
+    const { readMeta } = await import("../meta");
+    const meta = readMeta(tmp);
+    const run = meta?.runs.find((r) => r.sessionId === SID);
+    expect(run?.mergeNotPushed).toBeTruthy();
+    expect(run?.mergeNotPushed?.message).toContain("merge");
+
+    expect(escalateCalls).toHaveLength(1);
+    expect(escalateCalls[0][0]).toMatchObject({
+      taskId: basename(tmp),
+      sessionsDir: tmp,
+      gate: "merge",
+      retryScheduled: false,
+    });
+
+    expect(vi.mocked(worktrees.mergeAndRemoveWorktree)).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT stamp or escalate when the automatic merge-back succeeds", async () => {
+    const w = await import("../worktrees");
+    vi.mocked(w.mergeAndRemoveWorktree).mockResolvedValue({
+      ok: true,
+      message: "merged claude/wt/x into main; removed worktree",
+    });
+
+    const { escalateCalls } = await driveWorktreeExit();
+
+    const { readMeta } = await import("../meta");
+    const meta = readMeta(tmp);
+    const run = meta?.runs.find((r) => r.sessionId === SID);
+    expect(run?.mergeNotPushed ?? null).toBeNull();
+    expect(escalateCalls).toHaveLength(0);
+  });
+});
+
 describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
   const REAL_APP = {
     name: "real-app",

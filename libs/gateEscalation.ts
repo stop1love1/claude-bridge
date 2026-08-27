@@ -1,6 +1,6 @@
 import { logError, logWarn } from "./log";
 
-export type EscalationGate = "verify" | "preflight" | "claim" | "style" | "semantic";
+export type EscalationGate = "verify" | "preflight" | "claim" | "style" | "semantic" | "merge";
 
 export interface EscalateGateBlockOptions {
   taskId: string;
