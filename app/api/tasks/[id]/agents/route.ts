@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { appendRunIfNotDuplicate, readMeta, readIntake, setIntake, updateRun, type Run } from "@/libs/meta";
+import { claimRunForResume, type ClaimRunForResumeResult } from "@/libs/resumeGuard";
 import { evaluatePlanGate } from "@/libs/planGate";
 import { readPlanGateConfig } from "@/libs/planGateConfig";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
@@ -993,18 +994,31 @@ async function handleResume(args: {
   }
 
   const priorRoleChanged = prior.role !== role;
+  let claim: ClaimRunForResumeResult;
   try {
-    await updateRun(sessionsDir, prior.sessionId, {
-      status: "running",
-      startedAt: new Date().toISOString(),
-      endedAt: null,
-      ...(priorRoleChanged ? { role } : {}),
-    });
+    claim = await claimRunForResume(
+      sessionsDir,
+      prior.sessionId,
+      priorRoleChanged ? { role } : {},
+    );
   } catch (e) {
     console.error("failed to flip resume run back to running", e);
     return NextResponse.json(
       { error: "meta update failed", reason: safeErrorMessage(e) },
       { status: 500 },
+    );
+  }
+
+  if (!claim.ok) {
+    return NextResponse.json(
+      {
+        error: "resume claim lost the race",
+        reason:
+          "another request already claimed this session for resume, or its status changed, between the liveness check and the atomic claim; check the run's current status before retrying",
+        sessionId: prior.sessionId,
+        currentStatus: claim.run?.status ?? null,
+      },
+      { status: 409 },
     );
   }
 
