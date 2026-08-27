@@ -7,12 +7,13 @@ import {
 import { basename, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { writeJsonAtomic } from "./atomicWrite";
-import type { TaskStatus, TaskSection } from "./tasks";
+import { SECTION_STATUS, type TaskStatus, type TaskSection } from "./tasks";
 import type { DetectedScopeCacheEntry } from "./detect/types";
 import { SESSIONS_DIR } from "./paths";
 import type { RunStatus } from "./runStatus";
 import type { IntakeRecord } from "./planGate";
 import { defaultIntake } from "./planGate";
+import { logWarn } from "./log";
 
 export type { RunStatus };
 export type { IntakeRecord } from "./planGate";
@@ -303,6 +304,20 @@ export function createMeta(dir: string, header: Omit<Meta, "runs">): void {
 
 const META_CACHE_MAX_ENTRIES = 1024;
 
+function isValidMetaShape(value: unknown): value is Meta {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.runs)) return false;
+  if (typeof v.createdAt !== "string") return false;
+  if (
+    typeof v.taskSection !== "string" ||
+    !Object.prototype.hasOwnProperty.call(SECTION_STATUS, v.taskSection)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function readMeta(dir: string): Meta | null {
   const now = Date.now();
   const cached = metaCache.get(dir);
@@ -319,11 +334,17 @@ export function readMeta(dir: string): Meta | null {
   }
   let value: Meta | null;
   try {
-    value = JSON.parse(readFileSync(p, "utf8")) as Meta;
+    const parsed: unknown = JSON.parse(readFileSync(p, "utf8"));
+    if (!isValidMetaShape(parsed)) {
+      logWarn("meta", `invalid meta.json shape at ${p}`, { path: p });
+      value = null;
+    } else {
+      value = parsed;
+    }
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e?.code !== "ENOENT") {
-      console.warn(`readMeta: corrupt meta.json at ${p}`, err);
+      logWarn("meta", `corrupt meta.json at ${p}`, { path: p, error: (err as Error).message });
     }
     value = null;
   }

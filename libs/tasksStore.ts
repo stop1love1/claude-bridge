@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR, readBridgeMd } from "./paths";
+import { logWarn } from "./log";
 import {
   createMeta,
   emitTaskSection,
@@ -103,8 +104,15 @@ export function listTasks(): Task[] {
   }
   const tasks: Task[] = [];
   for (const id of listMetaIds()) {
-    const meta = readMeta(join(SESSIONS_DIR, id));
-    if (meta) tasks.push(metaToTask(meta));
+    try {
+      const meta = readMeta(join(SESSIONS_DIR, id));
+      if (meta) tasks.push(metaToTask(meta));
+    } catch (err) {
+      logWarn("tasks-store", `listTasks: skipping unreadable task ${id}`, {
+        id,
+        error: (err as Error).message,
+      });
+    }
   }
   tasks.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   listTasksCache = { value: tasks, expires: now + LIST_TASKS_TTL_MS };
