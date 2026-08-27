@@ -42,7 +42,10 @@ export async function spawnRetry(
 
   const md = readBridgeMd();
   const liveRepoCwd = resolveRepoCwd(md, BRIDGE_ROOT, finishedRun.repo);
-  if (!liveRepoCwd) return null;
+  if (!liveRepoCwd) {
+    releaseRepoReservation(finishedRun.repo, finishedRun.sessionId);
+    return null;
+  }
   let spawnCwd = liveRepoCwd;
   if (finishedRun.worktreePath && existsSync(finishedRun.worktreePath)) {
     spawnCwd = finishedRun.worktreePath;
@@ -55,9 +58,15 @@ export async function spawnRetry(
     nextAttempt = precomputedAttempt.nextAttempt;
   } else {
     const meta = readMeta(sessionsDir);
-    if (!meta) return null;
+    if (!meta) {
+      releaseRepoReservation(finishedRun.repo, finishedRun.sessionId);
+      return null;
+    }
     const elig = checkEligibility({ finishedRun, meta, gate, retry: app?.retry });
-    if (!elig.eligible) return null;
+    if (!elig.eligible) {
+      releaseRepoReservation(finishedRun.repo, finishedRun.sessionId);
+      return null;
+    }
     nextAttempt = elig.nextAttempt;
   }
 
@@ -98,10 +107,12 @@ export async function spawnRetry(
         taskId,
         sessionId,
       );
+      releaseRepoReservation(finishedRun.repo, sessionId);
       return null;
     }
   } catch (e) {
     console.error(`${logLabel} meta updateRun failed for`, taskId, sessionId, e);
+    releaseRepoReservation(finishedRun.repo, sessionId);
     return null;
   }
 

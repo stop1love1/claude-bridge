@@ -273,4 +273,52 @@ describe("spawnRetry — re-acquires the reservation the crash path already rele
     acquireSpy.mockRestore();
     releaseRepoReservation("fake-crash-retry-app", sid);
   });
+
+  it("releases a still-held reservation when the retry claim itself fails to apply (F2 abort-path leak)", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { spawnRetry } = await import("../retrySpawn");
+    const { acquireRepoReservation, currentReservation, releaseRepoReservation } =
+      await import("../repoReservation");
+
+    createMeta(taskDir(), HEADER);
+    const sid = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    const failedRun = {
+      sessionId: sid,
+      role: "coder",
+      // Already "running" in meta (e.g. a concurrent resume claimed it between
+      // failRun's eligibility pre-check and this call) — updateRun's precondition
+      // will reject the claim, so spawnRetry bails out before ever reaching its
+      // own acquireRepoReservation call.
+      status: "running" as const,
+      repo: "fake-crash-retry-app",
+      startedAt: "2026-08-27T10:00:01Z",
+      endedAt: null,
+      parentSessionId: "parent-1",
+    };
+    await appendRun(taskDir(), failedRun);
+
+    // Mirrors the fixed F2 timing: failRun's isEligibleForRetry pre-check said a
+    // retry would be attempted, so it never released — the reservation is still
+    // held under this exact sessionId when spawnRetry is invoked.
+    acquireRepoReservation("fake-crash-retry-app", sid);
+    expect(currentReservation("fake-crash-retry-app")?.sessionId).toBe(sid);
+
+    const result = await spawnRetry({
+      taskId: TASK_ID,
+      finishedRun: failedRun,
+      gate: "crash",
+      ctxBlock: "retry context",
+      logLabel: "auto-retry",
+      precomputedAttempt: { nextAttempt: 1 },
+    });
+
+    expect(result).toBeNull();
+    expect(resumeClaudeCalls).toHaveLength(0);
+    // Without the fix, this reservation would be stranded forever: the run's
+    // meta status stays whatever it already was (not "failed"), which the
+    // stale-run reaper never touches, and nothing else ever calls release for it.
+    expect(currentReservation("fake-crash-retry-app")).toBeNull();
+
+    releaseRepoReservation("fake-crash-retry-app", sid);
+  });
 });
