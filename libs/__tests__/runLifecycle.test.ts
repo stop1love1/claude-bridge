@@ -748,7 +748,7 @@ describe("postExitFlow — automatic worktree merge-back call site acts on failu
     const meta = readMeta(tmp);
     const run = meta?.runs.find((r) => r.sessionId === SID);
     expect(run?.mergeNotPushed).toBeTruthy();
-    expect(run?.mergeNotPushed?.message).toContain("merge");
+    expect(run?.mergeNotPushed?.message).toContain("MERGE-CONFLICT:");
 
     expect(escalateCalls).toHaveLength(1);
     expect(escalateCalls[0][0]).toMatchObject({
