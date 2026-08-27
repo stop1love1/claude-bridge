@@ -12,6 +12,17 @@ function jsonl(toolNames: string[]): string {
     .join("\n");
 }
 
+function jsonlWithInput(blocks: Array<{ name: string; input?: Record<string, unknown> }>): string {
+  return blocks
+    .map(({ name, input }) =>
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name, input: input ?? {} }] },
+      }),
+    )
+    .join("\n");
+}
+
 describe("countReadsBeforeEdit", () => {
   it("counts Read/Grep/Glob/LS calls before the first Edit", () => {
     const text = jsonl(["Read", "Grep", "Read", "Edit", "Read", "Write"]);
@@ -70,6 +81,75 @@ describe("countReadsBeforeEdit", () => {
     expect(got.readsBeforeEdit).toBe(1);
     expect(got.editCount).toBe(1);
   });
+
+  it("counts distinct files, not tool calls", () => {
+    const text = jsonlWithInput([
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+    ]);
+    expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(1);
+  });
+
+  it("counts each distinct file path once even when interleaved", () => {
+    const text = jsonlWithInput([
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Read", input: { file_path: "/b.ts" } },
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+    ]);
+    expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(2);
+  });
+
+  it("de-duplicates Grep/Glob by pattern rather than tool-call count", () => {
+    const text = jsonlWithInput([
+      { name: "Grep", input: { pattern: "foo" } },
+      { name: "Grep", input: { pattern: "foo" } },
+      { name: "Glob", input: { pattern: "**/*.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+    ]);
+    expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(2);
+  });
+
+  it("counts Read file_path and Grep pattern as separate signals", () => {
+    const text = jsonlWithInput([
+      { name: "Read", input: { file_path: "/a.ts" } },
+      { name: "Grep", input: { pattern: "foo" } },
+      { name: "Glob", input: { pattern: "**/*.ts" } },
+      { name: "Edit", input: { file_path: "/a.ts" } },
+    ]);
+    expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(3);
+  });
+
+  it("still counts calls with no identifiable path/pattern as distinct (unchanged legacy behaviour)", () => {
+    const text = jsonl(["Read", "Grep", "Read", "Edit", "Read", "Write"]);
+    expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(3);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "normalises case only on Windows, so differently-cased paths to the same file dedupe",
+    () => {
+      const text = jsonlWithInput([
+        { name: "Read", input: { file_path: "C:\\Repo\\a.ts" } },
+        { name: "Read", input: { file_path: "c:\\repo\\A.TS" } },
+        { name: "Edit", input: { file_path: "C:\\Repo\\a.ts" } },
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(1);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "treats differently-cased paths as distinct off Windows",
+    () => {
+      const text = jsonlWithInput([
+        { name: "Read", input: { file_path: "/repo/a.ts" } },
+        { name: "Read", input: { file_path: "/repo/A.TS" } },
+        { name: "Edit", input: { file_path: "/repo/a.ts" } },
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(2);
+    },
+  );
 });
 
 describe("renderPreflightRetryContextBlock", () => {
