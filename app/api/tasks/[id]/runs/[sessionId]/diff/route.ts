@@ -1,22 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { getApp } from "@/libs/apps";
 import { readMeta } from "@/libs/meta";
-import { resolveRepoCwd } from "@/libs/repos";
-import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
+import { SESSIONS_DIR } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
 import { safeErrorMessage } from "@/libs/errorResponse";
 import { badRequest, isValidSessionId } from "@/libs/validate";
-
-function isUnderAppRoot(appPath: string, candidate: string): boolean {
-  const a = resolve(appPath);
-  const c = resolve(candidate);
-  if (a === c) return true;
-  return c.startsWith(a + sep) || c.startsWith(a + "/");
-}
+import { resolveRunCwd } from "@/libs/runWorkingTree";
 
 export const dynamic = "force-dynamic";
 
@@ -83,25 +76,9 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   }
 
   const app = getApp(run.repo);
-  let cwd: string | null = null;
-  let kind: "worktree" | "live" = "live";
-  if (
-    run.worktreePath &&
-    app &&
-    isUnderAppRoot(app.path, run.worktreePath) &&
-    existsSync(run.worktreePath)
-  ) {
-    cwd = run.worktreePath;
-    kind = "worktree";
-  } else if (app && existsSync(app.path)) {
-    cwd = app.path;
-  } else {
-    const md = readBridgeMd();
-    if (md) {
-      const resolved = resolveRepoCwd(md, BRIDGE_ROOT, run.repo);
-      if (resolved && existsSync(resolved)) cwd = resolved;
-    }
-  }
+  const cwd = resolveRunCwd(run, app);
+  const kind: "worktree" | "live" =
+    cwd !== null && cwd === run.worktreePath ? "worktree" : "live";
 
   if (!cwd) {
     return NextResponse.json(
