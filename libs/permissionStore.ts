@@ -132,6 +132,13 @@ export function _emitterDebugInfo(sessionId: string): { exists: boolean; pending
   return { exists: true, pending: e.listenerCount("pending"), answered: e.listenerCount("answered") };
 }
 
+export function _globalEmitterDebugInfo(): { pending: number; answered: number } {
+  return {
+    pending: store.globalEmitter.listenerCount("pending"),
+    answered: store.globalEmitter.listenerCount("answered"),
+  };
+}
+
 export function subscribeAll(
   onPending: (r: PendingRequest) => void,
   onAnswered?: (r: PendingRequest) => void,

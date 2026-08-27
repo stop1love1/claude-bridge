@@ -185,3 +185,49 @@ describe("permission/stream route — emitter actually released on teardown", ()
     expect(store._emitterDebugInfo(streamSessionId).exists).toBe(false);
   });
 });
+
+describe("permission/stream route (global) — emitter actually released on teardown", () => {
+  it("drops the global emitter's listeners when the stream is cancelled without req.signal firing", async () => {
+    const store = await import("../permissionStore");
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("../../app/api/permission/stream/route");
+
+    const before = store._globalEmitterDebugInfo();
+
+    const req = new NextRequest("http://localhost/api/permission/stream");
+    const res = await GET(req);
+
+    const during = store._globalEmitterDebugInfo();
+    expect(during.pending).toBe(before.pending + 1);
+    expect(during.answered).toBe(before.answered + 1);
+
+    await res.body!.cancel();
+
+    const after = store._globalEmitterDebugInfo();
+    expect(after.pending).toBe(before.pending);
+    expect(after.answered).toBe(before.answered);
+  });
+
+  it("drops the global emitter's listeners when req.signal aborts", async () => {
+    const store = await import("../permissionStore");
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("../../app/api/permission/stream/route");
+
+    const before = store._globalEmitterDebugInfo();
+
+    const ac = new AbortController();
+    const req = new NextRequest("http://localhost/api/permission/stream", { signal: ac.signal });
+    await GET(req);
+
+    const during = store._globalEmitterDebugInfo();
+    expect(during.pending).toBe(before.pending + 1);
+    expect(during.answered).toBe(before.answered + 1);
+
+    ac.abort();
+    await Promise.resolve();
+
+    const after = store._globalEmitterDebugInfo();
+    expect(after.pending).toBe(before.pending);
+    expect(after.answered).toBe(before.answered);
+  });
+});

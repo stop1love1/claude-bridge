@@ -46,7 +46,10 @@ export function createSseResponse(options: CreateSseResponseOptions): Response {
 
       state.teardown = onStart(send) ?? undefined;
 
-      if (closed) return;
+      if (closed) {
+        try { state.teardown?.(); } catch { }
+        return;
+      }
 
       if (keepaliveMs && keepaliveMs > 0) {
         ka = setInterval(() => {

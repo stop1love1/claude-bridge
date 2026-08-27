@@ -112,4 +112,19 @@ describe("createSseResponse — wire format and lifecycle", () => {
     createSseResponse({ signal: ac.signal, onStart: () => teardown, keepaliveMs: 50 });
     expect(teardown).toHaveBeenCalledTimes(1);
   });
+
+  it("still runs the teardown onStart is about to return, even when send() throws and closes the stream before onStart returns", async () => {
+    const { createSseResponse } = await import("../sse");
+    const teardown = vi.fn();
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    createSseResponse({
+      onStart: (send) => {
+        send("boom", circular);
+        return teardown;
+      },
+      keepaliveMs: 50,
+    });
+    expect(teardown).toHaveBeenCalledTimes(1);
+  });
 });
