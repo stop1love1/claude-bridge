@@ -2069,6 +2069,213 @@ correctly and displayed nowhere."
 
 ---
 
+### Task 27: Reconcile the two `isUnderAppRoot` gates
+
+**Added during execution, from Task 13's review. Verified directly.**
+
+Two functions with the **same name** and **opposite root-equality semantics** now exist, both acting as security containment gates:
+
+- `libs/runWorkingTree.ts:8-13` (extracted by Task 13) — `if (a === c) return true;`
+- `libs/worktrees.ts:80-85` (private, pre-existing) — `if (a === c) return false;`
+
+Every other line is byte-identical. Task 13's implementer was right not to merge them — that would have changed security semantics inside an extraction, which its brief forbade. But leaving two same-named containment gates that disagree on their edge case is exactly the "a hardening fix gets applied to one copy" hazard that finding M3 named and that Task 13 existed to eliminate.
+
+**Files:**
+- Modify: `libs/worktrees.ts:80-85`
+- Test: `libs/__tests__/worktrees.test.ts`
+
+**What to do — in this order:**
+
+- [ ] **Step 1: Establish which semantics each caller actually needs.** Read every call site of the private `worktrees.ts` copy and determine, per call site, whether "the candidate IS the app root" should pass or fail. Record the answer per call site in your report. **Do not change any behaviour in this step.**
+- [ ] **Step 2: Decide, and say why.** If both callers genuinely need the strict form, **rename** the private one to `isStrictlyUnderAppRoot` and leave its behaviour alone — the collision is the defect, not the difference. If a caller was relying on the strict form by accident, that is a finding: report it and still do not change behaviour without saying so explicitly.
+- [ ] **Step 3: Write the test that pins the distinction.** Whatever you choose, `appPath === candidate` must have an asserted, named expectation on both functions so the next reader cannot mistake one for the other.
+- [ ] **Step 4: Verify and commit.** `bun run typecheck && bun run lint && bun run test`. Stage by explicit path.
+
+---
+
+### Task 28: Deny the `Task` tool to every agent-spawning child
+
+**Added during execution, from Task 12's review. Verified directly by grep.**
+
+`CLAUDE.md` states the rule and the reason: the built-in `Task`/`Agent` tool spawns subagents **in-process**, so they share the coordinator's cwd, bypass `meta.json`, and never reach the target app folder. `libs/coordinator.ts` enforces it with `disallowedTools: ["Task"]`.
+
+**Six other spawn sites pass `bypassPermissions` and no `disallowedTools` at all:**
+
+`libs/coordinatorNudge.ts`, `libs/planGateLifecycle.ts`, `libs/qualityGate.ts`, `libs/retrySpawn.ts`, `libs/semanticVerifier.ts`, `libs/telegramCommands.ts`
+
+These spawn full agent children that legitimately need tools, so Task 12's `readOnlyChildArgs()` is **wrong** for them — do not reach for it. What they need is the `Task` denial alone.
+
+**Files:**
+- Modify: the six files above
+- Modify: `libs/spawn.ts` — add the shared constant beside `readOnlyChildArgs`
+- Test: extend `libs/__tests__/auxSpawnRestrictions.test.ts`
+
+**Ruling carried into this task:** add one shared `denyTaskToolArgs()` (or extend the existing builder with a mode) and apply it at all six. Deny **only** `Task` — these children need `Bash`, `Read`, `Edit` and the rest to do their jobs, and widening the denial would break them. Task 12 proved the argv-ordering hazard is real: `--disallowed-tools` is variadic and swallows following non-flag tokens, so **the deny list must be the terminal element of argv** at every site, and any site passing its prompt positionally must pass it *before* the flag. Verify per site; Task 12 found the four sites did not all pass their prompt the same way.
+
+- [ ] **Step 1: Write the failing test** — one assertion per site that its built argv contains `--disallowed-tools` with `Task` in the list, and that the deny list is terminal.
+- [ ] **Step 2: Run it and watch all six fail.**
+- [ ] **Step 3: Implement**, checking each site's prompt-passing style first.
+- [ ] **Step 4: Smoke-test at least one** real path end to end — a semantic-verifier or quality-gate run — and confirm the child still functions with `Task` denied. If denying `Task` breaks a site, that is a finding; report it, do not widen the denial.
+- [ ] **Step 5: Verify and commit.** `bun run typecheck && bun run lint && bun run test`. Stage by explicit path.
+
+---
+
+## Phase K — from end-to-end verification
+
+Both found by running a real task through the full lifecycle against a scratch app, after the 28-task plan was already complete. Neither is a regression; both are calibration problems the plan's own fixes made visible.
+
+### Task 29: Scale the preflight read threshold to the task's actual footprint
+
+**Observed live.** A task whose entire scope was "add `subtract` to `math.ts`" produced a correct one-file change and was **blocked** with `preflight: agent made 1 Read call(s) before the first Edit/Write — minimum is 3`. Both the planner and the coder runs got `verdict: "drift"`. The work was perfect; the gate rejected it.
+
+**Why now and not before:** Task 19 changed `countReadsBeforeEdit` from counting **tool calls** to counting **distinct files**. That was correct — the old counter was satisfied by one `Glob` plus two `Read`s of the same file, which is exactly the gameable signal finding M5 named. But `DEFAULT_MIN_READS_BEFORE_EDIT = 3` was never re-examined against the stricter counter. A task that legitimately touches one file can now **never** pass.
+
+Task 19 did not create this. It made it visible.
+
+**Files:**
+- Modify: `libs/preflightCheck.ts` (`DEFAULT_MIN_READS_BEFORE_EDIT` is at `:8`; the comparison is around `:97`)
+- Test: `libs/__tests__/preflightCheck.test.ts`
+
+**Ruling carried into this task:** the requirement is **"did the agent edit blind?"**, not "did the agent read a fixed number of files". Scale the floor to the task's own footprint:
+
+```
+required = min(configuredMin, distinctFilesEdited)   // never below 1
+```
+
+- Edits 1 file → requires 1 distinct read. The agent must have read the file it is about to change. That is the real floor.
+- Edits 2 files → requires 2.
+- Edits 3 or more → requires 3, the configured minimum. **Unchanged from today**, so nothing that passes now starts failing.
+
+Do **not** raise the requirement above the configured minimum for large-footprint tasks — that is a different design question and out of scope here.
+
+**Read `countReadsBeforeEdit` before you start.** You need the count of distinct files *edited*, which the function may not currently compute — if it does not, derive it the same way it derives reads (from `tool_use` blocks), and keep the derivation in the same place so the two cannot drift apart.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+it("a one-file task passes when the agent read that one file", () => {
+  const entries = [
+    toolUse("Read", { file_path: "/repo/math.ts" }),
+    toolUse("Edit", { file_path: "/repo/math.ts" }),
+  ];
+  expect(runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" }).verdict).not.toBe("fail");
+});
+
+it("still fails a one-file task where the agent edited without reading anything", () => {
+  const entries = [toolUse("Edit", { file_path: "/repo/math.ts" })];
+  expect(runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" }).verdict).toBe("fail");
+});
+
+it("still requires the configured minimum on a wide-footprint task", () => {
+  const entries = [
+    toolUse("Read", { file_path: "/repo/a.ts" }),
+    toolUse("Edit", { file_path: "/repo/a.ts" }),
+    toolUse("Edit", { file_path: "/repo/b.ts" }),
+    toolUse("Edit", { file_path: "/repo/c.ts" }),
+  ];
+  expect(runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" }).verdict).toBe("fail");
+});
+```
+
+Use the file's real helpers and the real `runPreflight`/`countReadsBeforeEdit` signatures — the sketches above show intent, not the exact API. The second and third tests are the load-bearing ones: they prove the gate still has teeth.
+
+- [ ] **Step 2: Run and watch the first test fail** for the right reason — 1 read against a required 3.
+- [ ] **Step 3: Implement**, keeping the reason string accurate. It currently reads `minimum is 3`; it must now report the *effective* minimum for that run, or the message will lie.
+- [ ] **Step 4: Run the tests.**
+- [ ] **Step 5:** `bun run typecheck && bun run lint && bun run test`
+- [ ] **Step 6: Commit**
+
+```bash
+git add libs/preflightCheck.ts libs/__tests__/preflightCheck.test.ts
+git commit -m "fix(preflight): scale the read floor to the task's edited footprint
+
+A correct one-file change was blocked because the floor was a fixed three
+distinct files. Task 19 made the counter strict and correct; the threshold
+was never re-examined against it."
+```
+
+---
+
+### Task 30: A blocked gate must write its reason into `summary.md`
+
+**Observed live.** After the preflight gate blocked the task, `summary.md`'s first line read `READY FOR REVIEW — subtract(a, b) added…` while `taskSection` was `BLOCKED`. Neither is wrong on its own terms — the coordinator finished its work and reported honestly, and the gate escalated correctly. **They simply do not know about each other.** An operator opening the UI sees a red task whose summary says it is ready.
+
+The audit's roadmap already named half of this: `escalateGateBlock` sends `opts.reason` only to Telegram — an optional, ephemeral channel that may not even be configured — while `libs/coordinatorNudge.ts`'s `buildBlockedSummary` already solved exactly this problem for a sibling path, with the stated rationale *"so the operator sees real content in the UI's left pane."*
+
+**Files:**
+- Modify: `libs/gateEscalation.ts`
+- Test: `libs/__tests__/` (new or existing gate-escalation coverage)
+
+**Ruling carried into this task:**
+- **Reuse `buildBlockedSummary`'s approach** — read it first. Do not invent a second summary format.
+- **Do not destroy the coordinator's summary.** Its content is the record of what was done and is often correct. Prepend the block notice so the first line no longer claims readiness, and keep everything below it.
+- Follow `escalateGateBlock`'s existing discipline exactly: **each side effect in its own try/catch**, so a failed summary write cannot prevent the section flip or the Telegram ping, and vice versa. That structure is already there for the two existing effects; yours becomes the third.
+- If `summary.md` does not exist yet, write one containing just the block notice.
+
+- [ ] **Step 1: Write the failing test** — assert that after `escalateGateBlock`, `summary.md`'s first line names the block and the gate, and that pre-existing content below is preserved.
+- [ ] **Step 2: Run and watch it fail** — nothing writes the summary today.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the tests.**
+- [ ] **Step 5:** `bun run typecheck && bun run lint && bun run test`
+- [ ] **Step 6: Commit**
+
+```bash
+git add libs/gateEscalation.ts libs/__tests__/gateEscalation.test.ts
+git commit -m "fix(gates): write the block reason into summary.md
+
+A blocked task's summary still opened with READY FOR REVIEW, because the
+gate's reason went only to Telegram. The operator's first read of a task
+is its summary, not its notifications."
+```
+
+---
+
+### Task 31: Scope the preflight footprint to the app root
+
+**Observed live, on the run that verified Task 29.** Task 29's scaling works — the reason string correctly reported `minimum is 2` for the coder instead of a fixed `3`. But the coder's footprint was counted as **two** edited files while `git diff --stat` in the app showed exactly one (`math.ts`).
+
+The second "edit" was the agent writing its own report under `sessions/<task-id>/reports/` — outside the app entirely. `countReadsBeforeEdit` reads `file_path` off every `tool_use` block (`libs/preflightCheck.ts:42`) and never asks whether that path is inside the app. `appPath` is passed into `runPreflight` but used only at `:122` to locate the session transcript.
+
+So an agent that writes a report inflates its own edit footprint, which raises the read floor Task 29 just scaled — and the gate then fails a correct one-file change for reading one file.
+
+**Files:**
+- Modify: `libs/preflightCheck.ts`
+- Test: `libs/__tests__/preflightCheck.test.ts`
+
+**Ruling carried into this task:** the gate's question is *"did the agent edit the codebase blind?"* Both sides of the ratio must therefore be scoped to the codebase. Count a read or an edit toward the preflight signal **only when its path resolves inside the app root**.
+
+Scope **both** sides, not just edits. They must agree, and scoping only the edits would leave a read of the plan file counting as codebase comprehension. Worked through on the run that prompted this:
+
+| | unscoped (today) | scoped (target) |
+|---|---|---|
+| coder reads | `math.ts` → 1 | `math.ts` → 1 |
+| coder edits | `math.ts` + report → 2 | `math.ts` → 1 |
+| required | 2 | 1 |
+| verdict | **drift** | **pass** |
+
+And an agent that reads only the plan then edits `math.ts` scores 0 reads against 1 edit — a fail, correctly, because it *did* edit the codebase blind.
+
+**Reuse `isUnderAppRoot` from `libs/runWorkingTree.ts`.** Task 13 extracted it for exactly this kind of containment question and Task 27 pinned its root-equality semantics with a test. Do **not** write a fourth path-containment check — the repo has had two, briefly disagreed with itself about them, and a whole task went into reconciling that.
+
+- [ ] **Step 1: Write the failing test** — an agent that reads one in-app file, edits that file, and also writes one out-of-app path must **pass**. Then a companion: an agent that reads only an out-of-app path and edits one in-app file must still **fail**.
+- [ ] **Step 2: Run and watch both fail** — the first because the out-of-app write inflates `editFilesCount` to 2, the second because the out-of-app read counts as comprehension.
+- [ ] **Step 3: Implement.** A path that cannot be resolved (missing or non-string `file_path`) keeps whatever fallback identity it has today — do not change how unidentifiable calls are handled, only whether identifiable out-of-app paths count.
+- [ ] **Step 4: Run the tests**, including every Task 29 boundary case — they must all still hold.
+- [ ] **Step 5:** `bun run typecheck && bun run lint && bun run test`
+- [ ] **Step 6: Commit**
+
+```bash
+git add libs/preflightCheck.ts libs/__tests__/preflightCheck.test.ts
+git commit -m "fix(preflight): count only reads and edits inside the app root
+
+An agent writing its own report outside the app inflated its edit
+footprint, raising the read floor Task 29 had just scaled — failing a
+correct one-file change. Reuses isUnderAppRoot rather than adding a
+fourth containment check."
+```
+
+---
+
 ## Deferred — not in this plan
 
 Recorded so the final review does not treat them as oversights:
