@@ -81,7 +81,6 @@ function MessageComposerInner({
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [queuedCount, setQueuedCount] = useState(0);
-  // global key on first render of a brand-new task" behaviour.
   const loadComposerSettings = useCallback(
     (raw: string | null): ChatSettings => {
       const withDefaultMode = (s: ChatSettings): ChatSettings =>

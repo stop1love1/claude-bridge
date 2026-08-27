@@ -27,7 +27,6 @@ vi.mock("@/libs/apps", () => ({
 
 
 beforeEach(() => {
-  // global singleton stash. Cheaper than a full module reset.
   delete (globalThis as { __bridgeRateLimit?: unknown }).__bridgeRateLimit;
   vi.useFakeTimers();
 });

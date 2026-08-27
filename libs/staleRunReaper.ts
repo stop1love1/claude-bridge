@@ -174,7 +174,6 @@ async function computeStalePatches(
 
     if (run.status === "running") {
       const child = getChild(run.sessionId);
-      // global registry, etc.). Falling through to the JSONL freshness
       if (child && child.exitCode === null && !child.killed) {
         isStale = false;
       } else if (

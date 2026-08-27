@@ -24,7 +24,6 @@ type SessionRow = {
 const RESPONSE_TTL_MS = 2000;
 let responseCache: { value: SessionRow[]; expires: number } | null = null;
 
-// global registries. HMR-safe via the underlying EventEmitter stash.
 const G = globalThis as unknown as { __bridgeSessionsAllSub?: boolean };
 if (!G.__bridgeSessionsAllSub) {
   G.__bridgeSessionsAllSub = true;
