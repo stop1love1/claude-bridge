@@ -1,14 +1,29 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync, statSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+const readFileSyncCalls = vi.hoisted(() => [] as unknown[][]);
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync: ((...args: unknown[]) => {
+      readFileSyncCalls.push(args);
+      return (actual.readFileSync as (...a: unknown[]) => unknown)(...args);
+    }) as typeof actual.readFileSync,
+  };
+});
+
 import {
   pathToSlug,
   tailJsonl,
   tailJsonlBefore,
   listSessions,
+  readSessionCwd,
   __resetScanHeadCacheForTests,
 } from "../sessions";
-import { join } from "node:path";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync, statSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 
 describe("pathToSlug", () => {
   it("converts Windows drive path to Claude slug", () => {
@@ -346,5 +361,54 @@ describe("resolveSessionFile", () => {
     const { resolveSessionFile } = await import("../sessions");
     const file = resolveSessionFile(repo, VALID_SID);
     expect(file).toBe(join(dir, `${VALID_SID}.jsonl`));
+  });
+});
+
+describe("readSessionCwd", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "sess-cwd-"));
+    readFileSyncCalls.length = 0;
+  });
+
+  afterEach(() => {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { }
+  });
+
+  it("reads only the head of a large transcript", () => {
+    const big = join(dir, "big.jsonl");
+    writeFileSync(
+      big,
+      JSON.stringify({ cwd: "/repo/app", type: "x" }) + "\n" + "x".repeat(20_000_000),
+    );
+    readFileSyncCalls.length = 0;
+    expect(readSessionCwd(big)).toBe("/repo/app");
+    expect(readFileSyncCalls.some((args) => args[0] === big)).toBe(false);
+  });
+
+  it("returns the cwd from a small file, same as reading the whole file would", () => {
+    const small = join(dir, "small.jsonl");
+    writeFileSync(
+      small,
+      `{"type":"queue"}\n{"cwd":"/home/u/app","type":"init"}\n{"type":"user"}\n`,
+    );
+    expect(readSessionCwd(small)).toBe("/home/u/app");
+  });
+
+  it("returns null when no line in the head has a cwd", () => {
+    const file = join(dir, "no-cwd.jsonl");
+    writeFileSync(file, `{"type":"a"}\n{"type":"b"}\n`);
+    expect(readSessionCwd(file)).toBeNull();
+  });
+
+  it("returns null for a missing file", () => {
+    expect(readSessionCwd(join(dir, "nope.jsonl"))).toBeNull();
+  });
+
+  it("handles a final line with no trailing newline", () => {
+    const file = join(dir, "no-trailing-nl.jsonl");
+    writeFileSync(file, `{"cwd":"/x/y","type":"init"}`);
+    expect(readSessionCwd(file)).toBe("/x/y");
   });
 });

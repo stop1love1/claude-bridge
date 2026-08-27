@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -342,18 +342,34 @@ export function listSessions(projectDir: string): SessionEntry[] {
   return out.sort((a, b) => b.mtime - a.mtime);
 }
 
+const READ_CWD_MAX_BYTES = 16 * 1024;
+
 export function readSessionCwd(filePath: string): string | null {
-  let head: string;
-  try { head = readFileSync(filePath, "utf8").slice(0, 16384); }
+  let fd: number;
+  try { fd = openSync(filePath, "r"); }
   catch { return null; }
-  for (const line of head.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const obj = JSON.parse(line) as { cwd?: unknown };
-      if (typeof obj.cwd === "string" && obj.cwd) return obj.cwd;
-    } catch { }
+  try {
+    const buf = Buffer.alloc(READ_CWD_MAX_BYTES);
+    let total = 0;
+    while (total < READ_CWD_MAX_BYTES) {
+      let n: number;
+      try { n = readSync(fd, buf, total, READ_CWD_MAX_BYTES - total, total); }
+      catch { break; }
+      if (n === 0) break;
+      total += n;
+    }
+    const head = buf.subarray(0, total).toString("utf8");
+    for (const line of head.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line) as { cwd?: unknown };
+        if (typeof obj.cwd === "string" && obj.cwd) return obj.cwd;
+      } catch { }
+    }
+    return null;
+  } finally {
+    try { closeSync(fd); } catch { }
   }
-  return null;
 }
 
 export function discoverOrphanProjects(

@@ -1,7 +1,21 @@
-import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, utimesSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const readFileSyncCalls = vi.hoisted(() => [] as unknown[][]);
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync: ((...args: unknown[]) => {
+      readFileSyncCalls.push(args);
+      return (actual.readFileSync as (...a: unknown[]) => unknown)(...args);
+    }) as typeof actual.readFileSync,
+  };
+});
+
 import {
   sumUsageFromJsonl,
   __resetUsageCacheForTests,
@@ -112,6 +126,46 @@ describe("sumUsageFromJsonl cache", () => {
     }) + "\n");
     const b = sumUsageFromJsonl(ghost);
     expect(b.inputTokens).toBe(42);
+  });
+
+  function multiChunkUsagePayload(lineCount: number): { content: string; sizeBytes: number } {
+    const lines: string[] = [];
+    for (let i = 0; i < lineCount; i++) {
+      lines.push(JSON.stringify({
+        type: "assistant",
+        message: { usage: { input_tokens: 1, output_tokens: 1 } },
+        padding: "x".repeat(300),
+      }));
+    }
+    const content = lines.join("\n") + "\n";
+    return { content, sizeBytes: Buffer.byteLength(content, "utf8") };
+  }
+
+  it("streams a large file instead of materialising it with readFileSync", () => {
+    const { content, sizeBytes } = multiChunkUsagePayload(900);
+    const file = join(tmpDir, "big.jsonl");
+    writeFileSync(file, content);
+    expect(sizeBytes).toBeGreaterThan(256 * 1024);
+
+    readFileSyncCalls.length = 0;
+    const out = sumUsageFromJsonl(file);
+    expect(out.turns).toBe(900);
+    expect(out.inputTokens).toBe(900);
+    expect(out.outputTokens).toBe(900);
+    expect(readFileSyncCalls.some((args) => args[0] === file)).toBe(false);
+  });
+
+  it("sums the final line even when the file has no trailing newline", () => {
+    const file = join(tmpDir, "no-trailing-nl.jsonl");
+    const lines = [
+      JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 3, output_tokens: 4 } } }),
+      JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 5, output_tokens: 6 } } }),
+    ];
+    writeFileSync(file, lines.join("\n"));
+    const out = sumUsageFromJsonl(file);
+    expect(out.turns).toBe(2);
+    expect(out.inputTokens).toBe(8);
+    expect(out.outputTokens).toBe(10);
   });
 
   it("evicts oldest entries when the cap is exceeded", () => {

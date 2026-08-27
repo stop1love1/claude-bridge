@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 
 export interface SessionUsage {
   inputTokens: number;
@@ -43,6 +44,55 @@ export function __resetUsageCacheForTests(): void {
   usageCache.clear();
 }
 
+const SUM_CHUNK_BYTES = 256 * 1024;
+
+function sumUsageFromFile(filePath: string): SessionUsage {
+  const out: SessionUsage = { ...ZERO };
+  let fd: number;
+  try { fd = openSync(filePath, "r"); }
+  catch { return out; }
+
+  const buf = Buffer.alloc(SUM_CHUNK_BYTES);
+  const decoder = new StringDecoder("utf8");
+  let leftover = "";
+
+  const consume = (line: string) => {
+    if (!line) return;
+    let entry: JsonlEntry;
+    try { entry = JSON.parse(line) as JsonlEntry; }
+    catch { return; }
+    if (entry.type !== "assistant") return;
+    const u = entry.message?.usage;
+    if (!u) return;
+    out.inputTokens          += pickNumber(u.input_tokens);
+    out.outputTokens         += pickNumber(u.output_tokens);
+    out.cacheCreationTokens  += pickNumber(u.cache_creation_input_tokens);
+    out.cacheReadTokens      += pickNumber(u.cache_read_input_tokens);
+    out.turns                += 1;
+  };
+
+  try {
+    let pos = 0;
+    while (true) {
+      let n: number;
+      try { n = readSync(fd, buf, 0, SUM_CHUNK_BYTES, pos); }
+      catch { break; }
+      if (n === 0) break;
+      pos += n;
+      const text = leftover + decoder.write(buf.subarray(0, n));
+      const lastNl = text.lastIndexOf("\n");
+      if (lastNl < 0) { leftover = text; continue; }
+      const ready = text.slice(0, lastNl);
+      leftover = text.slice(lastNl + 1);
+      for (const line of ready.split("\n")) consume(line);
+    }
+    consume(leftover + decoder.end());
+  } finally {
+    try { closeSync(fd); } catch { }
+  }
+  return out;
+}
+
 export function sumUsageFromJsonl(filePath: string): SessionUsage {
   if (!existsSync(filePath)) return { ...ZERO };
   let mtimeMs = 0;
@@ -65,24 +115,7 @@ export function sumUsageFromJsonl(filePath: string): SessionUsage {
     }
   }
 
-  let raw: string;
-  try { raw = readFileSync(filePath, "utf8"); }
-  catch { return { ...ZERO }; }
-  const out: SessionUsage = { ...ZERO };
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    let entry: JsonlEntry;
-    try { entry = JSON.parse(line) as JsonlEntry; }
-    catch { continue; }
-    if (entry.type !== "assistant") continue;
-    const u = entry.message?.usage;
-    if (!u) continue;
-    out.inputTokens          += pickNumber(u.input_tokens);
-    out.outputTokens         += pickNumber(u.output_tokens);
-    out.cacheCreationTokens  += pickNumber(u.cache_creation_input_tokens);
-    out.cacheReadTokens      += pickNumber(u.cache_read_input_tokens);
-    out.turns                += 1;
-  }
+  const out = sumUsageFromFile(filePath);
 
   if (cacheable) {
     const key = usageCacheKey(filePath, mtimeMs, size);
