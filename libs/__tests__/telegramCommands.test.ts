@@ -239,6 +239,33 @@ describe("buildReplyBody — truncate before HTML conversion (audit H9)", () => 
   });
 });
 
+describe("buildReplyBody — bounds the converted payload at Telegram's 4096 limit", () => {
+  it("shrinks further when HTML conversion pushes an under-REPLY_MAX input past 4096", () => {
+    const raw = Array.from({ length: 300 }, (_, i) => `\`x${i}\` `).join("");
+    expect(raw.length).toBeLessThan(3500);
+    const out = buildReplyBody(raw);
+    expect(out.length).toBeLessThanOrEqual(4096);
+    expect(out).not.toContain("x299");
+  });
+
+  it("keeps LIST_CAP rows of the densest known renderer row shape under 4096 once converted", () => {
+    const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome";
+    const ip = "2001:0db8:85a3:0000:0000:8a2e:0370:7334";
+    const row = (i: number) =>
+      `🔐 \`abcd12${i % 10}${i % 10}\` · ${ua.slice(0, 60)} from \`${ip}\` · ${i}s ago`;
+    const raw = [
+      `*${LIST_CAP} pending device login(s):*`,
+      "",
+      ...Array.from({ length: LIST_CAP }, (_, i) => row(i)),
+      "",
+      "Reply with `/approvelogin <id>` or `/denylogin <id>` (8-char prefix is enough).",
+    ].join("\n");
+    const out = buildReplyBody(raw);
+    expect(out.length).toBeLessThanOrEqual(4096);
+    expect(out).toContain(`${LIST_CAP - 1}s ago`);
+  });
+});
+
 describe("sendReply — resilience via the shared retry helper (audit H9)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -304,6 +331,84 @@ describe("/tasks — end-to-end list cap via the real renderer", () => {
       createTask({ title: `Task ${i}`, body: "", app: null });
     }
     const out = await freshDispatch("/tasks");
+    expect(out).toMatch(new RegExp(`\\+${total - LIST_CAP} more`));
+  });
+});
+
+describe("/active — caps running sessions at LIST_CAP", () => {
+  let tempRoot: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    tempRoot = mkdtempSync(join(tmpdir(), "bridge-tg-active-"));
+    process.chdir(tempRoot);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    vi.resetModules();
+    try {
+      rmSync(tempRoot, { recursive: true, force: true });
+    } catch {
+    }
+  });
+
+  it("caps list output with a '+N more' suffix once running sessions exceed LIST_CAP", async () => {
+    const { createTask } = await import("../tasksStore");
+    const { appendRun } = await import("../meta");
+    const { dispatchCommand: freshDispatch } = await import("../telegramCommands");
+    const task = createTask({ title: "many runs", body: "", app: null });
+    const dir = join(tempRoot, "sessions", task.id);
+    const total = LIST_CAP + 4;
+    for (let i = 0; i < total; i++) {
+      await appendRun(dir, {
+        sessionId: `sess-${i}`,
+        role: "coder",
+        repo: "app",
+        status: "running",
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+      });
+    }
+    const out = await freshDispatch("/active");
+    expect(out).toMatch(new RegExp(`\\+${total - LIST_CAP} more`));
+  });
+});
+
+describe("/plan — caps questions at LIST_CAP", () => {
+  let tempRoot: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    tempRoot = mkdtempSync(join(tmpdir(), "bridge-tg-plan-"));
+    process.chdir(tempRoot);
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    vi.resetModules();
+    try {
+      rmSync(tempRoot, { recursive: true, force: true });
+    } catch {
+    }
+  });
+
+  it("caps the questions list with a '+N more' suffix once questions exceed LIST_CAP", async () => {
+    const { createTask } = await import("../tasksStore");
+    const { setIntake } = await import("../meta");
+    const { dispatchCommand: freshDispatch } = await import("../telegramCommands");
+    const task = createTask({ title: "plan test", body: "", app: null });
+    const dir = join(tempRoot, "sessions", task.id);
+    const total = LIST_CAP + 3;
+    await setIntake(dir, {
+      status: "awaiting-approval",
+      questions: Array.from({ length: total }, (_, i) => ({ id: `q${i}`, text: `question ${i}` })),
+    });
+    const out = await freshDispatch(`/plan ${task.id}`);
     expect(out).toMatch(new RegExp(`\\+${total - LIST_CAP} more`));
   });
 });

@@ -480,14 +480,16 @@ function renderActive(): string {
     }
   }
   if (active.length === 0) return "(no running sessions)";
-  const lines: string[] = [`*${active.length} active session(s):*`, ""];
-  for (const r of active) {
+  const rows = active.map((r) => {
     const role = escapeMarkdownV2(r.role);
     const repo = escapeMarkdownV2(r.repo);
-    lines.push(
-      `🟢 \`${r.taskId}\` — ${role} @ ${repo} \\(${r.sessionId.slice(0, 8)}\\)`,
-    );
-  }
+    return `🟢 \`${r.taskId}\` — ${role} @ ${repo} \\(${r.sessionId.slice(0, 8)}\\)`;
+  });
+  const lines: string[] = [
+    `*${active.length} active session(s):*`,
+    "",
+    ...capListLines(rows, LIST_CAP),
+  ];
   return lines.join("\n");
 }
 
@@ -797,9 +799,8 @@ export async function commandPlanShow(idArg: string | undefined): Promise<string
   }
   if (intake.questions.length > 0) {
     lines.push("", "Questions:");
-    for (const q of intake.questions) {
-      lines.push(`- ${escapeMarkdownV2(q.text)}`);
-    }
+    const rows = intake.questions.map((q) => `- ${escapeMarkdownV2(q.text)}`);
+    lines.push(...capListLines(rows, LIST_CAP));
   }
   return lines.join("\n");
 }
@@ -1111,9 +1112,21 @@ function mdLiteToHtml(input: string): string {
   return out.join("");
 }
 
+const TELEGRAM_TEXT_LIMIT = 4096;
+
+function convertReplyChunk(raw: string, cutLen: number): string {
+  const wasCut = cutLen < raw.length;
+  return mdLiteToHtml(raw.slice(0, cutLen) + (wasCut ? "…" : ""));
+}
+
 export function buildReplyBody(raw: string): string {
-  const truncated = raw.length > REPLY_MAX ? raw.slice(0, REPLY_MAX) + "…" : raw;
-  return mdLiteToHtml(truncated);
+  let cutLen = Math.min(raw.length, REPLY_MAX);
+  let html = convertReplyChunk(raw, cutLen);
+  while (html.length > TELEGRAM_TEXT_LIMIT && cutLen > 0) {
+    cutLen = Math.floor(cutLen * 0.9);
+    html = convertReplyChunk(raw, cutLen);
+  }
+  return html;
 }
 
 const escapeMarkdownV2 = escapeHtml;
@@ -1155,7 +1168,7 @@ export async function startTelegramUserCommandListener(): Promise<void> {
       reply = `Error: ${(err as Error).message}`;
     }
     try {
-      await sendUserMessage(mdLiteToHtml(reply), {
+      await sendUserMessage(buildReplyBody(reply), {
         target: msg.chatId,
         parseMode: "html",
       });
