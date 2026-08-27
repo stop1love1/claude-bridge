@@ -24,6 +24,7 @@ import {
 import { mergeAndRemoveWorktree } from "./worktrees";
 import { runDevopsAgent } from "./devops";
 import { escalateGateBlock, type EscalationGate } from "./gateEscalation";
+import { releaseRepoReservation } from "./repoReservation";
 import { logError, logInfo, logWarn } from "./log";
 import type * as VerifyChain from "./verifyChain";
 import type * as Verifier from "./verifier";
@@ -895,16 +896,19 @@ export function wireRunLifecycle(
   };
 
   const failRun = async (reason: string, exitCode: number | null) => {
+    let repoForRelease: string | null = null;
     try {
-      await updateRun(
+      const result = await updateRun(
         sessionsDir,
         sessionId,
         { status: "failed", endedAt: new Date().toISOString() },
         (run) => run.status === "running",
       );
+      repoForRelease = result.run?.repo ?? null;
     } catch (e) {
       logError("lifecycle", "failed to mark run failed", e, { tag });
     }
+    if (repoForRelease) releaseRepoReservation(repoForRelease, sessionId);
     logError("lifecycle", `run failed: ${reason}`, undefined, { tag });
     tryAutoRetry(exitCode);
   };
@@ -993,25 +997,30 @@ export function wireRunLifecycle(
     }
 
     if (finishedRun && finishedRun.role !== "coordinator") {
+      const repoForRelease = finishedRun.repo;
       void postExitFlow({
         sessionsDir,
         taskId,
         tag,
         finishedRun,
         taskTitle,
-      }).catch(async (err) => {
-        logError("post-exit", "flow crashed", err, { tag });
-        try {
-          await updateRun(
-            sessionsDir,
-            sessionId,
-            { status: "failed", endedAt: new Date().toISOString() },
-            (r) => r.status === "running",
-          );
-        } catch (e) {
-          logError("post-exit", "safety-net status:failed flip failed", e, { tag });
-        }
-      });
+      })
+        .catch(async (err) => {
+          logError("post-exit", "flow crashed", err, { tag });
+          try {
+            await updateRun(
+              sessionsDir,
+              sessionId,
+              { status: "failed", endedAt: new Date().toISOString() },
+              (r) => r.status === "running",
+            );
+          } catch (e) {
+            logError("post-exit", "safety-net status:failed flip failed", e, { tag });
+          }
+        })
+        .finally(() => {
+          releaseRepoReservation(repoForRelease, sessionId);
+        });
     }
   };
 

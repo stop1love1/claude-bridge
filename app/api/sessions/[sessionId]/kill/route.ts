@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { killChild } from "@/libs/spawnRegistry";
+import { releaseRepoReservation } from "@/libs/repoReservation";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { ok } from "@/libs/apiResponse";
 import { clearQueue } from "@/libs/messageQueue";
@@ -39,12 +40,15 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       if (!meta) continue;
       const run = meta.runs.find((r) => r.sessionId === sessionId);
       if (!run) continue;
-      await updateRun(
+      const cancelled = await updateRun(
         dir,
         sessionId,
         { status: "cancelled", endedAt: new Date().toISOString() },
         (r) => r.status === "running",
       );
+      if (cancelled.applied && cancelled.run) {
+        releaseRepoReservation(cancelled.run.repo, sessionId);
+      }
       break;
     }
   }

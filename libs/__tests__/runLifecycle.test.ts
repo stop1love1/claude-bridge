@@ -687,3 +687,136 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
     expect(run?.semanticVerifier?.verdict).toBe("crashed");
   });
 });
+
+describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
+  const REAL_APP = {
+    name: "real-app",
+    path: "/tmp/fake-app",
+    git: { branchMode: "current", worktreeMode: "disabled", autoCommit: false, autoPush: false, mergeTargetBranch: "", integrationMode: "none" },
+    verify: {},
+    quality: { critic: false, verifier: false },
+    retry: {},
+    memory: { distill: false },
+  };
+
+  it("releases the app reservation once failRun completes", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+    });
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "tag");
+    child.emit("exit", 1, null);
+    await flushAsync();
+
+    expect(currentReservation("real-app")).toBeNull();
+  });
+
+  it("releases the app reservation on the spawn-error path (child.error)", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: null,
+      endedAt: null,
+    });
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "tag");
+    child.emit("error", new Error("ENOENT"));
+    await flushAsync();
+
+    expect(currentReservation("real-app")).toBeNull();
+  });
+
+  it("holds the reservation while postExitFlow's async gate work is still pending, and releases once it settles", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    let resolveVerify: (v: unknown) => void = () => {};
+    const verifyPromise = new Promise((resolve) => { resolveVerify = resolve; });
+    seedRequireCache({
+      verifyChain: {
+        verifyConfigOf: () => ({ test: "x" }),
+        hasAnyVerifyCommand: () => true,
+        runVerifyChain: () => verifyPromise,
+      },
+    });
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+      parentSessionId: "00000000-0000-0000-0000-000000000000",
+    });
+    getAppMock.mockReturnValue(REAL_APP);
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "tag");
+    child.emit("exit", 0, null);
+    await flushAsync(5);
+
+    expect(currentReservation("real-app")?.sessionId).toBe(SID);
+
+    resolveVerify({
+      steps: [{ name: "test", ok: true, exitCode: 0, durationMs: 1, output: "" }],
+      passed: true,
+      startedAt: "2026-04-24T10:00:02Z",
+      endedAt: "2026-04-24T10:00:03Z",
+    });
+    await flushAsync(10);
+
+    expect(currentReservation("real-app")).toBeNull();
+  });
+
+  it("does not disturb a different session's reservation on the same repo", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation, releaseRepoReservation } =
+      await import("../repoReservation");
+
+    releaseRepoReservation("real-app", "someone-else");
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+    });
+    acquireRepoReservation("real-app", "someone-else");
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "tag");
+    child.emit("exit", 1, null);
+    await flushAsync();
+
+    expect(currentReservation("real-app")?.sessionId).toBe("someone-else");
+    releaseRepoReservation("real-app", "someone-else");
+  });
+});

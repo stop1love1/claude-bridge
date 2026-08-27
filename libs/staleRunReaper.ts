@@ -7,6 +7,7 @@ import { getChild } from "./spawnRegistry";
 import { getLastHeartbeat } from "./heartbeat";
 import { BRIDGE_FOLDER, BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { resolveRepoCwd } from "./repos";
+import { releaseRepoReservation } from "./repoReservation";
 import { projectDirFor } from "./sessions";
 
 const execFileP = promisify(execFile);
@@ -197,6 +198,7 @@ async function computeStalePatches(
       sessionId: run.sessionId,
       patch: { status: "stale", endedAt: nowIso },
     });
+    releaseRepoReservation(run.repo, run.sessionId);
   }
   return patches;
 }

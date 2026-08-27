@@ -299,3 +299,67 @@ describe("reapStaleRunsForDir — H4 queued state", () => {
     expect(meta!.runs[1].endedAt).toBe(old);
   });
 });
+
+describe("reapStaleRunsForDir — repo reservation release (Task 16)", () => {
+  it("releases a held repo reservation when a running row goes stale", async () => {
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+    const dir = join(tmp, "t_reserve_stale");
+    createMeta(dir, HEADER_FRESH);
+    const sid = "reserve-stale-sid";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-no-such-repo-reserve",
+      status: "running",
+      startedAt: new Date(Date.now() - 5_000).toISOString(),
+      endedAt: null,
+    });
+    acquireRepoReservation("fake-no-such-repo-reserve", sid);
+    expect(currentReservation("fake-no-such-repo-reserve")?.sessionId).toBe(sid);
+
+    const meta = await reapStaleRunsForDir(dir);
+    expect(meta!.runs[0].status).toBe("stale");
+    expect(currentReservation("fake-no-such-repo-reserve")).toBeNull();
+  });
+
+  it("releases a held repo reservation for a queued row that goes stale", async () => {
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+    const oldCreated = new Date(Date.now() - 5 * 60_000).toISOString();
+    const dir = join(tmp, "t_reserve_queued_stale");
+    createMeta(dir, withCreatedAt(oldCreated));
+    const sid = "reserve-queued-stale-sid";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-queued-reserve",
+      status: "queued",
+      startedAt: null,
+      endedAt: null,
+    });
+    acquireRepoReservation("fake-queued-reserve", sid);
+
+    const meta = await reapStaleRunsForDir(dir);
+    expect(meta!.runs[0].status).toBe("stale");
+    expect(currentReservation("fake-queued-reserve")).toBeNull();
+  });
+
+  it("leaves a held reservation alone when the run is not stale", async () => {
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+    const dir = join(tmp, "t_reserve_fresh");
+    createMeta(dir, HEADER_FRESH);
+    const sid = "reserve-fresh-sid";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-fresh-reserve",
+      status: "queued",
+      startedAt: null,
+      endedAt: null,
+    });
+    acquireRepoReservation("fake-fresh-reserve", sid);
+
+    const meta = await reapStaleRunsForDir(dir);
+    expect(meta!.runs[0].status).toBe("queued");
+    expect(currentReservation("fake-fresh-reserve")?.sessionId).toBe(sid);
+  });
+});

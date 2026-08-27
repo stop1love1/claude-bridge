@@ -17,6 +17,7 @@ import { wireRunLifecycle, spawnCoordinatorForTask } from "@/libs/coordinator";
 import { getApp, type AppGitSettings } from "@/libs/apps";
 import { verifyRequestActor, type Actor } from "@/libs/auth";
 import { prepareBranch } from "@/libs/gitOps";
+import { acquireRepoReservation, releaseRepoReservation } from "@/libs/repoReservation";
 import { createWorktreeForRun, removeWorktree } from "@/libs/worktrees";
 import { loadProfiles } from "@/libs/profileStore";
 import {
@@ -330,9 +331,33 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const app = getApp(repo);
   const effGit = app ? effectiveGitForActor(app.git, actor, id) : null;
   const useWorktree = !!(app && effGit && effGit.worktreeMode === "enabled");
+
+  let reservedSessionId: string | null = null;
+  if (app && !useWorktree) {
+    reservedSessionId = randomUUID();
+    const reservation = acquireRepoReservation(app.name, reservedSessionId);
+    if (!reservation.ok) {
+      return NextResponse.json(
+        {
+          error: "repo reserved",
+          reason:
+            `app "${app.name}" has worktreeMode disabled, so only one run may touch its shared working tree at a time; ` +
+            `session ${reservation.heldBy} currently holds it — wait for it to finish, kill it, or enable worktreeMode to allow concurrent runs`,
+          repo: app.name,
+          heldBy: reservation.heldBy ?? null,
+        },
+        { status: 409 },
+      );
+    }
+  }
+  const releaseReservation = () => {
+    if (app && reservedSessionId) releaseRepoReservation(app.name, reservedSessionId);
+  };
+
   if (app && effGit && effGit.branchMode !== "current" && !useWorktree) {
     const result = await prepareBranch(repoCwd, effGit, id);
     if (!result.ok) {
+      releaseReservation();
       return NextResponse.json(
         {
           error: `git branch setup failed: ${result.message}`,
@@ -370,7 +395,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }> = [];
 
   for (let variantIndex = 0; variantIndex < speculative.n; variantIndex++) {
-  const sessionId = randomUUID();
+  const sessionId = reservedSessionId ?? randomUUID();
 
   let spawnCwd = repoCwd;
   let worktreePath: string | null = null;
@@ -492,6 +517,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       prompt,
     });
     if (decision.status === "deny") {
+      releaseReservation();
       return NextResponse.json(
         { error: "user denied spawn", reason: decision.reason ?? null },
         { status: 403 },
@@ -545,6 +571,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       const { cleanupSessionSettings } = require("@/libs/permissionSettings") as typeof import("@/libs/permissionSettings");
       cleanupSessionSettings(sessionId);
     } catch { }
+    releaseReservation();
     return NextResponse.json(
       {
         error: "duplicate spawn",
@@ -578,6 +605,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     } catch (uErr) {
       console.error("failed to mark queued run failed after spawn error", uErr);
     }
+    releaseReservation();
     return NextResponse.json(serverError(e, "tasks:agent-spawn"), { status: 500 });
   }
 

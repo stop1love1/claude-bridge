@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { killChild } from "@/libs/spawnRegistry";
+import { releaseRepoReservation } from "@/libs/repoReservation";
 import { isValidTaskId } from "@/libs/tasks";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { ok } from "@/libs/apiResponse";
@@ -34,12 +35,15 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     );
   }
 
-  await updateRun(
+  const cancelled = await updateRun(
     dir,
     sessionId,
     { status: "cancelled", endedAt: new Date().toISOString() },
     (r) => r.status === "running",
   );
+  if (cancelled.applied && cancelled.run) {
+    releaseRepoReservation(cancelled.run.repo, sessionId);
+  }
 
   return ok({ sessionId, action: "killed" });
 }

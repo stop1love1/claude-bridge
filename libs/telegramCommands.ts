@@ -21,6 +21,7 @@ import { continueCoordinator } from "./planGateLifecycle";
 import { readPlanGateConfig } from "./planGateConfig";
 import { resumeClaude } from "./spawn";
 import { killChild } from "./spawnRegistry";
+import { releaseRepoReservation } from "./repoReservation";
 import { autoDetectApps, loadApps } from "./apps";
 import {
   isValidTaskId,
@@ -581,6 +582,7 @@ async function commandKill(idArg: string | undefined): Promise<string> {
       patch: { status: "cancelled", endedAt: new Date().toISOString() },
     })),
   );
+  for (const r of running) releaseRepoReservation(r.repo, r.sessionId);
   return `🛑 Killed ${killed} of ${running.length} session\\(s\\) for \`${idArg}\``;
 }
 
