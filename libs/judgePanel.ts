@@ -27,11 +27,14 @@ export function aggregatePanel(votes: PanelVote[], panelSize: number): PanelAggr
   const broken = votes.filter((v) => v.verdict === "broken");
   const drift = votes.filter((v) => v.verdict === "drift");
   const dedupeCap = (xs: string[]) => Array.from(new Set(xs)).slice(0, CONCERNS_CAP);
+  const partial = votes.length < panelSize;
+  const quorum = `${votes.length}/${panelSize} judges reported`;
+  const withQuorum = (reason: string) => (partial ? `${reason} (partial panel: ${quorum})` : reason);
 
   if (broken.length >= majority) {
     return {
       verdict: "broken",
-      reason: broken.map((v) => `[${v.lens}] ${v.reason}`).join(" · "),
+      reason: withQuorum(broken.map((v) => `[${v.lens}] ${v.reason}`).join(" · ")),
       concerns: dedupeCap(broken.flatMap((v) => v.concerns)),
     };
   }
@@ -39,11 +42,15 @@ export function aggregatePanel(votes: PanelVote[], panelSize: number): PanelAggr
     const flagged = [...broken, ...drift];
     return {
       verdict: "drift",
-      reason: flagged.map((v) => `[${v.lens}] ${v.reason}`).join(" · "),
+      reason: withQuorum(flagged.map((v) => `[${v.lens}] ${v.reason}`).join(" · ")),
       concerns: dedupeCap(flagged.flatMap((v) => v.concerns)),
     };
   }
-  return { verdict: "pass", reason: "panel consensus: pass", concerns: [] };
+  return {
+    verdict: "pass",
+    reason: partial ? `partial panel: ${quorum}, all pass` : "panel consensus: pass",
+    concerns: [],
+  };
 }
 
 export interface PanelLens {

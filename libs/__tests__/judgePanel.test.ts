@@ -44,6 +44,65 @@ describe("aggregatePanel (N=3 majority)", () => {
   });
 });
 
+describe("aggregatePanel (partial panel — majority reported, panelSize not reached)", () => {
+  const shortfall = /\b2\s*\/\s*3\b/;
+
+  it("two broken votes out of three still block", () => {
+    const r = aggregatePanel([v("a", "broken", "x", ["c1"]), v("b", "broken", "y")], 3);
+    expect(r.verdict).toBe("broken");
+    expect(r.reason).toContain("x");
+    expect(r.reason).toContain("y");
+    expect(r.reason).toMatch(shortfall);
+    expect(r.concerns).toContain("c1");
+  });
+
+  it("one broken + one pass out of three is drift, and says so with the count", () => {
+    const r = aggregatePanel([v("a", "broken", "x"), v("b", "pass")], 3);
+    expect(r.verdict).toBe("drift");
+    expect(r.reason).toContain("x");
+    expect(r.reason).toMatch(shortfall);
+  });
+
+  it("one drift + one pass out of three is drift, and says so with the count", () => {
+    const r = aggregatePanel([v("a", "drift", "d1"), v("b", "pass")], 3);
+    expect(r.verdict).toBe("drift");
+    expect(r.reason).toContain("d1");
+    expect(r.reason).toMatch(shortfall);
+  });
+
+  it("two drift votes out of three is drift, and says so with the count", () => {
+    const r = aggregatePanel([v("a", "drift", "d1"), v("b", "drift", "d2")], 3);
+    expect(r.verdict).toBe("drift");
+    expect(r.reason).toContain("d1");
+    expect(r.reason).toContain("d2");
+    expect(r.reason).toMatch(shortfall);
+  });
+
+  it("two pass votes out of three still pass, but the reason may not claim consensus", () => {
+    const r = aggregatePanel([v("a", "pass"), v("b", "pass")], 3);
+    expect(r.verdict).toBe("pass");
+    expect(r.reason).toMatch(shortfall);
+    expect(r.reason).not.toMatch(/consensus/i);
+  });
+
+  it("below majority (1 of 3) is still skipped and reports the count", () => {
+    const r = aggregatePanel([v("a", "pass")], 3);
+    expect(r.verdict).toBe("skipped");
+    expect(r.reason).toMatch(/\b1\s*\/\s*3\b/);
+  });
+
+  it("a full panel never understates how many judges reported", () => {
+    const understated = /\b[0-2]\s*\/\s*3\b/;
+    const allPass = aggregatePanel([v("a", "pass"), v("b", "pass"), v("c", "pass")], 3);
+    expect(allPass.verdict).toBe("pass");
+    expect(allPass.reason).not.toMatch(understated);
+
+    const blocked = aggregatePanel([v("a", "broken", "x"), v("b", "broken", "y"), v("c", "pass")], 3);
+    expect(blocked.verdict).toBe("broken");
+    expect(blocked.reason).not.toMatch(understated);
+  });
+});
+
 const FINISHED: Run = {
   sessionId: "00000000-0000-4000-8000-000000000001",
   role: "coder", repo: "app", status: "done", startedAt: null, endedAt: null,
