@@ -1196,3 +1196,237 @@ describe("wireRunLifecycle — crash-retry reservation timing (F2)", () => {
     expect(currentReservation("real-app")).toBeNull();
   });
 });
+
+describe("postExitFlow — diff-judging gates skip runs that changed nothing (Task 35)", () => {
+  const REAL_APP = {
+    name: "real-app",
+    path: "/tmp/fake-app",
+    git: { branchMode: "current", worktreeMode: "disabled", autoCommit: false, autoPush: false, mergeTargetBranch: "", integrationMode: "none" },
+    verify: {},
+    quality: { critic: false, verifier: false },
+    retry: {},
+    memory: { distill: false },
+  };
+
+  const NO_DIFF_VERIFIER = {
+    verdict: "pass",
+    reason: "analysis-only run — no diff, no claims, nothing to verify",
+    claimedFiles: [],
+    actualFiles: [],
+    unmatchedClaims: [],
+    unclaimedActual: [],
+    durationMs: 1,
+  };
+
+  const TOUCHED_VERIFIER = {
+    verdict: "pass",
+    reason: "all 1 claimed file(s) match git diff (0 extra unclaimed)",
+    claimedFiles: ["a.ts"],
+    actualFiles: ["a.ts"],
+    unmatchedClaims: [],
+    unclaimedActual: [],
+    durationMs: 1,
+  };
+
+  const UNMEASURED_VERIFIER = {
+    verdict: "skipped",
+    reason: "no report file at sessions/<task>/reports/<role>-<repo>.md",
+    claimedFiles: [],
+    actualFiles: [],
+    unmatchedClaims: [],
+    unclaimedActual: [],
+    durationMs: 1,
+  };
+
+  async function driveExit(opts: {
+    verifier: object | null;
+    quality: object;
+    styleCritic?: ReturnType<typeof vi.fn>;
+    semanticVerifier?: ReturnType<typeof vi.fn>;
+  }) {
+    const styleCritic =
+      opts.styleCritic ??
+      vi.fn().mockResolvedValue({ verdict: "match", reason: "fits", issues: [], durationMs: 1 });
+    const semanticVerifier =
+      opts.semanticVerifier ??
+      vi.fn().mockResolvedValue({ verdict: "pass", reason: "delivers the ask", concerns: [], durationMs: 1 });
+
+    seedRequireCache({
+      verifier: { runVerifier: async () => opts.verifier },
+      styleCritic: { runStyleCritic: styleCritic },
+      semanticVerifier: { runSemanticVerifier: semanticVerifier },
+    });
+
+    const { createMeta, appendRun, readMeta } = await import("../meta");
+    const ge = await import("../gateEscalation");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    vi.mocked(ge.escalateGateBlock).mockClear();
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+      parentSessionId: "00000000-0000-0000-0000-000000000000",
+    });
+    getAppMock.mockReturnValue({ ...REAL_APP, quality: opts.quality });
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 0, null);
+    await flushAsync(12);
+
+    return {
+      styleCritic,
+      semanticVerifier,
+      escalations: vi.mocked(ge.escalateGateBlock).mock.calls,
+      run: readMeta(tmp)?.runs.find((r) => r.sessionId === SID),
+    };
+  }
+
+  it("never spawns the semantic verifier when the claim gate observed zero changed files", async () => {
+    const { semanticVerifier, escalations, run } = await driveExit({
+      verifier: NO_DIFF_VERIFIER,
+      quality: { critic: false, verifier: true },
+      semanticVerifier: vi.fn().mockResolvedValue({
+        verdict: "broken",
+        reason: "the task's sole deliverable was never produced",
+        concerns: [],
+        durationMs: 1,
+      }),
+    });
+
+    expect(semanticVerifier).not.toHaveBeenCalled();
+    expect(run?.semanticVerifier).toBeUndefined();
+    expect(escalations).toHaveLength(0);
+    expect(run?.status).toBe("done");
+  });
+
+  it("never spawns the style critic when the claim gate observed zero changed files", async () => {
+    const { styleCritic, escalations, run } = await driveExit({
+      verifier: NO_DIFF_VERIFIER,
+      quality: { critic: true, verifier: false },
+      styleCritic: vi.fn().mockResolvedValue({
+        verdict: "alien",
+        reason: "raw fetch instead of api client",
+        issues: [],
+        durationMs: 1,
+      }),
+    });
+
+    expect(styleCritic).not.toHaveBeenCalled();
+    expect(run?.styleCritic).toBeUndefined();
+    expect(escalations).toHaveLength(0);
+    expect(run?.status).toBe("done");
+  });
+
+  it("spawns both gates unchanged when the claim gate observed changed files", async () => {
+    const { styleCritic, semanticVerifier, escalations, run } = await driveExit({
+      verifier: TOUCHED_VERIFIER,
+      quality: { critic: true, verifier: true },
+    });
+
+    expect(styleCritic).toHaveBeenCalledTimes(1);
+    expect(semanticVerifier).toHaveBeenCalledTimes(1);
+    expect(run?.styleCritic?.verdict).toBe("match");
+    expect(run?.semanticVerifier?.verdict).toBe("pass");
+    expect(escalations).toHaveLength(0);
+  });
+
+  it("still escalates a `broken` semantic verdict on a run that changed files", async () => {
+    const { escalations, run } = await driveExit({
+      verifier: TOUCHED_VERIFIER,
+      quality: { critic: false, verifier: true },
+      semanticVerifier: vi.fn().mockResolvedValue({
+        verdict: "broken",
+        reason: "does not implement the task body",
+        concerns: [],
+        durationMs: 1,
+      }),
+    });
+
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0][0]).toMatchObject({ gate: "semantic", retryScheduled: false });
+    expect(run?.semanticVerifier?.verdict).toBe("broken");
+  });
+
+  it("still records a `drift` semantic verdict without escalating on a run that changed files", async () => {
+    const { escalations, run } = await driveExit({
+      verifier: TOUCHED_VERIFIER,
+      quality: { critic: false, verifier: true },
+      semanticVerifier: vi.fn().mockResolvedValue({
+        verdict: "drift",
+        reason: "partial delivery",
+        concerns: ["missed criterion 2"],
+        durationMs: 1,
+      }),
+    });
+
+    expect(escalations).toHaveLength(0);
+    expect(run?.semanticVerifier?.verdict).toBe("drift");
+  });
+
+  it("still escalates an `alien` style verdict on a run that changed files", async () => {
+    const { escalations, run } = await driveExit({
+      verifier: TOUCHED_VERIFIER,
+      quality: { critic: true, verifier: false },
+      styleCritic: vi.fn().mockResolvedValue({
+        verdict: "alien",
+        reason: "raw fetch instead of api client",
+        issues: [],
+        durationMs: 1,
+      }),
+    });
+
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0][0]).toMatchObject({ gate: "style", retryScheduled: false });
+    expect(run?.styleCritic?.verdict).toBe("alien");
+  });
+
+  it("still blocks on a semantic-gate crash for a run that reaches the gate", async () => {
+    const { escalations, run } = await driveExit({
+      verifier: TOUCHED_VERIFIER,
+      quality: { critic: false, verifier: true },
+      semanticVerifier: vi.fn().mockRejectedValue(new Error("panel exploded")),
+    });
+
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0][0]).toMatchObject({ gate: "semantic", retryScheduled: false });
+    expect(run?.semanticVerifier?.verdict).toBe("crashed");
+  });
+
+  it("still blocks on a style-gate crash for a run that reaches the gate", async () => {
+    const { escalations, run } = await driveExit({
+      verifier: TOUCHED_VERIFIER,
+      quality: { critic: true, verifier: false },
+      styleCritic: vi.fn().mockRejectedValue(new Error("boom")),
+    });
+
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0][0]).toMatchObject({ gate: "style", retryScheduled: false });
+    expect(run?.styleCritic?.verdict).toBe("crashed");
+  });
+
+  it("still spawns both gates when the claim gate never measured the tree (skipped verdict)", async () => {
+    const { styleCritic, semanticVerifier } = await driveExit({
+      verifier: UNMEASURED_VERIFIER,
+      quality: { critic: true, verifier: true },
+    });
+
+    expect(styleCritic).toHaveBeenCalledTimes(1);
+    expect(semanticVerifier).toHaveBeenCalledTimes(1);
+  });
+
+  it("still spawns both gates when the claim gate returned nothing at all", async () => {
+    const { styleCritic, semanticVerifier } = await driveExit({
+      verifier: null,
+      quality: { critic: true, verifier: true },
+    });
+
+    expect(styleCritic).toHaveBeenCalledTimes(1);
+    expect(semanticVerifier).toHaveBeenCalledTimes(1);
+  });
+});

@@ -120,9 +120,14 @@ interface PostExitContext {
   title: string;
   app: App | null;
   identityRetained: boolean;
+  observedChangedFiles: string[] | null;
 }
 
 type GateOutcome = "proceed" | "blocked";
+
+function observedNoChanges(ctx: PostExitContext): boolean {
+  return ctx.observedChangedFiles !== null && ctx.observedChangedFiles.length === 0;
+}
 
 async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, app } = ctx;
@@ -345,6 +350,10 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
     });
   }
 
+  if (verifierResult && verifierResult.verdict !== "skipped") {
+    ctx.observedChangedFiles = verifierResult.actualFiles;
+  }
+
   const needsClaimRetry =
     !!verifierResult &&
     (verifierResult.verdict === "drift" || verifierResult.verdict === "broken");
@@ -397,6 +406,10 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
 async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
   const { dir, tid, t, run, title, app } = ctx;
   if (!app || app.quality?.critic !== true) {
+    return "proceed";
+  }
+  if (observedNoChanges(ctx)) {
+    logInfo("style-critic", "skipped — run produced no changed files, no diff to judge", { tag: t });
     return "proceed";
   }
 
@@ -492,6 +505,10 @@ async function runSemanticVerifierGate(
 ): Promise<GateOutcome> {
   const { dir, tid, t, run, title, app } = ctx;
   if (!app || !semanticVerifierEnabled(app)) {
+    return "proceed";
+  }
+  if (observedNoChanges(ctx)) {
+    logInfo("semantic-verifier", "skipped — run produced no changed files, no diff to judge", { tag: t });
     return "proceed";
   }
 
@@ -596,7 +613,16 @@ async function postExitFlow(args: {
   const { sessionsDir: dir, taskId: tid, tag: t, finishedRun: run, taskTitle: title } = args;
 
   const app = getApp(run.repo);
-  const ctx: PostExitContext = { dir, tid, t, run, title, app, identityRetained: false };
+  const ctx: PostExitContext = {
+    dir,
+    tid,
+    t,
+    run,
+    title,
+    app,
+    identityRetained: false,
+    observedChangedFiles: null,
+  };
 
   if ((await runVerifyChainGate(ctx)) === "blocked") {
     return { releaseReservation: !ctx.identityRetained };

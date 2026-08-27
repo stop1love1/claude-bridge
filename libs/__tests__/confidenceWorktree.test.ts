@@ -460,7 +460,7 @@ describe("postExitFlow — worktree confidence hold wiring", () => {
           verdict: "pass",
           reason: "",
           claimedFiles: [],
-          actualFiles: [],
+          actualFiles: ["a.ts"],
           unmatchedClaims: ["a", "b", "c", "d", "e"],
           unclaimedActual: [],
           durationMs: 1,
