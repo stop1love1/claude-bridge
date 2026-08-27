@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -114,6 +114,93 @@ describe("escalateGateBlock", () => {
         retryScheduled: false,
       }),
     ).resolves.toBeUndefined();
+    expect(sendTelegramRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepends a block notice into summary.md and preserves the coordinator's existing content below it", async () => {
+    const { createMeta } = await import("../meta");
+    const { escalateGateBlock } = await import("../gateEscalation");
+    createMeta(dir, TASK_HEADER);
+    const summaryPath = join(dir, "summary.md");
+    writeFileSync(
+      summaryPath,
+      "READY FOR REVIEW — subtract(a, b) added to math.ts, matching add's style exactly.\n",
+      "utf8",
+    );
+
+    await escalateGateBlock({
+      taskId: TASK_ID,
+      sessionsDir: dir,
+      gate: "preflight",
+      reason: "agent made 1 Read call(s) before the first Edit/Write — minimum is 1",
+      retryScheduled: false,
+    });
+
+    const content = readFileSync(summaryPath, "utf8");
+    const firstLine = content.split("\n")[0];
+    expect(firstLine).toContain("BLOCKED");
+    expect(firstLine).toContain("preflight");
+    expect(firstLine).not.toContain("READY FOR REVIEW");
+    expect(content).toContain(
+      "READY FOR REVIEW — subtract(a, b) added to math.ts, matching add's style exactly.",
+    );
+  });
+
+  it("writes a summary.md containing just the block notice when none exists yet", async () => {
+    const { createMeta } = await import("../meta");
+    const { escalateGateBlock } = await import("../gateEscalation");
+    createMeta(dir, TASK_HEADER);
+    const summaryPath = join(dir, "summary.md");
+
+    await escalateGateBlock({
+      taskId: TASK_ID,
+      sessionsDir: dir,
+      gate: "verify",
+      reason: "chain crashed — inconclusive",
+      retryScheduled: false,
+    });
+
+    const content = readFileSync(summaryPath, "utf8");
+    expect(content.split("\n")[0]).toContain("BLOCKED");
+    expect(content).toContain("chain crashed — inconclusive");
+  });
+
+  it("does NOT write summary.md when retryScheduled is true", async () => {
+    const { createMeta } = await import("../meta");
+    const { escalateGateBlock } = await import("../gateEscalation");
+    createMeta(dir, TASK_HEADER);
+    const summaryPath = join(dir, "summary.md");
+
+    await escalateGateBlock({
+      taskId: TASK_ID,
+      sessionsDir: dir,
+      gate: "style",
+      reason: "alien — spawned retry",
+      retryScheduled: true,
+    });
+
+    expect(() => readFileSync(summaryPath, "utf8")).toThrow();
+  });
+
+  it("still flips the section and notifies even when the summary.md write fails", async () => {
+    const { createMeta, readMeta } = await import("../meta");
+    const { escalateGateBlock } = await import("../gateEscalation");
+    createMeta(dir, TASK_HEADER);
+    const summaryPath = join(dir, "summary.md");
+    mkdirSync(summaryPath);
+
+    await expect(
+      escalateGateBlock({
+        taskId: TASK_ID,
+        sessionsDir: dir,
+        gate: "semantic",
+        reason: "broken — retry ineligible",
+        retryScheduled: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    const meta = readMeta(dir);
+    expect(meta?.taskSection).toBe("BLOCKED");
     expect(sendTelegramRaw).toHaveBeenCalledTimes(1);
   });
 });
