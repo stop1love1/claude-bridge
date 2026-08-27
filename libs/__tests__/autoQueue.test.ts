@@ -124,6 +124,18 @@ describe("pickNextTodoTask (pure)", () => {
     const tasks = [task({ id: "t_20260701_001", intakeStatus: undefined })];
     expect(pickNextTodoTask(tasks, new Map())?.id).toBe("t_20260701_001");
   });
+  it("skips a task whose meta.json was written moments ago", () => {
+    const justCreated = task({ id: "t_1", section: "TODO", createdAt: new Date().toISOString() });
+    expect(pickNextTodoTask([justCreated], new Map([["t_1", 0]]))).toBeNull();
+  });
+  it("picks a task that has been sitting in TODO", () => {
+    const old = task({
+      id: "t_1",
+      section: "TODO",
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+    expect(pickNextTodoTask([old], new Map([["t_1", 0]]))?.id).toBe("t_1");
+  });
 });
 
 describe("autoQueueTick", () => {
@@ -200,5 +212,20 @@ describe("autoQueueTick", () => {
     readMetaMock.mockImplementation(() => meta([]));
     await autoQueueTick();
     expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-verifies eligibility immediately before spawning", async () => {
+    writeAutoQueueConfig({ enabled: true, maxConcurrent: 1 });
+    const todo = task({ id: "t_20260701_001" });
+    listTasksMock.mockReturnValue([todo]);
+    let readMetaCalls = 0;
+    readMetaMock.mockImplementation(() => {
+      readMetaCalls += 1;
+      if (readMetaCalls === 1) return meta([]);
+      return meta([run({ status: "queued" })]);
+    });
+    await autoQueueTick();
+    expect(readMetaCalls).toBeGreaterThanOrEqual(2);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

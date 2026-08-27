@@ -26,6 +26,7 @@ export interface Task {
   workflowId?: string | null;
   effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | null;
   intakeStatus?: "none" | "planning" | "awaiting-approval" | "approved" | "error" | null;
+  createdAt?: string;
 }
 
 export const SECTION_STATUS: Record<TaskSection, TaskStatus> = {

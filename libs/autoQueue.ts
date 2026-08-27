@@ -4,6 +4,7 @@ import { BRIDGE_STATE_DIR, SESSIONS_DIR } from "./paths";
 import { writeJsonAtomic } from "./atomicWrite";
 import { listTasks } from "./tasksStore";
 import { readMeta } from "./meta";
+import type { Meta } from "./meta";
 import { spawnCoordinatorForTask } from "./coordinator";
 import { logError, logInfo } from "./log";
 import type { Task } from "./tasks";
@@ -66,17 +67,33 @@ export function _resetForTests(): void {
 export const _internal = { CONFIG_FILE };
 
 
+const AUTO_QUEUE_SETTLE_MS = 120_000;
+
 export function pickNextTodoTask(tasks: Task[], runCountById: Map<string, number>): Task | null {
+  const now = Date.now();
   const eligible = tasks.filter((t) => {
     if (t.section !== "TODO") return false;
     if ((runCountById.get(t.id) ?? 0) > 0) return false;
     const intake = t.intakeStatus ?? "none";
     if (intake !== "none") return false;
+    if (t.createdAt) {
+      const createdMs = Date.parse(t.createdAt);
+      if (Number.isFinite(createdMs) && now - createdMs < AUTO_QUEUE_SETTLE_MS) return false;
+    }
     return true;
   });
   if (eligible.length === 0) return null;
   eligible.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return eligible[0];
+}
+
+function metaLooksDispatchable(meta: Meta | null): boolean {
+  if (!meta) return false;
+  if (meta.taskSection !== "TODO") return false;
+  if (meta.runs.length > 0) return false;
+  const intakeStatus = meta.intake?.status ?? "none";
+  if (intakeStatus !== "none") return false;
+  return true;
 }
 
 
@@ -103,6 +120,12 @@ export async function autoQueueTick(): Promise<void> {
 
   const next = pickNextTodoTask(tasks, runCountById);
   if (!next) return;
+
+  const freshMeta = readMeta(join(SESSIONS_DIR, next.id));
+  if (!metaLooksDispatchable(freshMeta)) {
+    logInfo("autoQueue", `skipped ${next.id}: no longer eligible at dispatch time`, { taskId: next.id });
+    return;
+  }
 
   try {
     const sessionId = await spawnCoordinatorForTask(next);

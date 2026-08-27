@@ -41,6 +41,7 @@ function metaToTask(meta: Meta): Task {
     workflowId: meta.workflowId ?? null,
     effort: meta.taskEffort ?? null,
     intakeStatus: meta.intake?.status ?? null,
+    createdAt: meta.createdAt,
   };
 }
 
@@ -168,6 +169,7 @@ export function createTask(input: {
     origin,
     workflowId,
     effort: taskEffort,
+    createdAt: now.toISOString(),
   };
 }
 
