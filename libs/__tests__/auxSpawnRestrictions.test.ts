@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolve as resolvePath } from "node:path";
-import { readOnlyChildArgs, denyTaskToolArgs } from "../spawn";
+import { readOnlyChildArgs, denyTaskToolNames } from "../spawn";
 import { buildTelegramIntentArgs } from "../telegramIntent";
 import { buildDetectLLMArgs } from "../detect/llm";
 import { buildScanAppArgs, PROMPT as SCAN_APP_PROMPT } from "../scanApp";
@@ -83,9 +83,9 @@ describe("commitMessage argv", () => {
   });
 });
 
-describe("denyTaskToolArgs (Task 28)", () => {
+describe("denyTaskToolNames (Task 28)", () => {
   it("denies only Task — never the broader read-only denial list", () => {
-    const args = denyTaskToolArgs();
+    const args = denyTaskToolNames();
     expect(args).toEqual(["Task"]);
     expect(args).not.toContain("Bash");
     expect(args).not.toContain("Edit");
@@ -345,7 +345,7 @@ describe("planGateLifecycle continueCoordinator — resume settings deny Task (T
         wireRunLifecycle: vi.fn(),
       },
       paths: { BRIDGE_ROOT: "/tmp/fake-bridge-root" },
-      spawn: { denyTaskToolArgs: () => ["Task"] },
+      spawn: { denyTaskToolNames: () => ["Task"] },
     };
     const fakeKeyFor: Record<string, string> = {};
     for (const [name, mod] of Object.entries(fakes)) {

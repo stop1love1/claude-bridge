@@ -64,7 +64,7 @@ export function readOnlyChildArgs(): string[] {
   ];
 }
 
-export function denyTaskToolArgs(): string[] {
+export function denyTaskToolNames(): string[] {
   return ["Task"];
 }
 
@@ -305,6 +305,28 @@ export function spawnClaude(cwd: string, opts: SpawnOpts): SpawnedSession {
   return { child, sessionId };
 }
 
+export interface FreeSessionArgsOpts {
+  settings?: ChatSettings;
+  settingsPath?: string;
+  systemPromptFile?: string;
+}
+
+export function buildFreeSessionArgs(
+  opts: FreeSessionArgsOpts,
+  sessionId: string,
+): string[] {
+  return [
+    "--session-id", sessionId,
+    ...(opts.settingsPath ? ["--settings", opts.settingsPath] : []),
+    ...(opts.systemPromptFile
+      ? ["--append-system-prompt-file", opts.systemPromptFile]
+      : []),
+    ...settingsArgs(opts.settings),
+    ...streamingArgs(),
+    "-p",
+  ];
+}
+
 export function spawnFreeSession(
   cwd: string,
   prompt: string,
@@ -320,22 +342,35 @@ export function spawnFreeSession(
   );
   const child = spawnClaudeWithStdin(
     cwd,
-    [
-      "--session-id", sessionId,
-      ...(settingsPath ? ["--settings", settingsPath] : []),
-      ...(systemPromptFile
-        ? ["--append-system-prompt-file", systemPromptFile]
-        : []),
-      ...settingsArgs(settings),
-      ...streamingArgs(),
-      "-p",
-    ],
+    buildFreeSessionArgs({ settings, settingsPath, systemPromptFile }, sessionId),
     prompt,
     sessionId,
     settings,
   );
   registerChild(sessionId, child);
   return { child, sessionId };
+}
+
+export interface ResumeArgsOpts {
+  settings?: ChatSettings;
+  settingsPath?: string;
+  systemPromptFile?: string;
+}
+
+export function buildResumeArgs(
+  opts: ResumeArgsOpts,
+  sessionId: string,
+): string[] {
+  return [
+    "-p",
+    "--resume", sessionId,
+    ...(opts.settingsPath ? ["--settings", opts.settingsPath] : []),
+    ...(opts.systemPromptFile
+      ? ["--append-system-prompt-file", opts.systemPromptFile]
+      : []),
+    ...settingsArgs(opts.settings),
+    ...streamingArgs(),
+  ];
 }
 
 export function resumeClaude(
@@ -351,14 +386,7 @@ export function resumeClaude(
   );
   const child = spawnClaudeWithStdin(
     cwd,
-    [
-      "-p",
-      "--resume", sessionId,
-      ...(settingsPath ? ["--settings", settingsPath] : []),
-      ...(sysFile ? ["--append-system-prompt-file", sysFile] : []),
-      ...settingsArgs(settings),
-      ...streamingArgs(),
-    ],
+    buildResumeArgs({ settings, settingsPath, systemPromptFile: sysFile }, sessionId),
     message,
     sessionId,
     settings,

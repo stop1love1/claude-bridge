@@ -3,7 +3,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { autoApproveEnv, buildCoordinatorArgs, resolveEffort } from "../spawn";
+import {
+  autoApproveEnv,
+  buildCoordinatorArgs,
+  buildFreeSessionArgs,
+  buildResumeArgs,
+  denyTaskToolNames,
+  resolveEffort,
+} from "../spawn";
 import { ULTRACODE_DIRECTIVE, withUltracodeDirective } from "../systemPrompt";
 import { appendRun, createMeta, readMeta, updateRun } from "../meta";
 
@@ -208,6 +215,69 @@ describe("buildCoordinatorArgs", () => {
       "id",
     );
     expect(args).not.toContain("--settings");
+  });
+});
+
+describe("buildFreeSessionArgs — terminality (Task 28 follow-up)", () => {
+  it("emits --disallowed-tools Task when denyTaskToolNames() is passed", () => {
+    const args = buildFreeSessionArgs(
+      { settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() } },
+      "id",
+    );
+    const idx = args.indexOf("--disallowed-tools");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("Task");
+  });
+
+  it("the token immediately after the deny list is a flag, never a bare positional prompt", () => {
+    const args = buildFreeSessionArgs(
+      { settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() } },
+      "id",
+    );
+    const idx = args.indexOf("--disallowed-tools");
+    const afterDenyList = args[idx + 2];
+    expect(afterDenyList).toBeDefined();
+    expect(afterDenyList.startsWith("-")).toBe(true);
+  });
+
+  it("ends with the bare -p flag (prompt is piped via stdin, never positional)", () => {
+    const args = buildFreeSessionArgs(
+      { settings: { disallowedTools: denyTaskToolNames() } },
+      "id",
+    );
+    expect(args[args.length - 1]).toBe("-p");
+  });
+});
+
+describe("buildResumeArgs — terminality (Task 28 follow-up)", () => {
+  it("emits --disallowed-tools Task when denyTaskToolNames() is passed", () => {
+    const args = buildResumeArgs(
+      { settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() } },
+      "id",
+    );
+    const idx = args.indexOf("--disallowed-tools");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("Task");
+  });
+
+  it("the token immediately after the deny list is a flag, never a bare positional prompt", () => {
+    const args = buildResumeArgs(
+      { settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() } },
+      "id",
+    );
+    const idx = args.indexOf("--disallowed-tools");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const afterDenyList = args[idx + 2];
+    expect(afterDenyList).toBeDefined();
+    expect(afterDenyList.startsWith("-")).toBe(true);
+  });
+
+  it("nothing in the message/prompt path can reach argv here — resumeClaude pipes it via stdin, never appends it after buildResumeArgs's output", () => {
+    const args = buildResumeArgs(
+      { settings: { disallowedTools: denyTaskToolNames() } },
+      "id",
+    );
+    expect(args[args.length - 1]).toBe("--include-partial-messages");
   });
 });
 

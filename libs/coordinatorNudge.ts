@@ -11,7 +11,7 @@ import {
 } from "./meta";
 import { isAlive } from "./sessionEvents";
 import { resumeSessionWithLifecycle } from "./resumeSession";
-import { denyTaskToolArgs } from "./spawn";
+import { denyTaskToolNames } from "./spawn";
 import { BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
 import { logError, logInfo, logWarn } from "./log";
 
@@ -401,7 +401,7 @@ async function evaluateAndNudge(
       cwd: BRIDGE_ROOT,
       sessionId: parentSessionId,
       message: buildNudgeMessage({ taskId, children: decision.children }),
-      settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolArgs() },
+      settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() },
       context: `coordinator-nudge ${taskId}`,
     });
     logInfo(

@@ -34,7 +34,7 @@ vi.mock("../spawn", () => ({
     resumeClaudeCalls.push({ sessionId, settings });
     return fakeChild();
   },
-  denyTaskToolArgs: () => ["Task"],
+  denyTaskToolNames: () => ["Task"],
 }));
 
 const writeSessionSettingsShouldThrow = vi.hoisted(() => ({ value: false }));

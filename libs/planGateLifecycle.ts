@@ -75,7 +75,7 @@ export async function continueCoordinator(
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { BRIDGE_ROOT } = require("./paths") as typeof import("./paths");
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { denyTaskToolArgs } = require("./spawn") as typeof import("./spawn");
+  const { denyTaskToolNames } = require("./spawn") as typeof import("./spawn");
 
   const meta = readMeta(sessionsDir);
   if (!meta) return;
@@ -93,7 +93,7 @@ export async function continueCoordinator(
       cwd: BRIDGE_ROOT,
       sessionId: finished.sessionId,
       message: msg,
-      settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolArgs() },
+      settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() },
       context: `plan-gate-continue ${taskId}`,
     });
   } else {

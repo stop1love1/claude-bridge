@@ -19,7 +19,7 @@ import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { spawnCoordinatorForTask } from "./coordinator";
 import { continueCoordinator } from "./planGateLifecycle";
 import { readPlanGateConfig } from "./planGateConfig";
-import { denyTaskToolArgs, resumeClaude } from "./spawn";
+import { denyTaskToolNames, resumeClaude } from "./spawn";
 import { killChild } from "./spawnRegistry";
 import { releaseRepoReservation } from "./repoReservation";
 import { autoDetectApps, loadApps } from "./apps";
@@ -643,7 +643,7 @@ async function commandContinue(idArg: string | undefined): Promise<string> {
       `Continue from where you left off for bridge task ${idArg}. Read sessions/${idArg}/meta.json to see which child agents are still 'running', which 'done', and which 'failed'. If all children are done, finalize per prompts/coordinator-playbook.md §5. Otherwise re-orchestrate as needed.`;
     resumeClaude(BRIDGE_ROOT, coord.sessionId, message, {
       mode: "bypassPermissions",
-      disallowedTools: denyTaskToolArgs(),
+      disallowedTools: denyTaskToolNames(),
     });
     return `▶️ Resumed coordinator for \`${idArg}\` \\(\`${coord.sessionId.slice(0, 8)}\`\\)`;
   }

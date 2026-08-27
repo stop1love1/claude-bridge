@@ -4,7 +4,7 @@ import { getApp } from "./apps";
 import { readMeta, updateRun, type Run } from "./meta";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
-import { denyTaskToolArgs, resumeClaude } from "./spawn";
+import { denyTaskToolNames, resumeClaude } from "./spawn";
 import { acquireRepoReservation, releaseRepoReservation } from "./repoReservation";
 import { freeSessionSettingsPath, writeSessionSettings } from "./permissionSettings";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
@@ -123,7 +123,7 @@ export async function spawnRetry(
       spawnCwd,
       sessionId,
       retryMessage,
-      { mode: "bypassPermissions", disallowedTools: denyTaskToolArgs() },
+      { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() },
       settingsPath,
     );
   } catch (e) {

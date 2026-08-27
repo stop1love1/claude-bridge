@@ -55,7 +55,7 @@ vi.mock("../permissionSettings", () => ({
 const spawnFreeSessionMock = vi.fn();
 vi.mock("../spawn", () => ({
   spawnFreeSession: (...args: unknown[]) => spawnFreeSessionMock(...args),
-  denyTaskToolArgs: () => ["Task"],
+  denyTaskToolNames: () => ["Task"],
 }));
 
 import { runAgentGate } from "../qualityGate";

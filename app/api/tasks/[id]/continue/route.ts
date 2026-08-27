@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getTask } from "@/libs/tasksStore";
 import { readMeta } from "@/libs/meta";
 import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
+import { denyTaskToolNames } from "@/libs/spawn";
 import { spawnCoordinatorForTask } from "@/libs/coordinator";
 import { BRIDGE_ROOT, SESSIONS_DIR } from "@/libs/paths";
 import { isValidTaskId } from "@/libs/tasks";
@@ -37,7 +38,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           cwd: BRIDGE_ROOT,
           sessionId: coordinatorRun.sessionId,
           message,
-          settings: { mode: "bypassPermissions" },
+          settings: { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() },
           context: `coordinator-continue ${id}`,
         });
         return NextResponse.json({ action: "resumed", sessionId: coordinatorRun.sessionId });
