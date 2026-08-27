@@ -64,6 +64,10 @@ export function readOnlyChildArgs(): string[] {
   ];
 }
 
+export function denyTaskToolArgs(): string[] {
+  return ["Task"];
+}
+
 function streamingArgs(): string[] {
   return [
     "--output-format", "stream-json",

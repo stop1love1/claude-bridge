@@ -55,6 +55,7 @@ vi.mock("../permissionSettings", () => ({
 const spawnFreeSessionMock = vi.fn();
 vi.mock("../spawn", () => ({
   spawnFreeSession: (...args: unknown[]) => spawnFreeSessionMock(...args),
+  denyTaskToolArgs: () => ["Task"],
 }));
 
 import { runAgentGate } from "../qualityGate";
@@ -198,5 +199,24 @@ describe("runAgentGate — happy path", () => {
       expect(outcome.verdict).toMatchObject({ verdict: "match" });
     }
     expect(notifyGateInfraSkip).not.toHaveBeenCalled();
+  });
+
+  it("threads disallowedTools:[Task] into the agent-gate spawn (Task 28)", async () => {
+    spawnFreeSessionMock.mockImplementation(() => ({
+      child: fakeChildExiting(0),
+      sessionId: "gate-sid",
+    }));
+    const dir = join(TMP_SESSIONS, TASK_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "style-verdict.json"),
+      JSON.stringify({ verdict: "match", reason: "fits", issues: [] }),
+    );
+
+    await runAgentGate(baseOpts());
+
+    expect(spawnFreeSessionMock).toHaveBeenCalledTimes(1);
+    const settings = spawnFreeSessionMock.mock.calls[0][2];
+    expect(settings.disallowedTools).toContain("Task");
   });
 });

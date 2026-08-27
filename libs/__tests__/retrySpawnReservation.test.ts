@@ -19,16 +19,22 @@ vi.mock("../paths", async () => {
   return { ...actual, SESSIONS_DIR: TMP_SESSIONS };
 });
 
-const resumeClaudeCalls: Array<{ sessionId: string }> = [];
+const resumeClaudeCalls: Array<{ sessionId: string; settings?: { disallowedTools?: string[] } }> = [];
 function fakeChild(): ChildProcess {
   return new EventEmitter() as unknown as ChildProcess;
 }
 
 vi.mock("../spawn", () => ({
-  resumeClaude: (_cwd: string, sessionId: string) => {
-    resumeClaudeCalls.push({ sessionId });
+  resumeClaude: (
+    _cwd: string,
+    sessionId: string,
+    _message: string,
+    settings?: { disallowedTools?: string[] },
+  ) => {
+    resumeClaudeCalls.push({ sessionId, settings });
     return fakeChild();
   },
+  denyTaskToolArgs: () => ["Task"],
 }));
 
 const writeSessionSettingsShouldThrow = vi.hoisted(() => ({ value: false }));
@@ -129,6 +135,7 @@ describe("spawnRetry — re-acquires the reservation the crash path already rele
     expect(result).not.toBeNull();
     expect(resumeClaudeCalls).toHaveLength(1);
     expect(currentReservation("fake-crash-retry-app")?.sessionId).toBe(sid);
+    expect(resumeClaudeCalls[0].settings?.disallowedTools).toContain("Task");
 
     releaseRepoReservation("fake-crash-retry-app", sid);
   });

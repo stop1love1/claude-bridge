@@ -12,7 +12,7 @@ import { loadPinnedFiles } from "./pinnedFiles";
 import { ensureFreshSymbolIndex } from "./symbolStore";
 import { ensureFreshStyleFingerprint } from "./styleStore";
 import { buildChildPrompt } from "./childPrompt";
-import { spawnFreeSession } from "./spawn";
+import { denyTaskToolArgs, spawnFreeSession } from "./spawn";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
@@ -150,7 +150,7 @@ export async function runAgentGate(
     childHandle = spawnFreeSession(
       opts.appPath,
       prompt,
-      { mode: "bypassPermissions" },
+      { mode: "bypassPermissions", disallowedTools: denyTaskToolArgs() },
       settingsPath,
       sessionId,
     );

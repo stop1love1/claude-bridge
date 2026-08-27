@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { appendRun, readMeta, type Run, type RunSemanticVerifier } from "./meta";
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
-import { spawnFreeSession } from "./spawn";
+import { denyTaskToolArgs, spawnFreeSession } from "./spawn";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
@@ -265,7 +265,7 @@ export async function spawnSemanticVerifierRetry(args: {
     childHandle = spawnFreeSession(
       spawnCwd,
       retryPrompt,
-      { mode: "bypassPermissions" },
+      { mode: "bypassPermissions", disallowedTools: denyTaskToolArgs() },
       settingsPath,
       sessionId,
     );
