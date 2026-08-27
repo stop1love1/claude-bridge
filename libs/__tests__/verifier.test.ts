@@ -4,6 +4,7 @@ import {
   deriveVerdict,
   isEligibleForClaimRetry,
   parseChangedFiles,
+  parsePorcelainV1,
   renderClaimRetryContextBlock,
 } from "../verifier";
 import type { Run, RunVerifier } from "../meta";
@@ -188,6 +189,204 @@ describe("parseChangedFiles", () => {
   });
 });
 
+describe("parsePorcelainV1", () => {
+  describe("the exact bytes git status --porcelain=v1 emits", () => {
+    const table: Array<[string, string]> = [
+      [" M math.ts", "math.ts"],
+      [" D old.ts", "old.ts"],
+      [" M src/a-b/c.ts", "src/a-b/c.ts"],
+      ["?? new.ts", "new.ts"],
+      ["M  staged.ts", "staged.ts"],
+      ["A  added.ts", "added.ts"],
+      ["MM both.ts", "both.ts"],
+      ["R  old.ts -> new.ts", "new.ts"],
+    ];
+
+    for (const [line, expected] of table) {
+      it(`parses ${JSON.stringify(line)} as ${JSON.stringify(expected)}`, () => {
+        expect(parsePorcelainV1(line)).toEqual([expected]);
+      });
+    }
+  });
+
+  describe("the unstaged prefix that the leading-trim used to eat", () => {
+    it("keeps the path bare for a worktree-only modification", () => {
+      expect(parsePorcelainV1(" M math.ts")).toEqual(["math.ts"]);
+    });
+
+    it("keeps the path bare for a worktree-only deletion", () => {
+      expect(parsePorcelainV1(" D old.ts")).toEqual(["old.ts"]);
+    });
+
+    it("keeps the path bare for a worktree-only type change", () => {
+      expect(parsePorcelainV1(" T link.ts")).toEqual(["link.ts"]);
+    });
+
+    it("keeps the path bare for a nested unstaged path", () => {
+      expect(parsePorcelainV1(" M libs/__tests__/verifier.test.ts")).toEqual([
+        "libs/__tests__/verifier.test.ts",
+      ]);
+    });
+  });
+
+  describe("multi-line output", () => {
+    it("parses a realistic mixed worktree", () => {
+      const stdout = [
+        " M libs/verifier.ts",
+        "M  libs/meta.ts",
+        "?? scratch.md",
+        " D dead.ts",
+        "",
+      ].join("\n");
+      expect(parsePorcelainV1(stdout)).toEqual([
+        "libs/verifier.ts",
+        "libs/meta.ts",
+        "scratch.md",
+        "dead.ts",
+      ]);
+    });
+
+    it("handles CRLF line endings", () => {
+      expect(parsePorcelainV1(" M a.ts\r\n M b.ts\r\n")).toEqual(["a.ts", "b.ts"]);
+    });
+
+    it("strips a bare trailing carriage return on the last line", () => {
+      expect(parsePorcelainV1(" M math.ts\r")).toEqual(["math.ts"]);
+    });
+
+    it("dedupes a repeated path", () => {
+      expect(parsePorcelainV1(" M a.ts\nM  a.ts")).toEqual(["a.ts"]);
+    });
+
+    it("returns an empty list for empty stdout", () => {
+      expect(parsePorcelainV1("")).toEqual([]);
+      expect(parsePorcelainV1("\n")).toEqual([]);
+    });
+  });
+
+  describe("paths containing spaces", () => {
+    it("keeps a space inside an unstaged path", () => {
+      expect(parsePorcelainV1(" M my file.ts")).toEqual(["my file.ts"]);
+    });
+
+    it("keeps a space inside a staged path", () => {
+      expect(parsePorcelainV1("A  src/my dir/my file.ts")).toEqual([
+        "src/my dir/my file.ts",
+      ]);
+    });
+
+    it("keeps trailing content after multiple spaces", () => {
+      expect(parsePorcelainV1("?? a  b.ts")).toEqual(["a  b.ts"]);
+    });
+  });
+
+  describe("renames", () => {
+    it("yields the new path for a staged rename", () => {
+      expect(parsePorcelainV1("R  old.ts -> new.ts")).toEqual(["new.ts"]);
+    });
+
+    it("yields the new path for a rename with a further worktree edit", () => {
+      expect(parsePorcelainV1("RM old.ts -> new.ts")).toEqual(["new.ts"]);
+    });
+
+    it("yields the new path for a copy", () => {
+      expect(parsePorcelainV1("C  src.ts -> copy.ts")).toEqual(["copy.ts"]);
+    });
+
+    it("does not split a non-rename path that happens to contain an arrow", () => {
+      expect(parsePorcelainV1(" M a -> b.ts")).toEqual(["a -> b.ts"]);
+    });
+  });
+
+  describe("C-style quoted paths", () => {
+    it("unwraps a plainly quoted path", () => {
+      expect(parsePorcelainV1(' M "quoted.ts"')).toEqual(["quoted.ts"]);
+    });
+
+    it("decodes octal escapes back into UTF-8", () => {
+      expect(parsePorcelainV1(' M "\\303\\251t\\303\\251.ts"')).toEqual(["été.ts"]);
+    });
+
+    it("decodes an escaped double quote", () => {
+      expect(parsePorcelainV1(' M "we\\"ird.ts"')).toEqual(['we"ird.ts']);
+    });
+
+    it("decodes an escaped backslash", () => {
+      expect(parsePorcelainV1(' M "back\\\\slash.ts"')).toEqual(["back\\slash.ts"]);
+    });
+
+    it("unwraps both sides of a quoted rename and yields the new path", () => {
+      expect(parsePorcelainV1('R  "old name.ts" -> "new name.ts"')).toEqual([
+        "new name.ts",
+      ]);
+    });
+
+    it("leaves an unquoted path with an inner quote character alone", () => {
+      expect(parsePorcelainV1(" M a\"b.ts")).toEqual(['a"b.ts']);
+    });
+  });
+
+  describe("bytes captured verbatim from a live git status --porcelain=v1", () => {
+    const stdout = [
+      " M math.ts",
+      ' M "my file.ts"',
+      " D old.ts",
+      "R  ren.ts -> renamed.ts",
+      " M src/a-b/c.ts",
+      "A  staged.ts",
+      '?? "na\\303\\257ve dir.ts"',
+      "?? new.ts",
+      '?? "\\303\\251t\\303\\251.ts"',
+      "",
+    ].join("\n");
+
+    it("reduces every line to a bare path", () => {
+      expect(parsePorcelainV1(stdout)).toEqual([
+        "math.ts",
+        "my file.ts",
+        "old.ts",
+        "renamed.ts",
+        "src/a-b/c.ts",
+        "staged.ts",
+        "naïve dir.ts",
+        "new.ts",
+        "été.ts",
+      ]);
+    });
+
+    it("leaves no status prefix or quote character behind", () => {
+      for (const path of parsePorcelainV1(stdout)) {
+        expect(path).not.toMatch(/^[ MTADRCU?!]{2} /);
+        expect(path).not.toContain('"');
+        expect(path).not.toContain("\\3");
+      }
+    });
+  });
+
+  describe("lines that do not match the contract", () => {
+    const rejected = [
+      "",
+      "M",
+      " M",
+      "MM ",
+      "garbage",
+      "   spaces-only-flags.ts",
+      "XY bad.ts",
+      "M\tno-space.ts",
+    ];
+
+    for (const line of rejected) {
+      it(`skips ${JSON.stringify(line)}`, () => {
+        expect(parsePorcelainV1(line)).toEqual([]);
+      });
+    }
+
+    it("keeps parsing valid lines around a garbage line", () => {
+      expect(parsePorcelainV1(" M a.ts\ngarbage\n M b.ts")).toEqual(["a.ts", "b.ts"]);
+    });
+  });
+});
+
 describe("deriveVerdict", () => {
   it("returns pass for analysis-only run (both empty)", () => {
     const v = deriveVerdict({ claimed: [], actual: [] });
@@ -299,6 +498,38 @@ describe("deriveVerdict", () => {
     const v = deriveVerdict({ claimed, actual: ["Makefile"] });
     expect(v.verdict).toBe("pass");
     expect(v.unmatchedClaims).toEqual([]);
+  });
+
+  describe("the E2E run 3 scenario (unstaged coder edit)", () => {
+    it("passes a claim of math.ts against a worktree-only status line", () => {
+      const md = [
+        "# coder @ app-web",
+        "",
+        "## Changed files",
+        "- `math.ts` — added subtract",
+        "",
+        "## How to verify",
+        "Run the tests.",
+      ].join("\n");
+      const claimed = parseChangedFiles(md);
+      const actual = parsePorcelainV1(" M math.ts");
+      expect(claimed).toEqual(["math.ts"]);
+      expect(actual).toEqual(["math.ts"]);
+
+      const v = deriveVerdict({ claimed, actual });
+      expect(v.verdict).toBe("pass");
+      expect(v.unmatchedClaims).toEqual([]);
+      expect(v.unclaimedActual).toEqual([]);
+    });
+
+    it("still reports drift when the claim genuinely is not in the worktree", () => {
+      const v = deriveVerdict({
+        claimed: ["math.ts", "ghost.ts"],
+        actual: parsePorcelainV1(" M math.ts"),
+      });
+      expect(v.verdict).toBe("drift");
+      expect(v.unmatchedClaims).toEqual(["ghost.ts"]);
+    });
   });
 });
 

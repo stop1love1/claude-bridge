@@ -88,8 +88,96 @@ function readChildReport(taskId: string, run: Run): string {
   return "";
 }
 
-async function readActualFiles(appPath: string): Promise<string[]> {
+const PORCELAIN_PREFIX_LEN = 3;
+const PORCELAIN_STATUS_CODES = " MTADRCU?!";
+const RENAME_ARROW = " -> ";
+
+const C_ESCAPE_BYTES: Record<string, number> = {
+  a: 0x07,
+  b: 0x08,
+  f: 0x0c,
+  n: 0x0a,
+  r: 0x0d,
+  t: 0x09,
+  v: 0x0b,
+  '"': 0x22,
+  "\\": 0x5c,
+};
+
+function unquotePorcelainPath(token: string): string {
+  if (token.length < 2) return token;
+  if (!token.startsWith('"') || !token.endsWith('"')) return token;
+
+  const chars = Array.from(token.slice(1, -1));
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  let i = 0;
+
+  while (i < chars.length) {
+    const ch = chars[i];
+    if (ch !== "\\") {
+      for (const byte of encoder.encode(ch)) bytes.push(byte);
+      i += 1;
+      continue;
+    }
+    const next = chars[i + 1];
+    if (next === undefined) {
+      bytes.push(C_ESCAPE_BYTES["\\"]);
+      i += 1;
+      continue;
+    }
+    const simple = C_ESCAPE_BYTES[next];
+    if (simple !== undefined) {
+      bytes.push(simple);
+      i += 2;
+      continue;
+    }
+    const octal = chars.slice(i + 1, i + 1 + 3).join("");
+    if (/^[0-7]{3}$/.test(octal)) {
+      bytes.push(parseInt(octal, 8));
+      i += 4;
+      continue;
+    }
+    for (const byte of encoder.encode(next)) bytes.push(byte);
+    i += 2;
+  }
+
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+function parsePorcelainLine(rawLine: string): string | null {
+  const line = rawLine.replace(/\r+$/, "");
+  if (line.length <= PORCELAIN_PREFIX_LEN) return null;
+  if (line[PORCELAIN_PREFIX_LEN - 1] !== " ") return null;
+
+  const x = line[0];
+  const y = line[1];
+  if (!PORCELAIN_STATUS_CODES.includes(x)) return null;
+  if (!PORCELAIN_STATUS_CODES.includes(y)) return null;
+  if (x === " " && y === " ") return null;
+
+  const rest = line.slice(PORCELAIN_PREFIX_LEN);
+  const isRename = x === "R" || x === "C" || y === "R" || y === "C";
+  let token = rest;
+  if (isRename) {
+    const parts = rest.split(RENAME_ARROW);
+    token = parts[1] ?? parts[0];
+  }
+
+  const path = unquotePorcelainPath(token);
+  return path.length > 0 ? path : null;
+}
+
+export function parsePorcelainV1(stdout: string): string[] {
   const collected = new Set<string>();
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const path = parsePorcelainLine(rawLine);
+    if (path !== null) collected.add(path);
+  }
+  return [...collected];
+}
+
+async function readActualFiles(appPath: string): Promise<string[]> {
   try {
     const { stdout } = await execFileP("git", ["status", "--porcelain=v1"], {
       cwd: appPath,
@@ -97,17 +185,10 @@ async function readActualFiles(appPath: string): Promise<string[]> {
       windowsHide: true,
       maxBuffer: 256 * 1024,
     });
-    for (const rawLine of stdout.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line) continue;
-      const stripped = line.replace(/^.{2}\s+/, "");
-      const renameSplit = stripped.split(" -> ");
-      const path = (renameSplit[1] ?? renameSplit[0]).trim();
-      if (path) collected.add(path);
-    }
+    return parsePorcelainV1(stdout);
   } catch {
+    return [];
   }
-  return [...collected];
 }
 
 export function deriveVerdict(args: {
