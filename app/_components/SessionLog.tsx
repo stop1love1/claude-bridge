@@ -1,32 +1,23 @@
 "use client";
 
-import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Repo } from "@/libs/client/types";
 import { api } from "@/libs/client/api";
 import {
-  Terminal, Copy, Check, ArrowDown, OctagonAlert,
-  Undo2, Wrench,
-  Search, X, ArrowUp, Download, MoreVertical, RotateCw,
-  Loader2,
+  Terminal, ArrowDown, OctagonAlert,
+  Undo2,
+  Search, X, ArrowUp,
 } from "lucide-react";
-import { exportSessionMarkdown, downloadFile } from "@/libs/client/exportTask";
-import { TokenUsage, type TokenTotals } from "./TokenUsage";
+import type { TokenTotals } from "./TokenUsage";
 import { useToast } from "./Toasts";
 import { useConfirm } from "./ConfirmProvider";
 import { MessageComposer } from "./MessageComposer";
 import { InlinePermissionRequests } from "./InlinePermissionRequests";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
 
 import {
   asBlocks,
   classify,
   extractAttachments,
-  MAX_RENDERED,
   stripSystemTags,
   type ActiveRun,
   type ContentBlock,
@@ -36,19 +27,16 @@ import {
   ActivityRow,
   AttachmentChip,
   InlineImage,
-  StreamingAssistantRow,
   TextBlockView,
   ThinkingBlockView,
   ToolResultView,
   ToolUseView,
 } from "./SessionLog/views";
-import {
-  appendPartial,
-  clearPartials,
-  dropOnArrival,
-  subscribePartialKeys,
-  subscribePartialText,
-} from "./SessionLog/partialsStore";
+import { EmptyOrStreaming, StreamingPartialsList } from "./SessionLog/StreamingRows";
+import { useChatSearch } from "./SessionLog/useChatSearch";
+import { useScrollManager } from "./SessionLog/useScrollManager";
+import { useSessionStream } from "./SessionLog/useSessionStream";
+import { SessionLogHeader } from "./SessionLog/SessionLogHeader";
 
 
 const LogRow = memo(function LogRow({
@@ -212,107 +200,6 @@ const LogRow = memo(function LogRow({
   return true;
 });
 
-const StreamingPartialsList = memo(function StreamingPartialsList({
-  sessionId,
-  scrollerRef,
-  autoScroll,
-}: {
-  sessionId: string;
-  scrollerRef: React.RefObject<HTMLDivElement | null>;
-  autoScroll: boolean;
-}) {
-  const sub = useMemo(() => subscribePartialKeys(sessionId), [sessionId]);
-  const keys = useSyncExternalStore(sub.subscribe, sub.getSnapshot, sub.getSnapshot);
-  if (keys.length === 0) return null;
-  return (
-    <>
-      {keys.map((id) => (
-        <StreamingPartialRowConnected
-          key={`live-${id}`}
-          sessionId={sessionId}
-          messageId={id}
-          scrollerRef={scrollerRef}
-          autoScroll={autoScroll}
-        />
-      ))}
-    </>
-  );
-});
-
-function StreamingPartialRowConnected({
-  sessionId,
-  messageId,
-  scrollerRef,
-  autoScroll,
-}: {
-  sessionId: string;
-  messageId: string;
-  scrollerRef: React.RefObject<HTMLDivElement | null>;
-  autoScroll: boolean;
-}) {
-  const sub = useMemo(
-    () => subscribePartialText(sessionId, messageId),
-    [sessionId, messageId],
-  );
-  const text = useSyncExternalStore(sub.subscribe, sub.getSnapshot, sub.getSnapshot);
-  const autoScrollRef = useRef(autoScroll);
-  useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
-  useEffect(() => {
-    if (!autoScrollRef.current) return;
-    const el = scrollerRef.current;
-    if (!el) return;
-    const r = requestAnimationFrame(() => {
-      if (autoScrollRef.current && scrollerRef.current) {
-        scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
-      }
-    });
-    return () => cancelAnimationFrame(r);
-  }, [text, scrollerRef]);
-  if (!text.trim()) return null;
-  return <StreamingAssistantRow text={text} />;
-}
-
-function SpawnPlaceholder() {
-  const [stalled, setStalled] = useState(false);
-  useEffect(() => {
-    const h = setTimeout(() => setStalled(true), 30_000);
-    return () => clearTimeout(h);
-  }, []);
-  return (
-    <div className="flex items-start gap-2 text-muted-foreground text-[12px]">
-      <Loader2 size={14} className="animate-spin shrink-0 mt-0.5 text-primary" />
-      <span className="leading-relaxed">
-        {stalled
-          ? "Still spawning. Check the terminal where you started the bridge for errors."
-          : "Spawning coordinator… first response usually arrives in 5-15s."}
-      </span>
-    </div>
-  );
-}
-
-function EmptyOrStreaming({
-  sessionId,
-  scrollerRef,
-  autoScroll,
-}: {
-  sessionId: string;
-  scrollerRef: React.RefObject<HTMLDivElement | null>;
-  autoScroll: boolean;
-}) {
-  const sub = useMemo(() => subscribePartialKeys(sessionId), [sessionId]);
-  const keys = useSyncExternalStore(sub.subscribe, sub.getSnapshot, sub.getSnapshot);
-  if (keys.length === 0) {
-    return <SpawnPlaceholder key={sessionId} />;
-  }
-  return (
-    <StreamingPartialsList
-      sessionId={sessionId}
-      scrollerRef={scrollerRef}
-      autoScroll={autoScroll}
-    />
-  );
-}
-
 function SessionLogInner({
   run,
   repos,
@@ -324,19 +211,8 @@ function SessionLogInner({
   taskId?: string;
   onClearConversation?: () => void;
 }) {
-  const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [trimmed, setTrimmed] = useState(0);
-  const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
   const [showTools, setShowTools] = useState(true);
-  const [lastTs, setLastTs] = useState<number>(0);
-  const [pinnedUserUuid, setPinnedUserUuid] = useState<string | null>(null);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [aliveSse, setAliveSse] = useState<boolean | null>(null);
-  const [activity, setActivity] = useState<{
-    kind: "thinking" | "running" | "idle";
-    label?: string;
-  }>({ kind: "idle" });
   const offsetRef = useRef(0);
   const firstOffsetRef = useRef<number | null>(null);
   const entryOffsetsRef = useRef<number[]>([]);
@@ -354,232 +230,26 @@ function SessionLogInner({
     );
   }, [toast]);
 
-  useEffect(() => {
-    if (!run) return;
-
-    let stopped = false;
-    let es: EventSource | null = null;
-    let aliveSweepTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const applyTail = (payload: {
-      lines: unknown[];
-      offset: number;
-      lineOffsets: number[] | undefined;
-    }) => {
-      offsetRef.current = payload.offset;
-      if (!payload.lines.length) return;
-      const lines = payload.lines as LogEntry[];
-      const newest = lines[lines.length - 1]?.timestamp;
-      if (newest) setLastTs(new Date(newest).getTime());
-      const newLineOffsets = Array.isArray(payload.lineOffsets) ? payload.lineOffsets : [];
-      const arrivedAssistant = lines.some((l) => l?.type === "assistant");
-      if (arrivedAssistant) {
-        const arrivedIds: string[] = [];
-        for (const l of lines) {
-          const id = l?.message?.id;
-          if (typeof id === "string") arrivedIds.push(id);
-        }
-        dropOnArrival(run.sessionId, arrivedIds);
-      }
-      const arrivedUser = lines.some((l) => l?.type === "user");
-      startTransition(() => {
-        setEntries((prev) => {
-          const baseline = arrivedUser
-            ? prev.filter((e) => !(e.uuid && e.uuid.startsWith("optimistic:")))
-            : prev;
-          const seen = new Set<string>();
-          for (const e of baseline) {
-            if (e.uuid) seen.add(e.uuid);
-          }
-          const dedupLines: LogEntry[] = [];
-          const dedupOffsets: number[] = [];
-          for (let i = 0; i < lines.length; i++) {
-            const l = lines[i];
-            const id = l?.uuid;
-            if (id && seen.has(id)) continue;
-            if (id) seen.add(id);
-            dedupLines.push(l);
-            dedupOffsets.push(newLineOffsets[i] ?? 0);
-          }
-          if (dedupLines.length === 0 && baseline.length === prev.length) return prev;
-
-          const merged = [...baseline, ...dedupLines];
-          const mergedOffsets = [
-            ...entryOffsetsRef.current,
-            ...dedupOffsets,
-          ];
-          const protectedFront = loadedOlderCountRef.current;
-          const trimWindow = merged.length - protectedFront;
-          if (trimWindow <= MAX_RENDERED) {
-            entryOffsetsRef.current = mergedOffsets;
-            if (firstOffsetRef.current === null) {
-              firstOffsetRef.current = mergedOffsets[0] ?? 0;
-            }
-            return merged;
-          }
-          const drop = trimWindow - MAX_RENDERED;
-          setTrimmed((t) => t + drop);
-          const keptOffsets = [
-            ...mergedOffsets.slice(0, protectedFront),
-            ...mergedOffsets.slice(protectedFront + drop),
-          ];
-          entryOffsetsRef.current = keptOffsets;
-          if (firstOffsetRef.current === null) {
-            firstOffsetRef.current = keptOffsets[0] ?? 0;
-          }
-          return [
-            ...merged.slice(0, protectedFront),
-            ...merged.slice(protectedFront + drop),
-          ];
-        });
-      });
-    };
-
-    const openStream = () => {
-      if (stopped || es) return;
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      const url = `/api/sessions/${encodeURIComponent(run.sessionId)}/tail/stream?repo=${encodeURIComponent(run.repoPath)}&since=${offsetRef.current}`;
-      try {
-        es = new EventSource(url);
-      } catch {
-        return;
-      }
-      es.addEventListener("tail", (ev) => {
-        if (stopped) return;
-        try {
-          const payload = JSON.parse((ev as MessageEvent).data);
-          applyTail(payload);
-        } catch { }
-      });
-      es.addEventListener("partial", (ev) => {
-        if (stopped) return;
-        try {
-          const p = JSON.parse((ev as MessageEvent).data) as {
-            messageId: string;
-            index: number;
-            text: string;
-          };
-          if (!p?.text) return;
-          appendPartial(run.sessionId, p.messageId, p.text);
-          setLastTs(Date.now());
-        } catch { }
-      });
-      es.addEventListener("alive", (ev) => {
-        if (stopped) return;
-        try {
-          const { alive } = JSON.parse((ev as MessageEvent).data) as { alive: boolean };
-          setAliveSse(alive);
-          if (!alive) {
-            setActivity({ kind: "idle" });
-            if (aliveSweepTimer) clearTimeout(aliveSweepTimer);
-            aliveSweepTimer = setTimeout(() => {
-              aliveSweepTimer = null;
-              if (stopped) return;
-              clearPartials(run.sessionId);
-            }, 2000);
-          }
-        } catch { }
-      });
-      es.addEventListener("status", (ev) => {
-        if (stopped) return;
-        try {
-          const s = JSON.parse((ev as MessageEvent).data) as {
-            kind: "thinking" | "running" | "idle";
-            label?: string;
-          };
-          if (s && (s.kind === "thinking" || s.kind === "running" || s.kind === "idle")) {
-            setActivity({ kind: s.kind, label: s.label });
-          }
-        } catch { }
-      });
-    };
-
-    const closeStream = () => {
-      try { es?.close(); } catch { }
-      es = null;
-    };
-
-    const onVis = () => {
-      if (typeof document === "undefined") return;
-      if (document.visibilityState === "hidden") {
-        closeStream();
-      } else {
-        api.tail(run.sessionId, run.repoPath, offsetRef.current)
-          .then((payload) => { if (!stopped) applyTail(payload); })
-          .catch(() => { })
-          .finally(() => openStream());
-      }
-    };
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", onVis);
-    }
-
-    openStream();
-    return () => {
-      stopped = true;
-      if (aliveSweepTimer) {
-        clearTimeout(aliveSweepTimer);
-        aliveSweepTimer = null;
-      }
-      closeStream();
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", onVis);
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run?.sessionId, run?.repoPath]);
-
-  const loadOlder = useCallback(async () => {
-    if (!run) return;
-    if (inFlightOlderRef.current) return;
-    const cur = firstOffsetRef.current;
-    if (cur === null || cur <= 0) return;
-    const el = logRef.current;
-    if (!el) return;
-    inFlightOlderRef.current = true;
-    setLoadingOlder(true);
-    pendingScrollRestoreRef.current = {
-      prevHeight: el.scrollHeight,
-      prevTop: el.scrollTop,
-    };
-    try {
-      const result = await api.tailBefore(run.sessionId, run.repoPath, cur);
-      const olderLines = (result.lines ?? []) as LogEntry[];
-      const olderOffsets = Array.isArray(result.lineOffsets) ? result.lineOffsets : [];
-      if (olderLines.length === 0) {
-        firstOffsetRef.current = result.fromOffset === 0 ? 0 : cur;
-        pendingScrollRestoreRef.current = null;
-        return;
-      }
-      const seen = new Set<string>();
-      for (const e of entries) {
-        if (e.uuid) seen.add(e.uuid);
-      }
-      const dedupOlder: LogEntry[] = [];
-      const dedupOlderOffsets: number[] = [];
-      for (let i = 0; i < olderLines.length; i++) {
-        const l = olderLines[i];
-        const id = l?.uuid;
-        if (id && seen.has(id)) continue;
-        if (id) seen.add(id);
-        dedupOlder.push(l);
-        dedupOlderOffsets.push(olderOffsets[i] ?? 0);
-      }
-      setEntries((prev) => [...dedupOlder, ...prev]);
-      entryOffsetsRef.current = [...dedupOlderOffsets, ...entryOffsetsRef.current];
-      loadedOlderCountRef.current += dedupOlder.length;
-      firstOffsetRef.current = result.fromOffset;
-      if (dedupOlder.length > 0) {
-        setTrimmed((t) => Math.max(0, t - dedupOlder.length));
-      }
-    } catch {
-      pendingScrollRestoreRef.current = null;
-    } finally {
-      inFlightOlderRef.current = false;
-      setLoadingOlder(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run]);
+  const {
+    entries,
+    setEntries,
+    trimmed,
+    setTrimmed,
+    activity,
+    aliveSse,
+    lastTs,
+    loadOlder,
+    loadingOlder,
+  } = useSessionStream(
+    run,
+    logRef,
+    offsetRef,
+    firstOffsetRef,
+    entryOffsetsRef,
+    loadedOlderCountRef,
+    inFlightOlderRef,
+    pendingScrollRestoreRef,
+  );
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -600,87 +270,18 @@ function SessionLogInner({
     [entries, showTools],
   );
 
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [matchIdx, setMatchIdx] = useState(0);
-  const [matchSeed, setMatchSeed] = useState(searchQuery);
-  if (matchSeed !== searchQuery) {
-    setMatchSeed(searchQuery);
-    setMatchIdx(0);
-  }
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const entryKey = useCallback((e: LogEntry, fallback: number): string => {
-    return (
-      e.uuid ||
-      e.message?.id ||
-      (e.timestamp ? `${e.timestamp}:${e.type ?? ""}` : `pos-${fallback}`)
-    );
-  }, []);
-
-  const searchIndex = useMemo(
-    () =>
-      visibleEntries.map((e, i) => {
-        const c = e.message?.content;
-        const text = typeof c === "string" ? c : JSON.stringify(c ?? "");
-        return { key: entryKey(e, i), text: text.toLowerCase() };
-      }),
-    [visibleEntries, entryKey],
-  );
-
-  const matchedKeys = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [] as string[];
-    const keys: string[] = [];
-    for (const item of searchIndex) {
-      if (item.text.includes(q)) keys.push(item.key);
-    }
-    return keys;
-  }, [searchQuery, searchIndex]);
-
-  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
-  }, []);
-  const scrollToMatch = useCallback((idx: number) => {
-    const k = matchedKeys[idx];
-    if (!k) return;
-    const sel = `[data-entry-key="${(typeof CSS !== "undefined" && CSS.escape ? CSS.escape(k) : k)}"]`;
-    const el = logRef.current?.querySelector(sel) as HTMLElement | null;
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.classList.add("ring-2", "ring-warning/60");
-    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
-    highlightTimerRef.current = setTimeout(() => {
-      el.classList.remove("ring-2", "ring-warning/60");
-      highlightTimerRef.current = null;
-    }, 1400);
-  }, [matchedKeys]);
-
-  useEffect(() => {
-    if (!searchOpen) return;
-    if (matchedKeys.length === 0) return;
-    scrollToMatch(matchIdx);
-  }, [matchIdx, matchedKeys, scrollToMatch, searchOpen]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === "f") {
-        if (!logRef.current) return;
-        const r = logRef.current.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) return;
-        e.preventDefault();
-        setSearchOpen(true);
-        setTimeout(() => searchInputRef.current?.focus(), 0);
-      }
-      if (e.key === "Escape" && searchOpen) {
-        setSearchOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [searchOpen]);
+  const {
+    searchOpen,
+    searchQuery,
+    matchIdx,
+    matchedKeys,
+    setSearchQuery,
+    searchInputRef,
+    open: openSearch,
+    next: nextMatch,
+    prev: prevMatch,
+    close: closeSearch,
+  } = useChatSearch(visibleEntries, logRef);
 
   const sessionTotals = useMemo<TokenTotals>(() => {
     const t = {
@@ -723,138 +324,22 @@ function SessionLogInner({
     return m;
   }, [entries]);
 
-  const userTextOf = useCallback((e: LogEntry): string => {
-    const blocks = asBlocks(e.message?.content);
-    const raw = blocks
-      .filter((b) => b.type === "text" && typeof b.text === "string")
-      .map((b) => b.text!)
-      .join(" ");
-    const { stripped } = extractAttachments(raw);
-    const cleaned = stripSystemTags(stripped);
-    return cleaned.trim() || stripped.trim() || raw.trim();
-  }, []);
-
-  const lastUserText = useMemo(() => {
-    for (let i = visibleEntries.length - 1; i >= 0; i--) {
-      const e = visibleEntries[i];
-      if (classify(e) !== "user") continue;
-      const text = userTextOf(e);
-      if (text) return text;
-    }
-    return "";
-  }, [visibleEntries, userTextOf]);
-
-  const pinnedUserText = useMemo(() => {
-    if (autoScroll || !pinnedUserUuid) return lastUserText;
-    for (const e of visibleEntries) {
-      if (e.uuid !== pinnedUserUuid) continue;
-      if (classify(e) !== "user") continue;
-      const text = userTextOf(e);
-      if (text) return text;
-      break;
-    }
-    return lastUserText;
-  }, [autoScroll, pinnedUserUuid, visibleEntries, lastUserText, userTextOf]);
-
-  useLayoutEffect(() => {
-    const restore = pendingScrollRestoreRef.current;
-    if (!restore) return;
-    const el = logRef.current;
-    if (!el) {
-      pendingScrollRestoreRef.current = null;
-      return;
-    }
-    el.scrollTop = el.scrollHeight - restore.prevHeight + restore.prevTop;
-    pendingScrollRestoreRef.current = null;
-  }, [entries]);
-
-  useEffect(() => {
-    if (!autoScroll) return;
-    if (pendingScrollRestoreRef.current) return;
-    requestAnimationFrame(() => {
-      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-    });
-  }, [visibleEntries, autoScroll]);
-
-  const autoScrollRef = useRef(autoScroll);
-  useEffect(() => {
-    autoScrollRef.current = autoScroll;
-  }, [autoScroll]);
-  useEffect(() => {
-    const el = logRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
-      if (!autoScrollRef.current) return;
-      if (pendingScrollRestoreRef.current) return;
-      el.scrollTop = el.scrollHeight;
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const recomputePinnedUuid = useCallback(() => {
-    const el = logRef.current;
-    if (!el) return;
-    const containerTop = el.getBoundingClientRect().top;
-    const threshold = containerTop + 4;
-    const rows = el.querySelectorAll<HTMLDivElement>("[data-user-uuid]");
-    let pickUuid: string | null = null;
-    for (const row of rows) {
-      const r = row.getBoundingClientRect();
-      if (r.bottom <= threshold) {
-        const uuid = row.getAttribute("data-user-uuid") || "";
-        if (uuid) pickUuid = uuid;
-      } else {
-        break;
-      }
-    }
-    setPinnedUserUuid((prev) => (prev === pickUuid ? prev : pickUuid));
-  }, []);
-
-  const rafScheduledRef = useRef(false);
-  const schedulePinnedRecalc = useCallback(() => {
-    if (rafScheduledRef.current) return;
-    rafScheduledRef.current = true;
-    requestAnimationFrame(() => {
-      rafScheduledRef.current = false;
-      recomputePinnedUuid();
-    });
-  }, [recomputePinnedUuid]);
-
-  useEffect(() => {
-    const el = logRef.current;
-    if (!el) return;
-    const rows = el.querySelectorAll<HTMLDivElement>("[data-user-uuid]");
-    if (rows.length === 0) return;
-    const io = new IntersectionObserver(
-      () => schedulePinnedRecalc(),
-      { root: el, threshold: [0, 1] },
-    );
-    rows.forEach((r) => io.observe(r));
-    schedulePinnedRecalc();
-    return () => io.disconnect();
-  }, [visibleEntries, schedulePinnedRecalc]);
-
-  const handleScroll = useCallback(() => {
-    const el = logRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    setAutoScroll(atBottom);
-    if (
-      el.scrollTop < 32 &&
-      firstOffsetRef.current !== null &&
-      firstOffsetRef.current > 0 &&
-      !inFlightOlderRef.current
-    ) {
-      void loadOlder();
-    }
-    schedulePinnedRecalc();
-  }, [loadOlder, schedulePinnedRecalc]);
-
-  const scrollToBottom = useCallback(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-    setAutoScroll(true);
-  }, []);
+  const {
+    autoScroll,
+    setAutoScroll,
+    scrollToBottom,
+    setPinnedUserUuid,
+    pinnedUserText,
+    handleScroll,
+  } = useScrollManager(
+    entries,
+    visibleEntries,
+    logRef,
+    pendingScrollRestoreRef,
+    firstOffsetRef,
+    inFlightOlderRef,
+    loadOlder,
+  );
 
   const copySessionId = useCallback(async () => {
     if (!run) return;
@@ -880,7 +365,7 @@ function SessionLogInner({
         setEntries((prev) => [...prev, synthetic]);
       });
     },
-    [],
+    [setAutoScroll, setEntries],
   );
 
   const pendingQuestionIdx = useMemo(() => {
@@ -938,7 +423,7 @@ function SessionLogInner({
     } catch (e) {
       toast("error", (e as Error).message);
     }
-  }, [run, toast, confirm]);
+  }, [run, toast, confirm, setPinnedUserUuid, setEntries, setTrimmed]);
 
   const repo = useMemo(() => repos.find((r) => r.path === run?.repoPath), [repos, run?.repoPath]);
 
@@ -966,11 +451,9 @@ function SessionLogInner({
               if (e.key === "Enter") {
                 e.preventDefault();
                 if (matchedKeys.length === 0) return;
-                setMatchIdx((i) => (e.shiftKey
-                  ? (i - 1 + matchedKeys.length) % matchedKeys.length
-                  : (i + 1) % matchedKeys.length));
+                if (e.shiftKey) prevMatch(); else nextMatch();
               } else if (e.key === "Escape") {
-                setSearchOpen(false);
+                closeSearch();
               }
             }}
             placeholder="Search conversation"
@@ -986,7 +469,7 @@ function SessionLogInner({
           </span>
           <button
             type="button"
-            onClick={() => matchedKeys.length && setMatchIdx((i) => (i - 1 + matchedKeys.length) % matchedKeys.length)}
+            onClick={() => matchedKeys.length && prevMatch()}
             disabled={matchedKeys.length === 0}
             className="p-1 rounded text-fg-dim hover:text-foreground disabled:opacity-40"
             title="Previous match (Shift+Enter)"
@@ -996,7 +479,7 @@ function SessionLogInner({
           </button>
           <button
             type="button"
-            onClick={() => matchedKeys.length && setMatchIdx((i) => (i + 1) % matchedKeys.length)}
+            onClick={() => matchedKeys.length && nextMatch()}
             disabled={matchedKeys.length === 0}
             className="p-1 rounded text-fg-dim hover:text-foreground disabled:opacity-40"
             title="Next match (Enter)"
@@ -1006,7 +489,7 @@ function SessionLogInner({
           </button>
           <button
             type="button"
-            onClick={() => setSearchOpen(false)}
+            onClick={() => closeSearch()}
             className="p-1 rounded text-fg-dim hover:text-foreground"
             title="Close (Esc)"
             aria-label="Close search"
@@ -1015,139 +498,20 @@ function SessionLogInner({
           </button>
         </div>
       )}
-      <header className="px-3 py-2 border-b border-border flex items-center gap-2 text-xs min-w-0">
-        <Terminal size={13} className="text-muted-foreground shrink-0" />
-        <span className="font-medium whitespace-nowrap shrink-0">{run.role}</span>
-        {repo && (
-          <span className="text-muted-foreground whitespace-nowrap shrink-0">@ {repo.name}</span>
-        )}
-        {sessionTitle && (
-          <span
-            className="text-muted-foreground italic truncate min-w-0"
-            title={sessionTitle}
-          >
-            · {sessionTitle}
-          </span>
-        )}
-        {isResponding && (
-          <span className="inline-flex items-center gap-1 text-warning text-[10.5px] whitespace-nowrap shrink-0">
-            <span className="relative inline-flex h-1.5 w-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning" />
-            </span>
-            responding…
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1 shrink-0">
-          {sessionTotals.turns > 0 && (
-            <TokenUsage
-              totals={sessionTotals}
-              variant="compact"
-              title={`This window: ${sessionTotals.turns} assistant turns · in ${sessionTotals.inputTokens.toLocaleString()} · out ${sessionTotals.outputTokens.toLocaleString()} · cache read ${sessionTotals.cacheReadTokens.toLocaleString()}`}
-            />
-          )}
-          {}
-          <button
-            onClick={() => {
-              setSearchOpen(true);
-              setTimeout(() => searchInputRef.current?.focus(), 0);
-            }}
-            className="inline-flex items-center gap-1 h-7 w-7 md:w-auto md:px-1.5 md:h-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px] transition-colors"
-            title="Search this conversation (Ctrl/⌘+F)"
-            aria-label="Search conversation"
-          >
-            <Search size={11} />
-            <span className="hidden md:inline">Search</span>
-          </button>
-          {}
-          <button
-            onClick={() => setShowTools((v) => !v)}
-            className={`hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border text-[10px] transition-colors ${
-              showTools
-                ? "border-border bg-secondary text-foreground"
-                : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
-            }`}
-            title="Toggle tool results"
-          >
-            <Wrench size={10} /> {showTools ? "tools" : "no tools"}
-          </button>
-          <button
-            onClick={() => {
-              const md = exportSessionMarkdown(visibleEntries, {
-                title: `Session ${run.sessionId.slice(0, 8)}`,
-                sessionId: run.sessionId,
-                repo: run.repo,
-                role: run.role,
-              });
-              downloadFile(`session-${run.sessionId.slice(0, 8)}.md`, md);
-            }}
-            className="hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
-            title="Export this conversation as Markdown"
-          >
-            <Download size={10} /> Export
-          </button>
-          <button
-            onClick={copySessionId}
-            className="hidden md:inline-flex items-center gap-1 text-muted-foreground hover:text-foreground font-mono text-[11px]"
-            title="Copy session ID"
-          >
-            {run.sessionId.slice(0, 8)}…
-            {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
-          </button>
-          {onClearConversation && (
-            <button
-              onClick={onClearConversation}
-              className="hidden md:inline-flex items-center gap-1 px-1.5 h-6 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent text-[10px]"
-              title="Spawn a fresh coordinator"
-            >
-              <RotateCw size={10} /> Clear
-            </button>
-          )}
-          {}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="md:hidden inline-flex items-center justify-center h-7 w-7 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent"
-                title="More actions"
-                aria-label="More actions"
-              >
-                <MoreVertical size={14} />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem onClick={() => setShowTools((v) => !v)}>
-                <Wrench size={12} />
-                {showTools ? "Hide tool results" : "Show tool results"}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  const md = exportSessionMarkdown(visibleEntries, {
-                    title: `Session ${run.sessionId.slice(0, 8)}`,
-                    sessionId: run.sessionId,
-                    repo: run.repo,
-                    role: run.role,
-                  });
-                  downloadFile(`session-${run.sessionId.slice(0, 8)}.md`, md);
-                }}
-              >
-                <Download size={12} />
-                Export Markdown
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={copySessionId}>
-                {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-                <span className="font-mono">{run.sessionId.slice(0, 8)}…</span>
-              </DropdownMenuItem>
-              {onClearConversation && (
-                <DropdownMenuItem onClick={onClearConversation}>
-                  <RotateCw size={12} />
-                  Clear conversation
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </header>
+      <SessionLogHeader
+        run={run}
+        repo={repo}
+        sessionTitle={sessionTitle}
+        isResponding={isResponding}
+        sessionTotals={sessionTotals}
+        openSearch={openSearch}
+        showTools={showTools}
+        setShowTools={setShowTools}
+        visibleEntries={visibleEntries}
+        copied={copied}
+        copySessionId={copySessionId}
+        onClearConversation={onClearConversation}
+      />
       {}
       <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
         <div
