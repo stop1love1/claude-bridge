@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { execLocked, checkBlocklist } from "@/libs/appExecGuard";
 import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { badRequest } from "@/libs/validate";
+import { checkRateLimit } from "@/libs/rateLimit";
+import { getClientIp } from "@/libs/clientIp";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -25,6 +27,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       { status: 403 },
     );
   }
+
+  const denied = checkRateLimit("apps:exec:ip", getClientIp(req.headers), 6, 60_000);
+  if (denied) {
+    return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
+  }
+
   const { name: segment } = await ctx.params;
 
   let body: ExecBody;

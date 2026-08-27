@@ -1,4 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(() => {
+    const proc = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter & { setEncoding: (enc: string) => void };
+      stderr: EventEmitter & { setEncoding: (enc: string) => void };
+      kill: (signal?: string) => void;
+    };
+    proc.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+    proc.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+    proc.kill = () => {};
+    setImmediate(() => proc.emit("exit", 0, null));
+    return proc;
+  }),
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: () => true };
+});
+
+vi.mock("@/libs/apps", () => ({
+  resolveAppFromRouteSegment: () => ({ name: "demo", path: "C:\\fake-app" }),
+}));
 
 
 beforeEach(() => {
@@ -89,5 +114,33 @@ describe("checkRateLimit", () => {
     const denial = checkRateLimit("t", "ip", 1, 50);
     expect(denial).not.toBeNull();
     expect(Number(denial?.headers["Retry-After"])).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("apps/[name]/exec route rate limiting", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function callExec() {
+    const { NextRequest } = await import("next/server");
+    const { POST } = await import("../../app/api/apps/[name]/exec/route");
+    const req = new NextRequest("http://localhost/api/apps/demo/exec", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command: "echo hi" }),
+    });
+    return POST(req, { params: Promise.resolve({ name: "demo" }) });
+  }
+
+  it("allows 6 requests per minute from the same IP then denies the 7th with 429", async () => {
+    for (let i = 0; i < 6; i++) {
+      const res = await callExec();
+      expect(res.status).not.toBe(429);
+    }
+    const denied = await callExec();
+    expect(denied.status).toBe(429);
+    const body = await denied.json();
+    expect(body.error).toBe("too many requests");
   });
 });
