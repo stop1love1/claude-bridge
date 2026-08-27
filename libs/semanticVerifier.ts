@@ -296,6 +296,7 @@ export async function spawnSemanticVerifierRetry(args: {
     sessionsDir,
     sessionId,
     childHandle.child,
+    finishedRun.repo,
     `semantic-retry ${taskId}/${sessionId}`,
   );
   return { sessionId, run: retryRun };

@@ -221,7 +221,7 @@ describe("wireRunLifecycle — state transitions", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "test-coordinator");
+    wireRunLifecycle(tmp, SID, child, "fake-repo", "test-coordinator");
     child.emit("exit", 0, null);
     await flushAsync(8);
 
@@ -246,7 +246,7 @@ describe("wireRunLifecycle — state transitions", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "test-coordinator");
+    wireRunLifecycle(tmp, SID, child, "fake-repo", "test-coordinator");
     child.emit("exit", 1, null);
     await flushAsync();
 
@@ -271,7 +271,7 @@ describe("wireRunLifecycle — state transitions", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "test-signal-kill");
+    wireRunLifecycle(tmp, SID, child, "fake-repo", "test-signal-kill");
     child.emit("exit", null, "SIGTERM");
     await flushAsync();
 
@@ -296,7 +296,7 @@ describe("wireRunLifecycle — state transitions", () => {
     await updateRun(tmp, SID, { status: "done", endedAt: "2026-04-24T10:00:02Z" });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "fake-repo", "tag");
     child.emit("exit", 0, null);
     await flushAsync();
 
@@ -325,7 +325,7 @@ describe("wireRunLifecycle — state transitions", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "fake-repo", "tag");
     child.emit("exit", 137, null);
     await flushAsync();
 
@@ -350,7 +350,7 @@ describe("wireRunLifecycle — state transitions", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "fake-repo", "tag");
     child.emit("error", new Error("ENOENT: claude not on PATH"));
     await flushAsync();
 
@@ -385,7 +385,7 @@ describe("wireRunLifecycle — state transitions", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
     child.emit("exit", 0, null);
     await flushAsync(8);
 
@@ -410,7 +410,7 @@ describe("wireRunLifecycle — state transitions", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "fake-repo", "tag");
     child.emit("exit", 0, null);
     await flushAsync();
 
@@ -451,7 +451,7 @@ describe("postExitFlow — escalateGateBlock call-site wiring", () => {
     getAppMock.mockReturnValue({ ...REAL_APP, ...appOverrides });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
     child.emit("exit", 0, null);
     await flushAsync(10);
 
@@ -716,7 +716,7 @@ describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
     acquireRepoReservation("real-app", SID);
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
     child.emit("exit", 1, null);
     await flushAsync();
 
@@ -740,7 +740,7 @@ describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
     acquireRepoReservation("real-app", SID);
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
     child.emit("error", new Error("ENOENT"));
     await flushAsync();
 
@@ -776,7 +776,7 @@ describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
     acquireRepoReservation("real-app", SID);
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
     child.emit("exit", 0, null);
     await flushAsync(5);
 
@@ -812,11 +812,162 @@ describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
     acquireRepoReservation("real-app", "someone-else");
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
     child.emit("exit", 1, null);
     await flushAsync();
 
     expect(currentReservation("real-app")?.sessionId).toBe("someone-else");
     releaseRepoReservation("real-app", "someone-else");
+  });
+
+  it("releases using the wire-time repo even when the task's meta directory is already gone (Critical 1 — task deletion)", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+    });
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+
+    const { rmSync } = await import("node:fs");
+    rmSync(tmp, { recursive: true, force: true });
+
+    child.emit("exit", 1, null);
+    await flushAsync();
+
+    expect(currentReservation("real-app")).toBeNull();
+  });
+
+  it("releases immediately for a coordinator-role run (postExitFlow never runs for coordinators)", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coordinator",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+    });
+    getAppMock.mockReturnValue(REAL_APP);
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 0, null);
+    await flushAsync(8);
+
+    expect(currentReservation("real-app")).toBeNull();
+  });
+
+  it("releases when the run row can't be found at succeedRun time (meta lookup miss)", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: "other-sid",
+      role: "coder",
+      repo: "other-repo",
+      status: "running",
+      startedAt: null,
+      endedAt: null,
+    });
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 0, null);
+    await flushAsync();
+
+    expect(currentReservation("real-app")).toBeNull();
+  });
+
+  it("keeps the reservation held when a gate schedules a same-session retry, and releases only once that retry's own run settles", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    let verifyCallCount = 0;
+    let retryChild: ReturnType<typeof makeFakeChild> | null = null;
+    seedRequireCache({
+      verifyChain: {
+        verifyConfigOf: () => ({ test: "x" }),
+        hasAnyVerifyCommand: () => true,
+        runVerifyChain: async () => {
+          verifyCallCount += 1;
+          if (verifyCallCount === 1) {
+            return {
+              steps: [{ name: "test", ok: false, exitCode: 1, durationMs: 1, output: "" }],
+              passed: false,
+              startedAt: "2026-04-24T10:00:02Z",
+              endedAt: "2026-04-24T10:00:03Z",
+            };
+          }
+          return {
+            steps: [{ name: "test", ok: true, exitCode: 0, durationMs: 1, output: "" }],
+            passed: true,
+            startedAt: "2026-04-24T10:01:02Z",
+            endedAt: "2026-04-24T10:01:03Z",
+          };
+        },
+        isEligibleForVerifyRetry: () => true,
+        spawnVerifyRetry: async () => {
+          retryChild = makeFakeChild();
+          wireRunLifecycle(tmp, SID, retryChild, "real-app", "retry-tag");
+          return {
+            sessionId: SID,
+            run: {
+              sessionId: SID,
+              role: "coder-vretry",
+              repo: "real-app",
+              status: "running",
+              startedAt: null,
+              endedAt: null,
+            },
+          };
+        },
+      },
+    });
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+      parentSessionId: "00000000-0000-0000-0000-000000000000",
+    });
+    getAppMock.mockReturnValue(REAL_APP);
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 0, null);
+    await flushAsync(15);
+
+    expect(retryChild).not.toBeNull();
+    expect(currentReservation("real-app")?.sessionId).toBe(SID);
+
+    retryChild!.emit("exit", 0, null);
+    await flushAsync(15);
+
+    expect(currentReservation("real-app")).toBeNull();
   });
 });

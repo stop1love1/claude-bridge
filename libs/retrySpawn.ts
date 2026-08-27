@@ -142,6 +142,7 @@ export async function spawnRetry(
     sessionsDir,
     sessionId,
     child,
+    finishedRun.repo,
     `${logLabel} ${taskId}/${sessionId}`,
   );
   return { sessionId, run: retryRun };

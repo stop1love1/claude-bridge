@@ -49,6 +49,7 @@ export function resumeSessionWithLifecycle(
     sessionsDir,
     args.sessionId,
     child,
+    row.repo,
     args.context ?? `resume ${owningTask.id}/${args.sessionId.slice(0, 8)}`,
   );
 

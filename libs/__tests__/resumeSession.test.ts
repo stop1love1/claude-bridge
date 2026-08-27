@@ -15,7 +15,7 @@ const resumeClaudeCalls: Array<{
   message: string;
 }> = [];
 const updateRunCalls: Array<{ sessionId: string; patch: Record<string, unknown> }> = [];
-const wireLifecycleCalls: Array<{ sessionId: string; context: string | undefined }> = [];
+const wireLifecycleCalls: Array<{ sessionId: string; repo: string; context: string | undefined }> = [];
 
 vi.mock("../spawn", () => ({
   resumeClaude: (cwd: string, sessionId: string, message: string) => {
@@ -29,9 +29,10 @@ vi.mock("../runLifecycle", () => ({
     _dir: string,
     sessionId: string,
     _child: ChildProcess,
+    repo: string,
     context?: string,
   ) => {
-    wireLifecycleCalls.push({ sessionId, context });
+    wireLifecycleCalls.push({ sessionId, repo, context });
   },
 }));
 
@@ -101,6 +102,7 @@ describe("resumeSessionWithLifecycle", () => {
 
     expect(wireLifecycleCalls).toHaveLength(1);
     expect(wireLifecycleCalls[0].sessionId).toBe(SID_OWNED);
+    expect(wireLifecycleCalls[0].repo).toBe("claude-bridge");
     expect(wireLifecycleCalls[0].context).toBe("test-resume");
   });
 

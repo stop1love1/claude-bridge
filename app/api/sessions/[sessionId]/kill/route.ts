@@ -46,7 +46,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         { status: "cancelled", endedAt: new Date().toISOString() },
         (r) => r.status === "running",
       );
-      if (cancelled.applied && cancelled.run) {
+      if (cancelled.run) {
         releaseRepoReservation(cancelled.run.repo, sessionId);
       }
       break;

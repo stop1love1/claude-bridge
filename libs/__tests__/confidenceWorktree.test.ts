@@ -529,7 +529,7 @@ describe("postExitFlow — worktree confidence hold wiring", () => {
     });
 
     const child = makeFakeChild();
-    wireRunLifecycle(tmp, SID, child, "tag");
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
     child.emit("exit", 0, null);
     await flushAsync(12);
 

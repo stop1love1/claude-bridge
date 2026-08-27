@@ -148,7 +148,7 @@ export async function spawnCoordinatorForTask(
       console.error("failed to promote coordinator queued → running", uErr);
     }
 
-    wireRunLifecycle(sessionsDir, sessionId, child, `coordinator ${task.id}`);
+    wireRunLifecycle(sessionsDir, sessionId, child, basename(BRIDGE_ROOT), `coordinator ${task.id}`);
     return sessionId;
   } catch (err) {
     console.error("coordinator spawn failed for", task.id, err);

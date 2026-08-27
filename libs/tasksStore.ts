@@ -13,6 +13,7 @@ import {
 import { resolveRepoCwd } from "./repos";
 import { projectDirFor } from "./sessions";
 import { killChild } from "./spawnRegistry";
+import { releaseRepoReservation } from "./repoReservation";
 import {
   generateTaskId as generateIdFromList,
   isValidTaskId,
@@ -223,6 +224,7 @@ export async function deleteTask(id: string): Promise<DeleteTaskResult> {
 
       for (const run of meta.runs) {
         try { killChild(run.sessionId); } catch { }
+        releaseRepoReservation(run.repo, run.sessionId);
 
         const stateDir = join(BRIDGE_STATE_DIR, run.sessionId);
         if (existsSync(stateDir)) {

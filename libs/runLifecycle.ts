@@ -119,6 +119,7 @@ interface PostExitContext {
   run: Run;
   title: string;
   app: App | null;
+  identityRetained: boolean;
 }
 
 type GateOutcome = "proceed" | "blocked";
@@ -190,6 +191,7 @@ async function runVerifyChainGate(ctx: PostExitContext): Promise<GateOutcome> {
     if (verifyResult && !verifyResult.passed) {
       const failedName = verifyResult.steps.find((s: RunVerifyStep) => !s.ok)?.name;
       if (scheduledRetry) {
+        ctx.identityRetained = true;
         emitRetried(tid, scheduledRetry.run, run.sessionId);
         logInfo("verify", `chain failed at \`${failedName}\` — spawned retry`, {
           tag: t,
@@ -286,6 +288,7 @@ async function runPreflightGate(ctx: PostExitContext): Promise<GateOutcome> {
   await attachGateResult(dir, run.sessionId, "verifier", finalVerifier);
 
   if (scheduledPreflightRetry) {
+    ctx.identityRetained = true;
     emitRetried(tid, scheduledPreflightRetry.run, run.sessionId);
     logInfo("preflight", `${preflightResult.reason} — spawned retry`, {
       tag: t,
@@ -370,6 +373,7 @@ async function runClaimGate(ctx: PostExitContext): Promise<GateOutcome> {
 
   if (needsClaimRetry && verifierResult) {
     if (scheduledClaimRetry) {
+      ctx.identityRetained = true;
       emitRetried(tid, scheduledClaimRetry.run, run.sessionId);
       logInfo("verifier", `${verifierResult.verdict} — ${verifierResult.reason} — spawned retry`, {
         tag: t,
@@ -462,6 +466,7 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
 
   if (needsStyleRetry && criticResult) {
     if (scheduledStyleRetry) {
+      ctx.identityRetained = true;
       emitRetried(tid, scheduledStyleRetry.run, run.sessionId);
       logInfo("style-critic", `${criticResult.verdict} — ${criticResult.reason} — spawned retry`, {
         tag: t,
@@ -576,27 +581,41 @@ async function runSemanticVerifierGate(
   return "proceed";
 }
 
+interface PostExitFlowResult {
+  releaseReservation: boolean;
+}
+
 async function postExitFlow(args: {
   sessionsDir: string;
   taskId: string;
   tag: string;
   finishedRun: Run;
   taskTitle: string;
-}): Promise<void> {
+}): Promise<PostExitFlowResult> {
   const { sessionsDir: dir, taskId: tid, tag: t, finishedRun: run, taskTitle: title } = args;
 
   const app = getApp(run.repo);
-  const ctx: PostExitContext = { dir, tid, t, run, title, app };
+  const ctx: PostExitContext = { dir, tid, t, run, title, app, identityRetained: false };
 
-  if ((await runVerifyChainGate(ctx)) === "blocked") return;
+  if ((await runVerifyChainGate(ctx)) === "blocked") {
+    return { releaseReservation: !ctx.identityRetained };
+  }
 
-  if ((await runPreflightGate(ctx)) === "blocked") return;
+  if ((await runPreflightGate(ctx)) === "blocked") {
+    return { releaseReservation: !ctx.identityRetained };
+  }
 
-  if ((await runClaimGate(ctx)) === "blocked") return;
+  if ((await runClaimGate(ctx)) === "blocked") {
+    return { releaseReservation: !ctx.identityRetained };
+  }
 
-  if ((await runStyleCriticGate(ctx)) === "blocked") return;
+  if ((await runStyleCriticGate(ctx)) === "blocked") {
+    return { releaseReservation: !ctx.identityRetained };
+  }
 
-  if ((await runSemanticVerifierGate(ctx)) === "blocked") return;
+  if ((await runSemanticVerifierGate(ctx)) === "blocked") {
+    return { releaseReservation: !ctx.identityRetained };
+  }
 
   const vcGuard = loadVerifyChain();
 
@@ -621,7 +640,7 @@ async function postExitFlow(args: {
         killedSiblings: claim.killed.length,
       });
       if (!claim.proceed) {
-        return;
+        return { releaseReservation: true };
       }
     } catch (err) {
       logError("speculative", "claim crashed", err, { tag: t });
@@ -767,6 +786,8 @@ async function postExitFlow(args: {
       await performWorktreeMergeBack({ app, run, tid, title, t, dir, message });
     }
   }
+
+  return { releaseReservation: true };
 }
 
 export interface WorktreeMergeBackResult {
@@ -876,6 +897,7 @@ export function wireRunLifecycle(
   sessionsDir: string,
   sessionId: string,
   child: ChildProcess,
+  repo: string,
   context?: string,
 ): void {
   const tag = context ?? sessionsDir;
@@ -896,19 +918,17 @@ export function wireRunLifecycle(
   };
 
   const failRun = async (reason: string, exitCode: number | null) => {
-    let repoForRelease: string | null = null;
     try {
-      const result = await updateRun(
+      await updateRun(
         sessionsDir,
         sessionId,
         { status: "failed", endedAt: new Date().toISOString() },
         (run) => run.status === "running",
       );
-      repoForRelease = result.run?.repo ?? null;
     } catch (e) {
       logError("lifecycle", "failed to mark run failed", e, { tag });
     }
-    if (repoForRelease) releaseRepoReservation(repoForRelease, sessionId);
+    releaseRepoReservation(repo, sessionId);
     logError("lifecycle", `run failed: ${reason}`, undefined, { tag });
     tryAutoRetry(exitCode);
   };
@@ -997,15 +1017,17 @@ export function wireRunLifecycle(
     }
 
     if (finishedRun && finishedRun.role !== "coordinator") {
-      const repoForRelease = finishedRun.repo;
       void postExitFlow({
         sessionsDir,
         taskId,
         tag,
         finishedRun,
         taskTitle,
-      })
-        .catch(async (err) => {
+      }).then(
+        (result) => {
+          if (result.releaseReservation) releaseRepoReservation(repo, sessionId);
+        },
+        async (err) => {
           logError("post-exit", "flow crashed", err, { tag });
           try {
             await updateRun(
@@ -1017,10 +1039,11 @@ export function wireRunLifecycle(
           } catch (e) {
             logError("post-exit", "safety-net status:failed flip failed", e, { tag });
           }
-        })
-        .finally(() => {
-          releaseRepoReservation(repoForRelease, sessionId);
-        });
+          releaseRepoReservation(repo, sessionId);
+        },
+      );
+    } else {
+      releaseRepoReservation(repo, sessionId);
     }
   };
 

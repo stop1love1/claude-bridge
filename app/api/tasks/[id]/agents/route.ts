@@ -386,6 +386,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     noSpeculative,
     allowDuplicate,
   });
+  if (reservedSessionId && speculative.n !== 1) {
+    releaseReservation();
+    throw new Error(
+      "reservedSessionId is single-use — decideSpeculative must return n:1 whenever a non-worktree " +
+        "repo reservation is held, or the reused sessionId would silently apply to more than one spawned variant",
+    );
+  }
 
   const spawned: Array<{
     sessionId: string;
@@ -396,9 +403,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   for (let variantIndex = 0; variantIndex < speculative.n; variantIndex++) {
   const sessionId = reservedSessionId ?? randomUUID();
-
-  let spawnCwd = repoCwd;
   let worktreePath: string | null = null;
+  let childHandle: ReturnType<typeof spawnFreeSession> | undefined;
+  try {
+  let spawnCwd = repoCwd;
   let worktreeBranch: string | null = null;
   let worktreeBaseBranch: string | null = null;
   if (useWorktree && app && effGit) {
@@ -586,7 +594,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  let childHandle;
   try {
     childHandle = spawnFreeSession(
       spawnCwd,
@@ -608,6 +615,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     releaseReservation();
     return NextResponse.json(serverError(e, "tasks:agent-spawn"), { status: 500 });
   }
+  } catch (dispatchErr) {
+    releaseReservation();
+    throw dispatchErr;
+  }
 
   try {
     await updateRun(sessionsDir, sessionId, {
@@ -618,7 +629,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     console.error("failed to promote queued → running", uErr);
   }
 
-  wireRunLifecycle(sessionsDir, sessionId, childHandle.child, `agent ${id}/${sessionId}`);
+  wireRunLifecycle(sessionsDir, sessionId, childHandle!.child, repo, `agent ${id}/${sessionId}`);
 
   spawned.push({
     sessionId,
@@ -1022,6 +1033,9 @@ async function handleResume(args: {
   }
 
   const priorRoleChanged = prior.role !== role;
+  const priorStatusSnapshot = prior.status;
+  const priorEndedAtSnapshot = prior.endedAt;
+  const priorRoleSnapshot = prior.role;
   let claim: ClaimRunForResumeResult;
   try {
     claim = await claimRunForResume(
@@ -1050,6 +1064,35 @@ async function handleResume(args: {
     );
   }
 
+  const usesSharedTree = spawnCwd === repoCwd;
+  let resumeReserved = false;
+  if (usesSharedTree && getApp(repo)) {
+    const reservation = acquireRepoReservation(repo, prior.sessionId);
+    if (!reservation.ok) {
+      try {
+        await updateRun(sessionsDir, prior.sessionId, {
+          status: priorStatusSnapshot,
+          endedAt: priorEndedAtSnapshot,
+          ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
+        });
+      } catch (uErr) {
+        console.error("failed to roll resume run back after reservation refusal", uErr);
+      }
+      return NextResponse.json(
+        {
+          error: "repo reserved",
+          reason:
+            `app "${repo}" has worktreeMode disabled, so only one run may touch its shared working tree at a time; ` +
+            `session ${reservation.heldBy} currently holds it — wait for it to finish, kill it, or enable worktreeMode to allow concurrent runs`,
+          repo,
+          heldBy: reservation.heldBy ?? null,
+        },
+        { status: 409 },
+      );
+    }
+    resumeReserved = true;
+  }
+
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(prior.sessionId));
 
   const resumePrompt = buildResumePrompt({
@@ -1072,13 +1115,14 @@ async function handleResume(args: {
   } catch (e) {
     try {
       await updateRun(sessionsDir, prior.sessionId, {
-        status: prior.status,
-        endedAt: prior.endedAt,
-        ...(priorRoleChanged ? { role: prior.role } : {}),
+        status: priorStatusSnapshot,
+        endedAt: priorEndedAtSnapshot,
+        ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
       });
     } catch (uErr) {
       console.error("failed to roll resume run back after spawn error", uErr);
     }
+    if (resumeReserved) releaseRepoReservation(repo, prior.sessionId);
     return NextResponse.json(serverError(e, "tasks:agent-resume"), { status: 500 });
   }
 
@@ -1086,6 +1130,7 @@ async function handleResume(args: {
     sessionsDir,
     prior.sessionId,
     child,
+    repo,
     `agent-resume ${taskId}/${prior.sessionId}`,
   );
 
