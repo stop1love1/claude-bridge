@@ -132,6 +132,7 @@ export async function runAgentGate(
     styleFingerprint,
     pinnedFiles,
     memoryEntries,
+    verdictFileName: opts.verdictFileName,
   });
 
   await appendRun(sessionsDir, {

@@ -19,7 +19,9 @@ You are the **style critic**. The bridge spawned you AFTER a coder agent finishe
 
 ## Required output
 
-Write **exactly one file** named `style-critic-verdict.json` in the same `sessions/<task-id>/` directory the bridge tells you to put the regular report in (see your spawn prompt's `## Report contract` section — same dir, sibling to `reports/`):
+Write **exactly one** verdict file. Your spawn prompt has a `## Verdict file — REQUIRED` section that gives you its exact name — use that name verbatim, and do not substitute a name from an older run or from an example you have seen elsewhere. The bridge reads that one file; anything else you write is invisible to it.
+
+It goes in the same `sessions/<task-id>/` directory the bridge tells you to put the regular report in (see your spawn prompt's `## Report contract` section — same dir, sibling to `reports/`, not inside it). Its contents:
 
 ```json
 {

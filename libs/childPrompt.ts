@@ -34,6 +34,7 @@ export interface BuildChildPromptOpts {
   detectedScope?: DetectedScope | null;
   sharedPlan?: string | null;
   peerNotes?: string | null;
+  verdictFileName?: string | null;
 }
 
 const COORDINATOR_BODY_CAP = 16 * 1024;
@@ -62,6 +63,25 @@ function sanitizeCoordinatorBody(body: string): string {
 
 export function sanitizeTaskBodyForFence(body: string): string {
   return (body ?? "").replace(/^(\s*)(`{3,})/gm, "$1​ ​$2");
+}
+
+function renderVerdictFileLines(
+  verdictFileName: string | null | undefined,
+  taskId: string,
+  bridgeFolder: string,
+): string[] {
+  const name = (verdictFileName ?? "").trim();
+  if (name.length === 0) return [];
+  return [
+    "## Verdict file — REQUIRED",
+    "",
+    `Write **exactly one** verdict file for this gate, named \`${name}\`. Use that name character-for-character: the bridge reads that one path and nothing else, so a verdict written under any other name is read as no verdict at all and the gate is recorded as skipped.`,
+    "",
+    `Full path from your cwd: \`../${bridgeFolder}/sessions/${taskId}/${name}\` — directly in \`sessions/${taskId}/\`, a sibling of the \`reports/\` folder and not inside it. \`mkdir -p\` that directory first.`,
+    "",
+    "The verdict file is a separate artifact from the report described below — you write both. Your playbook gives the JSON schema for the verdict's contents. If anything else in this prompt shows a different verdict filename, the name above is the one that counts.",
+    "",
+  ];
 }
 
 export function sanitizeUserPromptContent(input: string): string {
@@ -301,6 +321,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "",
     "**Do NOT re-POST `status:\"done\"` at the end.** The bridge's lifecycle hook flips your run from `running → done` automatically when this turn ends cleanly (or `failed` on non-zero exit). Self-POSTing `done` while you're still streaming the final summary makes the UI show DONE before the user sees your reply. The only legitimate self-POST is the initial `running` confirmation above.",
     "",
+    ...renderVerdictFileLines(opts.verdictFileName, taskId, bridgeFolder),
     "## Report contract — REQUIRED",
     "",
     "**If ambiguous, escalate.** Don't guess past a multi-option choice or approval gate. Stop, set verdict `NEEDS-DECISION`, fill `## Questions for the user` (concrete options + recommendation), exit. Guessing wastes a retry slot.",
@@ -618,6 +639,7 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     "",
     "**Do NOT re-POST `status:\"done\"` at the end.** The bridge's lifecycle hook flips your run from `running → done` automatically when this turn ends cleanly (or `failed` on non-zero exit). Self-POSTing `done` while you're still streaming the final summary makes the UI show DONE before the user sees your reply. The only legitimate self-POST is the initial `running` confirmation above.",
     "",
+    ...renderVerdictFileLines(opts.verdictFileName, taskId, bridgeFolder),
     "## Report contract — REQUIRED",
     "",
     "**If ambiguous, escalate.** Don't guess past a multi-option choice or approval gate. Stop, set verdict `NEEDS-DECISION`, fill `## Questions for the user` (concrete options + recommendation), exit. Guessing wastes a retry slot.",
