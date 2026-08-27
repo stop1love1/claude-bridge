@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   createWorktreeForRun,
   inheritWorktreeFields,
+  isStrictlyUnderAppRoot,
   mergeAndRemoveWorktree,
   pruneStaleWorktrees,
   removeWorktree,
@@ -37,6 +38,28 @@ describe("worktreePathFor", () => {
   it("places the worktree under <appPath>/.worktrees/<sessionId>", () => {
     const p = worktreePathFor("/abs/app", "abc-123");
     expect(p).toBe(join("/abs/app", ".worktrees", "abc-123"));
+  });
+});
+
+describe("isStrictlyUnderAppRoot (Task 27 — opposite root-equality from runWorkingTree's isUnderAppRoot)", () => {
+  it("accepts a path inside the app root", () => {
+    expect(isStrictlyUnderAppRoot("/repo/app", "/repo/app/.worktrees/x")).toBe(true);
+  });
+
+  it("rejects the app root itself — unlike runWorkingTree's isUnderAppRoot, which accepts it", () => {
+    expect(isStrictlyUnderAppRoot("/repo/app", "/repo/app")).toBe(false);
+  });
+
+  it("rejects a sibling directory that merely shares the app root as a string prefix", () => {
+    expect(isStrictlyUnderAppRoot("/repo/app", "/repo/app-evil")).toBe(false);
+  });
+
+  it("rejects traversal back out of the app root", () => {
+    expect(isStrictlyUnderAppRoot("/repo/app", "/repo/app/../other")).toBe(false);
+  });
+
+  it("rejects an unrelated absolute path", () => {
+    expect(isStrictlyUnderAppRoot("/repo/app", "/etc")).toBe(false);
   });
 });
 
@@ -175,6 +198,16 @@ integration("createWorktreeForRun + removeWorktree (real git)", () => {
     });
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/outside/);
+  });
+
+  it("removeWorktree refuses when the target IS the app root itself (Task 27 — must never rm -rf the live app)", async () => {
+    const r = await removeWorktree({
+      appPath,
+      worktreePath: appPath,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/outside/);
+    expect(existsSync(appPath)).toBe(true);
   });
 
   it("pruneStaleWorktrees reaps directories older than the cutoff", async () => {

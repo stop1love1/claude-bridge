@@ -77,7 +77,7 @@ export function worktreePathFor(appPath: string, sessionId: string): string {
   return join(appPath, WORKTREES_DIRNAME, sessionId);
 }
 
-function isUnderAppRoot(appPath: string, candidate: string): boolean {
+export function isStrictlyUnderAppRoot(appPath: string, candidate: string): boolean {
   const a = resolve(appPath);
   const c = resolve(candidate);
   if (a === c) return false;
@@ -140,7 +140,7 @@ export async function createWorktreeForRun(args: {
   if (!existsSync(join(appPath, ".git"))) return null;
 
   const wtPath = worktreePathFor(appPath, sessionId);
-  if (!isUnderAppRoot(appPath, wtPath)) return null;
+  if (!isStrictlyUnderAppRoot(appPath, wtPath)) return null;
 
   try {
     mkdirSync(join(appPath, WORKTREES_DIRNAME), { recursive: true });
@@ -176,7 +176,7 @@ export async function removeWorktree(args: {
   worktreePath: string;
 }): Promise<WorktreeOpResult> {
   const { appPath, worktreePath } = args;
-  if (!isUnderAppRoot(appPath, worktreePath)) {
+  if (!isStrictlyUnderAppRoot(appPath, worktreePath)) {
     return {
       ok: false,
       message: "refusing to remove path outside app root",
@@ -330,7 +330,7 @@ export async function pruneStaleWorktrees(args: {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const wt = join(root, entry.name);
-    if (!isUnderAppRoot(appPath, wt)) continue;
+    if (!isStrictlyUnderAppRoot(appPath, wt)) continue;
     if (activeSessions.has(entry.name)) continue;
     let recent = false;
     try {
