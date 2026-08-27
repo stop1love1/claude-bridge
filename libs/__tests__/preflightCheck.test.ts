@@ -304,4 +304,31 @@ describe("runPreflight", () => {
     const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
     expect(result.required).toBeGreaterThanOrEqual(1);
   });
+
+  it("passes when the only out-of-app footprint is a report write alongside one in-app read+edit", () => {
+    const entries = [
+      toolUse("Read", { file_path: "/repo/math.ts" }),
+      toolUse("Edit", { file_path: "/repo/math.ts" }),
+      toolUse("Write", { file_path: "/bridge/sessions/t_1/reports/coder.md" }),
+    ];
+    const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
+    expect(result.verdict).not.toBe("fail");
+    expect(result.required).toBe(1);
+    expect(result.readsBeforeEdit).toBe(1);
+    expect(result.editCount).toBe(1);
+  });
+
+  it("still fails when the only read is out-of-app but the edit is in-app", () => {
+    const entries = [
+      toolUse("Read", { file_path: "/bridge/sessions/t_1/plan.md" }),
+      toolUse("Edit", { file_path: "/repo/math.ts" }),
+    ];
+    const result = runPreflight({ finishedRun: runFrom(entries), appPath: "/repo" });
+    expect(result.verdict).toBe("fail");
+    expect(result.required).toBe(1);
+    expect(result.readsBeforeEdit).toBe(0);
+    expect(result.reason).toBe(
+      "agent made 0 Read call(s) before the first Edit/Write — minimum is 1",
+    );
+  });
 });

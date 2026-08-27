@@ -4,6 +4,7 @@ import { type Run } from "./meta";
 import { projectDirFor } from "./sessions";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
+import { isUnderAppRoot } from "./runWorkingTree";
 
 export const DEFAULT_MIN_READS_BEFORE_EDIT = 3;
 const READ_TOOLS = new Set(["Read", "Grep", "Glob", "LS"]);
@@ -37,10 +38,15 @@ function normalizeReadKey(raw: string): string {
   return IS_WINDOWS ? raw.toLowerCase() : raw;
 }
 
-function readIdentityKey(name: string, input: unknown, fallbackId: string): string {
+function extractFilePath(input: unknown): string | undefined {
   const obj = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  const filePath = typeof obj.file_path === "string" ? obj.file_path : undefined;
+  return typeof obj.file_path === "string" ? obj.file_path : undefined;
+}
+
+function readIdentityKey(name: string, input: unknown, fallbackId: string): string {
+  const filePath = extractFilePath(input);
   if (filePath) return normalizeReadKey(filePath);
+  const obj = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   if (name === "Grep" || name === "Glob") {
     const pattern = typeof obj.pattern === "string" ? obj.pattern : undefined;
     if (pattern) return normalizeReadKey(pattern);
@@ -48,7 +54,15 @@ function readIdentityKey(name: string, input: unknown, fallbackId: string): stri
   return fallbackId;
 }
 
-export function countReadsBeforeEdit(jsonlText: string): {
+function isOutOfAppRoot(appPath: string | undefined, filePath: string | undefined): boolean {
+  if (!appPath || !filePath) return false;
+  return !isUnderAppRoot(appPath, filePath);
+}
+
+export function countReadsBeforeEdit(
+  jsonlText: string,
+  appPath?: string,
+): {
   readsBeforeEdit: number;
   editCount: number;
   editFilesCount: number;
@@ -78,10 +92,12 @@ export function countReadsBeforeEdit(jsonlText: string): {
       if (b.type !== "tool_use" || typeof b.name !== "string") continue;
       const name = b.name;
       if (EDIT_TOOLS.has(name)) {
+        if (isOutOfAppRoot(appPath, extractFilePath(b.input))) continue;
         editCount += 1;
         firstEditSeen = true;
         editFileKeys.add(readIdentityKey(name, b.input, ` edit#${unidentifiedEditCount++}`));
       } else if (READ_TOOLS.has(name) && !firstEditSeen) {
+        if (isOutOfAppRoot(appPath, extractFilePath(b.input))) continue;
         readKeys.add(readIdentityKey(name, b.input, ` #${unidentifiedReadCount++}`));
       }
     }
@@ -144,7 +160,7 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
     };
   }
 
-  const { readsBeforeEdit, editCount, editFilesCount } = countReadsBeforeEdit(text);
+  const { readsBeforeEdit, editCount, editFilesCount } = countReadsBeforeEdit(text, appPath);
 
   if (editCount === 0) {
     return {
