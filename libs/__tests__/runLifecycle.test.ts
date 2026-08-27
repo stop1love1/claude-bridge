@@ -1060,4 +1060,62 @@ describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
 
     expect(currentReservation("real-app")).toBeNull();
   });
+
+  it("keeps the reservation held when the semantic-verifier gate schedules a retry under a NEW session id (F1)", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    const RETRY_SID = "99999999-8888-7777-6666-555555555555";
+    seedRequireCache({
+      semanticVerifier: {
+        runSemanticVerifier: async () => ({
+          verdict: "broken",
+          reason: "does not implement the task body",
+          concerns: [],
+          durationMs: 1,
+        }),
+        isEligibleForSemanticVerifierRetry: () => true,
+        // Mirrors the real spawnSemanticVerifierRetry contract: it mints a FRESH
+        // sessionId (never the finished run's own) and never touches the
+        // reservation itself — that's exactly the F1 gap being pinned here.
+        spawnSemanticVerifierRetry: async () => ({
+          sessionId: RETRY_SID,
+          run: {
+            sessionId: RETRY_SID,
+            role: "coder-svretry",
+            repo: "real-app",
+            status: "running",
+            startedAt: null,
+            endedAt: null,
+          },
+        }),
+      },
+    });
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+      parentSessionId: "00000000-0000-0000-0000-000000000000",
+    });
+    getAppMock.mockReturnValue({ ...REAL_APP, quality: { critic: false, verifier: true } });
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 0, null);
+    await flushAsync(15);
+
+    // The original session's process has exited, but a semantic-verifier retry
+    // (a DIFFERENT, freshly-spawned claude process) is now running in the same
+    // live tree. The reservation must still be held — releasing it here is
+    // exactly the bug: it frees "real-app" for a concurrent dispatch while the
+    // retry is still actively running in that same working tree.
+    expect(currentReservation("real-app")?.sessionId).toBe(SID);
+  });
 });

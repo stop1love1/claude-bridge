@@ -561,6 +561,7 @@ async function runSemanticVerifierGate(
 
   if (needsSemanticRetry && semanticResult) {
     if (scheduledSemanticRetry) {
+      ctx.identityRetained = true;
       emitRetried(tid, scheduledSemanticRetry.run, run.sessionId);
       logInfo("semantic-verifier", `${semanticResult.verdict} — ${semanticResult.reason} — spawned retry`, {
         tag: t,

@@ -27,6 +27,24 @@ export function acquireRepoReservation(
   return { ok: false, heldBy: current.sessionId };
 }
 
+export interface TransferRepoReservationResult {
+  ok: boolean;
+  heldBy?: string;
+}
+
+export function transferRepoReservation(
+  repo: string,
+  fromSessionId: string,
+  toSessionId: string,
+): TransferRepoReservationResult {
+  const current = store.byRepo.get(repo);
+  if (!current || current.sessionId === fromSessionId) {
+    store.byRepo.set(repo, { sessionId: toSessionId });
+    return { ok: true };
+  }
+  return { ok: false, heldBy: current.sessionId };
+}
+
 export function releaseRepoReservation(repo: string, sessionId: string): void {
   const current = store.byRepo.get(repo);
   if (current && current.sessionId === sessionId) {

@@ -4,6 +4,7 @@ import { appendRun, readMeta, type Run, type RunSemanticVerifier } from "./meta"
 import { wireRunLifecycle } from "./coordinator";
 import { resolveRepoCwd } from "./repos";
 import { denyTaskToolNames, spawnFreeSession } from "./spawn";
+import { releaseRepoReservation, transferRepoReservation } from "./repoReservation";
 import {
   freeSessionSettingsPath,
   writeSessionSettings,
@@ -258,6 +259,19 @@ export async function spawnSemanticVerifierRetry(args: {
   const retryPrompt = [strategyPrefix, ctxBlock, "---", "", body].join("\n");
 
   const sessionId = randomUUID();
+
+  const canTransferReservation = !!app && !finishedRun.worktreePath;
+  if (canTransferReservation) {
+    const transfer = transferRepoReservation(finishedRun.repo, finishedRun.sessionId, sessionId);
+    if (!transfer.ok) {
+      console.warn(
+        `semantic-retry could not transfer ${finishedRun.repo} reservation to retry session (held by ${transfer.heldBy}) — proceeding anyway`,
+        taskId,
+        finishedRun.sessionId,
+      );
+    }
+  }
+
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
   let childHandle;
@@ -276,6 +290,7 @@ export async function spawnSemanticVerifierRetry(args: {
       finishedRun.sessionId,
       e,
     );
+    if (canTransferReservation) releaseRepoReservation(finishedRun.repo, sessionId);
     return null;
   }
 
