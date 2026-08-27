@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const readFileSyncCalls = vi.hoisted(() => [] as unknown[][]);
+const openSyncFailPaths = vi.hoisted(() => new Set<string>());
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -13,6 +14,15 @@ vi.mock("node:fs", async (importOriginal) => {
       readFileSyncCalls.push(args);
       return (actual.readFileSync as (...a: unknown[]) => unknown)(...args);
     }) as typeof actual.readFileSync,
+    openSync: ((...args: unknown[]) => {
+      const p = args[0];
+      if (typeof p === "string" && openSyncFailPaths.has(p)) {
+        const err = new Error("EACCES: permission denied, open") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return (actual.openSync as (...a: unknown[]) => number)(...args);
+    }) as typeof actual.openSync,
   };
 });
 
@@ -126,6 +136,21 @@ describe("sumUsageFromJsonl cache", () => {
     }) + "\n");
     const b = sumUsageFromJsonl(ghost);
     expect(b.inputTokens).toBe(42);
+  });
+
+  it("does not cache a failed read on an existing, unchanged file (transient EACCES/EBUSY)", () => {
+    const file = writeUsageFile("locked.jsonl", { input: 10, output: 5, turns: 1 });
+    openSyncFailPaths.add(file);
+    try {
+      const a = sumUsageFromJsonl(file);
+      expect(a.turns).toBe(0);
+      expect(a.inputTokens).toBe(0);
+    } finally {
+      openSyncFailPaths.delete(file);
+    }
+    const b = sumUsageFromJsonl(file);
+    expect(b.turns).toBe(1);
+    expect(b.inputTokens).toBe(10);
   });
 
   function multiChunkUsagePayload(lineCount: number): { content: string; sizeBytes: number } {

@@ -46,15 +46,21 @@ export function __resetUsageCacheForTests(): void {
 
 const SUM_CHUNK_BYTES = 256 * 1024;
 
-function sumUsageFromFile(filePath: string): SessionUsage {
+interface SumUsageResult {
+  ok: boolean;
+  usage: SessionUsage;
+}
+
+function sumUsageFromFile(filePath: string): SumUsageResult {
   const out: SessionUsage = { ...ZERO };
   let fd: number;
   try { fd = openSync(filePath, "r"); }
-  catch { return out; }
+  catch { return { ok: false, usage: { ...ZERO } }; }
 
   const buf = Buffer.alloc(SUM_CHUNK_BYTES);
   const decoder = new StringDecoder("utf8");
   let leftover = "";
+  let ok = true;
 
   const consume = (line: string) => {
     if (!line) return;
@@ -76,7 +82,7 @@ function sumUsageFromFile(filePath: string): SessionUsage {
     while (true) {
       let n: number;
       try { n = readSync(fd, buf, 0, SUM_CHUNK_BYTES, pos); }
-      catch { break; }
+      catch { ok = false; break; }
       if (n === 0) break;
       pos += n;
       const text = leftover + decoder.write(buf.subarray(0, n));
@@ -86,11 +92,11 @@ function sumUsageFromFile(filePath: string): SessionUsage {
       leftover = text.slice(lastNl + 1);
       for (const line of ready.split("\n")) consume(line);
     }
-    consume(leftover + decoder.end());
+    if (ok) consume(leftover + decoder.end());
   } finally {
     try { closeSync(fd); } catch { }
   }
-  return out;
+  return { ok, usage: ok ? out : { ...ZERO } };
 }
 
 export function sumUsageFromJsonl(filePath: string): SessionUsage {
@@ -115,9 +121,9 @@ export function sumUsageFromJsonl(filePath: string): SessionUsage {
     }
   }
 
-  const out = sumUsageFromFile(filePath);
+  const { ok, usage: out } = sumUsageFromFile(filePath);
 
-  if (cacheable) {
+  if (cacheable && ok) {
     const key = usageCacheKey(filePath, mtimeMs, size);
     usageCache.set(key, { ...out });
     if (usageCache.size > USAGE_CACHE_MAX) {
