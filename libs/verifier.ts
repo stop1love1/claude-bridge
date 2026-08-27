@@ -34,6 +34,17 @@ export interface RunVerifierOptions {
   finishedRun: Run;
 }
 
+function isNoneSentinel(line: string): boolean {
+  const stripped = line.replace(/^[-*]\s*/, "").replace(/^[_*~]+/, "");
+  return stripped.toLowerCase().startsWith("(none");
+}
+
+function isPlausiblePath(token: string): boolean {
+  if (!token) return false;
+  if (token.startsWith("(")) return false;
+  return token.includes("/") || token.includes(".");
+}
+
 export function parseChangedFiles(report: string): string[] {
   const idx = report.indexOf("## Changed files");
   if (idx === -1) return [];
@@ -45,17 +56,21 @@ export function parseChangedFiles(report: string): string[] {
   for (const rawLine of section.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
-    if (line.startsWith("(none")) return [];
+    if (isNoneSentinel(line)) return [];
     if (!line.startsWith("-") && !line.startsWith("*")) continue;
     const backtick = line.match(/[-*]\s*`([^`]+)`/);
     if (backtick) {
-      out.push(backtick[1].trim());
+      const token = backtick[1].trim();
+      if (isPlausiblePath(token)) out.push(token);
       continue;
     }
-    const bare = line.match(/[-*]\s*([^\s—–-]+)/);
-    if (bare) out.push(bare[1].trim());
+    const bare = line.match(/^[-*]\s*([^\s—–]+)/);
+    if (bare) {
+      const token = bare[1].trim();
+      if (isPlausiblePath(token)) out.push(token);
+    }
   }
-  return Array.from(new Set(out.filter(Boolean)));
+  return Array.from(new Set(out));
 }
 
 function readChildReport(taskId: string, run: Run): string {

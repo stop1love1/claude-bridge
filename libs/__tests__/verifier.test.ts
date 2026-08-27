@@ -65,6 +65,111 @@ describe("parseChangedFiles", () => {
     ].join("\n");
     expect(parseChangedFiles(md)).toEqual(["dup.ts"]);
   });
+
+  describe("the (none) sentinel", () => {
+    const spellings = [
+      "(none)",
+      "(none — analysis only)",
+      "- (none — analysis only)",
+      "* (none)",
+      "_(none)_",
+      "- _(none)_",
+      "- (NONE)",
+    ];
+    for (const spelling of spellings) {
+      it(`treats ${JSON.stringify(spelling)} as no files`, () => {
+        const md = [
+          "## Changed files",
+          spelling,
+          "",
+          "## How to verify",
+        ].join("\n");
+        expect(parseChangedFiles(md)).toEqual([]);
+      });
+    }
+
+    it("lets the sentinel win over a real path listed above it", () => {
+      const md = [
+        "## Changed files",
+        "- `src/foo.ts` — edited",
+        "- (none — analysis only)",
+      ].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+
+    it("lets the sentinel win over a real path listed below it", () => {
+      const md = [
+        "## Changed files",
+        "- (none — analysis only)",
+        "- `src/foo.ts` — edited",
+      ].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+  });
+
+  describe("bare paths containing hyphens", () => {
+    it("keeps a hyphen inside a bare filename", () => {
+      const md = ["## Changed files", "- my-file.ts"].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["my-file.ts"]);
+    });
+
+    it("keeps hyphens inside a bare path with an em-dash description", () => {
+      const md = [
+        "## Changed files",
+        "- src/some-module/index.ts — refactored",
+      ].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["src/some-module/index.ts"]);
+    });
+
+    it("terminates on an en dash separator", () => {
+      const md = [
+        "## Changed files",
+        "- src/some-module/index.ts – refactored",
+      ].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["src/some-module/index.ts"]);
+    });
+
+    it("terminates on an em dash with no surrounding spaces", () => {
+      const md = ["## Changed files", "- my-file.ts—refactored"].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["my-file.ts"]);
+    });
+
+    it("terminates on a spaced ASCII hyphen used as a separator", () => {
+      const md = ["## Changed files", "- foo.ts - notes"].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["foo.ts"]);
+    });
+
+    it("keeps hyphens in an asterisk-bulleted bare path", () => {
+      const md = ["## Changed files", "* libs/retry-ladder.ts — tweak"].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["libs/retry-ladder.ts"]);
+    });
+  });
+
+  it("still extracts a backticked path with an em-dash description", () => {
+    const md = ["## Changed files", "- `libs/verifier.ts` — fixed"].join("\n");
+    expect(parseChangedFiles(md)).toEqual(["libs/verifier.ts"]);
+  });
+
+  describe("the non-path guard", () => {
+    it("drops a token that opens with a parenthesis", () => {
+      const md = ["## Changed files", "- (no files were touched)"].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+
+    it("drops a prose token with neither a slash nor a dot", () => {
+      const md = ["## Changed files", "- nothing"].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+
+    it("keeps real paths on the lines around a dropped token", () => {
+      const md = [
+        "## Changed files",
+        "- nothing",
+        "- src/real-file.ts — edited",
+      ].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["src/real-file.ts"]);
+    });
+  });
 });
 
 describe("deriveVerdict", () => {
@@ -144,6 +249,23 @@ describe("deriveVerdict", () => {
       actual: ["src/foo.ts"],
     });
     expect(v.verdict).toBe("pass");
+  });
+
+  it("passes an analysis-only report whose sentinel is bulleted", () => {
+    const md = [
+      "# semantic-verifier @ app-web",
+      "",
+      "## Changed files",
+      "- (none — analysis only)",
+      "",
+      "## How to verify",
+      "Nothing to run.",
+    ].join("\n");
+    const claimed = parseChangedFiles(md);
+    expect(claimed).toEqual([]);
+    const v = deriveVerdict({ claimed, actual: [] });
+    expect(v.verdict).toBe("pass");
+    expect(v.reason).toBe("analysis-only run — no diff, no claims, nothing to verify");
   });
 });
 
