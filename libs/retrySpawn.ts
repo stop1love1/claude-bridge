@@ -116,10 +116,9 @@ export async function spawnRetry(
     }
   }
 
-  const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
-
   let child;
   try {
+    const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
     child = resumeClaude(
       spawnCwd,
       sessionId,
