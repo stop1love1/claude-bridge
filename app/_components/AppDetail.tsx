@@ -84,8 +84,11 @@ export function AppDetail({ name }: { name: string }) {
     document.title = `${displayTitle} · Apps | Claude Bridge`;
   }, [displayTitle]);
 
+  const reloadStatusAbortRef = useRef<AbortController | null>(null);
   const reloadStatus = useCallback(() => {
+    reloadStatusAbortRef.current?.abort();
     const ac = new AbortController();
+    reloadStatusAbortRef.current = ac;
     api.appStatus(name, { signal: ac.signal })
       .then((r) => { setStatus(r); setStatusError(null); })
       .catch((e) => {
@@ -713,6 +716,7 @@ function TerminalPanel({
   const [dockMode, setDockMode] = useState<TerminalDockMode>("shell");
   const [history, setHistory] = useState<TerminalEntry[]>([]);
   const [draft, setDraft] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [recall, setRecall] = useState<{ index: number; backup: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -752,7 +756,8 @@ function TerminalPanel({
 
   const submit = useCallback(async () => {
     const cmd = draft.trim();
-    if (!cmd) return;
+    if (!cmd || submitting) return;
+    setSubmitting(true);
     const id = ++idCounter.current;
     setHistory((h) => [
       ...h,
@@ -792,8 +797,10 @@ function TerminalPanel({
             : entry,
         ),
       );
+    } finally {
+      setSubmitting(false);
     }
-  }, [draft, name, onMaybeChangedRepo]);
+  }, [draft, name, onMaybeChangedRepo, submitting]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
@@ -990,8 +997,9 @@ function TerminalPanel({
               className="min-w-0 flex-1 bg-transparent border-0 py-0.5 font-mono text-xs outline-none placeholder:text-muted-foreground/65"
               spellCheck={false}
               autoComplete="off"
+              disabled={submitting}
             />
-            <Button type="submit" size="iconSm" disabled={!draft.trim()} title="Run (Enter)">
+            <Button type="submit" size="iconSm" disabled={!draft.trim() || submitting} title="Run (Enter)">
               <Send size={13} />
             </Button>
           </form>

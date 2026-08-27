@@ -725,6 +725,7 @@ function TreeItem({
         className="w-full flex items-center gap-1.5 pr-2 py-[3px] text-left text-[12px] text-foreground/90 hover:bg-accent transition-colors"
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
         title={node.fullPath}
+        aria-expanded={open}
       >
         {open ? (
           <ChevronDown size={12} className="text-fg-dim shrink-0" />

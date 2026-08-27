@@ -224,6 +224,7 @@ export function ThinkingBlockView({
           hasContent ? "hover:text-foreground cursor-pointer" : "cursor-default"
         }`}
         title={hasContent ? "Toggle chain-of-thought" : "Thinking content is not available"}
+        aria-expanded={open}
       >
         {hasContent
           ? (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />)
@@ -257,6 +258,7 @@ export function BashToolUseView({ block }: { block: ContentBlock }) {
       <button
         onClick={() => expandable && setOpen((v) => !v)}
         className={`group/tool w-full flex items-start gap-1.5 px-2 py-1 -mx-2 rounded text-left text-[11px] ${expandable ? "hover:bg-accent/50 cursor-pointer" : "cursor-default"}`}
+        aria-expanded={open}
       >
         {expandable ? (
           open ? <ChevronDown size={10} className="shrink-0 mt-1 opacity-60" /> : <ChevronRight size={10} className="shrink-0 mt-1 opacity-60" />
@@ -606,6 +608,7 @@ export function ToolUseView({
       <button
         onClick={() => setOpen((v) => !v)}
         className="group/tool w-full flex items-center gap-1.5 px-2 py-1 -mx-2 rounded text-left hover:bg-accent/50 text-[11px] text-muted-foreground"
+        aria-expanded={open}
       >
         {open ? <ChevronDown size={10} className="shrink-0 opacity-60" /> : <ChevronRight size={10} className="shrink-0 opacity-60" />}
         <Wrench size={10} className="text-info shrink-0" />
@@ -693,6 +696,7 @@ export function ToolResultView({ block, suppress, repo }: { block: ContentBlock;
           <button
             onClick={() => hasMore && setOpen((v) => !v)}
             className={`w-full flex items-start gap-1.5 px-2 py-1 -mx-2 rounded text-left ${hasMore ? "hover:bg-accent/50 cursor-pointer" : "cursor-default"}`}
+            aria-expanded={open}
           >
             {hasMore ? (
               open ? <ChevronDown size={10} className="shrink-0 mt-1 opacity-60" /> : <ChevronRight size={10} className="shrink-0 mt-1 opacity-60" />
