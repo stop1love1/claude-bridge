@@ -10,6 +10,7 @@ import { readMeta } from "@/libs/meta";
 import { resolveRepoCwd } from "@/libs/repos";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { guestBoundRepoValue } from "@/libs/guestSessionRepo";
+import { createSseResponse } from "@/libs/sse";
 
 export const dynamic = "force-dynamic";
 
@@ -112,12 +113,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const bufferKey = `${effectiveRepoPath}::${sessionId}`;
   const buffer = getBuffer(bufferKey);
 
-  const encoder = new TextEncoder();
-
-  let closeRef: (() => void) | null = null;
-
-  const stream = new ReadableStream({
-    start(controller) {
+  return createSseResponse({
+    signal: req.signal,
+    keepaliveMs: 15000,
+    onStart: (send) => {
       let closed = false;
       let offset = since;
       let pending: ReturnType<typeof setTimeout> | null = null;
@@ -125,16 +124,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       let watcher: FSWatcher | null = null;
       let waitTimer: ReturnType<typeof setTimeout> | null = null;
       let primed = false;
-
-      const send = (event: string, data: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-          );
-        } catch {
-        }
-      };
 
       const drain = async () => {
         if (closed || inFlight) return;
@@ -211,14 +200,6 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         });
       }
 
-      const ka = setInterval(() => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`: keepalive\n\n`));
-        } catch {
-        }
-      }, 15000);
-
       send("alive", { alive: isAlive(sessionId) });
       const unsub = subscribeSession(sessionId, {
         onPartial: (p: PartialEvent) => send("partial", p),
@@ -226,33 +207,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         onStatus: (s: StatusEvent) => send("status", s),
       });
 
-      const close = () => {
-        if (closed) return;
+      return () => {
         closed = true;
         if (pending) { clearTimeout(pending); pending = null; }
         if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
-        clearInterval(ka);
         try { unsub(); } catch { }
         try { watcher?.close(); } catch { }
-        try { controller.close(); } catch { }
         try { releaseSlot(); } catch { }
-        try { req.signal.removeEventListener("abort", close); } catch { }
       };
-
-      closeRef = close;
-      req.signal.addEventListener("abort", close);
-    },
-    cancel() {
-      closeRef?.();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      "connection": "keep-alive",
-      "x-accel-buffering": "no",
     },
   });
 }

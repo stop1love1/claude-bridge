@@ -118,3 +118,70 @@ describe("subscribeAll — global emitter", () => {
     off();
   });
 });
+
+describe("permission/stream route — emitter actually released on teardown", () => {
+  it("drops the per-session emitter's listeners when the stream is cancelled without req.signal firing, and consume() then evicts it", async () => {
+    const streamSessionId = "11111111-1111-1111-1111-111111111111";
+    const store = await import("../permissionStore");
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("../../app/api/sessions/[sessionId]/permission/stream/route");
+
+    const req = new NextRequest(`http://localhost/api/sessions/${streamSessionId}/permission/stream`);
+    const res = await GET(req, { params: Promise.resolve({ sessionId: streamSessionId }) });
+
+    const during = store._emitterDebugInfo(streamSessionId);
+    expect(during.exists).toBe(true);
+    expect(during.pending).toBeGreaterThan(0);
+    expect(during.answered).toBeGreaterThan(0);
+
+    await res.body!.cancel();
+
+    const after = store._emitterDebugInfo(streamSessionId);
+    expect(after.pending).toBe(0);
+    expect(after.answered).toBe(0);
+
+    store.announcePending({
+      sessionId: streamSessionId,
+      requestId: "req-evict",
+      tool: "Bash",
+      input: {},
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+    store.consume(streamSessionId, "req-evict");
+    expect(store._emitterDebugInfo(streamSessionId).exists).toBe(false);
+  });
+
+  it("drops the per-session emitter's listeners when req.signal aborts, and consume() then evicts it", async () => {
+    const streamSessionId = "22222222-2222-2222-2222-222222222222";
+    const store = await import("../permissionStore");
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("../../app/api/sessions/[sessionId]/permission/stream/route");
+
+    const ac = new AbortController();
+    const req = new NextRequest(`http://localhost/api/sessions/${streamSessionId}/permission/stream`, {
+      signal: ac.signal,
+    });
+    await GET(req, { params: Promise.resolve({ sessionId: streamSessionId }) });
+
+    const during = store._emitterDebugInfo(streamSessionId);
+    expect(during.exists).toBe(true);
+    expect(during.pending).toBeGreaterThan(0);
+
+    ac.abort();
+    await Promise.resolve();
+
+    const after = store._emitterDebugInfo(streamSessionId);
+    expect(after.pending).toBe(0);
+    expect(after.answered).toBe(0);
+
+    store.announcePending({
+      sessionId: streamSessionId,
+      requestId: "req-evict",
+      tool: "Bash",
+      input: {},
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+    store.consume(streamSessionId, "req-evict");
+    expect(store._emitterDebugInfo(streamSessionId).exists).toBe(false);
+  });
+});

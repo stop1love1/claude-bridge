@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { listPending, subscribe } from "@/libs/permissionStore";
 import { isValidSessionId } from "@/libs/validate";
 import { acquireSseSlot } from "@/libs/sseLimit";
+import { createSseResponse } from "@/libs/sse";
 
 export const dynamic = "force-dynamic";
 
@@ -16,18 +17,11 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!releaseSlot) {
     return new Response("too many concurrent streams", { status: 429 });
   }
-  const encoder = new TextEncoder();
 
-  const stream = new ReadableStream({
-    start(controller) {
-      const send = (event: string, data: unknown) => {
-        try {
-          controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-          );
-        } catch { }
-      };
-
+  return createSseResponse({
+    signal: req.signal,
+    keepaliveMs: 15000,
+    onStart: (send) => {
       for (const p of listPending(sessionId)) {
         send("pending", { requestId: p.requestId, tool: p.tool, input: p.input, createdAt: p.createdAt });
       }
@@ -42,27 +36,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         },
       );
 
-      const ka = setInterval(() => {
-        try { controller.enqueue(encoder.encode(`: keepalive\n\n`)); } catch { }
-      }, 15000);
-
-      const close = () => {
-        unsub();
-        clearInterval(ka);
-        try { controller.close(); } catch { }
+      return () => {
+        try { unsub(); } catch { }
         try { releaseSlot(); } catch { }
       };
-
-      req.signal.addEventListener("abort", close);
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      "connection": "keep-alive",
-      "x-accel-buffering": "no",
     },
   });
 }

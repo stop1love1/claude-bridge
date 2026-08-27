@@ -126,6 +126,12 @@ export function subscribe(
   };
 }
 
+export function _emitterDebugInfo(sessionId: string): { exists: boolean; pending: number; answered: number } {
+  const e = store.emitters.get(sessionId);
+  if (!e) return { exists: false, pending: 0, answered: 0 };
+  return { exists: true, pending: e.listenerCount("pending"), answered: e.listenerCount("answered") };
+}
+
 export function subscribeAll(
   onPending: (r: PendingRequest) => void,
   onAnswered?: (r: PendingRequest) => void,

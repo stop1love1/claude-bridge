@@ -6,6 +6,7 @@ import { isValidTaskId } from "@/libs/tasks";
 import { badRequest } from "@/libs/validate";
 import { subscribeSession, type StatusEvent } from "@/libs/sessionEvents";
 import { acquireSseSlot } from "@/libs/sseLimit";
+import { createSseResponse } from "@/libs/sse";
 
 export const dynamic = "force-dynamic";
 
@@ -19,57 +20,20 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     return new Response("too many concurrent streams", { status: 429 });
   }
   const sessionsDir = join(SESSIONS_DIR, id);
-  const encoder = new TextEncoder();
 
-  const stream = new ReadableStream({
-    start(controller) {
-      let closed = false;
-      let ka: ReturnType<typeof setInterval> | null = null;
-      let unsub: (() => void) | null = null;
+  return createSseResponse({
+    signal: req.signal,
+    keepaliveMs: 15000,
+    onStart: (send) => {
       const childStatusUnsubs = new Map<string, () => void>();
-
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        if (unsub) {
-          try { unsub(); } catch { }
-          unsub = null;
-        }
-        for (const [, off] of childStatusUnsubs) {
-          try { off(); } catch { }
-        }
-        childStatusUnsubs.clear();
-        if (ka !== null) {
-          clearInterval(ka);
-          ka = null;
-        }
-        try {
-          controller.close();
-        } catch {
-        }
-        try { releaseSlot(); } catch { }
-      };
-
-      const send = (event: string, data: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-          );
-        } catch {
-          close();
-        }
-      };
 
       const attachChildStatus = (sessionId: string) => {
         if (childStatusUnsubs.has(sessionId)) return;
         const off = subscribeSession(sessionId, {
           onStatus: (s: StatusEvent) => {
-            if (closed) return;
             send("child-status", { sessionId, status: s });
           },
           onAlive: (alive: boolean) => {
-            if (closed) return;
             send("child-alive", { sessionId, alive });
           },
         });
@@ -87,8 +51,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         send(event, { ...payload, meta });
       };
 
-      unsub = subscribeMeta(id, (ev: MetaChangeEvent) => {
-        if (closed) return;
+      const unsub = subscribeMeta(id, (ev: MetaChangeEvent) => {
         if (ev.kind === "spawned") {
           if (ev.sessionId) attachChildStatus(ev.sessionId);
           sendWithMeta("spawned", { sessionId: ev.sessionId, run: ev.run });
@@ -123,25 +86,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
         }
       });
 
-      ka = setInterval(() => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`: keepalive\n\n`));
-        } catch {
-          close();
+      return () => {
+        try { unsub(); } catch { }
+        for (const [, off] of childStatusUnsubs) {
+          try { off(); } catch { }
         }
-      }, 15000);
-
-      req.signal.addEventListener("abort", close);
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      "connection": "keep-alive",
-      "x-accel-buffering": "no",
+        childStatusUnsubs.clear();
+        try { releaseSlot(); } catch { }
+      };
     },
   });
 }
