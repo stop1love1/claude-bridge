@@ -189,6 +189,25 @@ describe("sessions/[sessionId]/message — repo reservation + atomic claim (F3)"
     spawnSpy.mockRestore();
   });
 
+  it("releases the reservation when the spawned child emits 'error' without ever emitting 'exit' (untracked free session)", async () => {
+    const { currentReservation } = await import("../repoReservation");
+
+    const sid = "77777777-7777-7777-7777-777777777777";
+    const res = await postMessage(sid, { message: "hello", repo: "fake-message-app" });
+    expect(res.status).toBe(200);
+    expect(spawnedChildren).toHaveLength(1);
+    expect(currentReservation("fake-message-app")?.sessionId).toBe(sid);
+
+    // Node emits 'error' without 'exit' when the process itself could not be
+    // spawned (ENOENT, exec format, ...) — attachQueueDrain must not depend on
+    // 'exit' alone to release, or this reservation is stuck forever for a
+    // session that was never wired to any other lifecycle.
+    spawnedChildren[0].emit("error", new Error("ENOENT: claude not on PATH"));
+    await flushAsync();
+
+    expect(currentReservation("fake-message-app")).toBeNull();
+  });
+
   it("rejects a second concurrent POST for the SAME sessionId while the first is still in flight (atomic claim)", async () => {
     let resolveWait: (v: EarlyFailure | null) => void = () => {};
     const stuck = new Promise<EarlyFailure | null>((resolve) => { resolveWait = resolve; });
@@ -251,5 +270,46 @@ describe("sessions/[sessionId]/message — repo reservation + atomic claim (F3)"
     expect(body.intakeStatus).toBe("planning");
     expect(spawnedChildren).toHaveLength(0);
     expect(currentReservation("fake-message-app")).toBeNull();
+  });
+
+  it("does NOT plan-gate a resume of an existing conversation, even when the task's plan is not approved", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { createMeta, appendRun, setIntake } = await import("../meta");
+    const { _resetForTests } = await import("../planGateConfig");
+    const { currentReservation } = await import("../repoReservation");
+    _resetForTests();
+
+    const taskId = "t_20260827_091";
+    const dir = `${TMP_SESSIONS}/${taskId}`;
+    createMeta(dir, {
+      taskId,
+      taskTitle: "plan-gate resume probe",
+      taskBody: "",
+      taskStatus: "doing" as const,
+      taskSection: "DOING" as const,
+      taskChecked: false,
+      createdAt: "2026-08-27T10:00:00Z",
+    });
+    const sid = "66666666-6666-6666-6666-666666666666";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-message-app",
+      status: "done" as const,
+      startedAt: "2026-08-27T09:00:00Z",
+      endedAt: "2026-08-27T09:05:00Z",
+    });
+    await setIntake(dir, { status: "planning", submittedBy: { kind: "operator", label: "operator" } });
+
+    owningTaskRef.value = { id: taskId, checked: false, section: "DOING" };
+    writeFileSync(`${TMP_PROJECT_DIR}/${sid}.jsonl`, "");
+
+    const res = await postMessage(sid, { message: "keep going", repo: "fake-message-app" });
+    expect(res.status).toBe(200);
+    expect(resumedChildren).toHaveLength(1);
+    expect(currentReservation("fake-message-app")?.sessionId).toBe(sid);
+
+    resumedChildren[0].emit("exit", 0, null);
+    await flushAsync();
   });
 });

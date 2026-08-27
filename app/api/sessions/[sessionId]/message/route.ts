@@ -35,7 +35,10 @@ function attachQueueDrain(
   sessionId: string,
   onIdle: () => void,
 ): void {
+  let settled = false;
   child.once("exit", () => {
+    if (settled) return;
+    settled = true;
     const next = dequeueMessage(sessionId);
     if (!next) {
       onIdle();
@@ -61,6 +64,11 @@ function attachQueueDrain(
       });
       onIdle();
     }
+  });
+  child.once("error", () => {
+    if (settled) return;
+    settled = true;
+    onIdle();
   });
 }
 
@@ -137,28 +145,31 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       }
 
       const owningTask = findTaskBySessionId(sessionId);
-      const ownerRow = owningTask
-        ? readMeta(join(SESSIONS_DIR, owningTask.id))?.runs.find((r) => r.sessionId === sessionId) ?? null
-        : null;
+      const isFreshDispatch = !existsSync(file);
 
-      if (owningTask && ownerRow) {
-        const cfg = readPlanGateConfig();
-        const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
-        const intake = readIntake(join(SESSIONS_DIR, owningTask.id));
-        const decision = evaluatePlanGate({
-          role: ownerRow.role,
-          intakeStatus: intake?.status ?? "none",
-          gateApplies,
-        });
-        if (!decision.allowed) {
-          return NextResponse.json(
-            {
-              error: "plan-gate",
-              reason: decision.reason,
-              intakeStatus: intake?.status ?? "none",
-            },
-            { status: 423 },
-          );
+      if (isFreshDispatch && owningTask) {
+        const ownerRow = readMeta(join(SESSIONS_DIR, owningTask.id))?.runs.find(
+          (r) => r.sessionId === sessionId,
+        ) ?? null;
+        if (ownerRow) {
+          const cfg = readPlanGateConfig();
+          const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
+          const intake = readIntake(join(SESSIONS_DIR, owningTask.id));
+          const decision = evaluatePlanGate({
+            role: ownerRow.role,
+            intakeStatus: intake?.status ?? "none",
+            gateApplies,
+          });
+          if (!decision.allowed) {
+            return NextResponse.json(
+              {
+                error: "plan-gate",
+                reason: decision.reason,
+                intakeStatus: intake?.status ?? "none",
+              },
+              { status: 423 },
+            );
+          }
         }
       }
 
