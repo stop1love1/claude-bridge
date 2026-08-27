@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { treeKill } from "./processKill";
+import { readOnlyChildArgs } from "./spawn";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const COMMIT_MSG_TIMEOUT_MS = 45_000;
@@ -160,6 +161,10 @@ export function buildPrompt(opts: GenerateCommitMessageOptions): string {
   return lines.join("\n");
 }
 
+export function buildCommitMessageArgs(): string[] {
+  return ["-p", "--permission-mode", "bypassPermissions", ...readOnlyChildArgs()];
+}
+
 function runClaude(
   prompt: string,
   cwd: string,
@@ -172,7 +177,7 @@ function runClaude(
 
     const child = spawn(
       CLAUDE_BIN,
-      ["-p", "--permission-mode", "bypassPermissions"],
+      buildCommitMessageArgs(),
       {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],

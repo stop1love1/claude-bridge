@@ -6,6 +6,7 @@ import { BRIDGE_ROOT } from "./paths";
 import { listTasks } from "./tasksStore";
 import type { Task } from "./tasks";
 import { COMMANDS, type CommandDef } from "./telegramCommands";
+import { readOnlyChildArgs } from "./spawn";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const ROUTE_TIMEOUT_MS = 45_000;
@@ -93,6 +94,10 @@ function buildPrompt(userText: string): string {
   return lines.join("\n");
 }
 
+export function buildTelegramIntentArgs(prompt: string): string[] {
+  return ["-p", "--permission-mode", "bypassPermissions", prompt, ...readOnlyChildArgs()];
+}
+
 function runClaude(prompt: string): Promise<string | null> {
   return new Promise<string | null>((resolveRun) => {
     let stdout = "";
@@ -101,7 +106,7 @@ function runClaude(prompt: string): Promise<string | null> {
 
     const child = spawn(
       CLAUDE_BIN,
-      ["-p", "--permission-mode", "bypassPermissions", prompt],
+      buildTelegramIntentArgs(prompt),
       {
         cwd: BRIDGE_ROOT,
         stdio: ["ignore", "pipe", "pipe"],

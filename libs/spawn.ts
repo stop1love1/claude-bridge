@@ -51,6 +51,19 @@ function settingsArgs(s: ChatSettings | undefined): string[] {
   return args;
 }
 
+export function readOnlyChildArgs(): string[] {
+  return [
+    "--disallowed-tools",
+    "Bash",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "WebFetch",
+    "Task",
+  ];
+}
+
 function streamingArgs(): string[] {
   return [
     "--output-format", "stream-json",

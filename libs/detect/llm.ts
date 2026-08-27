@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { treeKill } from "../processKill";
 import { BRIDGE_ROOT } from "../paths";
+import { readOnlyChildArgs } from "../spawn";
 import type { DetectInput, DetectedScope, RepoMatch } from "./types";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
@@ -102,6 +103,10 @@ function buildLLMPrompt(input: DetectInput): string {
   return lines.join("\n");
 }
 
+export function buildDetectLLMArgs(prompt: string): string[] {
+  return ["-p", "--permission-mode", "bypassPermissions", prompt, ...readOnlyChildArgs()];
+}
+
 function runClaude(prompt: string): Promise<string | null> {
   return new Promise<string | null>((resolveRun) => {
     let stdout = "";
@@ -110,7 +115,7 @@ function runClaude(prompt: string): Promise<string | null> {
 
     const child = spawn(
       CLAUDE_BIN,
-      ["-p", "--permission-mode", "bypassPermissions", prompt],
+      buildDetectLLMArgs(prompt),
       {
         cwd: BRIDGE_ROOT,
         stdio: ["ignore", "pipe", "pipe"],

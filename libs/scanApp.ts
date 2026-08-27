@@ -2,12 +2,13 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { treeKill } from "./processKill";
+import { readOnlyChildArgs } from "./spawn";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const SCAN_TIMEOUT_MS = 90_000;
 const MAX_DESCRIPTION_LEN = 240;
 
-const PROMPT = [
+export const PROMPT = [
   "You are scanning this repository to register it in a multi-repo coordinator.",
   "",
   "Read at most: README.md, CLAUDE.md, package.json, AGENTS.md, the names of",
@@ -25,6 +26,10 @@ const PROMPT = [
   "- If the repo is too thin to summarise, output exactly: (no clear purpose)",
 ].join("\n");
 
+export function buildScanAppArgs(): string[] {
+  return ["-p", "--permission-mode", "bypassPermissions", PROMPT, ...readOnlyChildArgs()];
+}
+
 export async function scanAppWithClaude(appPath: string): Promise<string | null> {
   if (!existsSync(appPath)) return null;
   return new Promise<string | null>((resolveScan) => {
@@ -34,11 +39,7 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
 
     const child = spawn(
       CLAUDE_BIN,
-      [
-        "-p",
-        "--permission-mode", "bypassPermissions",
-        PROMPT,
-      ],
+      buildScanAppArgs(),
       {
         cwd: appPath,
         stdio: ["ignore", "pipe", "pipe"],
