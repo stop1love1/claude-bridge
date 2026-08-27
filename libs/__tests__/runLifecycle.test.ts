@@ -1119,3 +1119,80 @@ describe("wireRunLifecycle — repo reservation release (Task 16)", () => {
     expect(currentReservation("real-app")?.sessionId).toBe(SID);
   });
 });
+
+describe("wireRunLifecycle — crash-retry reservation timing (F2)", () => {
+  const REAL_APP = {
+    name: "real-app",
+    path: "/tmp/fake-app",
+    git: { branchMode: "current", worktreeMode: "disabled", autoCommit: false, autoPush: false, mergeTargetBranch: "", integrationMode: "none" },
+    verify: {},
+    quality: { critic: false, verifier: false },
+    retry: {},
+    memory: { distill: false },
+  };
+
+  it("does NOT release the reservation on a failed exit when the crash ladder will retry (closes the release-then-reacquire window)", async () => {
+    seedRequireCache({
+      childRetry: {
+        maybeScheduleRetry: () => undefined,
+        isEligibleForRetry: () => ({ nextAttempt: 1 }),
+      },
+    });
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+    });
+    getAppMock.mockReturnValue(REAL_APP);
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 1, null);
+    await flushAsync(8);
+
+    // A concurrent dispatch must not be able to steal "real-app" in the gap
+    // between this failed exit and the crash-retry's own re-acquire — the
+    // reservation should never have gone through an observable null.
+    expect(currentReservation("real-app")?.sessionId).toBe(SID);
+  });
+
+  it("still releases the reservation on a failed exit when the crash ladder will NOT retry", async () => {
+    seedRequireCache({
+      childRetry: {
+        maybeScheduleRetry: () => undefined,
+        isEligibleForRetry: () => ({ reason: "max attempts reached" }),
+      },
+    });
+    const { createMeta, appendRun } = await import("../meta");
+    const { wireRunLifecycle } = await import("../runLifecycle");
+    const { acquireRepoReservation, currentReservation } = await import("../repoReservation");
+
+    createMeta(tmp, TASK_HEADER);
+    await appendRun(tmp, {
+      sessionId: SID,
+      role: "coder",
+      repo: "real-app",
+      status: "running",
+      startedAt: "2026-04-24T10:00:01Z",
+      endedAt: null,
+    });
+    getAppMock.mockReturnValue(REAL_APP);
+    acquireRepoReservation("real-app", SID);
+
+    const child = makeFakeChild();
+    wireRunLifecycle(tmp, SID, child, "real-app", "tag");
+    child.emit("exit", 1, null);
+    await flushAsync(8);
+
+    expect(currentReservation("real-app")).toBeNull();
+  });
+});

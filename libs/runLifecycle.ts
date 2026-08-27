@@ -920,12 +920,16 @@ export function wireRunLifecycle(
   const tag = context ?? sessionsDir;
   const taskId = basename(sessionsDir);
 
-  const tryAutoRetry = (exitCode: number | null) => {
+  const loadFailedRunForRetry = (): Run | null => {
+    const meta = readMeta(sessionsDir);
+    const failedRun = meta?.runs.find((r) => r.sessionId === sessionId);
+    if (!failedRun || failedRun.status !== "failed") return null;
+    if (failedRun.speculativeOutcome === "lost") return null;
+    return failedRun;
+  };
+
+  const tryAutoRetry = (failedRun: Run, exitCode: number | null) => {
     try {
-      const meta = readMeta(sessionsDir);
-      const failedRun = meta?.runs.find((r) => r.sessionId === sessionId);
-      if (!failedRun || failedRun.status !== "failed") return;
-      if (failedRun.speculativeOutcome === "lost") return;
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { maybeScheduleRetry } = require("./childRetry") as typeof import("./childRetry");
       maybeScheduleRetry({ taskId, failedRun, exitCode });
@@ -945,9 +949,24 @@ export function wireRunLifecycle(
     } catch (e) {
       logError("lifecycle", "failed to mark run failed", e, { tag });
     }
-    releaseRepoReservation(repo, sessionId);
+
+    const failedRun = loadFailedRunForRetry();
+    let retryWillBeAttempted = false;
+    if (failedRun) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { isEligibleForRetry } = require("./childRetry") as typeof import("./childRetry");
+        retryWillBeAttempted = "nextAttempt" in isEligibleForRetry(taskId, failedRun);
+      } catch (e) {
+        logError("auto-retry", "eligibility pre-check crashed", e, { tag });
+      }
+    }
+
+    if (!retryWillBeAttempted) {
+      releaseRepoReservation(repo, sessionId);
+    }
     logError("lifecycle", `run failed: ${reason}`, undefined, { tag });
-    tryAutoRetry(exitCode);
+    if (failedRun) tryAutoRetry(failedRun, exitCode);
   };
 
   const succeedRun = async () => {

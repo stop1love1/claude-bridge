@@ -99,12 +99,11 @@ describe("spawnRetry — re-acquires the reservation the crash path already rele
     try { rmSync(taskDir(), { recursive: true, force: true }); } catch { }
   });
 
-  it("re-acquires for a non-worktree app when nothing else holds it", async () => {
+  it("is an idempotent no-op re-acquire when failRun's fixed ordering kept the reservation held for an eligible crash retry", async () => {
     const { createMeta, appendRun } = await import("../meta");
     const { spawnRetry } = await import("../retrySpawn");
-    const { currentReservation, releaseRepoReservation } = await import(
-      "../repoReservation"
-    );
+    const { acquireRepoReservation, currentReservation, releaseRepoReservation } =
+      await import("../repoReservation");
 
     createMeta(taskDir(), HEADER);
     const sid = "77777777-7777-7777-7777-777777777777";
@@ -119,9 +118,12 @@ describe("spawnRetry — re-acquires the reservation the crash path already rele
     };
     await appendRun(taskDir(), failedRun);
 
-    // Mirrors real production timing: failRun releases before tryAutoRetry ever runs,
-    // so by the time spawnRetry is invoked for the crash gate, nothing is held.
-    expect(currentReservation("fake-crash-retry-app")).toBeNull();
+    // Mirrors the FIXED production timing (F2): failRun now checks retry eligibility
+    // before releasing, and skips the release entirely when a retry will be attempted —
+    // so by the time spawnRetry is invoked for the crash gate, the reservation is still
+    // held under the same sessionId, never observably null.
+    acquireRepoReservation("fake-crash-retry-app", sid);
+    expect(currentReservation("fake-crash-retry-app")?.sessionId).toBe(sid);
 
     const result = await spawnRetry({
       taskId: TASK_ID,
