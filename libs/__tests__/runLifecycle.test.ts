@@ -138,10 +138,6 @@ vi.mock("../apps", () => ({
   isValidAppName: () => true,
   semanticVerifierEnabled: (app: { quality?: { verifier?: boolean } }) =>
     app.quality?.verifier !== false,
-  resolvePanelSize: (app: { quality?: { verifierPanel?: number } }) => {
-    const n = app.quality?.verifierPanel;
-    return typeof n === "number" && Number.isFinite(n) ? Math.max(1, Math.min(5, Math.floor(n))) : 3;
-  },
 }));
 
 vi.mock("../paths", async () => {
