@@ -603,6 +603,16 @@ interface PostExitFlowResult {
   releaseReservation: boolean;
 }
 
+// Run in order; the first gate that blocks stops the run short of any
+// commit / merge / integration. Adding a gate means adding it here.
+const GATE_SEQUENCE: Array<(ctx: PostExitContext) => Promise<GateOutcome>> = [
+  runVerifyChainGate,
+  runPreflightGate,
+  runClaimGate,
+  runStyleCriticGate,
+  runSemanticVerifierGate,
+];
+
 async function postExitFlow(args: {
   sessionsDir: string;
   taskId: string;
@@ -624,24 +634,10 @@ async function postExitFlow(args: {
     observedChangedFiles: null,
   };
 
-  if ((await runVerifyChainGate(ctx)) === "blocked") {
-    return { releaseReservation: !ctx.identityRetained };
-  }
-
-  if ((await runPreflightGate(ctx)) === "blocked") {
-    return { releaseReservation: !ctx.identityRetained };
-  }
-
-  if ((await runClaimGate(ctx)) === "blocked") {
-    return { releaseReservation: !ctx.identityRetained };
-  }
-
-  if ((await runStyleCriticGate(ctx)) === "blocked") {
-    return { releaseReservation: !ctx.identityRetained };
-  }
-
-  if ((await runSemanticVerifierGate(ctx)) === "blocked") {
-    return { releaseReservation: !ctx.identityRetained };
+  for (const gate of GATE_SEQUENCE) {
+    if ((await gate(ctx)) === "blocked") {
+      return { releaseReservation: !ctx.identityRetained };
+    }
   }
 
   const vcGuard = loadVerifyChain();
