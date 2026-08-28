@@ -44,6 +44,25 @@ function isPlausiblePath(token: string): boolean {
   return !token.startsWith("(");
 }
 
+const DESCRIPTION_OPENERS = "—–-:;,([{";
+const TRAILING_PUNCTUATION = /[:;,]+$/;
+
+function hasPathSignal(token: string): boolean {
+  return /[./\\]/.test(token);
+}
+
+function stripTrailingPunctuation(token: string): string {
+  const stripped = token.replace(TRAILING_PUNCTUATION, "");
+  return stripped.length > 0 ? stripped : token;
+}
+
+function isSeparatedFromDescription(rawToken: string, rest: string): boolean {
+  if (TRAILING_PUNCTUATION.test(rawToken)) return true;
+  const trailing = rest.trim();
+  if (!trailing) return true;
+  return DESCRIPTION_OPENERS.includes(trailing[0]);
+}
+
 export function parseChangedFiles(report: string): string[] {
   const idx = report.indexOf("## Changed files");
   if (idx === -1) return [];
@@ -63,10 +82,13 @@ export function parseChangedFiles(report: string): string[] {
       if (isPlausiblePath(token)) out.push(token);
       continue;
     }
-    const bare = line.match(/^[-*]\s*([^\s—–]+)/);
+    const bare = line.match(/^[-*]\s*([^\s—–]+)(.*)$/);
     if (bare) {
-      const token = bare[1].trim();
-      if (isPlausiblePath(token)) out.push(token);
+      const rawToken = bare[1].trim();
+      const token = stripTrailingPunctuation(rawToken);
+      if (!isPlausiblePath(token)) continue;
+      if (!hasPathSignal(token) && !isSeparatedFromDescription(rawToken, bare[2] ?? "")) continue;
+      out.push(token);
     }
   }
   return Array.from(new Set(out));

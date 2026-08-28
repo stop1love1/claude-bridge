@@ -187,6 +187,118 @@ describe("parseChangedFiles", () => {
       });
     }
   });
+
+  describe("a bullet that is a sentence, not a claim", () => {
+    it("drops the first word of `- no changes`", () => {
+      const md = ["## Changed files", "- no changes"].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+
+    it("drops the first word of a sentence that references a backticked file", () => {
+      const md = [
+        "## Changed files",
+        "- see `note.md` for details",
+      ].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+
+    it("drops `- nothing was touched in this repo`", () => {
+      const md = ["## Changed files", "- nothing was touched in this repo"].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+
+    it("keeps real paths on the lines around a dropped sentence", () => {
+      const md = [
+        "## Changed files",
+        "- no changes",
+        "- src/real-file.ts — edited",
+        "- see `note.md` for details",
+      ].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["src/real-file.ts"]);
+    });
+
+    it("lets a prose-only section read as analysis-only rather than a claim", () => {
+      const md = [
+        "## Changed files",
+        "- no changes",
+        "",
+        "## How to verify",
+      ].join("\n");
+      const claimed = parseChangedFiles(md);
+      expect(claimed).toEqual([]);
+      expect(deriveVerdict({ claimed, actual: [] }).verdict).toBe("pass");
+    });
+  });
+
+  describe("tokens carrying a path signal are untouched by the sentence rule", () => {
+    const survivors: Array<[string, string]> = [
+      ["- src/a-b/c.ts", "src/a-b/c.ts"],
+      ["- my-file.ts", "my-file.ts"],
+      ["- .gitignore", ".gitignore"],
+      ["- .gitignore — added a rule", ".gitignore"],
+      ["- bin/run", "bin/run"],
+      ["- bin/run — made it executable", "bin/run"],
+      ["- .github/CODEOWNERS", ".github/CODEOWNERS"],
+      ["- scripts/deploy — rewrote it", "scripts/deploy"],
+      ["- src/foo.ts added a helper", "src/foo.ts"],
+      ["- src/foo.ts (added a helper)", "src/foo.ts"],
+    ];
+
+    for (const [line, expected] of survivors) {
+      it(`keeps ${JSON.stringify(expected)} from ${JSON.stringify(line)}`, () => {
+        expect(parseChangedFiles(["## Changed files", line].join("\n"))).toEqual([
+          expected,
+        ]);
+      });
+    }
+  });
+
+  describe("extension-less names keep every separator style", () => {
+    const names = ["Makefile", "Dockerfile", "LICENSE", "CODEOWNERS"];
+    const tails = ["", " — edited", " – edited", " - edited", " (edited)", " [edited]", ": edited"];
+
+    for (const name of names) {
+      for (const tail of tails) {
+        it(`keeps ${JSON.stringify(`- ${name}${tail}`)}`, () => {
+          const md = ["## Changed files", `- ${name}${tail}`].join("\n");
+          expect(parseChangedFiles(md)).toEqual([name]);
+        });
+      }
+    }
+  });
+
+  describe("stated false negative of the sentence rule", () => {
+    it("drops an extension-less name whose description has no separator", () => {
+      const md = ["## Changed files", "- Dockerfile updated the base image"].join("\n");
+      expect(parseChangedFiles(md)).toEqual([]);
+    });
+
+    it("keeps that same name once any separator is present", () => {
+      const md = ["## Changed files", "- Dockerfile — updated the base image"].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["Dockerfile"]);
+    });
+
+    it("keeps that same name once it is backticked", () => {
+      const md = ["## Changed files", "- `Dockerfile` updated the base image"].join("\n");
+      expect(parseChangedFiles(md)).toEqual(["Dockerfile"]);
+    });
+  });
+
+  describe("stated false positive — a lone prose token is not separable from a filename", () => {
+    it("still claims N/A", () => {
+      expect(parseChangedFiles(["## Changed files", "- N/A"].join("\n"))).toEqual(["N/A"]);
+    });
+
+    it("still claims None", () => {
+      expect(parseChangedFiles(["## Changed files", "- None"].join("\n"))).toEqual(["None"]);
+    });
+
+    it("still claims a backticked prose token", () => {
+      expect(parseChangedFiles(["## Changed files", "- `no changes`"].join("\n"))).toEqual([
+        "no changes",
+      ]);
+    });
+  });
 });
 
 describe("parsePorcelainV1", () => {
