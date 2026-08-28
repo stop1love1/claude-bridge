@@ -7,6 +7,7 @@ import next from "next";
 import pty, { type IPty } from "node-pty";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { DEMO_MODE } from "../libs/demoMode";
+import { resolveBridgePort } from "../libs/paths";
 import { execLocked, filterPtyStdinChunk } from "../libs/appExecGuard";
 import { INTERNAL_TOKEN_HEADER } from "../libs/auth";
 import { authorizePtyUpgrade } from "../libs/ptyWsAuth";
@@ -143,7 +144,7 @@ async function main() {
     process.env.BRIDGE_HOST?.trim() ||
     process.env.HOST?.trim() ||
     "0.0.0.0";
-  const port = parseInt(process.env.PORT ?? "3000", 10);
+  const port = resolveBridgePort(process.env);
 
   const app = next({ dev, hostname, port, dir: process.cwd() });
   const handle = app.getRequestHandler();

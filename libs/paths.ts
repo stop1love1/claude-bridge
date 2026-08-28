@@ -25,9 +25,17 @@ export const CLAUDE_DIR = join(BRIDGE_ROOT, ".claude");
 
 export const USER_CLAUDE_DIR = join(/* turbopackIgnore: true */ homedir(), ".claude");
 
-export const BRIDGE_PORT = Number(
-  process.env.BRIDGE_PORT ?? process.env.PORT ?? 7777,
-);
+export const DEFAULT_BRIDGE_PORT = 7777;
+
+// The HTTP listener and every callback URL (BRIDGE_URL, the permission hook,
+// tunnels, the process lock) must agree on one port, so both read this.
+export function resolveBridgePort(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  return Number(env.BRIDGE_PORT ?? env.PORT ?? DEFAULT_BRIDGE_PORT);
+}
+
+export const BRIDGE_PORT = resolveBridgePort(process.env);
 
 export const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://localhost:${BRIDGE_PORT}`;
 

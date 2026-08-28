@@ -81,6 +81,31 @@ describe("BRIDGE_PORT", () => {
   });
 });
 
+describe("resolveBridgePort", () => {
+  it("prefers BRIDGE_PORT over PORT", async () => {
+    const { resolveBridgePort } = await import("../paths");
+    expect(resolveBridgePort({ BRIDGE_PORT: "9090", PORT: "3000" })).toBe(9090);
+  });
+
+  it("falls back to PORT when BRIDGE_PORT is absent", async () => {
+    const { resolveBridgePort } = await import("../paths");
+    expect(resolveBridgePort({ PORT: "8181" })).toBe(8181);
+  });
+
+  it("defaults to the documented 7777 when neither is set", async () => {
+    const { resolveBridgePort } = await import("../paths");
+    expect(resolveBridgePort({})).toBe(7777);
+  });
+
+  it("agrees with the BRIDGE_PORT constant the rest of the bridge reads", async () => {
+    process.env.BRIDGE_PORT = "9091";
+    delete process.env.PORT;
+    vi.resetModules();
+    const { BRIDGE_PORT, resolveBridgePort } = await import("../paths");
+    expect(resolveBridgePort(process.env)).toBe(BRIDGE_PORT);
+  });
+});
+
 describe("getPublicBridgeUrl", () => {
   it("strips a trailing slash from BRIDGE_PUBLIC_URL", async () => {
     process.env.BRIDGE_PUBLIC_URL = "https://example.com/";
