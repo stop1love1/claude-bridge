@@ -103,6 +103,69 @@ describe("aggregatePanel (partial panel — majority reported, panelSize not rea
   });
 });
 
+describe("aggregatePanel (strict majority — no judge decides alone)", () => {
+  const brokenThen = (broken: number, panelSize: number) =>
+    aggregatePanel(
+      [
+        ...Array.from({ length: broken }, (_, i) => v(`b${i}`, "broken", `x${i}`)),
+        ...Array.from({ length: panelSize - broken }, (_, i) => v(`p${i}`, "pass")),
+      ],
+      panelSize,
+    ).verdict;
+
+  it("panelSize 2: a single reporting judge decides nothing, in any direction", () => {
+    expect(aggregatePanel([v("a", "broken", "x")], 2).verdict).toBe("skipped");
+    expect(aggregatePanel([v("a", "drift", "d")], 2).verdict).toBe("skipped");
+    expect(aggregatePanel([v("a", "pass")], 2).verdict).toBe("skipped");
+  });
+
+  it("panelSize 2: a lone broken on a full panel downgrades to drift, as it does on three", () => {
+    const r = aggregatePanel([v("a", "broken", "x", ["c1"]), v("b", "pass")], 2);
+    expect(r.verdict).toBe("drift");
+    expect(r.concerns).toContain("c1");
+  });
+
+  it("panelSize 2: both judges must report broken to block", () => {
+    expect(brokenThen(2, 2)).toBe("broken");
+  });
+
+  it("panelSize 2: both judges reporting pass still passes", () => {
+    expect(aggregatePanel([v("a", "pass"), v("b", "pass")], 2).verdict).toBe("pass");
+  });
+
+  it("panelSize 1 is unchanged — the single judge is the whole panel", () => {
+    expect(aggregatePanel([v("a", "broken", "x")], 1).verdict).toBe("broken");
+    expect(aggregatePanel([v("a", "drift", "d")], 1).verdict).toBe("drift");
+    expect(aggregatePanel([v("a", "pass")], 1).verdict).toBe("pass");
+    expect(aggregatePanel([], 1).verdict).toBe("skipped");
+  });
+
+  it("panelSize 3 is unchanged — quorum 2, block on 2", () => {
+    expect(aggregatePanel([v("a", "pass")], 3).verdict).toBe("skipped");
+    expect(aggregatePanel([v("a", "pass"), v("b", "pass")], 3).verdict).toBe("pass");
+    expect(brokenThen(1, 3)).toBe("drift");
+    expect(brokenThen(2, 3)).toBe("broken");
+  });
+
+  it("panelSize 4: quorum rises to 3 and blocking needs 3, not 2", () => {
+    expect(aggregatePanel([v("a", "pass"), v("b", "pass")], 4).verdict).toBe("skipped");
+    expect(
+      aggregatePanel([v("a", "pass"), v("b", "pass"), v("c", "pass")], 4).verdict,
+    ).toBe("pass");
+    expect(brokenThen(2, 4)).toBe("drift");
+    expect(brokenThen(3, 4)).toBe("broken");
+  });
+
+  it("panelSize 5 is unchanged — quorum 3, block on 3", () => {
+    expect(aggregatePanel([v("a", "pass"), v("b", "pass")], 5).verdict).toBe("skipped");
+    expect(
+      aggregatePanel([v("a", "pass"), v("b", "pass"), v("c", "pass")], 5).verdict,
+    ).toBe("pass");
+    expect(brokenThen(2, 5)).toBe("drift");
+    expect(brokenThen(3, 5)).toBe("broken");
+  });
+});
+
 const FINISHED: Run = {
   sessionId: "00000000-0000-4000-8000-000000000001",
   role: "coder", repo: "app", status: "done", startedAt: null, endedAt: null,

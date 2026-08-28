@@ -108,7 +108,7 @@ export async function runSemanticVerifier(
   });
 
   const app = getApp(opts.finishedRun.repo);
-  const panelSize = app ? resolvePanelSize(app) : 3;
+  const panelSize = resolvePanelSize(app ?? { quality: {} }, SEMANTIC_LENSES.length);
 
   if (panelSize === 1) {
     const outcome: AgentGateOutcome = await runAgentGate({

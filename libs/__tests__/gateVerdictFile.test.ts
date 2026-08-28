@@ -226,6 +226,60 @@ describe("gate children are told the verdict filename the bridge reads", () => {
     expect(out.concerns).toContain("c1");
   });
 
+  it("semantic panel of two: one usable vote is inconclusive, not a decision", async () => {
+    state.panelSize = 2;
+    state.verdictByLens = {
+      correctness: { verdict: "pass", reason: "delivered", concerns: [] },
+      "edge-cases": { verdict: "not-a-verdict", reason: "junk" },
+    };
+
+    const out = await runSemanticVerifier(gateOpts());
+
+    expect(out.panelSize).toBe(2);
+    expect(out.votes).toHaveLength(1);
+    expect(out.verdict).toBe("skipped");
+  });
+
+  it("semantic panel of two: a lone broken does not block on its own", async () => {
+    state.panelSize = 2;
+    state.verdictByLens = {
+      correctness: { verdict: "broken", reason: "endpoint missing", concerns: ["c1"] },
+      "edge-cases": { verdict: "pass", reason: "ok", concerns: [] },
+    };
+
+    const out = await runSemanticVerifier(gateOpts());
+
+    expect(out.panelSize).toBe(2);
+    expect(out.verdict).toBe("drift");
+    expect(out.concerns).toContain("c1");
+  });
+
+  it("semantic panel of two: both judges reporting broken still blocks", async () => {
+    state.panelSize = 2;
+    state.verdictByLens = {
+      correctness: { verdict: "broken", reason: "endpoint missing", concerns: ["c1"] },
+      "edge-cases": { verdict: "broken", reason: "null blows up", concerns: ["c2"] },
+    };
+
+    const out = await runSemanticVerifier(gateOpts());
+
+    expect(out.verdict).toBe("broken");
+    expect(out.concerns).toEqual(expect.arrayContaining(["c1", "c2"]));
+  });
+
+  it("a panel configured larger than the lens set runs the lens set, and says so", async () => {
+    state.panelSize = 5;
+    state.verdictByLens = {
+      default: { verdict: "pass", reason: "delivered", concerns: [] },
+    };
+
+    const out = await runSemanticVerifier(gateOpts());
+
+    expect(out.panelSize).toBe(3);
+    expect(out.votes).toHaveLength(3);
+    expect(state.prompts).toHaveLength(3);
+  });
+
   it("semantic single verifier (panelSize 1) reads back the verdict too", async () => {
     state.panelSize = 1;
     state.verdictByLens = {

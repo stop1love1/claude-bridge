@@ -59,16 +59,30 @@ export function semanticVerifierEnabled(app: Pick<App, "quality">): boolean {
   return app.quality?.verifier !== false;
 }
 
-export function resolvePanelSize(app: Pick<App, "quality">): number {
-  const n = app.quality?.verifierPanel;
-  if (typeof n !== "number" || !Number.isFinite(n)) return 3;
-  return Math.max(1, Math.min(5, Math.floor(n)));
+const DEFAULT_PANEL_SIZE = 3;
+
+function clampPanelSize(configured: number | undefined, availableJudges: number): number {
+  const ceiling = Number.isFinite(availableJudges)
+    ? Math.max(1, Math.floor(availableJudges))
+    : 1;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return Math.min(DEFAULT_PANEL_SIZE, ceiling);
+  }
+  return Math.max(1, Math.min(ceiling, Math.floor(configured)));
 }
 
-export function resolveCriticPanelSize(app: Pick<App, "quality">): number {
-  const n = app.quality?.criticPanel;
-  if (typeof n !== "number" || !Number.isFinite(n)) return 3;
-  return Math.max(1, Math.min(5, Math.floor(n)));
+export function resolvePanelSize(
+  app: Pick<App, "quality">,
+  availableJudges: number,
+): number {
+  return clampPanelSize(app.quality?.verifierPanel, availableJudges);
+}
+
+export function resolveCriticPanelSize(
+  app: Pick<App, "quality">,
+  availableJudges: number,
+): number {
+  return clampPanelSize(app.quality?.criticPanel, availableJudges);
 }
 
 export interface AppRetry {

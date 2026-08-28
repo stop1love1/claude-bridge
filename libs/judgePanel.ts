@@ -16,7 +16,7 @@ export interface PanelAggregate {
 const CONCERNS_CAP = 10;
 
 export function aggregatePanel(votes: PanelVote[], panelSize: number): PanelAggregate {
-  const majority = Math.ceil(panelSize / 2);
+  const majority = Math.floor(panelSize / 2) + 1;
   if (votes.length < majority) {
     return {
       verdict: "skipped",

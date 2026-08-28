@@ -85,7 +85,7 @@ export async function runStyleCritic(
   });
 
   const app = getApp(opts.finishedRun.repo);
-  const panelSize = app ? resolveCriticPanelSize(app) : 3;
+  const panelSize = resolveCriticPanelSize(app ?? { quality: {} }, STYLE_LENSES.length);
 
   if (panelSize === 1) {
     const outcome: AgentGateOutcome = await runAgentGate({
