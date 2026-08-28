@@ -80,3 +80,72 @@ describe("deriveGateVerdict", () => {
     expect(r.questions[0].text).toBe("real question?");
   });
 });
+
+describe("deriveGateVerdict — planner verdict contradicting its own question list", () => {
+  it("does not coerce needs-decision with zero questions to clear", () => {
+    const r = deriveGateVerdict({
+      intakeJson: { verdict: "needs-decision", summary: "ship the export", questions: [] },
+      planMd: "# Plan\n\nProceed.",
+    });
+    expect(r.verdict).not.toBe("clear");
+  });
+
+  it("records the contradiction as unknown so the gate cannot auto-approve", () => {
+    const r = deriveGateVerdict({
+      intakeJson: { verdict: "needs-decision", questions: [] },
+      planMd: "# Plan\n\nProceed.",
+    });
+    expect(r.verdict).toBe("unknown");
+    expect(r.questions).toEqual([]);
+  });
+
+  it("names the contradiction in the operator-visible summary", () => {
+    const r = deriveGateVerdict({
+      intakeJson: { verdict: "needs-decision", questions: [] },
+      planMd: "# Plan",
+    });
+    expect(r.summary).toContain("needs-decision");
+    expect(r.summary).toContain("no questions");
+  });
+
+  it("keeps the planner's own summary alongside the contradiction note", () => {
+    const r = deriveGateVerdict({
+      intakeJson: { verdict: "needs-decision", summary: "ship the export", questions: [] },
+      planMd: "# Plan",
+    });
+    expect(r.summary).toContain("ship the export");
+    expect(r.summary).toContain("needs-decision");
+  });
+
+  it("recovers the questions from plan.md instead of discarding the verdict", () => {
+    const r = deriveGateVerdict({
+      intakeJson: { verdict: "needs-decision", summary: "ship the export", questions: [] },
+      planMd: "# Plan\n## Questions for the user\n- Which columns?\n",
+    });
+    expect(r.verdict).toBe("needs-decision");
+    expect(r.questions.map((q) => q.text)).toEqual(["Which columns?"]);
+    expect(r.summary).toBe("ship the export");
+  });
+
+  it("treats a plan.md questions section of (none) as nothing to recover", () => {
+    const r = deriveGateVerdict({
+      intakeJson: { verdict: "needs-decision", questions: [] },
+      planMd: "# Plan\n## Questions for the user\n(none)\n",
+    });
+    expect(r.verdict).toBe("unknown");
+  });
+
+  it("leaves a needs-decision that does list its questions untouched", () => {
+    const r = deriveGateVerdict({
+      intakeJson: {
+        verdict: "needs-decision",
+        summary: "ship the export",
+        questions: [{ id: "q1", text: "Which columns?" }],
+      },
+      planMd: "",
+    });
+    expect(r.verdict).toBe("needs-decision");
+    expect(r.summary).toBe("ship the export");
+    expect(r.questions).toHaveLength(1);
+  });
+});

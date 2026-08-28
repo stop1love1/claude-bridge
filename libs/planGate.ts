@@ -163,17 +163,28 @@ function parsePlanQuestions(planMd: string): IntakeQuestion[] {
   return out;
 }
 
+export const CONTRADICTORY_VERDICT_NOTE =
+  "plan-gate: the planner reported 'needs-decision' but listed no questions — the verdict is recorded as 'unknown'; review plan.md before approving.";
+
 export function deriveGateVerdict(out: PlannerOutput): DerivedVerdict {
   const j = out.intakeJson;
-  if (j && (j.verdict === "clear" || j.verdict === "needs-decision")) {
-    const questions = normalizeQuestions(j.questions);
-    return {
-      verdict: j.verdict === "needs-decision" && questions.length === 0 ? "clear" : j.verdict,
-      summary: typeof j.summary === "string" ? j.summary : null,
-      questions,
-    };
-  }
   const planMd = out.planMd ?? "";
+  if (j && (j.verdict === "clear" || j.verdict === "needs-decision")) {
+    const summary = typeof j.summary === "string" ? j.summary : null;
+    const questions = normalizeQuestions(j.questions);
+    if (j.verdict === "needs-decision" && questions.length === 0) {
+      const recovered = parsePlanQuestions(planMd);
+      if (recovered.length > 0) {
+        return { verdict: "needs-decision", summary, questions: recovered };
+      }
+      return {
+        verdict: "unknown",
+        summary: summary ? `${CONTRADICTORY_VERDICT_NOTE}\n\n${summary}` : CONTRADICTORY_VERDICT_NOTE,
+        questions: [],
+      };
+    }
+    return { verdict: j.verdict, summary, questions };
+  }
   if (!planMd) {
     return { verdict: "unknown", summary: null, questions: [] };
   }
