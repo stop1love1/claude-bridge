@@ -6,10 +6,9 @@ import { checkRateLimit } from "@/libs/rateLimit";
 import { getClientIp } from "@/libs/clientIp";
 import { verifyRequestActor } from "@/libs/auth";
 import { badRequest } from "@/libs/validate";
+import { TUNNEL_PROVIDERS, isTunnelProvider } from "@/libs/tunnels";
 
 export const dynamic = "force-dynamic";
-
-const VALID_PROVIDERS = new Set(["localtunnel", "ngrok"]);
 
 const DEFAULT_AUTO_START: TunnelAutoStart = {
   enabled: false,
@@ -47,8 +46,8 @@ export async function PUT(req: NextRequest) {
   if (typeof body.enabled !== "boolean") {
     return badRequest("enabled must be a boolean");
   }
-  if (typeof body.provider !== "string" || !VALID_PROVIDERS.has(body.provider)) {
-    return badRequest("provider must be one of: localtunnel, ngrok");
+  if (!isTunnelProvider(body.provider)) {
+    return badRequest(`provider must be one of: ${TUNNEL_PROVIDERS.join(", ")}`);
   }
   const port = Number(body.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {

@@ -52,6 +52,79 @@ describe("extractTunnelUrl — localtunnel", () => {
   });
 });
 
+describe("extractTunnelUrl — cloudflared", () => {
+  // Lines below are copied verbatim from `cloudflared tunnel --url` 2025.7.0.
+  it("extracts the URL from the quick-tunnel banner box", () => {
+    const line =
+      "2026-08-28T15:16:05Z INF |  https://birds-vampire-bottles-genome.trycloudflare.com                                    |";
+    expect(extractTunnelUrl("cloudflared", line)).toBe(
+      "https://birds-vampire-bottles-genome.trycloudflare.com",
+    );
+  });
+
+  it("does NOT match the account-less warning banner, which links cloudflare.com", () => {
+    const line =
+      "2026-08-28T15:15:59Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick way to experiment and try it out. However, be aware that these account-less Tunnels have no uptime guarantee, are subject to the Cloudflare Online Services Terms of Use (https://www.cloudflare.com/website-terms/), and Cloudflare reserves the right to investigate your use of Tunnels for violations of such terms. If you intend to use Tunnels in production you should use a pre-created named tunnel by following: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps";
+    expect(extractTunnelUrl("cloudflared", line)).toBeNull();
+  });
+
+  it("does NOT match the bare hostname in the 'Requesting new quick Tunnel' line", () => {
+    const line =
+      "2026-08-28T15:15:59Z INF Requesting new quick Tunnel on trycloudflare.com...";
+    expect(extractTunnelUrl("cloudflared", line)).toBeNull();
+  });
+
+  it("returns null for empty / non-string lines", () => {
+    expect(extractTunnelUrl("cloudflared", "")).toBeNull();
+    expect(extractTunnelUrl("cloudflared", null as unknown as string)).toBeNull();
+  });
+});
+
+describe("startTunnel — provider validation", () => {
+  it("refuses a custom subdomain for cloudflared (quick tunnels are randomly named)", async () => {
+    const { startTunnel } = await import("../tunnels");
+    expect(() =>
+      startTunnel({ port: 7777, provider: "cloudflared", subdomain: "my-bridge" }),
+    ).toThrow(/only supported for localtunnel/i);
+  });
+
+  it("still refuses an unknown provider", async () => {
+    const { startTunnel } = await import("../tunnels");
+    expect(() =>
+      startTunnel({ port: 7777, provider: "frp" as never }),
+    ).toThrow(/unknown provider/i);
+  });
+});
+
+describe("installerPlan — per provider", () => {
+  it("names the right package for whichever installer this platform offers", async () => {
+    const { installerPlan } = await import("../tunnels");
+    const expected = {
+      ngrok: { winget: "Ngrok.Ngrok", brew: "ngrok/ngrok/ngrok", binary: "ngrok" },
+      cloudflared: {
+        winget: "Cloudflare.cloudflared",
+        brew: "cloudflared",
+        binary: "cloudflared",
+      },
+    } as const;
+
+    for (const provider of ["ngrok", "cloudflared"] as const) {
+      const plan = installerPlan(provider);
+      const want = expected[provider];
+      if (plan.kind === "winget") expect(plan.packageId).toBe(want.winget);
+      else if (plan.kind === "brew") expect(plan.formula).toBe(want.brew);
+      else if (plan.kind === "download") expect(plan.url).toContain(want.binary);
+      else expect(plan.hint).toContain(provider);
+    }
+  });
+
+  it("mentions the provider being installed in its hint, not a hardcoded ngrok", async () => {
+    const { installerPlan } = await import("../tunnels");
+    expect(installerPlan("cloudflared").hint.toLowerCase()).toContain("cloudflared");
+    expect(installerPlan("cloudflared").hint.toLowerCase()).not.toContain("ngrok");
+  });
+});
+
 describe("tunnel → publicUrl wiring", () => {
   let tempHome: string;
   let originalHome: string | undefined;
@@ -357,6 +430,25 @@ describe("getTunnelAutoStart / setTunnelAutoStart", () => {
     const { getTunnelAutoStart, setTunnelAutoStart } = await import("../apps");
     setTunnelAutoStart({ enabled: true, provider: "localtunnel", port: 7777 });
     setTunnelAutoStart(null);
+    expect(getTunnelAutoStart()).toBeNull();
+  });
+
+  it("round-trips every provider the bridge can start, so a write is never silently dropped", async () => {
+    const { getTunnelAutoStart, setTunnelAutoStart } = await import("../apps");
+    const { TUNNEL_PROVIDERS } = await import("../tunnels");
+    for (const provider of TUNNEL_PROVIDERS) {
+      setTunnelAutoStart({ enabled: true, provider, port: 7777 });
+      expect(getTunnelAutoStart()).toEqual({ enabled: true, provider, port: 7777 });
+    }
+  });
+
+  it("still rejects a provider the bridge cannot start", async () => {
+    const { getTunnelAutoStart, setTunnelAutoStart } = await import("../apps");
+    setTunnelAutoStart({
+      enabled: true,
+      provider: "frp" as never,
+      port: 7777,
+    });
     expect(getTunnelAutoStart()).toBeNull();
   });
 

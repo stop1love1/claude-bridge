@@ -2,6 +2,7 @@
 import { updateBridgeManifest } from "./bridgeManifest";
 import type { BridgeManifest } from "./apps/types";
 import { normalizeStringList, readManifest } from "./apps/manifest";
+import { isTunnelProvider, type TunnelProvider } from "./tunnelProvider";
 
 export type DetectManifestSource = "auto" | "llm" | "heuristic";
 
@@ -56,7 +57,7 @@ export function setManifestPublicUrl(input: string): string {
 
 export interface TunnelAutoStart {
   enabled: boolean;
-  provider: "localtunnel" | "ngrok";
+  provider: TunnelProvider;
   port: number;
 }
 
@@ -70,11 +71,11 @@ export function getTunnelAutoStart(): TunnelAutoStart | null {
   const tunnels = (m as { tunnels?: TunnelsManifestSection }).tunnels;
   const a = tunnels?.autoStart;
   if (!a || typeof a !== "object") return null;
-  const provider =
-    a.provider === "ngrok" ? "ngrok" : a.provider === "localtunnel" ? "localtunnel" : null;
   const port = Number(a.port);
-  if (!provider || !Number.isInteger(port) || port < 1 || port > 65535) return null;
-  return { enabled: a.enabled === true, provider, port };
+  if (!isTunnelProvider(a.provider) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    return null;
+  }
+  return { enabled: a.enabled === true, provider: a.provider, port };
 }
 
 export function setTunnelAutoStart(v: TunnelAutoStart | null): void {

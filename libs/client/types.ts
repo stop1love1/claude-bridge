@@ -185,7 +185,10 @@ export interface DetectCandidate {
 }
 
 export type TunnelStatus = "starting" | "running" | "error" | "stopped";
-export type TunnelProvider = "localtunnel" | "ngrok";
+// Sourced from the dependency-free module the server validates against, so the
+// client union cannot drift from it.
+import type { TunnelProvider } from "../tunnelProvider";
+export type { TunnelProvider };
 
 export interface TunnelEntry {
   id: string;

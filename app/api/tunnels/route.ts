@@ -1,5 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { listTunnels, startTunnel, type TunnelProvider } from "@/libs/tunnels";
+import {
+  TUNNEL_PROVIDERS,
+  isTunnelProvider,
+  listTunnels,
+  startTunnel,
+} from "@/libs/tunnels";
 import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +20,6 @@ interface CreateBody {
   subdomain?: unknown;
 }
 
-const VALID_PROVIDERS: ReadonlySet<TunnelProvider> = new Set(["localtunnel", "ngrok"]);
-
 export async function POST(req: NextRequest) {
   let body: CreateBody;
   try {
@@ -31,10 +34,10 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  const provider = (typeof body.provider === "string" ? body.provider : "localtunnel") as TunnelProvider;
-  if (!VALID_PROVIDERS.has(provider)) {
+  const provider = body.provider === undefined ? "localtunnel" : body.provider;
+  if (!isTunnelProvider(provider)) {
     return NextResponse.json(
-      { error: `provider must be one of: ${Array.from(VALID_PROVIDERS).join(", ")}` },
+      { error: `provider must be one of: ${TUNNEL_PROVIDERS.join(", ")}` },
       { status: 400 },
     );
   }

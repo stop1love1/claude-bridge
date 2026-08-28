@@ -41,11 +41,19 @@ import { EmptyState } from "../_components/ui/empty-state";
 const PROVIDER_LABELS: Record<TunnelProvider, string> = {
   localtunnel: "localtunnel — free, no signup",
   ngrok: "ngrok — faster, needs authtoken",
+  cloudflared: "cloudflare — free, no signup, no interstitial",
 };
 
 const PROVIDER_HOST_HINT: Record<TunnelProvider, string> = {
   localtunnel: "*.loca.lt",
   ngrok: "*.ngrok-free.app",
+  cloudflared: "*.trycloudflare.com",
+};
+
+const PROVIDER_DOWNLOAD_DOC: Record<"ngrok" | "cloudflared", string> = {
+  ngrok: "https://ngrok.com/download",
+  cloudflared:
+    "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
 };
 
 const LOCALTUNNEL_PASSWORD_DOC = "https://loca.lt/mytunnelpassword";
@@ -159,10 +167,6 @@ function TunnelsPage() {
   const currentProvider = useMemo<TunnelProviderStatus | null>(
     () => providers.find((p) => p.provider === provider) ?? null,
     [providers, provider],
-  );
-  const ngrokStatus = useMemo<TunnelProviderStatus | null>(
-    () => providers.find((p) => p.provider === "ngrok") ?? null,
-    [providers],
   );
   const ready =
     !currentProvider ||
@@ -289,11 +293,13 @@ function TunnelsPage() {
           </div>
           <p className="text-[11px] sm:text-xs text-muted-foreground mt-4">
             Expose a local port to the public internet. Pick{" "}
+            <code className="font-mono text-foreground">cloudflare</code>{" "}
+            for a fast tunnel with no signup and no interstitial,{" "}
             <code className="font-mono text-foreground">localtunnel</code>{" "}
-            for a one-click free tunnel, or{" "}
-            <code className="font-mono text-foreground">ngrok</code> for a
-            faster connection (one-time authtoken setup). Tunnels die when
-            the bridge process exits.
+            if you want a custom subdomain, or{" "}
+            <code className="font-mono text-foreground">ngrok</code>{" "}
+            (one-time authtoken setup). Tunnels die when the bridge process
+            exits.
           </p>
 
           <button
@@ -348,6 +354,7 @@ function TunnelsPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="localtunnel">{PROVIDER_LABELS.localtunnel}</SelectItem>
+                      <SelectItem value="cloudflared">{PROVIDER_LABELS.cloudflared}</SelectItem>
                       <SelectItem value="ngrok">{PROVIDER_LABELS.ngrok}</SelectItem>
                     </SelectContent>
                   </Select>
@@ -387,7 +394,11 @@ function TunnelsPage() {
                   <Label htmlFor="tunnel-subdomain">
                     Subdomain{" "}
                     <span className="text-muted-foreground">
-                      {provider === "localtunnel" ? "(optional)" : "(paid plan only)"}
+                      {provider === "localtunnel"
+                        ? "(optional)"
+                        : provider === "cloudflared"
+                          ? "(not supported)"
+                          : "(paid plan only)"}
                     </span>
                   </Label>
                   <Input
@@ -404,7 +415,9 @@ function TunnelsPage() {
                   <p className="text-[11px] text-muted-foreground sm:min-h-[2.6em] leading-snug">
                     {provider === "localtunnel"
                       ? "Sticky URL across restarts. 4–63 chars, lowercase + digits + hyphens."
-                      : "ngrok free-plan subdomains are randomized. Disable to skip."}
+                      : provider === "cloudflared"
+                        ? "Quick tunnels always get a random hostname. Use a named tunnel for a fixed domain."
+                        : "ngrok free-plan subdomains are randomized. Disable to skip."}
                   </p>
                 </div>
                 <div className="grid gap-1.5">
@@ -461,8 +474,8 @@ function TunnelsPage() {
             </p>
           </section>
 
-          {provider === "ngrok" && ngrokStatus && (
-            <NgrokStatusPanel status={ngrokStatus} onChanged={refresh} />
+          {provider !== "localtunnel" && currentProvider && (
+            <ProviderStatusPanel status={currentProvider} onChanged={refresh} />
           )}
 
           {loading ? (
@@ -529,7 +542,7 @@ function TunnelsPage() {
   );
 }
 
-function NgrokStatusPanel({
+function ProviderStatusPanel({
   status,
   onChanged,
 }: {
@@ -543,14 +556,18 @@ function NgrokStatusPanel({
   const [editingToken, setEditingToken] = useState(false);
   const toast = useToast();
 
+  // localtunnel runs via bunx and never reaches this panel.
+  const provider = status.provider === "cloudflared" ? "cloudflared" : "ngrok";
+  const needsAuthtoken = provider === "ngrok";
+
   const install = async () => {
     setInstalling(true);
     setInstallLog(null);
     try {
-      const r = await api.installNgrok();
+      const r = await api.installTunnelProvider(provider);
       setInstallLog(r.log);
-      if (r.ok) toast("success", "ngrok installed");
-      else toast("error", "ngrok install failed — see log below");
+      if (r.ok) toast("success", `${provider} installed`);
+      else toast("error", `${provider} install failed — see log below`);
       await onChanged();
     } catch (e) {
       toast("error", (e as Error).message);
@@ -594,18 +611,20 @@ function NgrokStatusPanel({
       <section className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
         <div className="flex items-center gap-2 mb-2">
           <AlertTriangle size={14} className="text-amber-500" />
-          <h3 className="text-[13px] sm:text-sm font-semibold">ngrok not installed</h3>
+          <h3 className="text-[13px] sm:text-sm font-semibold">
+            {provider} not installed
+          </h3>
         </div>
         <p className="text-[11px] text-muted-foreground mb-3">{status.hint}</p>
         <div className="flex flex-wrap gap-2">
           {status.installable ? (
             <Button onClick={install} disabled={installing}>
               <Download size={12} />
-              {installing ? "Installing… (1–2 min)" : "Install ngrok"}
+              {installing ? "Installing… (1–2 min)" : `Install ${provider}`}
             </Button>
           ) : (
             <Button asChild variant="outline">
-              <a href="https://ngrok.com/download" target="_blank" rel="noreferrer">
+              <a href={PROVIDER_DOWNLOAD_DOC[provider]} target="_blank" rel="noreferrer">
                 <ExternalLink size={12} /> Download manually
               </a>
             </Button>
@@ -620,7 +639,7 @@ function NgrokStatusPanel({
     );
   }
 
-  const showInput = !status.authtokenSet || editingToken;
+  const showInput = needsAuthtoken && (!status.authtokenSet || editingToken);
 
   if (showInput) {
     return (
@@ -681,30 +700,38 @@ function NgrokStatusPanel({
     <section className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <CheckCircle2 size={14} className="text-emerald-500" />
-        <span className="font-medium">ngrok ready</span>
+        <span className="font-medium">{provider} ready</span>
         {status.version && (
           <span className="text-muted-foreground font-mono text-[11px]">
             v{status.version}
           </span>
         )}
-        <span className="text-muted-foreground">· authtoken saved</span>
+        {needsAuthtoken ? (
+          <span className="text-muted-foreground">· authtoken saved</span>
+        ) : (
+          <span className="text-muted-foreground">· no account needed</span>
+        )}
         <div className="flex-1" />
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={() => setEditingToken(true)}
-          className="text-fg-dim"
-        >
-          <Pencil size={11} /> Replace
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={() => void clearToken()}
-          className="text-fg-dim hover:text-destructive"
-        >
-          <Trash2 size={11} /> Clear
-        </Button>
+        {needsAuthtoken && (
+          <>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setEditingToken(true)}
+              className="text-fg-dim"
+            >
+              <Pencil size={11} /> Replace
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => void clearToken()}
+              className="text-fg-dim hover:text-destructive"
+            >
+              <Trash2 size={11} /> Clear
+            </Button>
+          </>
+        )}
       </div>
     </section>
   );

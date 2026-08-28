@@ -10,9 +10,15 @@ import {
 import { getManifestPublicUrl, getTunnelAutoStart, setManifestPublicUrl } from "./apps";
 import { BRIDGE_PORT, USER_CLAUDE_DIR } from "./paths";
 import { treeKill } from "./processKill";
+import {
+  TUNNEL_PROVIDERS,
+  isTunnelProvider,
+  type TunnelProvider,
+} from "./tunnelProvider";
 
 export type TunnelStatus = "starting" | "running" | "error" | "stopped";
-export type TunnelProvider = "localtunnel" | "ngrok";
+
+export { TUNNEL_PROVIDERS, isTunnelProvider, type TunnelProvider };
 
 export interface TunnelEntry {
   id: string;
@@ -62,6 +68,10 @@ function pruneTunnelHistory(): void {
 const URL_RES: Record<TunnelProvider, RegExp> = {
   localtunnel: /your url is:\s+(https?:\/\/[a-z0-9-]+\.loca\.lt)/i,
   ngrok: /msg="?started tunnel"?[^\n]*?url=(https?:\/\/[a-z0-9-]+\.ngrok[a-z0-9.-]*)/i,
+  // cloudflared prints the URL alone inside an ASCII box on stderr. Anchored on
+  // `.trycloudflare.com` rather than `cloudflare.com`, because the account-less
+  // warning banner it prints first links www.cloudflare.com and developers.cloudflare.com.
+  cloudflared: /(https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com)/i,
 };
 
 export function extractTunnelUrl(
@@ -144,7 +154,7 @@ export function startTunnel(opts: StartOptions): TunnelEntry {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("port must be an integer 1-65535");
   }
-  if (opts.provider !== "localtunnel" && opts.provider !== "ngrok") {
+  if (!isTunnelProvider(opts.provider)) {
     throw new Error(`unknown provider: ${String(opts.provider)}`);
   }
   const live = Array.from(reg.tunnels.values()).filter(
@@ -258,7 +268,21 @@ function buildSpawnArgs(
       useShell: true,
     };
   }
-  const resolved = findNgrokExecutable() ?? "ngrok";
+  if (provider === "cloudflared") {
+    const resolved = findProviderExecutable("cloudflared") ?? "cloudflared";
+    return {
+      command: resolved,
+      args: [
+        "tunnel",
+        "--url",
+        `http://localhost:${port}`,
+        "--no-autoupdate",
+      ],
+      env: process.env,
+      useShell: resolved === "cloudflared",
+    };
+  }
+  const resolved = findProviderExecutable("ngrok") ?? "ngrok";
   const token = getNgrokAuthtoken();
   if (!token) {
     throw new Error(
@@ -343,7 +367,7 @@ let providerCache: { value: ProviderStatus[]; expires: number } | null = null;
 export function detectProviders(): ProviderStatus[] {
   const now = Date.now();
   if (providerCache && providerCache.expires > now) return providerCache.value;
-  const value = [detectLocaltunnel(), detectNgrok()];
+  const value = [detectLocaltunnel(), detectNgrok(), detectCloudflared()];
   providerCache = { value, expires: now + PROVIDER_CACHE_TTL_MS };
   return value;
 }
@@ -362,9 +386,9 @@ function detectLocaltunnel(): ProviderStatus {
 }
 
 function detectNgrok(): ProviderStatus {
-  const exe = findNgrokExecutable();
+  const exe = findProviderExecutable("ngrok");
   if (!exe) {
-    const plan = installerPlan();
+    const plan = installerPlan("ngrok");
     return {
       provider: "ngrok",
       installed: false,
@@ -372,20 +396,11 @@ function detectNgrok(): ProviderStatus {
       hint: plan.hint,
     };
   }
-  const versionResult = spawnSync(exe, ["version"], {
-    encoding: "utf8",
-    timeout: 5000,
-    windowsHide: true,
-  });
-  const version =
-    versionResult.status === 0
-      ? (versionResult.stdout.trim().split(/\s+/).pop() ?? "")
-      : undefined;
   const authtokenSet = !!getNgrokAuthtoken();
   return {
     provider: "ngrok",
     installed: true,
-    version,
+    version: probeVersion(exe, ["version"]),
     authtokenSet,
     installable: false,
     hint: authtokenSet
@@ -394,31 +409,69 @@ function detectNgrok(): ProviderStatus {
   };
 }
 
-function findNgrokExecutable(): string | null {
+function detectCloudflared(): ProviderStatus {
+  const exe = findProviderExecutable("cloudflared");
+  if (!exe) {
+    const plan = installerPlan("cloudflared");
+    return {
+      provider: "cloudflared",
+      installed: false,
+      installable: plan.kind !== "manual",
+      hint: plan.hint,
+    };
+  }
+  return {
+    provider: "cloudflared",
+    installed: true,
+    version: probeVersion(exe, ["--version"]),
+    installable: false,
+  };
+}
+
+function probeVersion(exe: string, args: string[]): string | undefined {
+  const r = spawnSync(exe, args, { encoding: "utf8", timeout: 5000, windowsHide: true });
+  if (r.status !== 0 || !r.stdout) return undefined;
+  const firstLine = r.stdout.trim().split(/\r?\n/)[0] ?? "";
+  // ngrok prints a bare "3.30.0"; cloudflared prints
+  // "cloudflared version 2025.7.0 (built ...)" — take the first semver-ish token.
+  const semver = /\b\d+\.\d+(?:\.\d+)?\b/.exec(firstLine);
+  return semver ? semver[0] : (firstLine.split(/\s+/).pop() ?? undefined);
+}
+
+function findProviderExecutable(provider: InstallableProvider): string | null {
+  const bin = provider;
   const probe =
     process.platform === "win32"
-      ? spawnSync("where.exe", ["ngrok"], { encoding: "utf8", timeout: 3000, windowsHide: true })
-      : spawnSync("which", ["ngrok"], { encoding: "utf8", timeout: 3000 });
+      ? spawnSync("where.exe", [bin], { encoding: "utf8", timeout: 3000, windowsHide: true })
+      : spawnSync("which", [bin], { encoding: "utf8", timeout: 3000 });
   if (probe.status === 0 && probe.stdout) {
     const first = probe.stdout.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
     if (first && existsSync(first)) return first;
   }
-  const candidates: string[] = [];
-  if (process.platform === "win32") {
-    const local = process.env["LocalAppData"] ?? process.env["LOCALAPPDATA"];
-    if (local) candidates.push(join(local, "Microsoft", "WinGet", "Links", "ngrok.exe"));
-    const pf = process.env["ProgramFiles"];
-    if (pf) candidates.push(join(pf, "ngrok", "ngrok.exe"));
-  } else {
-    if (process.platform === "darwin") {
-      candidates.push("/opt/homebrew/bin/ngrok", "/usr/local/bin/ngrok");
-    }
-    candidates.push(join(USER_CLAUDE_DIR, "bin", "ngrok"));
-  }
-  for (const c of candidates) {
+  for (const c of executableCandidates(provider)) {
     if (existsSync(c)) return c;
   }
   return null;
+}
+
+function executableCandidates(provider: InstallableProvider): string[] {
+  const bin = provider;
+  const candidates: string[] = [];
+  if (process.platform === "win32") {
+    const local = process.env["LocalAppData"] ?? process.env["LOCALAPPDATA"];
+    if (local) candidates.push(join(local, "Microsoft", "WinGet", "Links", `${bin}.exe`));
+    const pf = process.env["ProgramFiles"];
+    if (pf) candidates.push(join(pf, bin, `${bin}.exe`));
+    // cloudflared's own MSI lands in the x86 tree even on 64-bit Windows.
+    const pf86 = process.env["ProgramFiles(x86)"];
+    if (pf86) candidates.push(join(pf86, bin, `${bin}.exe`));
+    return candidates;
+  }
+  if (process.platform === "darwin") {
+    candidates.push(`/opt/homebrew/bin/${bin}`, `/usr/local/bin/${bin}`);
+  }
+  candidates.push(join(USER_CLAUDE_DIR, "bin", bin));
+  return candidates;
 }
 
 
@@ -428,11 +481,42 @@ export interface InstallResult {
   log: string;
 }
 
-type InstallerPlan =
-  | { kind: "winget"; hint: string }
-  | { kind: "brew"; hint: string }
-  | { kind: "download"; url: string; archive: "zip" | "tgz"; hint: string }
+/** Providers that ship a binary the bridge can fetch. localtunnel runs via bunx. */
+export type InstallableProvider = "ngrok" | "cloudflared";
+
+export type InstallerPlan =
+  | { kind: "winget"; packageId: string; hint: string }
+  | { kind: "brew"; formula: string; hint: string }
+  | { kind: "download"; url: string; archive: "zip" | "tgz" | "binary"; hint: string }
   | { kind: "manual"; hint: string };
+
+interface ProviderInstallSpec {
+  wingetId: string;
+  brewFormula: string;
+  downloadUrl: (platform: "darwin" | "linux", arch: string) => string | null;
+  /** darwin ships a tarball, linux a bare binary — cloudflared differs from ngrok here. */
+  archiveFor: (platform: "darwin" | "linux") => "zip" | "tgz" | "binary";
+  manualUrl: string;
+}
+
+const INSTALL_SPECS: Record<InstallableProvider, ProviderInstallSpec> = {
+  ngrok: {
+    wingetId: "Ngrok.Ngrok",
+    brewFormula: "ngrok/ngrok/ngrok",
+    downloadUrl: (platform, arch) =>
+      `https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${platform}-${arch}.${platform === "darwin" ? "zip" : "tgz"}`,
+    archiveFor: (platform) => (platform === "darwin" ? "zip" : "tgz"),
+    manualUrl: "https://ngrok.com/download",
+  },
+  cloudflared: {
+    wingetId: "Cloudflare.cloudflared",
+    brewFormula: "cloudflared",
+    downloadUrl: (platform, arch) =>
+      `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${platform}-${arch}${platform === "darwin" ? ".tgz" : ""}`,
+    archiveFor: (platform) => (platform === "darwin" ? "tgz" : "binary"),
+    manualUrl: "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/",
+  },
+};
 
 function mapArch(a: string): "amd64" | "arm64" | "386" | "arm" | null {
   if (a === "x64") return "amd64";
@@ -450,51 +534,48 @@ function commandExists(name: string): boolean {
   return probe.status === 0;
 }
 
-function installerPlan(): InstallerPlan {
+export function installerPlan(provider: InstallableProvider): InstallerPlan {
+  const spec = INSTALL_SPECS[provider];
   if (process.platform === "win32") {
     if (commandExists("winget")) {
-      return { kind: "winget", hint: "Click Install to fetch ngrok via winget." };
+      return {
+        kind: "winget",
+        packageId: spec.wingetId,
+        hint: `Click Install to fetch ${provider} via winget.`,
+      };
     }
     return {
       kind: "manual",
-      hint: "winget not on PATH. Install ngrok manually from https://ngrok.com/download.",
+      hint: `winget not on PATH. Install ${provider} manually from ${spec.manualUrl}.`,
+    };
+  }
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    return {
+      kind: "manual",
+      hint: `Unsupported platform. Install ${provider} manually from ${spec.manualUrl}.`,
+    };
+  }
+  const platform = process.platform;
+  if (platform === "darwin" && commandExists("brew")) {
+    return {
+      kind: "brew",
+      formula: spec.brewFormula,
+      hint: `Click Install to run brew install ${spec.brewFormula}.`,
     };
   }
   const arch = mapArch(process.arch);
-  if (process.platform === "darwin") {
-    if (commandExists("brew")) {
-      return { kind: "brew", hint: "Click Install to run brew install ngrok/ngrok/ngrok." };
-    }
-    if (!arch) {
-      return {
-        kind: "manual",
-        hint: `Unsupported arch ${process.arch}. Install ngrok manually.`,
-      };
-    }
+  const url = arch ? spec.downloadUrl(platform, arch) : null;
+  if (!url) {
     return {
-      kind: "download",
-      url: `https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-${arch}.zip`,
-      archive: "zip",
-      hint: "Click Install to download ngrok and extract to ~/.claude/bin.",
-    };
-  }
-  if (process.platform === "linux") {
-    if (!arch) {
-      return {
-        kind: "manual",
-        hint: `Unsupported arch ${process.arch}. Install ngrok manually.`,
-      };
-    }
-    return {
-      kind: "download",
-      url: `https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${arch}.tgz`,
-      archive: "tgz",
-      hint: "Click Install to download ngrok and extract to ~/.claude/bin.",
+      kind: "manual",
+      hint: `Unsupported arch ${process.arch}. Install ${provider} manually from ${spec.manualUrl}.`,
     };
   }
   return {
-    kind: "manual",
-    hint: "Unsupported platform. Install ngrok manually from https://ngrok.com/download.",
+    kind: "download",
+    url,
+    archive: spec.archiveFor(platform),
+    hint: `Click Install to download ${provider} into ~/.claude/bin.`,
   };
 }
 
@@ -530,52 +611,67 @@ function runInstaller(
   });
 }
 
-async function installViaDownload(url: string, archive: "zip" | "tgz"): Promise<InstallResult> {
+function detectInstallable(provider: InstallableProvider): ProviderStatus {
+  return provider === "ngrok" ? detectNgrok() : detectCloudflared();
+}
+
+async function installViaDownload(
+  provider: InstallableProvider,
+  url: string,
+  archive: "zip" | "tgz" | "binary",
+): Promise<InstallResult> {
   if (!commandExists("curl")) {
     return {
       ok: false,
-      status: detectNgrok(),
+      status: detectInstallable(provider),
       log:
-        "[bridge] `curl` not found on PATH. Install curl, or download ngrok manually from https://ngrok.com/download.",
+        `[bridge] \`curl\` not found on PATH. Install curl, or download ${provider} manually from ${INSTALL_SPECS[provider].manualUrl}.`,
     };
   }
 
   const dir = join(USER_CLAUDE_DIR, "bin");
   mkdirSync(dir, { recursive: true });
-  const archivePath = join(dir, archive === "zip" ? "ngrok-download.zip" : "ngrok-download.tgz");
+  const binPath = join(dir, provider);
+  // A bare binary downloads straight to its final name; an archive lands next to it.
+  const downloadPath =
+    archive === "binary" ? binPath : join(dir, `${provider}-download.${archive}`);
   let combinedLog = `[bridge] downloading ${url}\n`;
 
-  const dl = await runInstaller("curl", ["-fSL", url, "-o", archivePath], 120_000);
+  const dl = await runInstaller("curl", ["-fSL", url, "-o", downloadPath], 120_000);
   combinedLog += dl.log;
   if (!dl.ok) {
-    return { ok: false, status: detectNgrok(), log: combinedLog };
+    return { ok: false, status: detectInstallable(provider), log: combinedLog };
   }
 
-  combinedLog += `\n[bridge] extracting ${archive} to ${dir}\n`;
-  const extract =
-    archive === "zip"
-      ? await runInstaller("unzip", ["-o", archivePath, "-d", dir], 60_000)
-      : await runInstaller("tar", ["-xzf", archivePath, "-C", dir], 60_000);
-  combinedLog += extract.log;
-  if (!extract.ok) {
-    return { ok: false, status: detectNgrok(), log: combinedLog };
+  if (archive !== "binary") {
+    combinedLog += `\n[bridge] extracting ${archive} to ${dir}\n`;
+    const extract =
+      archive === "zip"
+        ? await runInstaller("unzip", ["-o", downloadPath, "-d", dir], 60_000)
+        : await runInstaller("tar", ["-xzf", downloadPath, "-C", dir], 60_000);
+    combinedLog += extract.log;
+    if (!extract.ok) {
+      return { ok: false, status: detectInstallable(provider), log: combinedLog };
+    }
+    try { unlinkSync(downloadPath); } catch { }
   }
 
   if (process.platform !== "win32") {
-    spawnSync("chmod", ["+x", join(dir, "ngrok")]);
+    spawnSync("chmod", ["+x", binPath]);
   }
-  try { unlinkSync(archivePath); } catch { }
 
   invalidateProviderCache();
-  const status = detectNgrok();
-  combinedLog += `\n[bridge] installed to ${join(dir, "ngrok")}`;
+  const status = detectInstallable(provider);
+  combinedLog += `\n[bridge] installed to ${binPath}`;
   return { ok: status.installed, status, log: combinedLog };
 }
 
-export async function installNgrok(): Promise<InstallResult> {
-  const plan = installerPlan();
+export async function installProvider(
+  provider: InstallableProvider,
+): Promise<InstallResult> {
+  const plan = installerPlan(provider);
   if (plan.kind === "manual") {
-    return { ok: false, status: detectNgrok(), log: plan.hint };
+    return { ok: false, status: detectInstallable(provider), log: plan.hint };
   }
   if (plan.kind === "winget") {
     const r = await runInstaller(
@@ -583,7 +679,7 @@ export async function installNgrok(): Promise<InstallResult> {
       [
         "install",
         "--id",
-        "Ngrok.Ngrok",
+        plan.packageId,
         "-e",
         "--accept-source-agreements",
         "--accept-package-agreements",
@@ -592,14 +688,18 @@ export async function installNgrok(): Promise<InstallResult> {
       120_000,
     );
     invalidateProviderCache();
-    return { ok: r.ok, status: detectNgrok(), log: r.log };
+    return { ok: r.ok, status: detectInstallable(provider), log: r.log };
   }
   if (plan.kind === "brew") {
-    const r = await runInstaller("brew", ["install", "ngrok/ngrok/ngrok"], 180_000);
+    const r = await runInstaller("brew", ["install", plan.formula], 180_000);
     invalidateProviderCache();
-    return { ok: r.ok, status: detectNgrok(), log: r.log };
+    return { ok: r.ok, status: detectInstallable(provider), log: r.log };
   }
-  return await installViaDownload(plan.url, plan.archive);
+  return await installViaDownload(provider, plan.url, plan.archive);
+}
+
+export function isInstallableProvider(v: unknown): v is InstallableProvider {
+  return v === "ngrok" || v === "cloudflared";
 }
 
 

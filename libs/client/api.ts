@@ -345,10 +345,11 @@ export const api = {
     ),
   tunnelProviders: (opts?: ReqOpts) =>
     req<{ providers: TunnelProviderStatus[] }>(`/tunnels/providers`, { signal: opts?.signal }),
-  installNgrok: () =>
-    req<TunnelInstallResult>(`/tunnels/providers/ngrok/install`, {
-      method: "POST",
-    }),
+  installTunnelProvider: (provider: "ngrok" | "cloudflared") =>
+    req<TunnelInstallResult>(
+      `/tunnels/providers/${encodeURIComponent(provider)}/install`,
+      { method: "POST" },
+    ),
   setNgrokAuthtoken: (authtoken: string) =>
     req<{ providers: TunnelProviderStatus[] }>(
       `/tunnels/providers/ngrok/authtoken`,
