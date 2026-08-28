@@ -32,6 +32,7 @@ interface Attachment {
 }
 
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 function readImageDimensions(file: File): Promise<{ w: number; h: number } | null> {
   if (!file.type.startsWith("image/") && !IMG_EXT.test(file.name)) {
@@ -199,7 +200,6 @@ function MessageComposerInner({
     }
   }, []);
 
-  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
   const onPickFile = () => fileRef.current?.click();
 
   const uploadOneFile = useCallback(async (f: File) => {
@@ -286,7 +286,7 @@ function MessageComposerInner({
       setAttachments([]);
       setInterim("");
       if (res.queued) {
-        setQueuedCount(res.position ?? (queuedCount + 1));
+        setQueuedCount((q) => res.position ?? q + 1);
         toast(
           "info",
           res.position && res.position > 1
