@@ -1,3 +1,10 @@
+// The blocklist below is a guardrail against a fat-fingered paste, NOT a
+// security boundary — it is a denylist over free-form shell text, so a
+// determined caller always gets past it (`rm -rf / --no-preserve-root`
+// already does: the pattern anchors on end-of-line). The real boundaries
+// are operator auth, BRIDGE_LOCK_EXEC, and BRIDGE_ALLOWED_ROOTS. Add
+// patterns for accidents worth catching; never rely on one to contain an
+// attacker who already reached this endpoint.
 
 export function execLocked(): boolean {
   return process.env.BRIDGE_LOCK_EXEC === "1";
