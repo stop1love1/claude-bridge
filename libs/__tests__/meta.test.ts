@@ -223,4 +223,48 @@ describe("meta.ts", () => {
       off();
     }
   });
+
+  // A route reads meta once, then awaits; a concurrent write must not rewrite
+  // the snapshot it is still reasoning about.
+  it("does not mutate a snapshot an earlier reader is still holding", async () => {
+    const dir = join(tmp, "t_20260424_alias");
+    createMeta(dir, { ...HEADER, taskId: "t_20260424_alias" });
+    await appendRun(dir, {
+      sessionId: "s-alias",
+      role: "coder",
+      repo: "app-api",
+      status: "running",
+      startedAt: "2026-04-24T10:00:00Z",
+      endedAt: null,
+    });
+
+    const snapshot = readMeta(dir)!;
+    expect(snapshot.runs[0].status).toBe("running");
+
+    await updateRun(dir, "s-alias", { status: "done", endedAt: "2026-04-24T10:05:00Z" });
+
+    expect(snapshot.runs[0].status).toBe("running");
+    expect(snapshot.runs[0].endedAt).toBeNull();
+    expect(readMeta(dir)!.runs[0].status).toBe("done");
+  });
+
+  it("hands two readers independent snapshots", async () => {
+    const dir = join(tmp, "t_20260424_alias2");
+    createMeta(dir, { ...HEADER, taskId: "t_20260424_alias2" });
+    await appendRun(dir, {
+      sessionId: "s-two",
+      role: "coder",
+      repo: "app-api",
+      status: "running",
+      startedAt: null,
+      endedAt: null,
+    });
+
+    const first = readMeta(dir)!;
+    const second = readMeta(dir)!;
+    first.runs[0].status = "failed";
+
+    expect(second.runs[0].status).toBe("running");
+    expect(readMeta(dir)!.runs[0].status).toBe("running");
+  });
 });

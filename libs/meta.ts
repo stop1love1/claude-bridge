@@ -214,7 +214,10 @@ function emit(dir: string, ev: MetaChangeEvent): void {
 }
 
 const META_CACHE_TTL_MS = 500;
-const metaCache = new Map<string, { value: Meta | null; expires: number }>();
+// Caches the raw file text, not the parsed object: the cache exists to skip
+// the disk read, and re-parsing per call is what hands every caller its own
+// object (cheaper than structuredClone on a meta this size).
+const metaCache = new Map<string, { json: string | null; expires: number }>();
 
 const GW = globalThis as unknown as {
   __bridgeMetaWriteQueues?: Map<string, Promise<unknown>>;
@@ -318,28 +321,35 @@ function isValidMetaShape(value: unknown): value is Meta {
   return true;
 }
 
+// Writers mutate the object they read (`Object.assign(run, patch)`), and a
+// route can hold a snapshot across several awaits — so no two callers may
+// share one object, or a concurrent write rewrites a reader's view mid-flight.
 export function readMeta(dir: string): Meta | null {
   const now = Date.now();
   const cached = metaCache.get(dir);
   if (cached && cached.expires > now) {
     metaCache.delete(dir);
     metaCache.set(dir, cached);
-    return cached.value;
+    return cached.json === null ? null : (JSON.parse(cached.json) as Meta);
   }
 
   const p = join(dir, FILE);
   if (!existsSync(p)) {
-    metaCache.set(dir, { value: null, expires: now + META_CACHE_TTL_MS });
+    metaCache.set(dir, { json: null, expires: now + META_CACHE_TTL_MS });
     return null;
   }
   let value: Meta | null;
+  let json: string | null;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(p, "utf8"));
+    const raw = readFileSync(p, "utf8");
+    const parsed: unknown = JSON.parse(raw);
     if (!isValidMetaShape(parsed)) {
       logWarn("meta", `invalid meta.json shape at ${p}`, { path: p });
       value = null;
+      json = null;
     } else {
       value = parsed;
+      json = raw;
     }
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
@@ -347,9 +357,10 @@ export function readMeta(dir: string): Meta | null {
       logWarn("meta", `corrupt meta.json at ${p}`, { path: p, error: (err as Error).message });
     }
     value = null;
+    json = null;
   }
   metaCache.delete(dir);
-  metaCache.set(dir, { value, expires: now + META_CACHE_TTL_MS });
+  metaCache.set(dir, { json, expires: now + META_CACHE_TTL_MS });
   if (metaCache.size > META_CACHE_MAX_ENTRIES) {
     const oldest = metaCache.keys().next().value;
     if (oldest !== undefined) metaCache.delete(oldest);
