@@ -645,6 +645,118 @@ describe("buildUserMessage", () => {
   });
 });
 
+describe("monolithic prompt vs system/user split — no drift", () => {
+  // Every optional section turned on, so a section edited in one path but not
+  // the other shows up here instead of silently reaching a child agent.
+  const fullOpts = {
+    ...baseOpts,
+    profile: {
+      name: "app-api",
+      path: "/parent/app-api",
+      summary: "API service",
+      stack: ["nestjs", "prisma"],
+      keywords: ["api"],
+      features: ["auth", "lms"],
+      entrypoints: ["src/**/*.controller.ts"],
+      fileCounts: {},
+      refreshedAt: "2026-04-26T00:00:00Z",
+      signals: {
+        hasPackageJson: true,
+        hasReadme: true,
+        hasClaudeMd: false,
+        hasNextConfig: false,
+        hasPrismaSchema: true,
+        hasTailwindConfig: false,
+        hasNestCoreDep: true,
+        hasReactDep: false,
+        routerStyle: "unknown",
+        primaryLang: "ts",
+      },
+    } as RepoProfile,
+    houseRules: "- Prefer named exports.\n- No raw fetch in components.",
+    playbookBody: "Reviewer rubric: ship/needs-rework/blocked, with file:line evidence.",
+    verifyHint: { test: "bun test", lint: "eslint .", typecheck: "tsc --noEmit" },
+    symbolIndex: {
+      appName: "app-api",
+      refreshedAt: "2026-04-26T00:00:00Z",
+      scannedDirs: ["lib"],
+      fileCount: 1,
+      symbols: [
+        { name: "cn", kind: "function", file: "lib/cn.ts", signature: "(...a: string[]) => string" },
+      ],
+    },
+    styleFingerprint: {
+      appName: "app-api",
+      refreshedAt: "2026-04-26T00:00:00Z",
+      sampledFiles: 12,
+      indent: { kind: "spaces", width: 2 },
+      quotes: "double",
+      semicolons: "always",
+      trailingComma: "all",
+      exports: "named",
+      fileNaming: { tsx: "PascalCase", ts: "camelCase" },
+    },
+    pinnedFiles: [
+      { rel: "src/api.ts", content: "export const apiUrl = '/api';", truncated: false },
+    ],
+    attachedReferences: [
+      { rel: "x.ts", content: "X", truncated: false, score: 3 },
+    ],
+    recentDirection: { dir: "lib/forms", log: "abc1234 commit", truncated: false },
+    memoryEntries: ["- Migrations live in prisma/migrations."],
+    detectedScope: {
+      repos: [{ name: "app-api", score: 4, reason: "path hit" }],
+      features: ["users"],
+      entities: ["User"],
+      files: ["app/api/users/route.ts"],
+      confidence: "high",
+      source: "heuristic",
+      detectedAt: "2026-04-26T00:00:00Z",
+      reason: "matched route path",
+    },
+    sharedPlan: "# Plan — Add /users/me\n\n## Goal\nShip the endpoint.",
+    peerNotes: "- coder/app-web: the FE expects `id` as a string.",
+    verdictFileName: "verdict-coder.json",
+  } as unknown as Parameters<typeof buildChildPrompt>[0];
+
+  function contentLines(s: string): string[] {
+    return s
+      .split("\n")
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim().length > 0)
+      .sort();
+  }
+
+  // The split path adds exactly one line the monolith must not have: the
+  // pointer telling the child where the cached half went. Anything else
+  // appearing on one side only is drift between the two renderers.
+  const SPLIT_ONLY = [
+    "Stable per-app context (house rules, house style, memory, repo profile, available helpers, pinned files, verify commands) is in the system prompt above — read it before diving in.",
+  ];
+
+  it("renders the same content in both paths, whatever the section order", () => {
+    const mono = contentLines(buildChildPrompt(fullOpts));
+    const split = contentLines(
+      `${buildSystemPromptAppend(fullOpts)}\n${buildUserMessage(fullOpts)}`,
+    );
+    const onlyInMono = mono.filter((l) => !split.includes(l));
+    const onlyInSplit = split.filter((l) => !mono.includes(l));
+    expect(onlyInMono).toEqual([]);
+    expect(onlyInSplit).toEqual(SPLIT_ONLY);
+  });
+
+  it("renders every section heading in both paths", () => {
+    const headings = (s: string) =>
+      (s.match(/^## .*/gm) ?? []).map((h) => h.trim()).sort();
+    const mono = headings(buildChildPrompt(fullOpts));
+    const split = headings(
+      `${buildSystemPromptAppend(fullOpts)}\n${buildUserMessage(fullOpts)}`,
+    );
+    expect(mono.length).toBeGreaterThan(20);
+    expect(mono).toEqual(split);
+  });
+});
+
 describe("sanitizeTaskBodyForFence", () => {
   it("escapes triple backticks at the start of a line", () => {
     const out = sanitizeTaskBodyForFence("hello\n```\nbad\n```\n");
