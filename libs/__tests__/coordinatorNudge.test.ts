@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   decideNudge,
-  isSummaryStale,
   shouldFinalizeDeferredCoordinator,
   shouldMarkCoordinatorSummaryBlocked,
 } from "../coordinatorNudge";

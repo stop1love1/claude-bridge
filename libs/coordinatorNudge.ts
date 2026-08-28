@@ -167,18 +167,6 @@ export function decideNudge(args: {
   return { kind: "nudge", children };
 }
 
-function isChildTerminalTransition(ev: MetaChangeEvent): ev is MetaChangeEvent & {
-  run: Run;
-  sessionId: string;
-} {
-  if (ev.kind !== "transition") return false;
-  if (!ev.run || !ev.sessionId) return false;
-  if (!isTerminal(ev.run.status)) return false;
-  if (ev.run.role === "coordinator") return false;
-  if (!ev.run.parentSessionId) return false;
-  return true;
-}
-
 function buildNudgeMessage(args: {
   taskId: string;
   children: Run[];
