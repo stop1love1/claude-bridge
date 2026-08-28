@@ -36,6 +36,9 @@ const RULES: Rule[] = [
   { method: "GET", pattern: ["tasks", ":tid", "preview"], grant: "viewPreview" },
   { method: "GET", pattern: ["tasks", ":tid", "presence"], grant: null },
   { method: "POST", pattern: ["tasks", ":tid", "presence"], grant: null },
+  // A guest with sendMessage can attach a file; the transcript renders it back
+  // from /api/uploads, so reading one is part of the same baseline.
+  { method: "GET", pattern: ["uploads", ":sid", ":any"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "tail"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "tail", "stream"], grant: null, checkSession: true },
   { method: "GET", pattern: ["sessions", ":sid", "permission"], grant: null, checkSession: true },
@@ -80,6 +83,7 @@ function matchRule(rule: Rule, segs: string[]): MatchCaptures | null {
     if (pat === ":tid") caps.tid = seg;
     else if (pat === ":sid") caps.sid = seg;
     else if (pat === ":rid") caps.rid = seg;
+    else if (pat === ":any") continue;
     else if (pat !== seg) return null;
   }
   return caps;

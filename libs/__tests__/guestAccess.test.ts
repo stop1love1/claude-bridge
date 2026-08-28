@@ -76,6 +76,32 @@ describe("authorizeGuestRequest — grant gates", () => {
   });
 });
 
+describe("authorizeGuestRequest — uploaded attachments", () => {
+  it("serves an attachment back for a session in the guest's own task", () => {
+    const r = authorizeGuestRequest("GET", "/api/uploads/sess-9/screenshot.png", scope(NONE), inTask);
+    expect(r.ok).toBe(true);
+  });
+
+  it("allows a filename carrying dots, spaces, and unicode", () => {
+    for (const name of ["a b.png", "báo-cáo.v2.pdf", "log.txt"]) {
+      const p = `/api/uploads/sess-9/${encodeURIComponent(name)}`;
+      expect(authorizeGuestRequest("GET", p, scope(NONE), inTask).ok).toBe(true);
+    }
+  });
+
+  it("refuses an attachment from a session outside the task", () => {
+    const r = authorizeGuestRequest("GET", "/api/uploads/sess-9/secret.png", scope(NONE), notInTask);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("session not in task");
+  });
+
+  it("does not open the uploads tree to listing or writes", () => {
+    expect(authorizeGuestRequest("GET", "/api/uploads/sess-9", scope(ALL), inTask).ok).toBe(false);
+    expect(authorizeGuestRequest("GET", "/api/uploads", scope(ALL), inTask).ok).toBe(false);
+    expect(authorizeGuestRequest("POST", "/api/uploads/sess-9/x.png", scope(ALL), inTask).ok).toBe(false);
+  });
+});
+
 describe("authorizeGuestRequest — deny by default", () => {
   it("rejects dashboard / cross-feature routes even with all grants", () => {
     const denied = [
