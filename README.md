@@ -97,7 +97,7 @@ The smaller stuff that makes the five pillars pleasant to live with:
 - 🧠 **Task memory** — top extracted notes from prior runs on the same task get folded into the next coordinator prompt, so re-dispatches don't re-litigate decisions the team already made.
 - ⚙️ **Runtime-agnostic** — runs identically under Bun, npm, or pnpm.
 - 🌐 **Demo-mode deployable** — flip a single env var to host the landing page on Vercel/Netlify without exposing the dashboard.
-- 🛰️ **One-click public tunnels** — pick a local port, choose `localtunnel` (free, no signup) or `ngrok` (faster, one-time authtoken), and share the public URL. The bridge installs ngrok via winget/brew/tarball if it isn't on PATH.
+- 🛰️ **One-click public tunnels** — pick a local port, choose `cloudflare` (free, no signup, no interstitial), `localtunnel` (free, no signup), or `ngrok` (one-time authtoken), and share the public URL. The bridge installs cloudflared or ngrok via winget/brew/binary if they aren't on PATH.
 
 ---
 
@@ -252,7 +252,7 @@ model-agnostic, repo-agnostic, tracker-agnostic.
 - [x] Verify-then-ship chain + 6-gate retry ladder
 - [x] Branch-aware dispatch with per-spawn `git worktree` isolation
 - [x] Single-operator auth with trusted devices + login approvals
-- [x] One-click public tunnels (localtunnel + ngrok auto-install)
+- [x] One-click public tunnels (cloudflare + localtunnel + ngrok auto-install)
 
 Have an idea? [Open an issue](https://github.com/stop1love1/claude-bridge/issues) — feedback
 shapes the roadmap.

@@ -397,7 +397,7 @@ function Tunnels() {
       <H2 id="tunnels">Tunnels</H2>
       <P>
         The <Code>/tunnels</Code> page exposes a local port to the public internet for demos,
-        webhook testing, or sharing a dev preview from the bridge itself. Two providers ship
+        webhook testing, or sharing a dev preview from the bridge itself. Three providers ship
         out of the box:
       </P>
       <ul className="text-sm text-muted-foreground leading-relaxed mb-3 ml-5 list-disc space-y-1">
@@ -406,6 +406,14 @@ function Tunnels() {
           <Code>bunx localtunnel</Code>. Free, no signup, slightly slower, shows an
           interstitial password page on first visit per IP. Custom subdomains are
           honoured. URL host: <Code>*.loca.lt</Code>.
+        </li>
+        <li>
+          <strong className="text-foreground">cloudflare</strong> — runs a{" "}
+          <Code>cloudflared</Code> quick tunnel. Free, no signup, no interstitial. The
+          bridge one-click installs it via <Code>winget</Code> (Windows),{" "}
+          <Code>brew</Code> (macOS), or the official GitHub release binary (Linux).
+          Hostnames are always random — a fixed domain needs a named tunnel, which the
+          bridge does not manage. URL host: <Code>*.trycloudflare.com</Code>.
         </li>
         <li>
           <strong className="text-foreground">ngrok</strong> — faster, no interstitial,
