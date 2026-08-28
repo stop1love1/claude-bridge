@@ -9,6 +9,7 @@ import { badRequest, isValidSessionId } from "@/libs/validate";
 import { getChild } from "@/libs/spawnRegistry";
 import { isAlive } from "@/libs/sessionEvents";
 import { ok } from "@/libs/apiResponse";
+import { truncateTranscript } from "@/libs/transcriptRewind";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,8 @@ type Ctx = { params: Promise<{ sessionId: string }> };
 interface RewindBody {
   repo: string;
   uuid: string;
+  /** false drops the target entry too — what editing a message needs. */
+  inclusive?: boolean;
 }
 
 export async function POST(req: NextRequest, ctx: Ctx) {
@@ -42,21 +45,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!existsSync(file)) return NextResponse.json({ error: "session file not found" }, { status: 404 });
 
   const content = readFileSync(file, "utf8");
-  const lines = content.split("\n");
-  let cutoff = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i]) continue;
-    try {
-      const obj = JSON.parse(lines[i]) as { uuid?: string };
-      if (obj.uuid === body.uuid) { cutoff = i; break; }
-    } catch { }
+  const result = truncateTranscript(content, body.uuid, {
+    inclusive: body.inclusive !== false,
+  });
+  if (!result) {
+    return NextResponse.json({ error: "uuid not found in session" }, { status: 404 });
   }
-  if (cutoff === -1) return NextResponse.json({ error: "uuid not found in session" }, { status: 404 });
 
-  const kept = lines.slice(0, cutoff + 1).join("\n");
-  const payload = kept.endsWith("\n") ? kept : kept + "\n";
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  writeFileSync(tmp, payload);
+  writeFileSync(tmp, result.payload);
   renameSync(tmp, file);
-  return ok({ kept: cutoff + 1, dropped: lines.length - cutoff - 1 });
+  return ok({ kept: result.kept, dropped: result.dropped });
 }

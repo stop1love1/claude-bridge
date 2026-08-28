@@ -5,7 +5,7 @@ import type { Repo } from "@/libs/client/types";
 import { api } from "@/libs/client/api";
 import {
   Terminal, ArrowDown, OctagonAlert,
-  Undo2,
+  Undo2, Pencil, RefreshCw,
   Search, X, ArrowUp,
 } from "lucide-react";
 import type { TokenTotals } from "./TokenUsage";
@@ -17,12 +17,15 @@ import { InlinePermissionRequests } from "./InlinePermissionRequests";
 import {
   asBlocks,
   classify,
+  entryPlainText,
   extractAttachments,
+  formatEntryTime,
   stripSystemTags,
   type ActiveRun,
   type ContentBlock,
   type LogEntry,
 } from "./SessionLog/helpers";
+import { CopyButton } from "./ui/copy-button";
 import {
   ActivityRow,
   AttachmentChip,
@@ -43,6 +46,8 @@ const LogRow = memo(function LogRow({
   entry,
   sessionId,
   onRewindToHere,
+  onEditHere,
+  onRegenerate,
   toolNames,
   repo,
   prevTimestamp,
@@ -52,6 +57,8 @@ const LogRow = memo(function LogRow({
   entry: LogEntry;
   sessionId: string;
   onRewindToHere?: (uuid: string) => void;
+  onEditHere?: (uuid: string, text: string) => void;
+  onRegenerate?: () => void;
   toolNames?: Map<string, string>;
   repo?: string;
   prevTimestamp?: string;
@@ -62,6 +69,7 @@ const LogRow = memo(function LogRow({
   if (kind === "hidden") return null;
   const blocks = asBlocks(entry.message?.content);
   const canRewind = kind === "user" && !!entry.uuid && !!onRewindToHere;
+  const canEdit = kind === "user" && !!entry.uuid && !!onEditHere;
 
   if (kind === "user") {
     const textParts: string[] = [];
@@ -82,17 +90,38 @@ const LogRow = memo(function LogRow({
     const { stripped, items: attachments } = extractAttachments(raw);
     const cleaned = stripSystemTags(stripped);
     if (!cleaned.trim() && attachments.length === 0 && inlineImages.length === 0) return null;
+    const rowTime = formatEntryTime(entry.timestamp);
     return (
       <div className="group flex justify-end gap-1.5 my-3" data-user-uuid={entry.uuid ?? ""}>
-        {canRewind && (
-          <button
-            onClick={() => onRewindToHere!(entry.uuid!)}
-            className="self-end inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground/70 hover:text-warning"
-            title="Rewind: drop every later entry"
-          >
-            <Undo2 size={10} /> rewind
-          </button>
-        )}
+        <div className="self-end flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          {rowTime && (
+            <time
+              dateTime={entry.timestamp}
+              className="px-1 text-[10px] text-muted-foreground/60 tabular-nums"
+            >
+              {rowTime}
+            </time>
+          )}
+          {cleaned.trim() && <CopyButton value={cleaned} label="Copy message" size={10} />}
+          {canEdit && (
+            <button
+              onClick={() => onEditHere!(entry.uuid!, cleaned)}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground/70 hover:text-foreground hover:bg-secondary"
+              title="Edit: drop this turn and everything after it, then reopen it in the composer"
+            >
+              <Pencil size={10} /> edit
+            </button>
+          )}
+          {canRewind && (
+            <button
+              onClick={() => onRewindToHere!(entry.uuid!)}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground/70 hover:text-warning"
+              title="Rewind: drop every later entry"
+            >
+              <Undo2 size={10} /> rewind
+            </button>
+          )}
+        </div>
         <div className="max-w-[80%] flex flex-col items-end gap-1.5">
           {inlineImages.length > 0 && (
             <div className="flex flex-col items-end gap-1.5 max-w-full">
@@ -164,13 +193,38 @@ const LogRow = memo(function LogRow({
     typeof stopReason === "string" &&
     stopReason !== "end_turn" &&
     stopReason !== "tool_use";
+  const replyText = entryPlainText(entry);
+  const rowTime = formatEntryTime(entry.timestamp);
+  const showActions = !!replyText || !!onRegenerate;
   return (
-    <div className="my-2 space-y-1">
+    <div className="group my-2 space-y-1">
       {merged.map((m, i) => {
         if (m.kind === "text") return <TextBlockView key={i} text={m.text} role="assistant" />;
         if (m.kind === "thinking") return <ThinkingBlockView key={i} text={m.text} durationSec={thoughtDurationSec} />;
         return <ToolUseView key={i} block={m.block} canAnswer={canAnswer} onAnswer={onAnswer} />;
       })}
+      {showActions && (
+        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          {rowTime && (
+            <time
+              dateTime={entry.timestamp}
+              className="px-1 text-[10px] text-muted-foreground/60 tabular-nums"
+            >
+              {rowTime}
+            </time>
+          )}
+          {replyText && <CopyButton value={replyText} label="Copy response" size={10} />}
+          {onRegenerate && (
+            <button
+              onClick={onRegenerate}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground/70 hover:text-foreground hover:bg-secondary"
+              title="Regenerate: drop this turn and send the previous message again"
+            >
+              <RefreshCw size={10} /> retry
+            </button>
+          )}
+        </div>
+      )}
       {showStopBadge && (
         <div className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-warning/10 text-warning border border-warning/30">
           <OctagonAlert size={10} />
@@ -213,6 +267,8 @@ function SessionLogInner({
 }) {
   const [copied, setCopied] = useState(false);
   const [showTools, setShowTools] = useState(true);
+  // nonce lets the same text be pushed into the composer twice in a row.
+  const [composerPrefill, setComposerPrefill] = useState<{ text: string; nonce: number } | null>(null);
   const offsetRef = useRef(0);
   const firstOffsetRef = useRef<number | null>(null);
   const entryOffsetsRef = useRef<number[]>([]);
@@ -384,6 +440,30 @@ function SessionLogInner({
     return -1;
   }, [visibleEntries]);
 
+  // Last real user turn — the anchor both regenerate and edit truncate back to.
+  // Optimistic rows have no server-side uuid, so they cannot be truncated to.
+  // Kept as two primitives rather than an object so the memo stays stable.
+  const lastUserIdx = useMemo(() => {
+    for (let i = visibleEntries.length - 1; i >= 0; i--) {
+      const e = visibleEntries[i];
+      if (classify(e) !== "user") continue;
+      if (!e.uuid || e.uuid.startsWith("optimistic:")) return -1;
+      return i;
+    }
+    return -1;
+  }, [visibleEntries]);
+  const lastUserUuid = lastUserIdx >= 0 ? (visibleEntries[lastUserIdx].uuid ?? null) : null;
+  const lastUserText = lastUserIdx >= 0 ? entryPlainText(visibleEntries[lastUserIdx]) : "";
+
+  const lastAssistantIdx = useMemo(() => {
+    for (let i = visibleEntries.length - 1; i >= 0; i--) {
+      const k = classify(visibleEntries[i]);
+      if (k === "user") return -1;
+      if (k === "assistant") return i;
+    }
+    return -1;
+  }, [visibleEntries]);
+
   const handleAnswer = useCallback(
     async (text: string) => {
       if (!run) return;
@@ -399,6 +479,20 @@ function SessionLogInner({
     [run, onSent, toast],
   );
 
+  // The transcript file just changed underneath us, so every paging cursor and
+  // cached offset is stale — drop them and let the stream refill from scratch.
+  const resetAfterTruncate = useCallback(() => {
+    offsetRef.current = 0;
+    firstOffsetRef.current = null;
+    entryOffsetsRef.current = [];
+    loadedOlderCountRef.current = 0;
+    inFlightOlderRef.current = false;
+    pendingScrollRestoreRef.current = null;
+    setEntries([]);
+    setTrimmed(0);
+    setPinnedUserUuid(null);
+  }, [setEntries, setTrimmed, setPinnedUserUuid]);
+
   const handleRewind = useCallback(async (uuid: string) => {
     if (!run) return;
     const ok = await confirm({
@@ -411,19 +505,58 @@ function SessionLogInner({
     try {
       const r = await api.rewind(run.sessionId, { repo: run.repo, uuid });
       toast("success", `Dropped ${r.dropped} entries — kept ${r.kept}`);
-      offsetRef.current = 0;
-      firstOffsetRef.current = null;
-      entryOffsetsRef.current = [];
-      loadedOlderCountRef.current = 0;
-      inFlightOlderRef.current = false;
-      pendingScrollRestoreRef.current = null;
-      setEntries([]);
-      setTrimmed(0);
-      setPinnedUserUuid(null);
+      resetAfterTruncate();
     } catch (e) {
       toast("error", (e as Error).message);
     }
-  }, [run, toast, confirm, setPinnedUserUuid, setEntries, setTrimmed]);
+  }, [run, toast, confirm, resetAfterTruncate]);
+
+  const handleEdit = useCallback(async (uuid: string, text: string) => {
+    if (!run) return;
+    const ok = await confirm({
+      title: "Edit this message?",
+      description:
+        "This turn and everything after it are dropped from the transcript, then the text reopens in the composer. The previous version is not kept — Claude Code owns this file and has no notion of branches.",
+      confirmLabel: "Edit",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      const r = await api.rewind(run.sessionId, { repo: run.repo, uuid, inclusive: false });
+      toast("info", `Dropped ${r.dropped} entries — edit and send again`);
+      resetAfterTruncate();
+      setComposerPrefill({ text, nonce: Date.now() });
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  }, [run, toast, confirm, resetAfterTruncate]);
+
+  const handleRegenerate = useCallback(async () => {
+    if (!run || !lastUserUuid || !lastUserText) return;
+    const ok = await confirm({
+      title: "Regenerate this response?",
+      description:
+        "The last turn is dropped and your previous message is sent again unchanged. The old response is not kept.",
+      confirmLabel: "Regenerate",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api.rewind(run.sessionId, {
+        repo: run.repo,
+        uuid: lastUserUuid,
+        inclusive: false,
+      });
+      resetAfterTruncate();
+      onSent(lastUserText);
+      await api.sendMessage(run.sessionId, {
+        message: lastUserText,
+        repo: run.repo,
+      });
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  }, [run, lastUserUuid, lastUserText, toast, confirm, resetAfterTruncate, onSent]);
 
   const repo = useMemo(() => repos.find((r) => r.path === run?.repoPath), [repos, run?.repoPath]);
 
@@ -517,6 +650,8 @@ function SessionLogInner({
         <div
           ref={logRef}
           onScroll={handleScroll}
+          role="log"
+          aria-label="Conversation"
           className="flex-1 overflow-y-auto overflow-x-hidden font-sans text-xs leading-relaxed"
         >
         {pinnedUserText && (
@@ -559,6 +694,12 @@ function SessionLogInner({
                       entry={e}
                       sessionId={run.sessionId}
                       onRewindToHere={handleRewind}
+                      onEditHere={isOptimistic ? undefined : handleEdit}
+                      onRegenerate={
+                        i === lastAssistantIdx && !isResponding && lastUserUuid
+                          ? handleRegenerate
+                          : undefined
+                      }
                       toolNames={toolNames}
                       repo={run.repo}
                       prevTimestamp={visibleEntries[i - 1]?.timestamp}
@@ -568,7 +709,12 @@ function SessionLogInner({
                   </div>
                 );
               })}
-              <StreamingPartialsList sessionId={run.sessionId} scrollerRef={logRef} autoScroll={autoScroll} />
+              {/* Tokens rewrite one node many times a second; letting the log
+                  announce that would flood a screen reader, so the status
+                  line below carries the state change instead. */}
+              <div aria-live="off" aria-busy={isResponding}>
+                <StreamingPartialsList sessionId={run.sessionId} scrollerRef={logRef} autoScroll={autoScroll} />
+              </div>
             </>
           )}
         </div>
@@ -582,6 +728,10 @@ function SessionLogInner({
           </button>
         )}
       </div>
+
+      <p role="status" aria-live="polite" className="sr-only">
+        {isResponding ? "Assistant is responding" : "Assistant is idle"}
+      </p>
 
       <ActivityRow activity={activity} />
 
@@ -598,6 +748,7 @@ function SessionLogInner({
           onSent={onSent}
           onClearConversation={onClearConversation}
           onRewindRequest={onRewindFromPalette}
+          prefill={composerPrefill}
         />
       </div>
     </section>

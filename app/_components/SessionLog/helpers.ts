@@ -257,3 +257,53 @@ export function extractAttachments(text: string): { stripped: string; items: Par
   while (kept.length && !kept[0].trim()) kept.shift();
   return { stripped: kept.join("\n"), items };
 }
+
+/** Wall-clock time for a log row. Empty string when there is nothing to show. */
+export function formatEntryTime(iso: string | undefined | null): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * The text of a turn as a human would copy it: reply text only, with the
+ * thinking, tool calls and injected system tags left out.
+ */
+export function entryPlainText(entry: LogEntry): string {
+  const parts: string[] = [];
+  for (const b of asBlocks(entry.message?.content)) {
+    if (b.type === "text" && typeof b.text === "string") parts.push(b.text);
+  }
+  return stripSystemTags(parts.join("\n\n")).trim();
+}
+
+/**
+ * Removes optimistic placeholders whose real entry has now arrived.
+ *
+ * Tool results are `type: "user"` too, so a running agent's tool traffic must
+ * not be mistaken for the user's own message landing — that is what made a
+ * message sent mid-run disappear from the log while it sat in the send queue.
+ * Placeholders are matched on their text, so one queued message settling does
+ * not take the others down with it.
+ */
+export function pruneOptimistic(prev: LogEntry[], arrived: LogEntry[]): LogEntry[] {
+  if (prev.length === 0 || arrived.length === 0) return prev;
+
+  const settled: string[] = [];
+  for (const l of arrived) {
+    if (classify(l) !== "user") continue;
+    const text = entryPlainText(l);
+    if (text) settled.push(text);
+  }
+  if (settled.length === 0) return prev;
+
+  const next = prev.filter((e) => {
+    if (!e.uuid?.startsWith("optimistic:")) return true;
+    return !settled.includes(entryPlainText(e));
+  });
+  return next.length === prev.length ? prev : next;
+}

@@ -3,10 +3,13 @@ import {
   asBlocks,
   buildAnswerMessage,
   classify,
+  entryPlainText,
   extractAttachments,
   extractImagePaths,
+  formatEntryTime,
   HIDDEN_TYPES,
   parseAskUserQuestion,
+  pruneOptimistic,
   prettyToolName,
   stringifyResult,
   stripSystemTags,
@@ -14,6 +17,126 @@ import {
   type AskUserQuestion,
   type LogEntry,
 } from "../../app/_components/SessionLog/helpers";
+
+describe("pruneOptimistic", () => {
+  const optimistic = (text: string): LogEntry =>
+    ({
+      type: "user",
+      uuid: `optimistic:${text}`,
+      message: { role: "user", content: text },
+    }) as unknown as LogEntry;
+
+  const realUser = (text: string): LogEntry =>
+    ({
+      type: "user",
+      uuid: "real-1",
+      message: { role: "user", content: [{ type: "text", text }] },
+    }) as unknown as LogEntry;
+
+  const toolResult = (): LogEntry =>
+    ({
+      type: "user",
+      uuid: "tr-1",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }],
+      },
+    }) as unknown as LogEntry;
+
+  it("keeps a queued message on screen while tool results stream in", () => {
+    // Tool results are type:"user" too — the reason a queued prompt used to
+    // vanish the moment the running agent called a tool.
+    const prev = [optimistic("thêm phần xử lý lỗi")];
+    expect(pruneOptimistic(prev, [toolResult(), toolResult()])).toEqual(prev);
+  });
+
+  it("drops the placeholder once its own text lands in the transcript", () => {
+    const prev = [optimistic("thêm phần xử lý lỗi")];
+    expect(pruneOptimistic(prev, [realUser("thêm phần xử lý lỗi")])).toEqual([]);
+  });
+
+  it("keeps a second queued message when only the first one landed", () => {
+    const prev = [optimistic("first"), optimistic("second")];
+    const out = pruneOptimistic(prev, [realUser("first")]);
+    expect(out).toEqual([optimistic("second")]);
+  });
+
+  it("leaves real entries untouched", () => {
+    const prev = [realUser("kept"), optimistic("pending")];
+    expect(pruneOptimistic(prev, [toolResult()])).toEqual(prev);
+  });
+
+  it("returns the same array when nothing needs dropping, so React can skip a render", () => {
+    const prev = [optimistic("pending")];
+    expect(pruneOptimistic(prev, [])).toBe(prev);
+  });
+});
+
+describe("formatEntryTime", () => {
+  it("renders a wall-clock time for a valid ISO timestamp", () => {
+    const out = formatEntryTime("2026-08-28T15:25:29.000Z");
+    expect(out).not.toBe("");
+    expect(out).toMatch(/\d/);
+  });
+
+  it("returns an empty string for missing or unparseable input", () => {
+    expect(formatEntryTime(undefined)).toBe("");
+    expect(formatEntryTime("")).toBe("");
+    expect(formatEntryTime("not a date")).toBe("");
+  });
+});
+
+describe("entryPlainText", () => {
+  it("joins the text blocks of an assistant turn", () => {
+    const e: LogEntry = {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "first" },
+          { type: "text", text: "second" },
+        ],
+      },
+    } as unknown as LogEntry;
+    expect(entryPlainText(e)).toBe("first\n\nsecond");
+  });
+
+  it("skips thinking and tool_use blocks, which are not the reply", () => {
+    const e: LogEntry = {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hmm" },
+          { type: "text", text: "answer" },
+          { type: "tool_use", name: "Bash", input: { command: "ls" } },
+        ],
+      },
+    } as unknown as LogEntry;
+    expect(entryPlainText(e)).toBe("answer");
+  });
+
+  it("strips the system tags the user never typed", () => {
+    const e: LogEntry = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "hello <system-reminder>ignore me</system-reminder>" },
+        ],
+      },
+    } as unknown as LogEntry;
+    expect(entryPlainText(e)).toBe("hello");
+  });
+
+  it("returns an empty string when there is no text to copy", () => {
+    const e: LogEntry = {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", name: "Bash" }] },
+    } as unknown as LogEntry;
+    expect(entryPlainText(e)).toBe("");
+  });
+});
 
 describe("classify", () => {
   it("flags every HIDDEN_TYPES entry as hidden", () => {

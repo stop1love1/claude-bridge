@@ -67,6 +67,7 @@ function MessageComposerInner({
   onSent,
   onClearConversation,
   onRewindRequest,
+  prefill,
 }: {
   sessionId: string;
   repo: string;
@@ -77,6 +78,8 @@ function MessageComposerInner({
   onSent?: (text: string) => void;
   onClearConversation?: () => void;
   onRewindRequest?: () => void;
+  /** Text pushed in from the log (editing a message). nonce re-applies the same text. */
+  prefill?: { text: string; nonce: number } | null;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -156,6 +159,24 @@ function MessageComposerInner({
     el.style.overflowY = natural > MAX_H ? "auto" : "hidden";
   }, []);
   useEffect(resize, [draft, interim, resize]);
+
+  // Editing a message in the log hands the old text back here. Applied during
+  // render (React's documented way to adjust state when a prop changes) rather
+  // than in an effect, which would cascade an extra render per keystroke-sized
+  // update; the nonce lets the same text be pushed twice in a row.
+  const [appliedPrefill, setAppliedPrefill] = useState<number | null>(null);
+  const prefillNonce = prefill?.nonce ?? null;
+  if (prefillNonce !== null && prefillNonce !== appliedPrefill) {
+    setAppliedPrefill(prefillNonce);
+    setDraft(prefill?.text ?? "");
+  }
+  useEffect(() => {
+    if (appliedPrefill === null) return;
+    const el = taRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [appliedPrefill]);
 
   const detectMention = useCallback(() => {
     const el = taRef.current;

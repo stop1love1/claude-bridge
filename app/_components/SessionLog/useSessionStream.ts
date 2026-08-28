@@ -3,7 +3,7 @@
 
 import { startTransition, useCallback, useEffect, useState } from "react";
 import { api } from "@/libs/client/api";
-import { MAX_RENDERED, type ActiveRun, type LogEntry } from "./helpers";
+import { MAX_RENDERED, pruneOptimistic, type ActiveRun, type LogEntry } from "./helpers";
 import { appendPartial, clearPartials, dropOnArrival } from "./partialsStore";
 
 export function useSessionStream(
@@ -53,12 +53,9 @@ export function useSessionStream(
         }
         dropOnArrival(run.sessionId, arrivedIds);
       }
-      const arrivedUser = lines.some((l) => l?.type === "user");
       startTransition(() => {
         setEntries((prev) => {
-          const baseline = arrivedUser
-            ? prev.filter((e) => !(e.uuid && e.uuid.startsWith("optimistic:")))
-            : prev;
+          const baseline = pruneOptimistic(prev, lines);
           const seen = new Set<string>();
           for (const e of baseline) {
             if (e.uuid) seen.add(e.uuid);

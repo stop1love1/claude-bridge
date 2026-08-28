@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Hand, Code2, ListTree, Zap, Check, ShieldOff } from "lucide-react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import type { ChatSettings, PermissionMode } from "@/libs/client/types";
+import { api } from "@/libs/client/api";
+import type { ChatSettings, ModelChoice, PermissionMode } from "@/libs/client/types";
 import { Button } from "./ui/button";
 import { EffortControl } from "./EffortControl";
 import { cn } from "@/libs/cn";
@@ -50,6 +51,43 @@ const MODE_OPTIONS: Array<{
     : []),
 ];
 
+function ModelRow({
+  label,
+  hint,
+  description,
+  active,
+  onSelect,
+}: {
+  label: string;
+  hint?: string;
+  description: string;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={active}
+      className={cn(
+        "w-full text-left rounded-md px-2.5 py-1.5 flex items-start gap-2.5 transition-colors",
+        active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+      )}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="text-[12.5px] font-medium leading-tight text-foreground">
+          {label}
+          {hint && <span className="font-normal text-muted-foreground"> ({hint})</span>}
+        </div>
+        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+          {description}
+        </p>
+      </div>
+      {active && <Check className="h-3.5 w-3.5 text-foreground/80 shrink-0 mt-0.5" />}
+    </button>
+  );
+}
+
 export function ChatSettingsMenu({
   value,
   onChange,
@@ -58,6 +96,27 @@ export function ChatSettingsMenu({
   onChange: (next: ChatSettings) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [models, setModels] = useState<ModelChoice[] | null>(null);
+  const [modelsFailed, setModelsFailed] = useState(false);
+
+  // Fetched when the menu first opens, not on mount: discovery shells out to
+  // the CLI, and most composer renders never show this panel.
+  useEffect(() => {
+    if (!open || models !== null || modelsFailed) return;
+    let cancelled = false;
+    void api
+      .models()
+      .then((r) => {
+        if (!cancelled) setModels(r.models);
+      })
+      .catch(() => {
+        if (!cancelled) setModelsFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, models, modelsFailed]);
+
   const currentMode = value.mode ?? "default";
   const currentMeta = MODE_OPTIONS.find((m) => m.value === currentMode) ?? MODE_OPTIONS[0];
   const ModeIcon = currentMeta.icon;
@@ -133,6 +192,46 @@ export function ChatSettingsMenu({
                 </button>
               );
             })}
+          </div>
+
+          <div className="border-t border-border px-3 py-2.5">
+            <div className="text-[11px] uppercase tracking-wider font-medium text-muted-foreground mb-1">
+              Select a model
+            </div>
+            <div className="-mx-1.5">
+              <ModelRow
+                label="Default"
+                hint="recommended"
+                description="Whatever model your Claude CLI is configured to use"
+                active={!value.model}
+                onSelect={() => {
+                  const next = { ...value };
+                  delete next.model;
+                  onChange(next);
+                }}
+              />
+              {(models ?? []).map((m) => (
+                <ModelRow
+                  key={m.value}
+                  label={m.label}
+                  description={
+                    m.description ??
+                    (m.source === "seen"
+                      ? `Run on this machine · ${m.value}`
+                      : `Passed to the CLI as --model ${m.value}`)
+                  }
+                  active={value.model === m.value}
+                  onSelect={() => onChange({ ...value, model: m.value })}
+                />
+              ))}
+            </div>
+            {(models === null || modelsFailed) && (
+              <p className="px-1.5 pt-1 text-[11px] leading-snug text-muted-foreground">
+                {modelsFailed
+                  ? "Could not read the model list from the Claude CLI — Default still works."
+                  : "Reading the model list from your Claude CLI…"}
+              </p>
+            )}
           </div>
 
           <div className="border-t border-border px-3 py-2.5">

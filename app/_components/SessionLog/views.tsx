@@ -1,7 +1,7 @@
 "use client";
 
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import { Highlight, themes, type Language } from "prism-react-renderer";
 import {
   AlertCircle,
@@ -21,7 +21,11 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "../ui/dialog";
+import { CopyButton } from "../ui/copy-button";
 import { cn } from "@/libs/cn";
 import {
   buildAnswerMessage,
@@ -62,32 +66,119 @@ const LANG_ALIAS: Record<string, Language> = {
 
 const HighlightedCode: React.FC<{ lang: string; text: string }> = ({ lang, text }) => {
   const prismLang = LANG_ALIAS[lang.toLowerCase()] ?? ("tsx" as Language);
+  if (lang.toLowerCase() === "mermaid") {
+    // Keyed on the source so an edited diagram remounts instead of resetting.
+    return <MermaidBlock key={text} text={text} />;
+  }
   return (
-    <Highlight code={text} language={prismLang} theme={themes.vsDark}>
-      {({ tokens, getLineProps, getTokenProps }) => (
-        <pre
-          className="my-1.5 rounded bg-[#1e1e1e] border border-border px-2.5 py-2 overflow-x-auto text-[11.5px] leading-relaxed"
-          style={{ margin: 0 }}
-        >
-          <span className="block text-[9px] uppercase tracking-wider text-fg-dim mb-1 select-none">
-            {lang}
-          </span>
-          {tokens.map((line, i) => {
-            const lineProps = getLineProps({ line });
-            return (
-              <div key={i} {...lineProps}>
-                {line.map((token, key) => (
-                  <span key={key} {...getTokenProps({ token })} />
-                ))}
-              </div>
-            );
-          })}
-        </pre>
-      )}
-    </Highlight>
+    <div className="group/code relative my-1.5">
+      <Highlight code={text} language={prismLang} theme={themes.vsDark}>
+        {({ tokens, getLineProps, getTokenProps }) => (
+          <pre
+            className="rounded bg-[#1e1e1e] border border-border px-2.5 py-2 overflow-x-auto text-[11.5px] leading-relaxed"
+            style={{ margin: 0 }}
+          >
+            <span className="block text-[9px] uppercase tracking-wider text-fg-dim mb-1 select-none">
+              {lang}
+            </span>
+            {tokens.map((line, i) => {
+              const lineProps = getLineProps({ line });
+              return (
+                <div key={i} {...lineProps}>
+                  {line.map((token, key) => (
+                    <span key={key} {...getTokenProps({ token })} />
+                  ))}
+                </div>
+              );
+            })}
+          </pre>
+        )}
+      </Highlight>
+      <CopyButton
+        value={text}
+        label="Copy code"
+        className="absolute right-1 top-1 bg-[#1e1e1e]/90 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/code:opacity-100"
+      />
+    </div>
   );
 };
 HighlightedCode.displayName = "HighlightedCode";
+
+let mermaidReady: Promise<typeof import("mermaid").default> | null = null;
+// ~2.5 MB, and most sessions never contain a diagram — so it is fetched on the
+// first mermaid fence and never as part of the dashboard bundle.
+function loadMermaid(): Promise<typeof import("mermaid").default> {
+  if (!mermaidReady) {
+    mermaidReady = import("mermaid").then((m) => {
+      m.default.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "dark",
+      });
+      return m.default;
+    });
+  }
+  return mermaidReady;
+}
+
+const MermaidBlock: React.FC<{ text: string }> = ({ text }) => {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  // Mermaid needs a DOM-unique id for the node it renders into. The component
+  // is keyed on its source, so a changed diagram arrives as a fresh mount and
+  // this effect never has to reset state on its way in.
+  const renderId = useId().replace(/:/g, "");
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadMermaid()
+      .then((mermaid) => mermaid.render(`mmd-${renderId}`, text))
+      .then(({ svg: out }) => {
+        if (!cancelled) setSvg(out);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setFailed((err as Error)?.message ?? "diagram failed to render");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [text, renderId]);
+
+  if (failed !== null) {
+    // A diagram the agent got syntactically wrong is still worth reading as text.
+    return (
+      <div className="group/code relative my-1.5">
+        <pre className="rounded bg-[#1e1e1e] border border-warning/40 px-2.5 py-2 overflow-x-auto text-[11.5px] leading-relaxed" style={{ margin: 0 }}>
+          <span className="block text-[9px] uppercase tracking-wider text-warning mb-1 select-none">
+            mermaid — {failed}
+          </span>
+          {text}
+        </pre>
+        <CopyButton
+          value={text}
+          label="Copy diagram source"
+          className="absolute right-1 top-1 bg-[#1e1e1e]/90 opacity-0 transition-opacity group-hover/code:opacity-100"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="group/code relative my-1.5 rounded border border-border bg-card px-2.5 py-2 overflow-x-auto">
+      {svg === null ? (
+        <span className="text-[11px] text-muted-foreground italic">Rendering diagram…</span>
+      ) : (
+        <div className="[&_svg]:max-w-full [&_svg]:h-auto" dangerouslySetInnerHTML={{ __html: svg }} />
+      )}
+      <CopyButton
+        value={text}
+        label="Copy diagram source"
+        className="absolute right-1 top-1 opacity-0 transition-opacity group-hover/code:opacity-100"
+      />
+    </div>
+  );
+};
+MermaidBlock.displayName = "MermaidBlock";
 
 const MD_COMPONENTS = {
   p: (p: React.HTMLAttributes<HTMLParagraphElement>) => (
@@ -187,7 +278,11 @@ const MD_COMPONENTS = {
 
 export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={MD_COMPONENTS}
+    >
       {text}
     </ReactMarkdown>
   );

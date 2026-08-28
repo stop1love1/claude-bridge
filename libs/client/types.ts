@@ -297,3 +297,11 @@ export interface UsageSnapshot {
   plan: { subscriptionType: string; rateLimitTier: string } | null;
   quota: QuotaPanel | null;
 }
+
+/** A model the composer may pass to `claude --model`, discovered at runtime. */
+export interface ModelChoice {
+  value: string;
+  label: string;
+  description?: string;
+  source: "cli" | "seen";
+}

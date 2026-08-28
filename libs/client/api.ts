@@ -9,6 +9,7 @@ import type {
   AppGitSettings,
   AppRetry,
   SlashCommandsItemDto,
+  ModelChoice,
   TunnelEntry,
   TunnelProvider,
   TunnelProviderStatus,
@@ -41,6 +42,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   repos: () => req<Repo[]>("/repos"),
+  models: (opts?: ReqOpts) =>
+    req<{ models: ModelChoice[] }>("/models", { signal: opts?.signal }),
   tasks: () => req<Task[]>("/tasks"),
   createTask: (body: {
     title?: string;
@@ -146,7 +149,10 @@ export const api = {
       xhr.send(fd);
     });
   },
-  rewind: (sessionId: string, body: { repo: string; uuid: string }) =>
+  rewind: (
+    sessionId: string,
+    body: { repo: string; uuid: string; inclusive?: boolean },
+  ) =>
     req<{ ok: true; kept: number; dropped: number }>(
       `/sessions/${sessionId}/rewind`,
       { method: "POST", body: JSON.stringify(body) },
