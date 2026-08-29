@@ -26,6 +26,8 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "../ui/dialog";
 import { CopyButton } from "../ui/copy-button";
+import { FileRefLink } from "./FileRefLink";
+import { parseFileRef } from "./fileRef";
 import { cn } from "@/libs/cn";
 import {
   buildAnswerMessage,
@@ -210,16 +212,25 @@ const MD_COMPONENTS = {
   ),
   hr: () => <hr className="my-2 border-border" />,
   a: ({ href, ...p }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
-    const safe = href && /^(https?:|mailto:)/i.test(href) ? href : undefined;
-    return (
-      <a
-        className="text-primary hover:underline"
-        target="_blank"
-        rel="noopener noreferrer"
-        href={safe}
-        {...p}
-      />
-    );
+    if (href && /^(https?:|mailto:)/i.test(href)) {
+      return (
+        <a
+          className="text-primary hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+          href={href}
+          {...p}
+        />
+      );
+    }
+    // Agents write repo-relative references like `libs/validate.ts#L81`.
+    const fileRef = parseFileRef(href);
+    if (fileRef) {
+      return <FileRefLink target={fileRef}>{p.children}</FileRefLink>;
+    }
+    // Anything else has nowhere to go — render it as text rather than as a
+    // link that looks clickable and does nothing.
+    return <span {...p} />;
   },
   strong: (p: React.HTMLAttributes<HTMLElement>) => (
     <strong className="font-semibold text-foreground" {...p} />

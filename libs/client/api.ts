@@ -506,6 +506,16 @@ export const api = {
       }`,
       { signal: opts?.signal },
     ),
+  repoFile: (repo: string, filePath: string, opts?: ReqOpts) =>
+    req<{
+      path: string;
+      content: string;
+      size?: number;
+      truncated?: boolean;
+    }>(
+      `/repos/${encodeURIComponent(repo)}/file?path=${encodeURIComponent(filePath)}`,
+      { signal: opts?.signal },
+    ),
   appFile: (appRouteKey: string, filePath: string, opts?: ReqOpts) =>
     req<{
       path: string;

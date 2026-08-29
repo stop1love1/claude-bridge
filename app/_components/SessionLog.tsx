@@ -26,6 +26,7 @@ import {
   type LogEntry,
 } from "./SessionLog/helpers";
 import { CopyButton } from "./ui/copy-button";
+import { FileRefRepoProvider } from "./SessionLog/FileRefLink";
 import {
   ActivityRow,
   AttachmentChip,
@@ -647,6 +648,7 @@ function SessionLogInner({
       />
       {}
       <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+        <FileRefRepoProvider repo={run.repo}>
         <div
           ref={logRef}
           onScroll={handleScroll}
@@ -722,6 +724,7 @@ function SessionLogInner({
           <ActivityRow activity={activity} />
         </div>
         </div>
+        </FileRefRepoProvider>
         {!autoScroll && visibleEntries.length > 0 && (
           <button
             onClick={scrollToBottom}
