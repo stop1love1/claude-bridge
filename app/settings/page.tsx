@@ -14,6 +14,7 @@ import {
 import { api } from "@/libs/client/api";
 import { usePushSubscribe } from "@/libs/client/usePushSubscribe";
 import { HeaderShell } from "../_components/HeaderShell";
+import { SettingsCard, SettingsGroup } from "../_components/SettingsCard";
 import { Button } from "../_components/ui/button";
 import { Input } from "../_components/ui/input";
 import { Label } from "../_components/ui/label";
@@ -68,15 +69,23 @@ function SettingsPage() {
             your bot tokens / detection mode.
           </p>
 
-          <PublicUrlSection />
-          <PushNotificationsSection />
-          <DetectSettingsSection />
-          <PlanGateSettingsSection />
-          <ConfidenceSettingsSection />
-          <AutoQueueSettingsSection />
-          <TrustedDevicesSection />
-          <TelegramSettingsSection />
-          <TelegramUserSection />
+          <SettingsGroup title="Access" hint="who can reach this bridge, and at what address">
+            <PublicUrlSection />
+            <TrustedDevicesSection />
+          </SettingsGroup>
+
+          <SettingsGroup title="Agent behaviour" hint="how tasks are scoped, gated and dispatched">
+            <DetectSettingsSection />
+            <PlanGateSettingsSection />
+            <ConfidenceSettingsSection />
+            <AutoQueueSettingsSection />
+          </SettingsGroup>
+
+          <SettingsGroup title="Notifications" hint="how the bridge reaches you when it needs a human">
+            <PushNotificationsSection />
+            <TelegramSettingsSection />
+            <TelegramUserSection />
+          </SettingsGroup>
         </div>
       </main>
     </div>
@@ -142,11 +151,12 @@ function PublicUrlSection() {
   const dirty = draft.trim() !== publicUrl;
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Globe size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Public URL</h3>
-      </div>
+    <SettingsCard
+      title="Public URL"
+      icon={<Globe size={14} />}
+      summary={loading ? "…" : draft.trim() || "not set — links use localhost"}
+      changed={!!draft.trim()}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         The origin the bridge is reachable at after deploy. Used to render
         clickable links — Telegram task notifications, magic-link emails,
@@ -190,7 +200,7 @@ function PublicUrlSection() {
           </div>
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -205,11 +215,11 @@ function PushNotificationsSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Bell size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Push notifications</h3>
-      </div>
+    <SettingsCard
+      title="Push notifications"
+      icon={<Bell size={14} />}
+      summary={statusLabel[state]}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         Get native OS notifications on this device for the same events the
         Telegram notifier surfaces — permission requests, tasks blocked or
@@ -243,7 +253,7 @@ function PushNotificationsSection() {
         )}
       </div>
       {error ? <p className="mt-2 text-[11px] text-destructive">{error}</p> : null}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -284,11 +294,12 @@ function DetectSettingsSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Sparkles size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Scope detection</h3>
-      </div>
+    <SettingsCard
+      title="Scope detection"
+      icon={<Sparkles size={14} />}
+      summary={loading ? "…" : source === "auto" ? "auto" : source === "llm" ? "LLM only" : "heuristic only"}
+      changed={source !== "auto"}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         Controls how the bridge picks repo + features for a new task.
         Detection runs once at task-create time and is cached in{" "}
@@ -337,7 +348,7 @@ function DetectSettingsSection() {
           })}
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -381,11 +392,11 @@ function PlanGateSettingsSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <ShieldCheck size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Planning gate</h3>
-      </div>
+    <SettingsCard
+      title="Planning gate"
+      icon={<ShieldCheck size={14} />}
+      summary={loading ? "…" : operatorEnabled ? `on · up to ${maxClarifyRounds} clarify rounds` : "off for the operator"}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         Before a coder runs, the bridge has a planner restate the goal and
         draft a plan; coding is blocked until the plan is approved.{" "}
@@ -447,7 +458,7 @@ function PlanGateSettingsSection() {
           </div>
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -491,11 +502,12 @@ function ConfidenceSettingsSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <ShieldCheck size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Confidence gate</h3>
-      </div>
+    <SettingsCard
+      title="Confidence gate"
+      icon={<ShieldCheck size={14} />}
+      summary={loading ? "…" : enabled ? `hold below ${threshold}` : "off"}
+      changed={enabled}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         After the quality gates pass, the bridge scores each run 0–100 from the gate results
         (verify, claim-vs-diff, style, semantic panel). Below the threshold it <strong>holds
@@ -545,7 +557,7 @@ function ConfidenceSettingsSection() {
           </div>
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -589,11 +601,12 @@ function AutoQueueSettingsSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Sparkles size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Auto-queue</h3>
-      </div>
+    <SettingsCard
+      title="Auto-queue"
+      icon={<Sparkles size={14} />}
+      summary={loading ? "…" : enabled ? `on · max ${maxConcurrent} coordinators` : "off"}
+      changed={enabled}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         Lets the bridge dispatch <strong>TODO</strong> tasks on its own, oldest
         first, without waiting for you to open one. Every 30s the scheduler
@@ -647,7 +660,7 @@ function AutoQueueSettingsSection() {
           </div>
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -778,11 +791,12 @@ function TelegramSettingsSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <Send size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Telegram notifier</h3>
-      </div>
+    <SettingsCard
+      title="Telegram notifier"
+      icon={<Send size={14} />}
+      summary={tokenAlreadySet ? "bot token saved" : "no bot token"}
+      changed={tokenAlreadySet}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         Forwards run lifecycle events (done / failed) and pending permission
         requests to a Telegram chat. Empty both fields to disable. Get a bot
@@ -946,7 +960,7 @@ function TelegramSettingsSection() {
           </div>
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -1057,13 +1071,12 @@ function TelegramUserSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <User size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">
-          Telegram user-client (MTProto)
-        </h3>
-      </div>
+    <SettingsCard
+      title="Telegram user-client (MTProto)"
+      icon={<User size={14} />}
+      summary={sessionSet ? "signed in" : apiHashSet ? "api hash saved, not signed in" : "not configured"}
+      changed={sessionSet}
+    >
       <p className="text-[11px] text-muted-foreground mb-2">
         Posts as your <strong>own</strong> Telegram account (gram-js / MTProto).
         Use this when the bot can&apos;t deliver — e.g. it&apos;s restricted,
@@ -1191,7 +1204,7 @@ function TelegramUserSection() {
           </div>
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
@@ -1257,11 +1270,11 @@ function TrustedDevicesSection() {
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <ShieldCheck size={14} className="text-primary" />
-        <h3 className="text-[13px] sm:text-sm font-semibold">Trusted devices</h3>
-      </div>
+    <SettingsCard
+      title="Trusted devices"
+      icon={<ShieldCheck size={14} />}
+      summary={loading ? "…" : devices.length === 0 ? "none" : `${devices.length} device${devices.length === 1 ? "" : "s"}`}
+    >
       <p className="text-[11px] text-muted-foreground mb-4">
         Browsers where you ticked &ldquo;Trust this device&rdquo; at sign-in.
         Each entry holds a 30-day session cookie. Revoke any you don&apos;t
@@ -1320,7 +1333,7 @@ function TrustedDevicesSection() {
           ))}
         </div>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 
