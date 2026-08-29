@@ -1,20 +1,24 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { resolveAppFromRouteSegment } from "@/libs/apps";
 import { readFileUnderRoot } from "@/libs/readFileUnderRoot";
+import { resolveRepoCwd } from "@/libs/repos";
+import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
 import { badRequest } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ name: string }> };
 
+/**
+ * Reads a text file out of any repo the bridge knows — including the bridge
+ * itself, which is a repo but not a registered app, so the per-app route
+ * cannot reach it. Backs the file references agents write in the transcript.
+ */
 export async function GET(req: NextRequest, ctx: Ctx) {
-  const { name: segment } = await ctx.params;
-  const app = resolveAppFromRouteSegment(segment);
-  if (!app) {
-    return NextResponse.json({ error: "app not found" }, { status: 404 });
-  }
+  const { name } = await ctx.params;
+  const cwd = resolveRepoCwd(readBridgeMd(), BRIDGE_ROOT, name);
+  if (!cwd) return NextResponse.json({ error: "unknown repo" }, { status: 404 });
 
-  const r = readFileUnderRoot(app.path, req.nextUrl.searchParams.get("path"));
+  const r = readFileUnderRoot(cwd, req.nextUrl.searchParams.get("path"));
   if (!r.ok) {
     switch (r.reason) {
       case "invalid-path":
