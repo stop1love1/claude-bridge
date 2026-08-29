@@ -185,6 +185,13 @@ export function summarizeInput(input: unknown): string {
   return "";
 }
 
+/** A single unknown block can carry a payload; never let one flood the log. */
+const MAX_BLOCK_CHARS = 2000;
+
+function isImageBlock(b: unknown): b is { type: "image"; source?: Record<string, unknown> } {
+  return !!b && typeof b === "object" && (b as { type?: unknown }).type === "image";
+}
+
 export function stringifyResult(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -192,11 +199,38 @@ export function stringifyResult(content: unknown): string {
       .map((b) => {
         if (typeof b === "string") return b;
         if (b && typeof b === "object" && "text" in b) return String((b as { text: unknown }).text ?? "");
-        return JSON.stringify(b);
+        // Images are shown as images by the caller — stringifying one dumps its
+        // whole base64 payload into the transcript as text.
+        if (isImageBlock(b)) return "";
+        const json = JSON.stringify(b);
+        return json.length > MAX_BLOCK_CHARS
+          ? `${json.slice(0, MAX_BLOCK_CHARS)}… (truncated ${json.length - MAX_BLOCK_CHARS} chars)`
+          : json;
       })
+      .filter((s) => s !== "")
       .join("\n");
   }
   return JSON.stringify(content, null, 2);
+}
+
+/**
+ * Base64 images carried by a tool result (e.g. reading a PNG), so the caller
+ * can render them instead of printing their payload.
+ */
+export function extractResultImages(
+  content: unknown,
+): Array<{ mediaType: string; data: string }> {
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ mediaType: string; data: string }> = [];
+  for (const b of content) {
+    if (!isImageBlock(b)) continue;
+    const src = b.source;
+    if (!src || src.type !== "base64") continue;
+    const data = typeof src.data === "string" ? src.data : "";
+    const mediaType = typeof src.media_type === "string" ? src.media_type : "image/png";
+    if (data) out.push({ mediaType, data });
+  }
+  return out;
 }
 
 export function prettyToolName(raw: string): string {

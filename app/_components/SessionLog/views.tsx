@@ -32,6 +32,7 @@ import { cn } from "@/libs/cn";
 import {
   buildAnswerMessage,
   extractImagePaths,
+  extractResultImages,
   parseAskUserQuestion,
   prettyToolName,
   stringifyResult,
@@ -789,7 +790,10 @@ export function ToolResultView({ block, suppress, repo }: { block: ContentBlock;
   const rawText = stringifyResult(block.content);
   const text = stripSystemTags(rawText);
   const images = extractImagePaths(text);
-  if (!text && images.length === 0) return null;
+  // A tool that returned a picture (reading a PNG, a screenshot) carries it as
+  // a base64 block; show the picture rather than its payload.
+  const inlineImages = extractResultImages(block.content);
+  if (!text && images.length === 0 && inlineImages.length === 0) return null;
   const lines = text.split("\n");
   const preview = lines.slice(0, 2).join("\n");
   const hasMore = lines.length > 2 || text.length > 200;
@@ -813,6 +817,13 @@ export function ToolResultView({ block, suppress, repo }: { block: ContentBlock;
               {!open && hasMore && <span className="opacity-60"> …</span>}
             </pre>
           </button>
+        </div>
+      )}
+      {inlineImages.length > 0 && (
+        <div className="ml-5 mt-1 flex flex-col gap-1.5">
+          {inlineImages.map((img, i) => (
+            <InlineImage key={`b64-${i}`} src={img} />
+          ))}
         </div>
       )}
       {images.map((p, i) => (

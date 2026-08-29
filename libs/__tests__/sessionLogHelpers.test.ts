@@ -6,6 +6,7 @@ import {
   entryPlainText,
   extractAttachments,
   extractImagePaths,
+  extractResultImages,
   formatEntryTime,
   HIDDEN_TYPES,
   parseAskUserQuestion,
@@ -302,6 +303,55 @@ describe("stringifyResult", () => {
 
   it("pretty-prints non-string non-array content as JSON", () => {
     expect(stringifyResult({ a: 1 })).toBe(JSON.stringify({ a: 1 }, null, 2));
+  });
+
+  it("leaves an image block out entirely rather than dumping its base64", () => {
+    // Reading a PNG returns this shape; stringifying it flooded the transcript
+    // with tens of thousands of characters of payload.
+    const png = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo".repeat(50) },
+    };
+    const out = stringifyResult([{ text: "before" }, png, { text: "after" }]);
+    expect(out).not.toContain("iVBORw0KGgo");
+    expect(out).toBe("before\nafter");
+  });
+
+  it("returns nothing at all for a result that is only an image", () => {
+    const png = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AAAA" },
+    };
+    expect(stringifyResult([png])).toBe("");
+  });
+
+  it("caps a single oversized block so no payload can flood the log", () => {
+    const out = stringifyResult([{ blob: "x".repeat(20000) }]);
+    expect(out.length).toBeLessThan(3000);
+    expect(out).toContain("truncated");
+  });
+});
+
+describe("extractResultImages", () => {
+  const png = (data: string) => ({
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data },
+  });
+
+  it("pulls base64 images out of a tool result so they can be shown as images", () => {
+    expect(extractResultImages([{ text: "x" }, png("AAAA")])).toEqual([
+      { mediaType: "image/png", data: "AAAA" },
+    ]);
+  });
+
+  it("returns an empty list for text-only results", () => {
+    expect(extractResultImages("plain")).toEqual([]);
+    expect(extractResultImages([{ text: "x" }])).toEqual([]);
+  });
+
+  it("ignores an image block with no usable payload", () => {
+    expect(extractResultImages([{ type: "image", source: { type: "url", url: "u" } }])).toEqual([]);
+    expect(extractResultImages([{ type: "image" }])).toEqual([]);
   });
 });
 
