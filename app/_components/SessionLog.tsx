@@ -35,6 +35,7 @@ import {
   ThinkingBlockView,
   ToolResultView,
   ToolUseView,
+  pairsInline,
 } from "./SessionLog/views";
 import { EmptyOrStreaming, StreamingPartialsList } from "./SessionLog/StreamingRows";
 import { useChatSearch } from "./SessionLog/useChatSearch";
@@ -50,6 +51,7 @@ const LogRow = memo(function LogRow({
   onEditHere,
   onRegenerate,
   toolNames,
+  toolResults,
   repo,
   prevTimestamp,
   canAnswer,
@@ -61,6 +63,7 @@ const LogRow = memo(function LogRow({
   onEditHere?: (uuid: string, text: string) => void;
   onRegenerate?: () => void;
   toolNames?: Map<string, string>;
+  toolResults?: Map<string, ContentBlock>;
   repo?: string;
   prevTimestamp?: string;
   canAnswer?: boolean;
@@ -154,7 +157,12 @@ const LogRow = memo(function LogRow({
         if (b.type !== "tool_result") return null;
         const tuid = b.tool_use_id ?? "";
         const name = tuid && toolNames ? toolNames.get(tuid) : undefined;
-        const suppress = name === "TodoWrite" || name === "AskUserQuestion";
+        // Tools drawn as a call/response pair show their own result, so the
+        // standalone row would repeat it. Only suppress when the call is
+        // actually on screen — trimming can leave a result without its call.
+        const pairedInline = !!tuid && !!name && pairsInline(name) && toolNames!.has(tuid);
+        const suppress =
+          name === "TodoWrite" || name === "AskUserQuestion" || pairedInline;
         const key = tuid || `idx-${i}`;
         return <ToolResultView key={key} block={b} suppress={suppress} repo={repo} />;
       })
@@ -202,7 +210,17 @@ const LogRow = memo(function LogRow({
       {merged.map((m, i) => {
         if (m.kind === "text") return <TextBlockView key={i} text={m.text} role="assistant" />;
         if (m.kind === "thinking") return <ThinkingBlockView key={i} text={m.text} durationSec={thoughtDurationSec} />;
-        return <ToolUseView key={i} block={m.block} canAnswer={canAnswer} onAnswer={onAnswer} />;
+        return (
+          <ToolUseView
+            key={i}
+            block={m.block}
+            canAnswer={canAnswer}
+            onAnswer={onAnswer}
+            result={
+              typeof m.block.id === "string" ? toolResults?.get(m.block.id) : undefined
+            }
+          />
+        );
       })}
       {showActions && (
         <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
@@ -381,6 +399,21 @@ function SessionLogInner({
     return m;
   }, [entries]);
 
+  // Each call's result, keyed by the call it answers. Lets a tool render as one
+  // call/response block, and tells an AskUserQuestion card it has been answered.
+  const toolResults = useMemo(() => {
+    const m = new Map<string, ContentBlock>();
+    for (const e of entries) {
+      if (e.type !== "user") continue;
+      for (const b of asBlocks(e.message?.content)) {
+        if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
+          m.set(b.tool_use_id, b);
+        }
+      }
+    }
+    return m;
+  }, [entries]);
+
   const {
     autoScroll,
     setAutoScroll,
@@ -429,17 +462,19 @@ function SessionLogInner({
     for (let i = visibleEntries.length - 1; i >= 0; i--) {
       const e = visibleEntries[i];
       if (classify(e) === "user") return -1;
-      if (
-        e.type === "assistant" &&
-        asBlocks(e.message?.content).some(
-          (b) => b.type === "tool_use" && b.name === "AskUserQuestion",
-        )
-      ) {
-        return i;
-      }
+      if (e.type !== "assistant") continue;
+      const ask = asBlocks(e.message?.content).find(
+        (b) => b.type === "tool_use" && b.name === "AskUserQuestion",
+      );
+      if (!ask) continue;
+      // The answer comes back as a tool_result, which classify() reports as
+      // "tool_result" rather than "user" — so the scan above walks straight
+      // past it and the card kept offering Submit long after it was answered.
+      const answered = typeof ask.id === "string" && toolResults.has(ask.id);
+      return answered ? -1 : i;
     }
     return -1;
-  }, [visibleEntries]);
+  }, [visibleEntries, toolResults]);
 
   // Last real user turn — the anchor both regenerate and edit truncate back to.
   // Optimistic rows have no server-side uuid, so they cannot be truncated to.
@@ -703,6 +738,7 @@ function SessionLogInner({
                           : undefined
                       }
                       toolNames={toolNames}
+                      toolResults={toolResults}
                       repo={run.repo}
                       prevTimestamp={visibleEntries[i - 1]?.timestamp}
                       canAnswer={!isResponding && i === pendingQuestionIdx && !!run.repo}

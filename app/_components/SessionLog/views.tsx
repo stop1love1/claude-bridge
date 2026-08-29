@@ -349,40 +349,136 @@ export function ThinkingBlockView({
   );
 }
 
-export function BashToolUseView({ block }: { block: ContentBlock }) {
-  const [open, setOpen] = useState(false);
+/**
+ * One tool call as a call/response pair: the header names the tool, then a
+ * bordered block carries an IN row and, once it arrives, an OUT row. Keeps the
+ * two halves of a call together instead of leaving the result to drift down
+ * the transcript as a separate row.
+ */
+function ToolIOView({
+  header,
+  input,
+  result,
+  lang = "bash",
+}: {
+  header: React.ReactNode;
+  input: string;
+  result?: ContentBlock;
+  lang?: string;
+}) {
+  const [openIn, setOpenIn] = useState(false);
+  const [openOut, setOpenOut] = useState(false);
+
+  const outText = result ? stripSystemTags(stringifyResult(result.content)) : "";
+  const outImages = result ? extractResultImages(result.content) : [];
+  const outPaths = extractImagePaths(outText);
+
+  const inLines = input.split("\n");
+  const inLong = inLines.length > 1 || input.length > 160;
+  const outLines = outText.split("\n");
+  const outLong = outLines.length > 6 || outText.length > 600;
+
+  const row = "flex items-start gap-2 px-2 py-1.5";
+  const label =
+    "select-none shrink-0 w-8 pt-px text-[9px] font-medium uppercase tracking-wider text-fg-dim";
+
+  return (
+    <div className="my-1">
+      {header}
+      <div className="ml-5 mt-1 rounded-md border border-border overflow-hidden bg-card/40">
+        <div className={row}>
+          <span className={label}>in</span>
+          <button
+            type="button"
+            onClick={() => inLong && setOpenIn((v) => !v)}
+            className={cn(
+              "min-w-0 flex-1 text-left",
+              inLong ? "cursor-pointer" : "cursor-default",
+            )}
+            aria-expanded={inLong ? openIn : undefined}
+          >
+            <pre className="m-0 font-mono text-[12.5px] leading-snug text-foreground/90 whitespace-pre-wrap wrap-break-word">
+              {openIn || !inLong ? input : inLines[0].slice(0, 160) + (inLong ? " …" : "")}
+            </pre>
+          </button>
+        </div>
+
+        {result && (outText || outImages.length > 0) && (
+          <div className={cn(row, "border-t border-border bg-background/40")}>
+            <span
+              className={cn(label, result.is_error && "text-destructive")}
+            >
+              out
+            </span>
+            <div className="min-w-0 flex-1">
+              {outText && (
+                <button
+                  type="button"
+                  onClick={() => outLong && setOpenOut((v) => !v)}
+                  className={cn(
+                    "block w-full text-left",
+                    outLong ? "cursor-pointer" : "cursor-default",
+                  )}
+                  aria-expanded={outLong ? openOut : undefined}
+                >
+                  <pre
+                    className={cn(
+                      "m-0 font-mono text-[11px] leading-snug whitespace-pre-wrap wrap-break-word",
+                      result.is_error ? "text-destructive/90" : "text-muted-foreground",
+                    )}
+                  >
+                    {openOut || !outLong ? outText : outLines.slice(0, 6).join("\n")}
+                    {!openOut && outLong && (
+                      <span className="opacity-60"> … {outLines.length} lines</span>
+                    )}
+                  </pre>
+                </button>
+              )}
+              {outImages.map((img, i) => (
+                <div key={`b64-${i}`} className="mt-1">
+                  <InlineImage src={img} />
+                </div>
+              ))}
+              {outPaths.map((p, i) => (
+                <ImageRefLink key={`p-${i}`} path={p} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <span className="sr-only">{lang}</span>
+    </div>
+  );
+}
+
+/** Tools drawn as a call/response pair rather than two separate rows. */
+export function pairsInline(toolName: string): boolean {
+  return toolName !== "TodoWrite" && toolName !== "AskUserQuestion" && toolName !== "Skill";
+}
+
+export function BashToolUseView({
+  block,
+  result,
+}: {
+  block: ContentBlock;
+  result?: ContentBlock;
+}) {
   const input = (block.input ?? {}) as Record<string, unknown>;
   const command = typeof input.command === "string" ? input.command : "";
   const description = typeof input.description === "string" ? input.description : "";
-  const oneLine = command.replace(/\s*\n\s*/g, " ").trim();
-  const TRUNC = 140;
-  const truncated = oneLine.length > TRUNC;
-  const preview = truncated ? oneLine.slice(0, TRUNC) + "…" : oneLine;
-  const multiline = command.includes("\n");
-  const expandable = truncated || multiline;
   return (
-    <div className="my-0.5">
-      <button
-        onClick={() => expandable && setOpen((v) => !v)}
-        className={`group/tool w-full flex items-start gap-1.5 px-2 py-1 -mx-2 rounded text-left text-[11px] ${expandable ? "hover:bg-accent/50 cursor-pointer" : "cursor-default"}`}
-        aria-expanded={open}
-      >
-        {expandable ? (
-          open ? <ChevronDown size={10} className="shrink-0 mt-1 opacity-60" /> : <ChevronRight size={10} className="shrink-0 mt-1 opacity-60" />
-        ) : <span className="w-2.5 shrink-0" />}
-        <span className="flex-1 min-w-0">
-          <span className="font-mono text-foreground block truncate">
-            <span className="text-fg-dim select-none mr-1">$</span>
-            {open ? command : preview}
-          </span>
+    <ToolIOView
+      header={
+        <div className="flex items-baseline gap-2 text-[11px]">
+          <span className="font-mono font-medium text-foreground shrink-0">Bash</span>
           {description && (
-            <span className="block text-[10px] text-fg-dim italic mt-0.5 truncate">
-              {description}
-            </span>
+            <span className="text-fg-dim italic truncate">{description}</span>
           )}
-        </span>
-      </button>
-    </div>
+        </div>
+      }
+      input={command}
+      result={result}
+    />
   );
 }
 
@@ -696,14 +792,15 @@ export function ToolUseView({
   block,
   canAnswer,
   onAnswer,
+  result,
 }: {
   block: ContentBlock;
   canAnswer?: boolean;
   onAnswer?: (text: string) => void | Promise<void>;
+  result?: ContentBlock;
 }) {
-  const [open, setOpen] = useState(false);
   const rawName = block.name ?? "tool";
-  if (rawName === "Bash") return <BashToolUseView block={block} />;
+  if (rawName === "Bash") return <BashToolUseView block={block} result={result} />;
   if (rawName === "TodoWrite") return <TodoWriteView block={block} />;
   if (rawName === "Skill") return <SkillToolUseView block={block} />;
   if (rawName === "AskUserQuestion")
@@ -711,23 +808,17 @@ export function ToolUseView({
   const displayName = prettyToolName(rawName);
   const summary = summarizeInput(block.input);
   return (
-    <div className="my-0.5">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="group/tool w-full flex items-center gap-1.5 px-2 py-1 -mx-2 rounded text-left hover:bg-accent/50 text-[11px] text-muted-foreground"
-        aria-expanded={open}
-      >
-        {open ? <ChevronDown size={10} className="shrink-0 opacity-60" /> : <ChevronRight size={10} className="shrink-0 opacity-60" />}
-        <Wrench size={10} className="text-info shrink-0" />
-        <span className="font-mono font-medium text-foreground shrink-0">{displayName}</span>
-        {summary && <span className="font-mono truncate opacity-80">{summary}</span>}
-      </button>
-      {open && (
-        <pre className="ml-5 mt-1 px-2 py-1 rounded bg-muted/40 text-[11px] text-muted-foreground whitespace-pre-wrap wrap-break-word font-mono">
-          {JSON.stringify(block.input ?? {}, null, 2)}
-        </pre>
-      )}
-    </div>
+    <ToolIOView
+      header={
+        <div className="flex items-baseline gap-2 text-[11px]">
+          <Wrench size={10} className="text-info shrink-0 self-center" />
+          <span className="font-mono font-medium text-foreground shrink-0">{displayName}</span>
+          {summary && <span className="font-mono text-fg-dim truncate">{summary}</span>}
+        </div>
+      }
+      input={JSON.stringify(block.input ?? {}, null, 2)}
+      result={result}
+    />
   );
 }
 
