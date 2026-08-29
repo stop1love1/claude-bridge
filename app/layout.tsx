@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import Script from "next/script";
 import "./globals.css";
 import { Providers } from "./_components/Providers";
 import { NO_FLASH_SCRIPT } from "@/libs/themeBootstrap";
@@ -30,13 +29,13 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        {/* Must run before first paint, so it is a plain tag emitted by this
+            server component rather than next/script: that one is a client
+            component, and a script React renders on the client never executes. */}
+        <script dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }} />
+      </head>
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        {}
-        <Script
-          id="bridge-theme-no-flash"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }}
-        />
         <Providers>{children}</Providers>
       </body>
     </html>
