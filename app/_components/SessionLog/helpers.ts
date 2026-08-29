@@ -293,17 +293,22 @@ export function entryPlainText(entry: LogEntry): string {
 export function pruneOptimistic(prev: LogEntry[], arrived: LogEntry[]): LogEntry[] {
   if (prev.length === 0 || arrived.length === 0) return prev;
 
+  // The composer prepends `Attached file: …` lines to what it sends, so compare
+  // on the same stripped text the row renderer displays.
+  const spoken = (e: LogEntry): string =>
+    extractAttachments(entryPlainText(e)).stripped.trim();
+
   const settled: string[] = [];
   for (const l of arrived) {
     if (classify(l) !== "user") continue;
-    const text = entryPlainText(l);
+    const text = spoken(l);
     if (text) settled.push(text);
   }
   if (settled.length === 0) return prev;
 
   const next = prev.filter((e) => {
     if (!e.uuid?.startsWith("optimistic:")) return true;
-    return !settled.includes(entryPlainText(e));
+    return !settled.includes(spoken(e));
   });
   return next.length === prev.length ? prev : next;
 }

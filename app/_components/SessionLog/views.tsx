@@ -860,7 +860,7 @@ export function ActivityRow({
     <Asterisk size={11} className="text-warning animate-pulse" aria-hidden="true" />
   );
   return (
-    <div className="px-3 py-1.5 border-t border-border bg-card/60 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+    <div className="my-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
       {icon}
       <span className={isThinking ? "italic" : "font-medium text-foreground"}>
         {verb}…

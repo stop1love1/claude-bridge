@@ -717,6 +717,9 @@ function SessionLogInner({
               </div>
             </>
           )}
+          {/* Last row of the transcript, not a status bar above the composer —
+              it belongs to the conversation and scrolls with it. */}
+          <ActivityRow activity={activity} />
         </div>
         </div>
         {!autoScroll && visibleEntries.length > 0 && (
@@ -732,8 +735,6 @@ function SessionLogInner({
       <p role="status" aria-live="polite" className="sr-only">
         {isResponding ? "Assistant is responding" : "Assistant is idle"}
       </p>
-
-      <ActivityRow activity={activity} />
 
       <InlinePermissionRequests sessionId={run.sessionId} />
 

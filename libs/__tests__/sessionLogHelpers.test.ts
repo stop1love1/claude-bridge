@@ -55,6 +55,28 @@ describe("pruneOptimistic", () => {
     expect(pruneOptimistic(prev, [realUser("thêm phần xử lý lỗi")])).toEqual([]);
   });
 
+  it("drops the placeholder when the landed message carries an attachment preamble", () => {
+    // The composer sends `Attached file: … — please Read it …\n\n<live text>`,
+    // but the optimistic entry only holds the live text, so the match must
+    // ignore the attachment lines the same way the row renderer does.
+    const withAttachment = (text: string): LogEntry =>
+      ({
+        type: "user",
+        uuid: "real-att",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Attached file: \`/x/.uploads/s/a.png\` (a.png, 12 bytes) — please Read it as part of this turn.\n\n${text}`,
+            },
+          ],
+        },
+      }) as unknown as LogEntry;
+    const prev = [optimistic("thêm phần xử lý lỗi")];
+    expect(pruneOptimistic(prev, [withAttachment("thêm phần xử lý lỗi")])).toEqual([]);
+  });
+
   it("keeps a second queued message when only the first one landed", () => {
     const prev = [optimistic("first"), optimistic("second")];
     const out = pruneOptimistic(prev, [realUser("first")]);
