@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { announcePending, listPending } from "@/libs/permissionStore";
+import { announcePending, answer, listPending } from "@/libs/permissionStore";
+import { isSessionBypassed } from "@/libs/sessionBypass";
 import {
   badRequest,
   isValidRequestId,
@@ -40,6 +41,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     input: body.input ?? {},
     createdAt: body.timestamp ?? new Date().toISOString(),
   });
+
+  // Skip-permissions is a per-session choice the operator makes in the
+  // composer. Answering here is what makes it apply to a turn that is already
+  // running and to sessions the bridge did not spawn — the hook long-polls for
+  // this decision, so it proceeds without ever drawing a popup.
+  if (isSessionBypassed(sessionId)) {
+    answer(sessionId, body.requestId, "allow", "auto-allowed: skip permissions");
+  }
   return ok();
 }
 

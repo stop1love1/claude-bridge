@@ -8,6 +8,7 @@ import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/sp
 import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
 import { projectDirFor } from "@/libs/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
+import { setSessionBypass } from "@/libs/sessionBypass";
 import { badRequest, isValidEffort, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
 import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
 import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
@@ -117,6 +118,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         ...(settings ?? {}),
         mode: settings?.mode ?? fallbackMode,
       };
+      // The env var only reaches a process the bridge spawns, and only at spawn
+      // time. Recording the choice lets the permission route honour it for a
+      // turn already in flight, and for a session the bridge never spawned.
+      //
+      // Read from what the caller actually asked for, never from the
+      // ALLOW_BYPASS fallback above: a client that simply omits settings must
+      // not end up silently auto-approving every tool call in the session.
+      setSessionBypass(sessionId, settings?.mode === "bypassPermissions");
       const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
       const file = join(projectDirFor(cwd), `${sessionId}.jsonl`);
 
