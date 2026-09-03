@@ -254,7 +254,7 @@ function Configuration() {
     { name: "ALLOWED_DEV_ORIGINS", def: "—", purpose: "Comma-separated origins allowed to hit the dev server" },
     { name: "BRIDGE_LOCK_VERIFY", def: "0", purpose: "1 = reject API edits to per-app verify commands" },
     { name: "BRIDGE_TRUSTED_PROXY", def: "0", purpose: "1 = trust XFF headers when behind a proxy" },
-    { name: "BRIDGE_HOST", def: "0.0.0.0", purpose: "Interface the server binds to — set 127.0.0.1 to keep the bridge off the LAN" },
+    { name: "BRIDGE_HOST", def: "127.0.0.1", purpose: "Interface the server binds to — loopback-only by default; set 0.0.0.0 to also accept LAN clients" },
     { name: "BRIDGE_ALLOWED_ROOTS", def: "—", purpose: "Semicolon-separated roots an app path must sit under; empty = any path is accepted" },
     { name: "BRIDGE_LOCK_EXEC", def: "0", purpose: "1 = disable the app exec endpoint and the PTY terminal entirely" },
     { name: "BRIDGE_JSON_LOGS", def: "0", purpose: "1 = emit structured JSON log lines instead of human-readable ones" },

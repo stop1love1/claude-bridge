@@ -140,10 +140,15 @@ function attachPty(ws: InstanceType<typeof WebSocket>, cwd: string) {
 
 async function main() {
   const dev = process.env.NODE_ENV !== "production";
+  // Loopback by default. This process also serves a PTY WebSocket that spawns
+  // a real shell in an app's working tree, so reaching the LAN should be a
+  // deliberate act, not what happens when you join a café Wi-Fi. Tunnels are
+  // unaffected — every provider dials `http://localhost:<port>` from this same
+  // machine. To expose it on purpose: BRIDGE_HOST=0.0.0.0.
   const hostname =
     process.env.BRIDGE_HOST?.trim() ||
     process.env.HOST?.trim() ||
-    "0.0.0.0";
+    "127.0.0.1";
   const port = resolveBridgePort(process.env);
 
   const app = next({ dev, hostname, port, dir: process.cwd() });
@@ -239,8 +244,14 @@ async function main() {
     server.on("error", reject);
   });
 
-  const hostLabel = hostname === "0.0.0.0" ? "localhost" : hostname;
-  console.log(`[bridge] ready on http://${hostLabel}:${port} (PTY WS at ${PTY_PATH})`);
+  const loopback = hostname === "127.0.0.1" || hostname === "::1";
+  const hostLabel = hostname === "0.0.0.0" || loopback ? "localhost" : hostname;
+  const reach = loopback
+    ? "this machine only — set BRIDGE_HOST=0.0.0.0 to accept LAN clients"
+    : `bound to ${hostname} — reachable from other machines`;
+  console.log(
+    `[bridge] ready on http://${hostLabel}:${port} (PTY WS at ${PTY_PATH}); ${reach}`,
+  );
 }
 
 main().catch((err) => {

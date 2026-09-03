@@ -186,6 +186,7 @@ Set these before `bun run start` to point the bridge at a non-default host or po
 | Variable | Default | Notes |
 |---|---|---|
 | `BRIDGE_PORT` | `7777` | Listening port. `PORT` is also honored. |
+| `BRIDGE_HOST` | `127.0.0.1` | Interface to bind. Loopback-only by default — the bridge serves a shell-spawning PTY endpoint, so reaching the LAN is opt-in. Set `0.0.0.0` to accept clients on your network. Tunnels work either way (providers dial `localhost` from this machine). |
 | `BRIDGE_URL` | `http://localhost:$BRIDGE_PORT` | Public origin spawned children & webhooks call back to. Set this when reverse-proxying or running behind a hostname. |
 | `NODE_ENV` | `production` (set by `bun run start`) | Enables secure cookies. |
 | `BRIDGE_DEMO_MODE` | unset | When `1`, runs in landing-page-only mode (see [Deployment](#-deployment)). |

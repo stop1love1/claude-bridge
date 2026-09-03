@@ -56,7 +56,7 @@ If the coordinator prompt in `prompts/coordinator.md` tells you to spawn sub-age
 ## What *not* to do
 
 - Don't invent a new session format. Sessions are the plain `.jsonl` files Claude Code writes to `~/.claude/projects/<slug>/`.
-- Don't hardcode absolute paths or repo names. The apps registry lives in `bridge.json` (committed to git), edited via the UI's "Add app" / "Auto-detect" buttons. The bridge folder itself is referenced via `basename "$PWD"`, never a hardcoded string.
+- Don't hardcode absolute paths or repo names. The apps registry lives in `~/.claude/bridge.json` — outside this tree, per-machine, **never committed** (it also carries the operator password hash, the HMAC session secret, the internal-bypass token, and any Telegram/ngrok credentials). Edit it via the UI's "Add app" / "Auto-detect" buttons, not by hand. The bridge folder itself is referenced via `basename "$PWD"`, never a hardcoded string.
 - Don't edit files inside `../<other-repo>/` from here — spawn a child `claude` in that repo instead.
 - Don't edit `prompts/tasks.md` to move tasks between sections. Use `PATCH /api/tasks/<id>` with `{"section": "TODO" | "DOING" | "BLOCKED" | "DONE — not yet archived", ...}` — the bridge writes the canonical state to `sessions/<id>/meta.json`.
 - Don't run `git checkout` / `git commit` / `git push` from inside a child agent. The bridge runs those automatically per the app's settings — duplicating them races the lifecycle hook.

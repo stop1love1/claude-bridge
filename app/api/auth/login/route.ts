@@ -91,13 +91,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // One message for both failure modes, deliberately. Naming which half was
+  // wrong tells a caller they've found the operator's email and only the
+  // password is left — and this bridge can be published to the internet in one
+  // click from the Tunnels page. `verifyPassword` runs even when the email is
+  // already wrong so the response time doesn't leak the same fact.
   const emailOk = email.toLowerCase() === cfg.email.toLowerCase();
   const passOk = await verifyPassword(password, cfg.passwordHash);
   if (!emailOk || !passOk) {
-    const error = !emailOk
-      ? "The email address does not match the operator account on this bridge."
-      : "The password is incorrect.";
-    return NextResponse.json({ error }, { status: 401 });
+    return NextResponse.json(
+      { error: "Email or password is incorrect." },
+      { status: 401 },
+    );
   }
 
   rateLimitClear("login:ip", ip);
