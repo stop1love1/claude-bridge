@@ -142,7 +142,7 @@ function checkTelegramUserClient(): CheckResult {
     return {
       name: "telegram-user",
       status: "missing",
-      detail: "not configured (run `bun scripts/telegram-login.ts` to enable MTProto)",
+      detail: "not configured (run `npm run telegram:login` to enable MTProto)",
     };
   }
   if (!hasApiId || !hasApiHash || !hasSession) {

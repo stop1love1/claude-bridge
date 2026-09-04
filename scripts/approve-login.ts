@@ -11,7 +11,7 @@ const pendingId = positional[0];
 if (!pendingId) {
   console.error(
     [
-      "usage: bun scripts/approve-login.ts <pendingId> [--deny]",
+      "usage: npm run approve:login <pendingId> [--deny]",
       "",
       "Approves (or denies) a device login that's waiting on the bridge's",
       "approval queue. Copy <pendingId> from the 'Waiting for approval'",

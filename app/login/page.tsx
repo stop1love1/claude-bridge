@@ -290,7 +290,7 @@ function SetupForm({ onDone }: { onDone(): void }) {
         <p>
           No credentials set yet. Create the operator account below — this
           is a <strong>one-time</strong> setup. To rotate later you&apos;ll need{" "}
-          <code className="font-mono">bun scripts/set-password.ts</code>.
+          <code className="font-mono">npm run set:password</code>.
         </p>
       </div>
       <div className="grid gap-1.5">
@@ -395,7 +395,7 @@ function PendingApprovalNotice({
     return () => clearInterval(handle);
   }, []);
 
-  const cliCommand = `bun run approve:login ${pendingId}`;
+  const cliCommand = `npm run approve:login ${pendingId}`;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(cliCommand);

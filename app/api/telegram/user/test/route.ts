@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   }
   if (!isUserClientConfigured()) {
     return NextResponse.json(
-      { ok: false, reason: "user-client not configured (run `bun scripts/telegram-login.ts`)" },
+      { ok: false, reason: "user-client not configured (run `npm run telegram:login`)" },
       { status: 503 },
     );
   }

@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   const cfg = loadAuthConfig();
   if (!cfg) {
     return NextResponse.json(
-      { error: "auth not configured", hint: "run `bun scripts/set-password.ts`" },
+      { error: "auth not configured", hint: "run `npm run set:password`" },
       { status: 503 },
     );
   }

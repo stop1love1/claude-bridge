@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error: "auth already configured",
-        hint: "to rotate the password, run `bun scripts/set-password.ts` from the bridge repo",
+        hint: "to rotate the password, run `npm run set:password` from the bridge repo",
       },
       { status: 409 },
     );
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error: "first-run setup is restricted to localhost",
-        hint: "open the bridge from `http://localhost:7777` on the same machine, or run `bun scripts/set-password.ts`",
+        hint: "open the bridge from `http://localhost:7777` on the same machine, or run `npm run set:password`",
       },
       { status: 403 },
     );
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error: "invalid or missing setup token",
-        hint: "copy the one-time token printed in the bridge terminal banner (`[bridge] auth MISSING …`) into the setup form, or run `bun scripts/set-password.ts`",
+        hint: "copy the one-time token printed in the bridge terminal banner (`[bridge] auth MISSING …`) into the setup form, or run `npm run set:password`",
       },
       { status: 401 },
     );

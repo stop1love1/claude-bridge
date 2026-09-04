@@ -3,18 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "bun scripts/run.ts development node --import tsx ./scripts/bridge-http-server.ts",
+    "dev": "node --import tsx scripts/run.ts development node --import tsx ./scripts/bridge-http-server.ts",
     "build": "next build",
-    "start": "bun scripts/run.ts production node --import tsx ./scripts/bridge-http-server.ts",
-    "serve": "next build && bun run start",
+    "start": "node --import tsx scripts/run.ts production node --import tsx ./scripts/bridge-http-server.ts",
+    "serve": "next build && node --import tsx scripts/run.ts production node --import tsx ./scripts/bridge-http-server.ts",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "telegram:login": "bun scripts/telegram-login.ts",
-    "set:password": "bun scripts/set-password.ts",
-    "approve:login": "bun scripts/approve-login.ts"
+    "telegram:login": "node --import tsx scripts/telegram-login.ts",
+    "set:password": "node --import tsx scripts/set-password.ts",
+    "approve:login": "node --import tsx scripts/approve-login.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",

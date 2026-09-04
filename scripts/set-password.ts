@@ -96,7 +96,7 @@ async function main() {
   }
 
   console.log(`Credentials saved for "${next.email}".`);
-  console.log("Restart the bridge (`bun dev`) to pick up the new auth state if it was already running.");
+  console.log("Restart the bridge (`npm run dev`) to pick up the new auth state if it was already running.");
   rl.close();
 }
 

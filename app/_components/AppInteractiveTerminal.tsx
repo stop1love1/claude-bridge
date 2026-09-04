@@ -278,7 +278,7 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
         setDiag({
           kind: "wrong-server",
           title: "Shell server not loaded",
-          hint: "Stop the dev server (Ctrl+C) and run `bun dev`. Plain `next dev` lacks the PTY upgrade handler — that's why the WebSocket hangs.",
+          hint: "Stop the dev server (Ctrl+C) and run `npm run dev`. Plain `next dev` lacks the PTY upgrade handler — that's why the WebSocket hangs.",
         });
         setConnUi("offline");
         return;
@@ -326,7 +326,7 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
           setDiag({
             kind: "ws-1006",
             title: "Shell handshake rejected",
-            hint: "Likely the bridge server isn't running with PTY support, or the session cookie isn't valid for this host. Restart with `bun dev` and re-login on the same URL.",
+            hint: "Likely the bridge server isn't running with PTY support, or the session cookie isn't valid for this host. Restart with `npm run dev` and re-login on the same URL.",
           });
         } else {
           setDiag({

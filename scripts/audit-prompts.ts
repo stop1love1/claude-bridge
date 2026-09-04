@@ -28,7 +28,7 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (a === "--json") {
       json = true;
     } else if (a === "--help" || a === "-h") {
-      console.log("usage: bun scripts/audit-prompts.ts [--task <id>] [--json]");
+      console.log("usage: node --import tsx scripts/audit-prompts.ts [--task <id>] [--json]");
       process.exit(0);
     }
   }

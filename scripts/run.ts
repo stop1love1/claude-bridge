@@ -6,7 +6,7 @@ const [, , modeArg, ...rest] = process.argv;
 const mode = modeArg === "development" ? "development" : modeArg === "production" ? "production" : null;
 if (!mode || rest.length === 0) {
   console.error(
-    "usage: bun scripts/run.ts <development|production> <command> [...args]",
+    "usage: node --import tsx scripts/run.ts <development|production> <command> [...args]",
   );
   process.exit(1);
 }
@@ -46,8 +46,13 @@ loadEnv(".env.local");
 loadEnv(`.env.${mode}.local`);
 (process.env as Record<string, string>)["NODE_ENV"] = mode;
 
+// `shell: true` is what lets this resolve `next` / `vitest` style shims on
+// Windows, but passing an argv array alongside it trips Node's DEP0190 (the
+// args are concatenated, not escaped). Everything here comes from our own
+// package.json scripts, never from user input, so joining it ourselves is the
+// documented way to keep the shell and lose the warning.
 const [command, ...args] = rest;
-const child = spawn(command, args, { stdio: "inherit", shell: true });
+const child = spawn([command, ...args].join(" "), { stdio: "inherit", shell: true });
 child.on("exit", (code, signal) => {
   if (signal) {
     process.kill(process.pid, signal);

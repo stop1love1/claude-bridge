@@ -1086,7 +1086,7 @@ function TelegramUserSection() {
       </p>
       <p className="text-[11px] text-muted-foreground mb-4">
         First-time setup needs phone + login code:{" "}
-        <code className="font-mono">bun scripts/telegram-login.ts</code>. The
+        <code className="font-mono">npm run telegram:login</code>. The
         script writes <code className="font-mono">apiId</code>,{" "}
         <code className="font-mono">apiHash</code>, and the resulting
         StringSession into <code className="font-mono">~/.claude/bridge.json</code>{" "}
@@ -1146,7 +1146,7 @@ function TelegramUserSection() {
               placeholder={
                 sessionSet
                   ? `${maskedSession} (leave blank to keep)`
-                  : "Run `bun scripts/telegram-login.ts` to mint one"
+                  : "Run `npm run telegram:login` to mint one"
               }
               autoComplete="off"
               spellCheck={false}

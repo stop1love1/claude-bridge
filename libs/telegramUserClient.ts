@@ -76,7 +76,7 @@ async function buildAndConnect(): Promise<TelegramClient | null> {
   if (!authorized) {
     try { await client.disconnect(); } catch { }
     throw new Error(
-      "Telegram user session is no longer authorized — re-run `bun scripts/telegram-login.ts`",
+      "Telegram user session is no longer authorized — re-run `npm run telegram:login`",
     );
   }
   for (const [h] of state.inboundHandlers) {
