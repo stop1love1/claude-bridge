@@ -88,10 +88,17 @@ The smaller stuff that makes the five pillars pleasant to live with:
 
 - 🔍 **Auto-detect any stack** — Next.js, NestJS, Prisma, Express, Vue, Svelte, Tailwind, Python, Go, Rust, Java, and more.
 - 🗂️ **Task lifecycle in the UI** — `TODO → DOING → DONE / BLOCKED` in one click; stable ids, bodies, run trees.
+- 📋 **Plan gate** — before anything is dispatched, a planner drafts the approach and asks its clarifying questions (bounded rounds, on by default); nothing spawns until you approve.
+- 🔁 **Scheduled workflows** — name an ordered set of stages (role + prompt + verify on/off), pin them to an app, and run them on demand or on a cron.
+- 🤖 **Auto-queue** — let the bridge drain `TODO` unattended with a concurrency cap, instead of dispatching each task by hand.
+- 🔗 **Task share links** — hand a stakeholder a token link scoped to one task: read-only by default, with opt-in grants (send a message, spawn an agent, answer a permission prompt, commit, push, approve a plan) and per-device approval you can revoke.
+- 🏁 **Speculative runs + judge panel** — race sibling attempts in isolated worktrees and keep the first to claim; multi-lens voting backs the semantic gate.
+- 🚢 **Integration modes** — per app, a run that ships can stop at the commit, auto-merge into your target branch, or hand off to a `devops` role that opens the PR/MR through `gh` / `glab` (GitHub + GitLab).
 - 🌿 **Branch-aware dispatch** — per-app git policy (current / fixed / `claude/<task-id>` / fresh worktree) + optional auto-commit & push.
 - 📝 **Cross-repo registers** — `decisions.md`, `bugs.md`, `questions.md` so cross-repo agreements outlive the AI session.
 - 💬 **Session continuation + rewind** — resume past sessions with full transcript replay or rewind to any message.
 - 💰 **Token usage analytics** — per-task input / output / cache totals with per-run drill-down.
+- 🔔 **Web push** — browser notifications (VAPID) as an alternative to Telegram when you'd rather not wire up a bot.
 - 🔐 **Single-operator auth** — scrypt password + signed cookie + trusted devices + CSRF + rate-limited login + optional Telegram login approvals.
 - 📊 **Repo profiles** — heuristic per-repo summaries injected into every child prompt.
 - 🧩 **Pre-warmed child context** — every spawn ships with house rules, pinned files, a symbol index, the repo's style fingerprint, and the most recent coordinator direction so children don't start cold.
@@ -194,7 +201,10 @@ Set these before `bun run start` to point the bridge at a non-default host or po
 | `BRIDGE_DEMO_MODE` | unset | When `1`, runs in landing-page-only mode (see [Deployment](#-deployment)). |
 
 For a long-running deploy, run `bun run start` under a process supervisor
-(`systemd`, `pm2`, Docker, …) so it restarts cleanly on reboot. For local
+(`systemd`, `pm2`, Docker, …) so it restarts cleanly on reboot. On Windows,
+[`scripts/install-service.ps1`](scripts/install-service.ps1) does the same job
+through Task Scheduler with no extra dependencies — see
+[`docs/24-7-setup.md`](docs/24-7-setup.md) for the full 24/7 setup. For local
 hacking on the bridge itself, use `bun run dev` instead — Turbopack hot-reload,
 no auth-cookie hardening.
 
@@ -237,25 +247,41 @@ Or browse the source: [`app/docs/page.tsx`](app/docs/page.tsx).
 The aim is to be the most capable **agentic coding control plane** on your machine —
 model-agnostic, repo-agnostic, tracker-agnostic.
 
-- [ ] Multi-LLM support — Claude + GPT, Gemini, Grok, DeepSeek, OpenRouter, and local models (Ollama / vLLM) behind one loop
-- [ ] Per-role / per-task model pinning (coordinator, coder, reviewer, fixer all configurable)
-- [ ] Codebase knowledge graph + cross-repo long-term memory injected into every spawn
-- [ ] Sandboxed execution — each child in an ephemeral Docker/VM with declared scope
-- [ ] Policy engine — declarative invariants enforced by the verify chain
-- [ ] Plugin system for custom agent roles (security-auditor, perf-tuner, …)
-- [ ] LLM-assisted repo profiles (currently heuristic-only)
-- [ ] Richer retry strategies beyond the 6-gate ladder
-- [ ] First-class monorepo support (Nx, Turbo, pnpm / Bun workspaces)
-- [ ] GitHub / Linear / Jira bridges — issue → task, PR-review bot, CI-failure → fix
-- [ ] Editor companions (VS Code, JetBrains) + CLI client
-- [ ] Long-horizon autonomous mode — hand over a goal, the bridge backplans and ships PRs
-- [ ] Read-only public dashboard mode for stakeholders
-- [x] Built-in token usage analytics per task
-- [x] Telegram bridge for remote control + notifications
-- [x] Verify-then-ship chain + 6-gate retry ladder
+### Shipped
+
+- [x] Verify-then-ship chain + 6-gate retry ladder (crash / verify / claim / preflight / style / semantic)
+- [x] Speculative sibling runs — race attempts in isolated worktrees, keep the first to claim
+- [x] Multi-lens judge panel behind the semantic gate
+- [x] Plan gate — clarifying questions + operator approval before anything is dispatched
+- [x] Scheduled workflows — multi-stage role pipelines, on demand or on a cron
+- [x] Auto-queue — drain `TODO` unattended with a concurrency cap
 - [x] Branch-aware dispatch with per-spawn `git worktree` isolation
+- [x] Task share links — token + device-approved guest access with per-grant capabilities
+- [x] Telegram bridge for remote control + notifications, plus web push
+- [x] Integration modes per app — commit only, auto-merge, or a `devops` role that opens the PR/MR (`gh` / `glab`, GitHub + GitLab)
+- [x] Built-in token usage analytics per task
 - [x] Single-operator auth with trusted devices + login approvals
 - [x] One-click public tunnels (cloudflare + localtunnel + ngrok auto-install)
+
+### Next
+
+- [ ] Per-role / per-task model pinning — model discovery and the `--model` plumbing are in; dispatched children still inherit the CLI default
+- [ ] Whole-dashboard read-only mode for stakeholders — share links cover one task at a time today
+- [ ] UI-managed role playbooks + packaging, so adding a custom role (security-auditor, perf-tuner, …) isn't a file edit
+- [ ] LLM-assisted repo profiles — profiles are heuristic-only; `summarizeWithLLM` is still a stub
+- [ ] Codebase knowledge graph — the symbol index and per-task memory exist; the cross-repo graph on top of them doesn't
+- [ ] GitHub bridge beyond PR creation — issue → task, PR-review bot, CI-failure → fix
+- [ ] First-class monorepo support (Nx, Turbo, pnpm / Bun workspaces)
+
+### Later
+
+- [ ] Multi-LLM support — Claude + GPT, Gemini, Grok, DeepSeek, OpenRouter, and local models (Ollama / vLLM) behind one loop
+- [ ] Sandboxed execution — each child in an ephemeral Docker/VM with declared scope
+- [ ] Policy engine — declarative invariants enforced by the verify chain
+- [ ] Long-horizon autonomous mode — hand over a goal, the bridge backplans and ships PRs on top of the auto-queue
+- [ ] Editor companions (VS Code, JetBrains) + CLI client
+- [ ] Linear / Jira bridges
+- [ ] A permissive license (MIT or Apache-2.0) — see [License](#-license)
 
 Have an idea? [Open an issue](https://github.com/stop1love1/claude-bridge/issues) — feedback
 shapes the roadmap.
