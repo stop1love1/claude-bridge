@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRepoCwd } from "@/libs/repos";
 import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
-import { spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/spawn";
+import { sendToLiveSession, spawnFreeSession, waitEarlyFailure, type ChatSettings } from "@/libs/spawn";
 import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
 import { projectDirFor } from "@/libs/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
@@ -29,7 +29,7 @@ import {
   queueLength,
   type QueuedMessage,
 } from "@/libs/messageQueue";
-import { logError, logInfo } from "@/libs/log";
+import { logError, logInfo, logWarn } from "@/libs/log";
 
 function attachQueueDrain(
   child: ChildProcess,
@@ -130,6 +130,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       const file = join(projectDirFor(cwd), `${sessionId}.jsonl`);
 
       if (existsSync(file) && isAlive(sessionId)) {
+        // Preferred path: hand it straight to the running process, so a message
+        // typed mid-run lands in the turn the operator is watching instead of
+        // waiting for it to end. Only sessions this bridge spawned have a live
+        // child to write to; everything else falls through to the queue below.
+        if (sendToLiveSession(sessionId, message)) {
+          logInfo(
+            "msg-live",
+            `delivered message into live session ${sessionId.slice(0, 8)}`,
+          );
+          return NextResponse.json(
+            { sessionId, delivered: "live" },
+            { status: 202 },
+          );
+        }
+
         const queued: QueuedMessage = {
           message,
           cwd,
@@ -238,7 +253,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           await updateTask(owningTask.id, { section: SECTION_DOING, checked: false });
         }
       } catch (err) {
-        console.warn("re-open task on chat failed", err);
+        logWarn("chat", "re-open task on chat failed", { error: (err as Error)?.message ?? String(err) });
       }
       return ok({ sessionId });
     } catch (e) {

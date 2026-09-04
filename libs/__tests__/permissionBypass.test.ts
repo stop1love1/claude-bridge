@@ -35,6 +35,7 @@ const TMP_PROJECT_DIR = vi.hoisted(() => {
 
 // Flipped per test: false = idle session, true = a turn already in flight.
 const aliveRef = vi.hoisted(() => ({ value: false }));
+const liveSendRef = vi.hoisted(() => ({ value: false }));
 
 vi.mock("../paths", async () => {
   const actual = await vi.importActual<typeof import("../paths")>("../paths");
@@ -59,6 +60,9 @@ vi.mock("../tasksStore", () => ({
   updateTask: vi.fn(),
 }));
 vi.mock("../spawn", () => ({
+  // Default to "no live child", which is what an orphan or already-exited
+  // session looks like, so these cases exercise the queue fallback.
+  sendToLiveSession: () => liveSendRef.value,
   resumeClaude: () => new EventEmitter() as unknown as ChildProcess,
   spawnFreeSession: (
     _cwd: string,
@@ -123,6 +127,7 @@ let previousAllowBypass: string | undefined;
 
 beforeEach(async () => {
   aliveRef.value = false;
+  liveSendRef.value = false;
   // The composer only offers "skip permissions" when the operator has opted in
   // with this variable, and the message route refuses the mode without it.
   previousAllowBypass = process.env.NEXT_PUBLIC_BRIDGE_ALLOW_BYPASS;
@@ -164,8 +169,25 @@ describe("skip permissions — the popup the hook would draw", () => {
     aliveRef.value = true;
     const res = await sendMessage(SESSION, "bypassPermissions");
     expect(res.status).toBe(202); // queued, not spawned
+    expect(await res.json()).toMatchObject({ queued: true });
     await announce(SESSION, rid(3));
     expect((await poll(SESSION, rid(3))).body.status).toBe("allow");
+  });
+
+  it("hands the message to the live process when there is one, instead of queuing it", async () => {
+    // Same live session, but this time the bridge still owns the child. The
+    // message should reach the turn already in flight rather than waiting for
+    // it to end, which is the whole point of holding stdin open.
+    const { writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    writeFileSync(join(TMP_PROJECT_DIR, `${SESSION}.jsonl`), "");
+    aliveRef.value = true;
+    liveSendRef.value = true;
+    const res = await sendMessage(SESSION, "bypassPermissions");
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { delivered?: string; queued?: boolean };
+    expect(body.delivered).toBe("live");
+    expect(body.queued).toBeUndefined();
   });
 
   it("goes back to asking as soon as the operator unticks it", async () => {
