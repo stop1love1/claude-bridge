@@ -24,6 +24,7 @@ import { verifyRequestAuth, verifyRequestActor } from "@/libs/auth";
 import { getClientIp } from "@/libs/clientIp";
 import { readPlanGateConfig } from "@/libs/planGateConfig";
 import { setIntake } from "@/libs/meta";
+import { logError, logWarn } from "@/libs/log";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,7 @@ function autoInitProfilesOnce(): void {
     }));
     if (repos.length > 0) refreshAll(repos);
   } catch (err) {
-    console.error("auto-init repo profiles failed (non-fatal)", err);
+    logError("tasks", "auto-init repo profiles failed (non-fatal)", err);
   }
 }
 
@@ -102,12 +103,12 @@ export async function POST(req: NextRequest) {
             await writeScopeCache(sessionsDir, upgraded);
           }
         } catch (err) {
-          console.warn("[detect] background LLM upgrade failed:", err);
+          logWarn("detect", "background LLM upgrade failed", { error: (err as Error)?.message ?? String(err) });
         }
       })();
     }
   } catch (err) {
-    console.warn("[detect] sync heuristic write failed (non-fatal):", err);
+    logWarn("detect", "sync heuristic write failed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
   }
 
   try {
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest) {
       });
     }
   } catch (err) {
-    console.warn("[plan-gate] task-create gate init failed (non-fatal):", err);
+    logWarn("plan-gate", "task-create gate init failed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
   }
 
   let spawnError: string | null = null;
@@ -141,7 +142,7 @@ export async function POST(req: NextRequest) {
     }
   } catch (err) {
     spawnError = safeErrorMessage(err, "spawn_failed");
-    console.error("spawnCoordinatorForTask threw for", task.id, err);
+    logError("coordinator", "spawnCoordinatorForTask threw", err, { taskId: task.id });
   }
 
   return NextResponse.json(

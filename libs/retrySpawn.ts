@@ -16,6 +16,7 @@ import {
   renderStrategyPrefix,
   type RetryGate,
 } from "./retryLadder";
+import { logError, logWarn } from "./log";
 
 export interface SpawnRetryArgs {
   taskId: string;
@@ -102,16 +103,17 @@ export async function spawnRetry(
       },
     );
     if (!updateResult.applied || !updateResult.run) {
-      console.error(
-        `${logLabel} retry not applied (budget raced or precondition failed) for`,
-        taskId,
-        sessionId,
+      logError(
+        logLabel,
+        "retry not applied (budget raced or precondition failed)",
+        undefined,
+        { taskId, sessionId },
       );
       releaseRepoReservation(finishedRun.repo, sessionId);
       return null;
     }
   } catch (e) {
-    console.error(`${logLabel} meta updateRun failed for`, taskId, sessionId, e);
+    logError(logLabel, "meta updateRun failed", e, { taskId, sessionId });
     releaseRepoReservation(finishedRun.repo, sessionId);
     return null;
   }
@@ -119,10 +121,10 @@ export async function spawnRetry(
   if (app && !finishedRun.worktreePath) {
     const reservation = acquireRepoReservation(finishedRun.repo, sessionId);
     if (!reservation.ok) {
-      console.warn(
-        `${logLabel} could not reserve ${finishedRun.repo} for retry (held by ${reservation.heldBy}) — proceeding anyway`,
-        taskId,
-        sessionId,
+      logWarn(
+        logLabel,
+        `could not reserve ${finishedRun.repo} for retry (held by ${reservation.heldBy}) — proceeding anyway`,
+        { taskId, sessionId },
       );
     }
   }
@@ -138,7 +140,7 @@ export async function spawnRetry(
       settingsPath,
     );
   } catch (e) {
-    console.error(`${logLabel} resume failed for`, taskId, sessionId, e);
+    logError(logLabel, "resume failed", e, { taskId, sessionId });
     try {
       await updateRun(sessionsDir, sessionId, {
         status: "failed",
@@ -153,10 +155,11 @@ export async function spawnRetry(
   const refreshedMeta = readMeta(sessionsDir);
   const retryRun = refreshedMeta?.runs.find((r) => r.sessionId === sessionId);
   if (!retryRun) {
-    console.error(
-      `${logLabel} resumed run vanished from meta for`,
-      taskId,
-      sessionId,
+    logError(
+      logLabel,
+      "resumed run vanished from meta",
+      undefined,
+      { taskId, sessionId },
     );
     releaseRepoReservation(finishedRun.repo, sessionId);
     return null;

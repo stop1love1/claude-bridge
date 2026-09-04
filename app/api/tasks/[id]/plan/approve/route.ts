@@ -12,6 +12,7 @@ import { badRequest } from "@/libs/validate";
 import { checkCsrf } from "@/libs/csrf";
 import { checkRateLimit } from "@/libs/rateLimit";
 import { getClientIp } from "@/libs/clientIp";
+import { logWarn } from "@/libs/log";
 
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
@@ -107,7 +108,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         answers.map((a) => `- **${a.questionId}** — ${a.answer}`).join("\n") + "\n";
       appendFileSync(join(sessionsDir, "plan.md"), block, "utf8");
     } catch (err) {
-      console.warn("[plan-gate] failed to append answers to plan.md:", err);
+      logWarn("plan-gate", "failed to append answers to plan.md", { error: (err as Error)?.message ?? String(err) });
     }
   }
 

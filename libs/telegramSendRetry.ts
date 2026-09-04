@@ -1,3 +1,4 @@
+import { logWarn } from "./log";
 
 const MAX_ATTEMPTS = 4;
 
@@ -27,7 +28,7 @@ export function parseRetryAfter(body: string, header: string | null): number {
 export async function sendTelegramApiMessage(
   url: string,
   buildBody: (plainFallbackUsed: boolean) => Record<string, unknown>,
-  logPrefix: string,
+  logScope: string,
 ): Promise<void> {
   let plainFallbackUsed = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -61,14 +62,14 @@ export async function sendTelegramApiMessage(
         plainFallbackUsed = true;
         continue;
       }
-      console.warn(`${logPrefix} send failed: ${r.status} ${bodyText.slice(0, 200)}`);
+      logWarn(logScope, `send failed: ${r.status} ${bodyText.slice(0, 200)}`);
       return;
     } catch (err) {
       if (attempt < MAX_ATTEMPTS - 1) {
         await sleep(500 * Math.pow(2, attempt));
         continue;
       }
-      console.warn(`${logPrefix} send error: ${(err as Error).message}`);
+      logWarn(logScope, `send error: ${(err as Error).message}`);
       return;
     }
   }

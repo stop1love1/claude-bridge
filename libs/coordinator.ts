@@ -17,6 +17,7 @@ import { buildTeamHint } from "./teamHints";
 
 export { wireRunLifecycle } from "./runLifecycle";
 import { wireRunLifecycle } from "./runLifecycle";
+import { logError } from "./log";
 
 async function buildDetectedScopeBlock(
   sessionsDir: string,
@@ -42,7 +43,7 @@ async function buildDetectedScopeBlock(
     });
     return hint ? `${scopeBlock}\n${hint.block}` : scopeBlock;
   } catch (err) {
-    console.error("buildDetectedScopeBlock failed (non-fatal)", err);
+    logError("coordinator", "buildDetectedScopeBlock failed (non-fatal)", err);
     return [
       "## Detected scope",
       "",
@@ -68,7 +69,7 @@ export async function spawnCoordinatorForTask(
   const sessionsDir = join(SESSIONS_DIR, task.id);
 
   if (!readMeta(sessionsDir)) {
-    console.error("coordinator spawn skipped: meta.json missing for", task.id);
+    logError("coordinator", "coordinator spawn skipped: meta.json missing", undefined, { taskId: task.id });
     return null;
   }
 
@@ -134,7 +135,7 @@ export async function spawnCoordinatorForTask(
           endedAt: new Date().toISOString(),
         });
       } catch (uErr) {
-        console.error("failed to mark coordinator run failed after spawn error", uErr);
+        logError("coordinator", "failed to mark coordinator run failed after spawn error", uErr);
       }
       throw spawnErr;
     }
@@ -145,13 +146,13 @@ export async function spawnCoordinatorForTask(
         startedAt: new Date().toISOString(),
       });
     } catch (uErr) {
-      console.error("failed to promote coordinator queued → running", uErr);
+      logError("coordinator", "failed to promote coordinator queued → running", uErr);
     }
 
     wireRunLifecycle(sessionsDir, sessionId, child, basename(BRIDGE_ROOT), `coordinator ${task.id}`);
     return sessionId;
   } catch (err) {
-    console.error("coordinator spawn failed for", task.id, err);
+    logError("coordinator", "coordinator spawn failed", err, { taskId: task.id });
     return null;
   }
 }

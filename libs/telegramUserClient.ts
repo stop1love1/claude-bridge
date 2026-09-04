@@ -1,6 +1,7 @@
 
 import type { TelegramClient } from "telegram";
 import { getManifestTelegramSettings } from "./apps";
+import { logWarn } from "./log";
 
 interface UserClientState {
   client: TelegramClient | null;
@@ -105,8 +106,9 @@ export async function getTelegramUserClient(): Promise<TelegramClient | null> {
     state.connecting = null;
   }
   if (state.client && !isClientLive(state.client)) {
-    console.warn(
-      "[telegram-user] cached client is disconnected — rebuilding on next request",
+    logWarn(
+      "telegram-user",
+      "cached client is disconnected — rebuilding on next request",
     );
     try { await state.client.disconnect(); } catch { }
     state.client = null;
@@ -121,9 +123,10 @@ export async function getTelegramUserClient(): Promise<TelegramClient | null> {
       state.client = c;
       return c;
     } catch (err) {
-      console.warn(
-        "[telegram-user] connect failed:",
-        (err as Error).message,
+      logWarn(
+        "telegram-user",
+        "connect failed",
+        { error: (err as Error).message },
       );
       state.client = null;
       throw err;
@@ -228,11 +231,11 @@ function makeMessageDispatcher(
       });
       if (result && typeof (result as Promise<void>).catch === "function") {
         (result as Promise<void>).catch((err: Error) => {
-          console.warn("[telegram-user] handler error:", err.message);
+          logWarn("telegram-user", "handler error", { error: err.message });
         });
       }
     } catch (err) {
-      console.warn("[telegram-user] dispatcher crashed:", (err as Error).message);
+      logWarn("telegram-user", "dispatcher crashed", { error: (err as Error).message });
     }
   };
 }
@@ -253,9 +256,10 @@ export async function subscribeUserMessages(
         state.inboundHandlers.set(handler, dispatcher);
       }
     } catch (err) {
-      console.warn(
-        "[telegram-user] subscribe failed (will retry on next connect):",
-        (err as Error).message,
+      logWarn(
+        "telegram-user",
+        "subscribe failed (will retry on next connect)",
+        { error: (err as Error).message },
       );
     }
   }
@@ -267,7 +271,7 @@ export async function subscribeUserMessages(
         (state.client as unknown as { removeEventHandler?: (fn: unknown) => void })
           .removeEventHandler?.(dispatcher);
       } catch (err) {
-        console.warn("[telegram-user] removeEventHandler failed:", (err as Error).message);
+        logWarn("telegram-user", "removeEventHandler failed", { error: (err as Error).message });
       }
     }
   };

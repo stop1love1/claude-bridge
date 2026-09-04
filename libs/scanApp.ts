@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { treeKill } from "./processKill";
 import { readOnlyChildArgs } from "./spawn";
+import { logWarn } from "./log";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const SCAN_TIMEOUT_MS = 90_000;
@@ -57,7 +58,7 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
     const timer = setTimeout(() => {
       treeKill(child, "SIGTERM");
       setTimeout(() => treeKill(child, "SIGKILL"), 3_000);
-      console.warn(`scanApp: timed out after ${SCAN_TIMEOUT_MS}ms in ${appPath}`);
+      logWarn("scan-app", `timed out after ${SCAN_TIMEOUT_MS}ms in ${appPath}`);
       settle(null);
     }, SCAN_TIMEOUT_MS);
 
@@ -71,14 +72,14 @@ export async function scanAppWithClaude(appPath: string): Promise<string | null>
     });
 
     child.on("error", (err) => {
-      console.warn(`scanApp: spawn error in ${appPath}`, err.message);
+      logWarn("scan-app", `spawn error in ${appPath}`, { error: err.message });
       settle(null);
     });
 
     child.on("exit", (code) => {
       if (code !== 0) {
         const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-        console.warn(`scanApp: claude exited ${code} in ${appPath}: ${tail}`);
+        logWarn("scan-app", `claude exited ${code} in ${appPath}: ${tail}`);
         settle(null);
         return;
       }

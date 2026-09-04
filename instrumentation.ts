@@ -2,9 +2,11 @@
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
+  const { logWarn } = await import("./libs/log");
+
   const { runStartupChecks } = await import("./libs/startupChecks");
   void runStartupChecks().catch((err: unknown) => {
-    console.warn("[bridge] startup checks failed:", (err as Error).message);
+    logWarn("startup", "startup checks failed", { error: (err as Error).message });
   });
 
   const { ensureTelegramNotifier } = await import("./libs/telegramNotifier");
@@ -23,6 +25,6 @@ export async function register(): Promise<void> {
 
   const { maybeAutoStartTunnel } = await import("./libs/tunnels");
   void maybeAutoStartTunnel().catch((err: unknown) => {
-    console.warn("[tunnels] auto-start failed:", (err as Error).message);
+    logWarn("tunnels", "auto-start failed", { error: (err as Error).message });
   });
 }

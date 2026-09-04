@@ -31,6 +31,7 @@ import {
   DEFAULT_QUALITY,
   DEFAULT_VERIFY,
 } from "./types";
+import { logError } from "../log";
 
 export const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SCHEMA_VERSION = 1;
@@ -410,7 +411,7 @@ export function loadApps(): App[] {
     try {
       value = parseAppsFromManifest(readBridgeManifest());
     } catch (err) {
-      console.error("apps: cannot read", BRIDGE_JSON, err);
+      logError("apps", "cannot read", err, { file: BRIDGE_JSON });
       value = [];
     }
   }

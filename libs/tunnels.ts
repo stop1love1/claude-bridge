@@ -15,6 +15,7 @@ import {
   isTunnelProvider,
   type TunnelProvider,
 } from "./tunnelProvider";
+import { logWarn } from "./log";
 
 export type TunnelStatus = "starting" | "running" | "error" | "stopped";
 
@@ -92,7 +93,7 @@ function onTunnelRunning(entry: TunnelEntry): void {
   try {
     setManifestPublicUrl(entry.url);
   } catch (err) {
-    console.warn("[tunnels] failed to write publicUrl:", (err as Error).message);
+    logWarn("tunnels", "failed to write publicUrl", { error: (err as Error).message });
   }
 }
 
@@ -103,7 +104,7 @@ function onTunnelStopped(entry: TunnelEntry): void {
       setManifestPublicUrl("");
     }
   } catch (err) {
-    console.warn("[tunnels] failed to clear publicUrl:", (err as Error).message);
+    logWarn("tunnels", "failed to clear publicUrl", { error: (err as Error).message });
   }
 }
 
@@ -340,14 +341,14 @@ export async function maybeAutoStartTunnel(): Promise<void> {
   try {
     cfg = getTunnelAutoStart();
   } catch (err) {
-    console.warn("[tunnels] auto-start failed:", (err as Error).message);
+    logWarn("tunnels", "auto-start failed", { error: (err as Error).message });
     return;
   }
   if (!cfg || !cfg.enabled) return;
   try {
     startTunnel({ port: cfg.port, provider: cfg.provider });
   } catch (err) {
-    console.warn("[tunnels] auto-start failed:", (err as Error).message);
+    logWarn("tunnels", "auto-start failed", { error: (err as Error).message });
   }
 }
 

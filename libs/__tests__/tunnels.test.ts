@@ -387,8 +387,7 @@ describe("tunnel → publicUrl wiring", () => {
 
     expect(listTunnels()).toHaveLength(0);
     expect(warn).toHaveBeenCalledWith(
-      "[tunnels] auto-start failed:",
-      expect.stringContaining("authtoken"),
+      expect.stringMatching(/auto-start failed.*authtoken/),
     );
   });
 });

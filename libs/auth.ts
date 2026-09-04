@@ -1,3 +1,4 @@
+import { logWarn } from "./log";
 
 import {
   randomBytes,
@@ -430,7 +431,7 @@ export function writeRuntimeMeta(args: { url: string; port: number }): void {
       },
     }));
   } catch (err) {
-    console.warn("[bridge] writeRuntimeMeta failed (non-fatal):", err);
+    logWarn("auth", "writeRuntimeMeta failed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
   }
 }
 

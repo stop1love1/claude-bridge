@@ -108,7 +108,7 @@ export async function markMergeNotPushed(
       },
     });
   } catch (e) {
-    console.error("markMergeNotPushed failed", e);
+    logError("lifecycle", "markMergeNotPushed failed", e);
   }
 }
 

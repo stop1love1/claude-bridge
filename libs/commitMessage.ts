@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { treeKill } from "./processKill";
 import { readOnlyChildArgs } from "./spawn";
+import { logWarn } from "./log";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const COMMIT_MSG_TIMEOUT_MS = 45_000;
@@ -59,7 +60,7 @@ export async function generateCommitMessageWithLLM(
     if (first) return first;
     return await attempt(opts, true);
   } catch (err) {
-    console.warn("[commit-message] generate crashed (non-fatal)", err);
+    logWarn("commit-message", "generate crashed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
     return null;
   }
 }
@@ -198,7 +199,7 @@ function runClaude(
     const timer = setTimeout(() => {
       treeKill(child, "SIGTERM");
       setTimeout(() => treeKill(child, "SIGKILL"), 3_000);
-      console.warn(`[commit-message] timed out after ${timeoutMs}ms`);
+      logWarn("commit-message", `timed out after ${timeoutMs}ms`);
       settle(null);
     }, timeoutMs);
 
@@ -216,13 +217,13 @@ function runClaude(
     });
 
     child.on("error", (err) => {
-      console.warn(`[commit-message] spawn error:`, err.message);
+      logWarn("commit-message", "spawn error", { error: err.message });
       settle(null);
     });
     child.on("exit", (code) => {
       if (code !== 0) {
         const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-        console.warn(`[commit-message] claude exited ${code}: ${tail}`);
+        logWarn("commit-message", `claude exited ${code}: ${tail}`);
         settle(null);
         return;
       }

@@ -2,6 +2,7 @@ import { subscribeMetaAll, type MetaChangeEvent, type Run } from "./meta";
 import { subscribeSession, type PartialEvent } from "./sessionEvents";
 import { getManifestTelegramSettings } from "./apps";
 import { sendTelegramRaw } from "./telegramNotifier";
+import { logWarn } from "./log";
 
 interface SessionBuffer {
   sessionId: string;
@@ -88,9 +89,10 @@ function flushBuffer(buf: SessionBuffer, reason: "rotate" | "exit"): void {
   const body = escapeMarkdownV2(trimmed);
   const text = `${header}\n${body}`;
   void sendTelegramRaw(text).catch((err) => {
-    console.warn(
-      `[telegram-chat] flush failed for ${buf.sessionId} (${reason}):`,
-      (err as Error).message,
+    logWarn(
+      "telegram-chat",
+      `flush failed for ${buf.sessionId} (${reason})`,
+      { error: (err as Error).message },
     );
   });
 }

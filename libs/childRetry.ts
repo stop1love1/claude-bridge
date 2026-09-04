@@ -7,6 +7,7 @@ import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths";
 import { getApp } from "./apps";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
+import { logError, logInfo } from "./log";
 
 
 const MAX_LAST_ASSISTANT_CHARS = 2000;
@@ -262,11 +263,12 @@ export function maybeScheduleRetry(args: ScheduleArgs & { exitCode: number | nul
       });
       if (!result) return;
       emitRetried(taskId, result.run, failedRun.sessionId);
-      console.log(
-        `[auto-retry] ${taskId}: spawned ${result.sessionId} (role=${result.run.role}, attempt=${elig.nextAttempt}) for failed ${failedRun.sessionId}`,
+      logInfo(
+        "auto-retry",
+        `${taskId}: spawned ${result.sessionId} (role=${result.run.role}, attempt=${elig.nextAttempt}) for failed ${failedRun.sessionId}`,
       );
     } catch (e) {
-      console.error("auto-retry scheduling crashed", e);
+      logError("auto-retry", "auto-retry scheduling crashed", e);
     }
   })();
 }

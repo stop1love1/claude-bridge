@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanRepoIfExists, type RepoProfile } from "./repoProfile";
+import { logError } from "./log";
 
 export const PROFILE_STORE_VERSION = 1;
 export const PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -103,7 +104,7 @@ export function ensureFreshOrAuto(repos: RepoLike[]): ProfileStore {
   try {
     return refreshAll(repos);
   } catch (err) {
-    console.error("ensureFreshOrAuto: refresh failed", err);
+    logError("profile-store", "ensureFreshOrAuto: refresh failed", err);
     return store ?? emptyStore();
   }
 }

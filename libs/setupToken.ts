@@ -9,6 +9,7 @@ import {
 import { dirname, join } from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { BRIDGE_STATE_DIR } from "./paths";
+import { logWarn } from "./log";
 
 const SETUP_TOKEN_FILE = join(BRIDGE_STATE_DIR, "setup-token");
 
@@ -67,7 +68,7 @@ export function clearSetupToken(): void {
   try {
     if (existsSync(SETUP_TOKEN_FILE)) unlinkSync(SETUP_TOKEN_FILE);
   } catch (err) {
-    console.warn("[bridge] failed to clear setup token (non-fatal):", err);
+    logWarn("setup-token", "failed to clear setup token (non-fatal)", { error: (err as Error)?.message ?? String(err) });
   }
 }
 

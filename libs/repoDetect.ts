@@ -5,6 +5,7 @@ import { BRIDGE_ROOT } from "./paths";
 import type { App } from "./apps/types";
 import { APP_NAME_RE, loadApps } from "./apps/manifest";
 import { addApp } from "./apps/crud";
+import { logWarn } from "./log";
 
 const STRONG_MARKERS: ReadonlyMap<string, number> = new Map([
   [".git", 10],
@@ -212,7 +213,7 @@ export async function detectAppCandidates(
         entries = readdirSync(dir, { withFileTypes: true });
       } catch (err) {
         await emit({ type: "skipped", path: dir, reason: "permission" });
-        console.warn("detect: cannot read", dir, (err as Error).message);
+        logWarn("detect", "cannot read", { dir, error: (err as Error).message });
         continue;
       }
 

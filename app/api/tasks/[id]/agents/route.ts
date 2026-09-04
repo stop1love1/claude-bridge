@@ -56,6 +56,7 @@ import {
   subscribe,
   type PendingRequest,
 } from "@/libs/permissionStore";
+import { logError, logWarn } from "@/libs/log";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 200;
@@ -198,7 +199,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       }),
     );
   } catch (err) {
-    console.warn("[detect] agents route: scope load failed (non-fatal):", err);
+    logWarn("detect", "agents route: scope load failed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
   }
 
   let repo = explicitRepo;
@@ -422,8 +423,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       worktreeBranch = handle.branch;
       worktreeBaseBranch = handle.baseBranch;
     } else {
-      console.error(
-        `[worktree] create failed for ${app.name} task ${id} sid ${sessionId}`,
+      logError(
+        "worktree",
+        `create failed for ${app.name} task ${id} sid ${sessionId}`,
       );
       return NextResponse.json(
         {
@@ -568,9 +570,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       try {
         await removeWorktree({ appPath: app.path, worktreePath });
       } catch (cleanupErr) {
-        console.warn(
-          `[dedup-race] worktree cleanup failed for ${worktreePath}:`,
-          cleanupErr,
+        logWarn(
+          "dedup-race",
+          `worktree cleanup failed for ${worktreePath}`,
+          { error: (cleanupErr as Error)?.message ?? String(cleanupErr) },
         );
       }
     }
@@ -610,7 +613,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         endedAt: new Date().toISOString(),
       });
     } catch (uErr) {
-      console.error("failed to mark queued run failed after spawn error", uErr);
+      logError("agents", "failed to mark queued run failed after spawn error", uErr);
     }
     releaseReservation();
     return NextResponse.json(serverError(e, "tasks:agent-spawn"), { status: 500 });
@@ -626,7 +629,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       startedAt: new Date().toISOString(),
     });
   } catch (uErr) {
-    console.error("failed to promote queued → running", uErr);
+    logError("agents", "failed to promote queued → running", uErr);
   }
 
   wireRunLifecycle(sessionsDir, sessionId, childHandle!.child, repo, `agent ${id}/${sessionId}`);
@@ -657,8 +660,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     : {};
 
   if (warningPayload.warning) {
-    console.warn(
-      `[agents] near-duplicate role for task ${id}: spawned \`${role}\` while \`${nearDuplicate?.existing.role}\` (sid ${nearDuplicate?.existing.sessionId.slice(0, 8)}) was already a finished sibling on the same parent+repo`,
+    logWarn(
+      "agents",
+      `near-duplicate role for task ${id}: spawned \`${role}\` while \`${nearDuplicate?.existing.role}\` (sid ${nearDuplicate?.existing.sessionId.slice(0, 8)}) was already a finished sibling on the same parent+repo`,
     );
   }
 
@@ -1044,7 +1048,7 @@ async function handleResume(args: {
       priorRoleChanged ? { role } : {},
     );
   } catch (e) {
-    console.error("failed to flip resume run back to running", e);
+    logError("agents", "failed to flip resume run back to running", e);
     return NextResponse.json(
       { error: "meta update failed", reason: safeErrorMessage(e) },
       { status: 500 },
@@ -1076,7 +1080,7 @@ async function handleResume(args: {
           ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
         });
       } catch (uErr) {
-        console.error("failed to roll resume run back after reservation refusal", uErr);
+        logError("agents", "failed to roll resume run back after reservation refusal", uErr);
       }
       return NextResponse.json(
         {
@@ -1120,7 +1124,7 @@ async function handleResume(args: {
         ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
       });
     } catch (uErr) {
-      console.error("failed to roll resume run back after spawn error", uErr);
+      logError("agents", "failed to roll resume run back after spawn error", uErr);
     }
     if (resumeReserved) releaseRepoReservation(repo, prior.sessionId);
     return NextResponse.json(serverError(e, "tasks:agent-resume"), { status: 500 });

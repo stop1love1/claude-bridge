@@ -8,6 +8,7 @@ import {
 import { dirname, join } from "node:path";
 import * as webpush from "web-push";
 import { BRIDGE_STATE_DIR } from "./paths";
+import { logWarn } from "./log";
 
 const KEYS_FILE = join(BRIDGE_STATE_DIR, "push-keys.json");
 const SUBS_FILE = join(BRIDGE_STATE_DIR, "push-subs.json");
@@ -176,9 +177,10 @@ export async function sendPushToAll(payload: {
           if (statusCode === 404 || statusCode === 410) {
             dead.push(sub.endpoint);
           } else {
-            console.warn(
-              `[webpush] send failed for ${sub.endpoint.slice(0, 60)}…:`,
-              (err as Error)?.message ?? err,
+            logWarn(
+              "webpush",
+              `send failed for ${sub.endpoint.slice(0, 60)}…`,
+              { error: (err as Error)?.message ?? String(err) },
             );
           }
         }
@@ -192,9 +194,10 @@ export async function sendPushToAll(payload: {
       writeSubscriptions(remaining);
     }
   } catch (err) {
-    console.warn(
-      "[webpush] sendPushToAll failed:",
-      (err as Error)?.message ?? err,
+    logWarn(
+      "webpush",
+      "sendPushToAll failed",
+      { error: (err as Error)?.message ?? String(err) },
     );
   }
 }

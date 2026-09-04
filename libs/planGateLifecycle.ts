@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readMeta, readIntake, setIntake, emitIntakeAwaitingApproval } from "./meta";
 import { deriveGateVerdict, type GateVerdict, type IntakeStatus } from "./planGate";
+import { logError } from "./log";
 
 export function computeNextIntakeStatus(args: {
   verdict: GateVerdict;
@@ -57,7 +58,7 @@ export async function resolvePlanGateAfterPlanner(args: {
       emitIntakeAwaitingApproval({ taskId: args.taskId, taskTitle: title });
     }
   } catch (err) {
-    console.error("[plan-gate] resolvePlanGateAfterPlanner failed:", err);
+    logError("plan-gate", "resolvePlanGateAfterPlanner failed", err);
     try { await setIntake(args.sessionsDir, { status: "error" }); } catch { }
   }
 }

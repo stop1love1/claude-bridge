@@ -1,3 +1,4 @@
+import { logError } from "./log";
 
 const FS_PATH_PATTERNS: Array<{ re: RegExp; replacement: string }> = [
   { re: /'(?:\/|[A-Za-z]:[\\/]|\\\\)[^'\n]*'/g, replacement: "'<path>'" },
@@ -32,7 +33,7 @@ export function safeErrorMessage(e: unknown, fallback = "internal_error"): strin
 }
 
 export function serverError(e: unknown, context?: string): { error: string } {
-  if (context) console.error(`[bridge] ${context} failed:`, e);
-  else console.error("[bridge] error:", e);
+  if (context) logError("api", `${context} failed`, e);
+  else logError("api", "error", e);
   return { error: safeErrorMessage(e) };
 }

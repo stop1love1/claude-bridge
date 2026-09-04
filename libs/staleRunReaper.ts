@@ -9,6 +9,7 @@ import { BRIDGE_FOLDER, BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "./paths"
 import { resolveRepoCwd } from "./repos";
 import { releaseRepoReservation } from "./repoReservation";
 import { projectDirFor } from "./sessions";
+import { logWarn } from "./log";
 
 const execFileP = promisify(execFile);
 
@@ -229,7 +230,7 @@ async function bootSweepIfNeeded(): Promise<void> {
             await applyManyRuns(dir, patches);
           }
         } catch (err) {
-          console.warn(`boot-sweep: skipped ${id}`, err);
+          logWarn("boot-sweep", `skipped ${id}`, { error: (err as Error)?.message ?? String(err) });
         }
       }
     } finally {

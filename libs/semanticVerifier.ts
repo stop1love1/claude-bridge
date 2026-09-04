@@ -27,6 +27,7 @@ import {
   parseRole,
   renderStrategyPrefix,
 } from "./retryLadder";
+import { logError, logWarn } from "./log";
 
 export const SEMANTIC_VERIFIER_ROLE = "semantic-verifier";
 export const SEMANTIC_VERIFIER_RETRY_SUFFIX = "-svretry";
@@ -264,10 +265,10 @@ export async function spawnSemanticVerifierRetry(args: {
   if (canTransferReservation) {
     const transfer = transferRepoReservation(finishedRun.repo, finishedRun.sessionId, sessionId);
     if (!transfer.ok) {
-      console.warn(
+      logWarn(
+        "semantic-verifier",
         `semantic-retry could not transfer ${finishedRun.repo} reservation to retry session (held by ${transfer.heldBy}) — proceeding anyway`,
-        taskId,
-        finishedRun.sessionId,
+        { taskId, sessionId: finishedRun.sessionId },
       );
     }
   }
@@ -297,11 +298,11 @@ export async function spawnSemanticVerifierRetry(args: {
     };
     await appendRun(sessionsDir, retryRun);
   } catch (e) {
-    console.error(
-      "semantic-retry spawn failed for",
-      taskId,
-      finishedRun.sessionId,
+    logError(
+      "semantic-verifier",
+      "semantic-retry spawn failed",
       e,
+      { taskId, sessionId: finishedRun.sessionId },
     );
     if (canTransferReservation) releaseRepoReservation(finishedRun.repo, sessionId);
     return null;

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { addApp, isValidAppName, loadApps } from "@/libs/apps";
 import { pruneStaleWorktrees } from "@/libs/worktrees";
+import { logWarn } from "@/libs/log";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,7 @@ export async function GET() {
       .filter((a) => a.git.worktreeMode === "enabled")
       .map((a) =>
         pruneStaleWorktrees({ appPath: a.path }).catch((err) => {
-          console.warn(`[worktree] prune for ${a.name} failed`, err);
+          logWarn("worktree", `prune for ${a.name} failed`, { error: (err as Error)?.message ?? String(err) });
           return 0;
         }),
       ),

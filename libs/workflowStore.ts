@@ -10,6 +10,7 @@ import {
   validateSchedule,
   type CronSchedule,
 } from "./cronSchedule";
+import { logError } from "./log";
 
 export type { CronSchedule } from "./cronSchedule";
 
@@ -88,9 +89,10 @@ function load(): void {
       };
     }
   } catch (err) {
-    console.error(
-      `[workflowStore] ${WORKFLOWS_FILE} is unreadable — starting empty and preserving the bad copy as .corrupt:`,
-      (err as Error).message,
+    logError(
+      "workflow-store",
+      `${WORKFLOWS_FILE} is unreadable — starting empty and preserving the bad copy as .corrupt`,
+      err,
     );
     try {
       renameSync(WORKFLOWS_FILE, `${WORKFLOWS_FILE}.corrupt`);

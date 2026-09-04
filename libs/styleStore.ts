@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanStyle, type StyleFingerprint } from "./styleFingerprint";
+import { logError } from "./log";
 
 export const STYLE_STORE_VERSION = 1;
 export const STYLE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -98,7 +99,7 @@ export function refreshStyleFingerprint(
   try {
     fresh = scanStyle(appPath);
   } catch (err) {
-    console.error(`styleStore: scan failed for ${appName}`, err);
+    logError("style-store", `scan failed for ${appName}`, err);
     return store.fingerprints[appName] ?? null;
   }
   store.fingerprints[appName] = fresh;
@@ -123,7 +124,7 @@ export function ensureFreshStyleFingerprint(
   try {
     return refreshStyleFingerprint(appName, appPath);
   } catch (err) {
-    console.error("ensureFreshStyleFingerprint: refresh failed", err);
+    logError("style-store", "ensureFreshStyleFingerprint: refresh failed", err);
     return existing;
   }
 }

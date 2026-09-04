@@ -8,6 +8,7 @@ import {
 import { BRIDGE_PORT, BRIDGE_URL } from "./paths";
 import { clearSetupToken, ensureSetupToken } from "./setupToken";
 import { acquireProcessLock } from "./processLock";
+import { logError, logInfo, logWarn } from "./log";
 
 type CheckStatus = "ok" | "configured" | "missing" | "warn" | "error";
 
@@ -171,7 +172,7 @@ function checkAuth(): CheckResult {
     try {
       setupToken = ensureSetupToken();
     } catch (err) {
-      console.warn("[bridge] failed to mint setup token (non-fatal):", err);
+      logWarn("startup", "failed to mint setup token (non-fatal)", { error: (err as Error)?.message ?? String(err) });
     }
     const tokenHint = setupToken
       ? ` — paste setup token \`${setupToken}\` from this terminal into the form`
@@ -237,8 +238,9 @@ const STATUS_GLYPH: Record<CheckStatus, string> = {
 };
 
 export async function runStartupChecks(): Promise<CheckResult[]> {
-  console.info(
-    `[bridge] starting up — port=${BRIDGE_PORT} url=${BRIDGE_URL}`,
+  logInfo(
+    "startup",
+    `starting up — port=${BRIDGE_PORT} url=${BRIDGE_URL}`,
   );
 
   writeRuntimeMeta({ url: BRIDGE_URL, port: BRIDGE_PORT });
@@ -262,10 +264,10 @@ export async function runStartupChecks(): Promise<CheckResult[]> {
   ];
 
   for (const r of all) {
-    const tag = `[bridge] ${STATUS_GLYPH[r.status]} ${r.name.padEnd(15, " ")} ${r.status.toUpperCase().padEnd(11, " ")} ${r.detail}`;
-    if (r.status === "error") console.error(tag);
-    else if (r.status === "warn") console.warn(tag);
-    else console.info(tag);
+    const tag = `${STATUS_GLYPH[r.status]} ${r.name.padEnd(15, " ")} ${r.status.toUpperCase().padEnd(11, " ")} ${r.detail}`;
+    if (r.status === "error") logError("startup", tag);
+    else if (r.status === "warn") logWarn("startup", tag);
+    else logInfo("startup", tag);
   }
   return all;
 }

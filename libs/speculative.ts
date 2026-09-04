@@ -4,6 +4,7 @@ import { SESSIONS_DIR } from "./paths";
 import { killChild } from "./spawnRegistry";
 import { removeWorktree } from "./worktrees";
 import { getApp } from "./apps";
+import { logWarn } from "./log";
 
 export interface ClaimResult {
   proceed: boolean;
@@ -95,9 +96,10 @@ export async function claimSpeculativeWinner(args: {
             worktreePath: run.worktreePath,
           });
         } catch (err) {
-          console.warn(
-            `[speculative] worktree cleanup for loser ${run.sessionId} failed:`,
-            err,
+          logWarn(
+            "speculative",
+            `worktree cleanup for loser ${run.sessionId} failed`,
+            { error: (err as Error)?.message ?? String(err) },
           );
         }
       }
@@ -117,7 +119,7 @@ export async function claimSpeculativeWinner(args: {
       try {
         didKill = killChild(loser.sessionId);
       } catch (err) {
-        console.warn(`[speculative] kill ${loser.sessionId} threw:`, err);
+        logWarn("speculative", `kill ${loser.sessionId} threw`, { error: (err as Error)?.message ?? String(err) });
       }
     }
     if (didKill) killed.push(loser.sessionId);
@@ -130,9 +132,10 @@ export async function claimSpeculativeWinner(args: {
             worktreePath: loser.worktreePath,
           });
         } catch (err) {
-          console.warn(
-            `[speculative] worktree cleanup for loser ${loser.sessionId} failed:`,
-            err,
+          logWarn(
+            "speculative",
+            `worktree cleanup for loser ${loser.sessionId} failed`,
+            { error: (err as Error)?.message ?? String(err) },
           );
         }
       }

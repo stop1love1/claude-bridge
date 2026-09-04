@@ -106,7 +106,7 @@ export function LandingHeader() {
             >
               <Menu size={14} />
             </summary>
-            <nav className="absolute right-0 top-full mt-1 min-w-[180px] rounded-md border border-border bg-card shadow-lg p-1 z-40">
+            <nav className="absolute right-0 top-full mt-1 min-w-45 rounded-md border border-border bg-card shadow-lg p-1 z-40">
               {NAV_LINKS.map(({ href, label }) => (
                 <Link
                   key={href}
@@ -163,7 +163,7 @@ export function Hero() {
           alt="Claude Bridge"
           width={88}
           height={88}
-          className="mx-auto mb-5 sm:mb-6 rounded-md drop-shadow-[0_0_30px_rgba(106,168,255,0.25)] w-14 h-14 sm:w-[88px] sm:h-[88px]"
+          className="mx-auto mb-5 sm:mb-6 rounded-md drop-shadow-[0_0_30px_rgba(106,168,255,0.25)] w-14 h-14 sm:w-22 sm:h-22"
           priority
         />
         <h1 className="text-[1.75rem] sm:text-4xl md:text-5xl font-semibold tracking-tight mb-4 sm:mb-5 leading-[1.1] text-balance">

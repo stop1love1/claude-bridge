@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_ROOT, BRIDGE_STATE_DIR, SESSIONS_DIR, readBridgeMd } from "./paths";
-import { logWarn } from "./log";
+import { logError, logWarn } from "./log";
 import {
   createMeta,
   emitTaskSection,
@@ -278,7 +278,7 @@ export async function migrateTaskApp(oldName: string, newName: string): Promise<
       writeMeta(dir, meta);
       return true;
     }).catch((err) => {
-      console.error("migrateTaskApp: failed to rewrite", id, err);
+      logError("tasks-store", "migrateTaskApp: failed to rewrite", err, { id });
       return false;
     });
     if (ok) migrated += 1;

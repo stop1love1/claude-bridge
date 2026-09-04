@@ -5,6 +5,7 @@ import { treeKill } from "../processKill";
 import { BRIDGE_ROOT } from "../paths";
 import { readOnlyChildArgs } from "../spawn";
 import type { DetectInput, DetectedScope, RepoMatch } from "./types";
+import { logWarn } from "../log";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const DETECT_TIMEOUT_MS = 60_000;
@@ -133,7 +134,7 @@ function runClaude(prompt: string): Promise<string | null> {
     const timer = setTimeout(() => {
       treeKill(child, "SIGTERM");
       setTimeout(() => treeKill(child, "SIGKILL"), 3_000);
-      console.warn(`[detect/llm] timed out after ${DETECT_TIMEOUT_MS}ms`);
+      logWarn("detect-llm", `timed out after ${DETECT_TIMEOUT_MS}ms`);
       settle(null);
     }, DETECT_TIMEOUT_MS);
 
@@ -151,13 +152,13 @@ function runClaude(prompt: string): Promise<string | null> {
     });
 
     child.on("error", (err) => {
-      console.warn(`[detect/llm] spawn error:`, err.message);
+      logWarn("detect-llm", "spawn error", { error: err.message });
       settle(null);
     });
     child.on("exit", (code) => {
       if (code !== 0) {
         const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-        console.warn(`[detect/llm] claude exited ${code}: ${tail}`);
+        logWarn("detect-llm", `claude exited ${code}: ${tail}`);
         settle(null);
         return;
       }
@@ -172,14 +173,14 @@ function parseLLMResponse(
 ): DetectedScope | null {
   const json = extractJsonBlock(raw);
   if (!json) {
-    console.warn("[detect/llm] no JSON block in response");
+    logWarn("detect-llm", "no JSON block in response");
     return null;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch (err) {
-    console.warn("[detect/llm] JSON parse failed:", (err as Error).message);
+    logWarn("detect-llm", "JSON parse failed", { error: (err as Error).message });
     return null;
   }
   if (!parsed || typeof parsed !== "object") return null;

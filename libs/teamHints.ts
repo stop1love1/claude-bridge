@@ -1,5 +1,6 @@
 import type { DetectedScope } from "./detect/types";
 import type { RepoProfile } from "./repoProfile";
+import { logWarn } from "./log";
 
 const FE_STACK_TOKENS = new Set([
   "next", "next.js", "nextjs",
@@ -142,7 +143,7 @@ export function buildTeamHint(args: TeamHintArgs): TeamHint | null {
       },
     };
   } catch (err) {
-    console.warn("[team-hint] buildTeamHint crashed (non-fatal)", err);
+    logWarn("team-hint", "buildTeamHint crashed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
     return null;
   }
 }

@@ -25,7 +25,7 @@ export async function detectScope(input: DetectInput): Promise<DetectedScope> {
   }
 
   const llmResult = await detectWithLLM(input).catch((err) => {
-    console.warn("[detect] LLM impl threw:", (err as Error).message);
+    logWarn("detect", "LLM impl threw", { error: (err as Error).message });
     return null;
   });
 
@@ -90,7 +90,7 @@ export async function getOrComputeScope(
   const input = inputBuilder();
   const scope = await detectScope(input);
   await writeScopeCache(sessionsDir, scope).catch((err) => {
-    console.warn("[detect] failed to persist scope cache:", (err as Error).message);
+    logWarn("detect", "failed to persist scope cache", { error: (err as Error).message });
   });
   return scope;
 }
@@ -109,6 +109,7 @@ export type {
   DetectSource,
   RepoMatch,
 } from "./types";
+import { logWarn } from "../log";
 export { heuristicDetector } from "./heuristic";
 export { renderDetectedScope } from "./render";
 export { readScopeCache, writeScopeCache, clearScopeCache } from "./cache";

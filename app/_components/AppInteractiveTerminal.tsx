@@ -435,7 +435,7 @@ export function AppInteractiveTerminal({ appSegment, active }: Props) {
         onClick={focusTerminal}
         title={statusTitleFor(connUi)}
         className={cn(
-          "bridge-xterm-host relative flex-1 min-h-[88px] min-w-0 w-full cursor-text overflow-hidden rounded-lg border border-border/70 bg-card/40 shadow-inner transition-shadow",
+          "bridge-xterm-host relative flex-1 min-h-22 min-w-0 w-full cursor-text overflow-hidden rounded-lg border border-border/70 bg-card/40 shadow-inner transition-shadow",
           "outline-none focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-ring/30",
           connUi === "offline" && "border-border/50",
         )}

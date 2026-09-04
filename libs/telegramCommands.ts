@@ -56,6 +56,7 @@ import { resolveRepoCwd } from "./repos";
 import { projectDirFor } from "./sessions";
 import { addUsage, sumUsageFromJsonl, type SessionUsage } from "./sessionUsage";
 import { sendTelegramApiMessage } from "./telegramSendRetry";
+import { logInfo, logWarn } from "./log";
 
 const TG_HOST = "https://api.telegram.org";
 const POLL_TIMEOUT_S = 25;
@@ -94,7 +95,7 @@ export function startTelegramCommandPoller(): void {
   poller.running = true;
   poller.abort = new AbortController();
   void publishCommandsToBotFather(cfg.token).catch((err) => {
-    console.warn("[telegram-cmd] setMyCommands failed:", (err as Error).message);
+    logWarn("telegram-cmd", "setMyCommands failed", { error: (err as Error).message });
   });
   void runLoop(cfg);
 }
@@ -126,14 +127,14 @@ async function runLoop(cfg: { token: string; chatId: string }): Promise<void> {
         try {
           await handleUpdate(up, cfg);
         } catch (err) {
-          console.warn(`[telegram-cmd] handler crashed:`, (err as Error).message);
+          logWarn("telegram-cmd", "handler crashed", { error: (err as Error).message });
         }
       }
     } catch (err) {
       if (!poller.running) break;
       const msg = (err as Error).message;
       if (!/abort/i.test(msg)) {
-        console.warn(`[telegram-cmd] poll error:`, msg);
+        logWarn("telegram-cmd", "poll error", { error: msg });
         await delay(POLL_RESTART_DELAY_MS);
       }
     }
@@ -178,8 +179,9 @@ async function handleUpdate(
   const msg = up.message;
   if (!msg || !msg.text) return;
   if (String(msg.chat.id) !== cfg.chatId) {
-    console.warn(
-      `[telegram-cmd] ignoring message from non-allowlisted chat ${msg.chat.id}`,
+    logWarn(
+      "telegram-cmd",
+      `ignoring message from non-allowlisted chat ${msg.chat.id}`,
     );
     return;
   }
@@ -381,7 +383,7 @@ export async function smartDispatch(rawText: string): Promise<string> {
   try {
     result = await routeNaturalLanguage(trimmed);
   } catch (err) {
-    console.warn("[telegram-cmd] intent router crashed:", (err as Error).message);
+    logWarn("telegram-cmd", "intent router crashed", { error: (err as Error).message });
     result = null;
   }
   if (!result) {
@@ -619,12 +621,12 @@ async function commandNew(rawTail: string): Promise<string> {
           const upgraded = await detectWithLLM(detectInput);
           if (upgraded) await writeScopeCache(sessionsDir, upgraded);
         } catch (err) {
-          console.warn("[telegram-cmd] /new LLM upgrade failed:", err);
+          logWarn("telegram-cmd", "/new LLM upgrade failed", { error: (err as Error)?.message ?? String(err) });
         }
       })();
     }
   } catch (err) {
-    console.warn("[telegram-cmd] /new detection failed (non-fatal):", err);
+    logWarn("telegram-cmd", "/new detection failed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
   }
 
   void spawnCoordinatorForTask(task);
@@ -1028,7 +1030,7 @@ export async function sendReply(
       if (replyTo) body.reply_to_message_id = replyTo;
       return body;
     },
-    "[telegram-cmd]",
+    "telegram-cmd",
   );
 }
 
@@ -1178,13 +1180,14 @@ export async function startTelegramUserCommandListener(): Promise<void> {
         parseMode: "html",
       });
     } catch (err) {
-      console.warn(
-        `[telegram-user-cmd] reply failed:`,
-        (err as Error).message,
+      logWarn(
+        "telegram-user-cmd",
+        "reply failed",
+        { error: (err as Error).message },
       );
     }
   });
-  console.info("[telegram-user-cmd] inbound listener installed");
+  logInfo("telegram-user-cmd", "inbound listener installed");
 }
 
 export async function stopTelegramUserCommandListener(): Promise<void> {

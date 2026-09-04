@@ -26,14 +26,15 @@ import {
 } from "./telegramChatForwarder";
 import { sendPushToAll } from "./webPush";
 import { sendTelegramApiMessage } from "./telegramSendRetry";
+import { logInfo, logWarn } from "./log";
 
 function notifyPush(payload: { title: string; body: string; url?: string }): void {
   try {
     void sendPushToAll(payload).catch((err) => {
-      console.warn("[webpush] fan-out failed:", (err as Error)?.message ?? err);
+      logWarn("webpush", "fan-out failed", { error: (err as Error)?.message ?? String(err) });
     });
   } catch (err) {
-    console.warn("[webpush] fan-out threw synchronously:", (err as Error)?.message ?? err);
+    logWarn("webpush", "fan-out threw synchronously", { error: (err as Error)?.message ?? String(err) });
   }
 }
 
@@ -122,7 +123,7 @@ async function sendViaBot(
         ...(plainFallbackUsed ? {} : { parse_mode: "MarkdownV2" }),
         disable_web_page_preview: true,
       }),
-      "[telegram]",
+      "telegram",
     ),
   );
 }
@@ -133,7 +134,7 @@ async function sendViaUserClient(text: string): Promise<void> {
   try {
     await sendUserMessage(truncated);
   } catch (err) {
-    console.warn(`[telegram-user] send error: ${(err as Error).message}`);
+    logWarn("telegram-user", `send error: ${(err as Error).message}`);
   }
 }
 
@@ -447,15 +448,17 @@ export function ensureTelegramNotifier(): void {
   if (hasBot) startTelegramCommandPoller();
   if (hasUser) {
     void startTelegramUserCommandListener().catch((err) => {
-      console.warn(
-        "[telegram-user] inbound listener failed to start:",
-        (err as Error).message,
+      logWarn(
+        "telegram-user",
+        "inbound listener failed to start",
+        { error: (err as Error).message },
       );
     });
   }
   ensureTelegramChatForwarder();
-  console.info(
-    `[telegram] notifier installed (bot=${hasBot}, user=${hasUser})`,
+  logInfo(
+    "telegram",
+    `notifier installed (bot=${hasBot}, user=${hasUser})`,
   );
 }
 

@@ -7,6 +7,7 @@ import { listTasks } from "./tasksStore";
 import type { Task } from "./tasks";
 import { COMMANDS, type CommandDef } from "./telegramCommands";
 import { readOnlyChildArgs } from "./spawn";
+import { logWarn } from "./log";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 const ROUTE_TIMEOUT_MS = 45_000;
@@ -124,7 +125,7 @@ function runClaude(prompt: string): Promise<string | null> {
     const timer = setTimeout(() => {
       treeKill(child, "SIGTERM");
       setTimeout(() => treeKill(child, "SIGKILL"), 3_000);
-      console.warn(`[telegram-intent] timed out after ${ROUTE_TIMEOUT_MS}ms`);
+      logWarn("telegram-intent", `timed out after ${ROUTE_TIMEOUT_MS}ms`);
       settle(null);
     }, ROUTE_TIMEOUT_MS);
 
@@ -142,13 +143,13 @@ function runClaude(prompt: string): Promise<string | null> {
     });
 
     child.on("error", (err) => {
-      console.warn(`[telegram-intent] spawn error:`, err.message);
+      logWarn("telegram-intent", "spawn error", { error: err.message });
       settle(null);
     });
     child.on("exit", (code) => {
       if (code !== 0) {
         const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-        console.warn(`[telegram-intent] claude exited ${code}: ${tail}`);
+        logWarn("telegram-intent", `claude exited ${code}: ${tail}`);
         settle(null);
         return;
       }
@@ -160,16 +161,17 @@ function runClaude(prompt: string): Promise<string | null> {
 function parseResponse(raw: string): IntentResult | null {
   const json = extractJsonBlock(raw);
   if (!json) {
-    console.warn("[telegram-intent] no JSON block in response");
+    logWarn("telegram-intent", "no JSON block in response");
     return null;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch (err) {
-    console.warn(
-      "[telegram-intent] JSON parse failed:",
-      (err as Error).message,
+    logWarn(
+      "telegram-intent",
+      "JSON parse failed",
+      { error: (err as Error).message },
     );
     return null;
   }
@@ -181,8 +183,9 @@ function parseResponse(raw: string): IntentResult | null {
   if (typeof cmdRaw === "string" && cmdRaw.trim().startsWith("/")) {
     command = cmdRaw.trim();
     if (!isKnownCommand(command)) {
-      console.warn(
-        `[telegram-intent] LLM returned unknown command, dropping: ${command}`,
+      logWarn(
+        "telegram-intent",
+        `LLM returned unknown command, dropping: ${command}`,
       );
       command = null;
     }

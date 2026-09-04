@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { detectAppCandidates, type DetectEvent } from "@/libs/apps";
 import { acquireSseSlot } from "@/libs/sseLimit";
+import { logError } from "@/libs/log";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,7 @@ export async function GET(req: NextRequest) {
             alreadyRegistered: 0,
             scanned: 0,
           });
-          console.error("auto-detect/stream: scan failed", err);
+          logError("auto-detect", "scan failed", err);
         }
       } finally {
         if (!closed) {

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanSymbols, type SymbolIndex } from "./symbolIndex";
+import { logError } from "./log";
 
 export const SYMBOL_STORE_VERSION = 1;
 export const SYMBOL_TTL_MS = 24 * 60 * 60 * 1000;
@@ -105,7 +106,7 @@ export function refreshSymbolIndex(
   try {
     fresh = scanSymbols(appPath, symbolDirs);
   } catch (err) {
-    console.error(`symbolStore: scan failed for ${appName}`, err);
+    logError("symbol-store", `scan failed for ${appName}`, err);
     return store.indexes[appName] ?? null;
   }
   store.indexes[appName] = fresh;
@@ -131,7 +132,7 @@ export function ensureFreshSymbolIndex(
   try {
     return refreshSymbolIndex(appName, appPath, symbolDirs);
   } catch (err) {
-    console.error("ensureFreshSymbolIndex: refresh failed", err);
+    logError("symbol-store", "ensureFreshSymbolIndex: refresh failed", err);
     return existing;
   }
 }
