@@ -1,7 +1,10 @@
 import {
+  BarChart3,
   BookOpenCheck,
   Boxes,
   GitBranch,
+  GitMerge,
+  Globe,
   LayoutGrid,
   Send,
   ShieldCheck,
@@ -66,7 +69,22 @@ export const FEATURES: Feature[] = [
   {
     Icon: GitBranch,
     title: "Branch-aware dispatch",
-    body: "Per-app git policy: stay on current branch, fix to one branch, auto-create claude/<task-id>, or spawn into a fresh worktree. Optional auto-commit + push after every successful run.",
+    body: "Per-app git policy: stay on current branch, fix to one branch, auto-create claude/<task-id>, or spawn into a fresh worktree. Optional auto-commit + push after every successful run — and a run that scores low on confidence has its push and merge held back for you to look at first.",
+  },
+  {
+    Icon: GitMerge,
+    title: "Reusable workflows",
+    body: "Save a task shape as a pipeline — named stages, each with its own role and prompt, each optionally gated by the verify chain. Run it whenever that shape of work comes back, or put it on a cron schedule and let it fire without you.",
+  },
+  {
+    Icon: Globe,
+    title: "One-click public tunnels",
+    body: "Pick a local port and get a public URL: cloudflare and localtunnel need no signup, ngrok takes a one-time authtoken. The bridge installs the binary via winget / brew / direct download if it isn't already on PATH.",
+  },
+  {
+    Icon: BarChart3,
+    title: "Token usage analytics",
+    body: "Input, output, and cache totals per task, with a drill-down to any single run — so you can see what a task actually cost before you queue five more like it.",
   },
 ];
 
@@ -102,6 +120,9 @@ export const QUICK_LINKS: QuickLink[] = [
   { href: "/apps", label: "Apps", description: "Registered sibling repos", Icon: Boxes },
   { href: "/tasks", label: "Tasks", description: "Board for cross-repo work", Icon: LayoutGrid },
   { href: "/sessions", label: "Sessions", description: "Raw Claude transcripts", Icon: Terminal },
+  { href: "/workflows", label: "Workflows", description: "Saved multi-stage pipelines", Icon: GitMerge },
+  { href: "/usage", label: "Usage", description: "Token spend per task and run", Icon: BarChart3 },
+  { href: "/tunnels", label: "Tunnels", description: "Share a local port publicly", Icon: Globe },
 ];
 
 export const STACK = ["Next.js 16", "TypeScript", "Tailwind v4", "Bun · npm · pnpm", "Claude Code"];
