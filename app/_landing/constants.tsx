@@ -46,12 +46,12 @@ export const FEATURES: Feature[] = [
   {
     Icon: ShieldCheck,
     title: "Per-tool permission gates",
-    body: "Risky tool calls (Bash, Edit, Write, Delete, …) pause behind a popup until you allow or deny — with reusable allowlists per session.",
+    body: "In any session you drive yourself, risky tool calls (Bash, Edit, Write, Delete, …) pause behind a popup until you allow or deny, and your answers build a reusable per-session allowlist. Dispatched children run headless, so what holds them is the ship gate instead: no commit, merge, or push until the verify chain passes.",
   },
   {
     Icon: Sparkles,
     title: "Verify-then-ship chain",
-    body: "Auto-retry on failure, then run preflight, semantic, style-critic, and your own test/lint/build commands before declaring a run done. The fix agent gets the failure context injected.",
+    body: "Five gates in order before a run counts as done: your own test/lint/build, then preflight, claim-vs-diff, style-critic, and semantic. The first one to block stops the run short of any commit, merge, or push — and the fix agent gets the failure transcript injected on retry.",
   },
   {
     Icon: Send,
@@ -109,7 +109,7 @@ export const STACK = ["Next.js 16", "TypeScript", "Tailwind v4", "Bun · npm · 
 export const STATS: { value: string; label: string }[] = [
   { value: "0", label: "Hardcoded paths or names" },
   { value: "3", label: "Runtimes (Bun · npm · pnpm)" },
-  { value: "4", label: "Verify stages before ship" },
+  { value: "5", label: "Verify gates before ship" },
   { value: "∞", label: "Repos coordinated per task" },
 ];
 
@@ -124,11 +124,11 @@ export const FAQS: FaqItem[] = [
   },
   {
     q: "How does it handle dangerous tool calls?",
-    a: "Every Bash, Edit, Write, or Delete call pauses behind an Allow / Deny popup until you decide. You can build per-session allowlists, mark a child as bypass-trusted, or operate fully gated — your call, per task.",
+    a: "It depends on who is driving. In a session you're chatting with, every Bash, Edit, Write, or Delete call pauses behind an Allow / Deny popup until you decide, and your answers accumulate into a per-session allowlist. Agents the coordinator dispatches run in bypass mode — they're headless, so a popup would just hang them on their first tool call. What holds those is the ship gate rather than the call gate: nothing is committed, merged, or pushed until the run clears the whole verify chain. If you want them fenced off from your working tree as well, set that app's branch policy to a per-task branch or a fresh git worktree.",
   },
   {
     q: "Can multiple people use the same dashboard?",
-    a: "It's designed as a single-operator console — scrypt password, signed cookie, optional trusted-device list, optional Telegram approval for new logins. For shared deployments, run it behind your VPN or reverse proxy.",
+    a: "There's exactly one operator account — scrypt password, signed cookie, optional trusted-device list, optional Telegram approval for new logins. But you can share a single task with someone else: they get a link scoped to that one task, with per-share grants you pick (send a message, spawn an agent, answer a permission prompt, commit, push, approve a plan, view the preview), their own git branch policy, and an expiry you set. Everything outside that task stays invisible to them. For a whole team on the dashboard itself, run it behind your VPN or reverse proxy.",
   },
   {
     q: "What stacks does the auto-detect support?",

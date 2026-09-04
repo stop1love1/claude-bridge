@@ -47,8 +47,9 @@ context between sessions, and *babysitting* AI work that was supposed to save yo
 
 - 🧭 **Picks the right repos** and spawns a coder agent in each.
 - 📺 **Streams every agent live** to one dashboard you don't have to stare at.
-- 🛡️ **Gates risky tools** behind a popup so nothing scary happens unsupervised.
-- ✅ **Runs the verify chain** (preflight + claim-vs-diff + semantic + style + your `test` / `lint` / `build`)
+- 🛡️ **Gates risky tools** behind an Allow / Deny popup in any session you drive yourself.
+  Dispatched children run headless, held at the ship gate by the verify chain below.
+- ✅ **Runs the verify chain** (your `test` / `lint` / `build` → preflight → claim-vs-diff → style critic → semantic)
   before declaring anything *done*, with a configurable 6-gate retry ladder feeding the failure transcript
   back to a fix agent.
 - 📨 **Pings your phone** over Telegram when it ships — or when it needs a human call.
@@ -77,8 +78,8 @@ These are the load-bearing pieces — everything else exists to make them work b
 |---|---|
 | 🧭 **Multi-repo coordinator** | One agent reads the task, picks which sibling repos it touches, and spawns coder / reviewer / fixer children in the right working directory. No naming convention, no hardcoded paths. |
 | 📺 **Live dashboard** | Token-level streaming of every agent's output, SSE status updates, and a per-task tree of parent / child runs — so when you *do* peek, you see everything at once. |
-| 🛡️ **Per-tool permission gates** | Risky calls (`Bash`, `Edit`, `Write`, `Delete`, …) pause behind an Allow / Deny popup. Build up reusable allowlists per session; bypass mode for trusted children only. |
-| ✅ **Verify-then-ship chain** | Every successful child run is gated by preflight → claim-vs-diff → semantic → style critic → your app's `test` / `lint` / `build`. Failures fan out into a 6-gate retry ladder (crash / verify / claim / preflight / style / semantic), each with its own configurable budget — the failure transcript is fed back to a fix agent on every retry. |
+| 🛡️ **Per-tool permission gates** | In a session you drive from the chat UI, risky calls (`Bash`, `Edit`, `Write`, `Delete`, …) pause behind an Allow / Deny popup, and your answers build a reusable per-session allowlist. Agents the coordinator dispatches run in bypass mode — they have no TTY to prompt against and would hang on their first tool call — so they're held at the ship gate instead: nothing is committed, merged, or pushed until the verify chain passes. Fence them off from your working tree too by setting that app's branch policy to a per-task branch or a fresh worktree. |
+| ✅ **Verify-then-ship chain** | Every successful child run is gated by five checks, in this order: your app's `test` / `lint` / `build` → **preflight** (did the agent read enough before it started editing?) → **claim-vs-diff** (does what it says it changed match what git says?) → **style critic** (does the diff look like this codebase?) → **semantic** (does the diff actually do what the task asked?). The first one to block stops the run short of any commit, merge, or push. Failures fan out into a 6-gate retry ladder (crash / verify / claim / preflight / style / semantic), each with its own configurable budget — the failure transcript is fed back to a fix agent on every retry. |
 | 📨 **Telegram bridge** | Spawn tasks, watch transitions, kill runs, or read a report from your phone. Bot + user-client channels with chat-id allowlist and natural-language command routing — the reason you can actually leave the desk. |
 
 ### 🎁 What else is in the box
@@ -95,7 +96,7 @@ The smaller stuff that makes the five pillars pleasant to live with:
 - 📊 **Repo profiles** — heuristic per-repo summaries injected into every child prompt.
 - 🧩 **Pre-warmed child context** — every spawn ships with house rules, pinned files, a symbol index, the repo's style fingerprint, and the most recent coordinator direction so children don't start cold.
 - 🧠 **Task memory** — top extracted notes from prior runs on the same task get folded into the next coordinator prompt, so re-dispatches don't re-litigate decisions the team already made.
-- ⚙️ **Runtime-agnostic** — runs identically under Bun, npm, or pnpm.
+- ⚙️ **Package-manager-agnostic** — install and run with Bun, npm, or pnpm; the scripts themselves shell out to Node, never to one specific manager.
 - 🌐 **Demo-mode deployable** — flip a single env var to host the landing page on Vercel/Netlify without exposing the dashboard.
 - 🛰️ **One-click public tunnels** — pick a local port, choose `cloudflare` (free, no signup, no interstitial), `localtunnel` (free, no signup), or `ngrok` (one-time authtoken), and share the public URL. The bridge installs cloudflared or ngrok via winget/brew/binary if they aren't on PATH.
 
@@ -123,15 +124,16 @@ The smaller stuff that makes the five pillars pleasant to live with:
                   ┌──────────────────┐  ┌──────────────────┐
                   │ coder · app-api  │  │ coder · app-web  │
                   │  streams tokens  │  │  streams tokens  │
-                  │  ↑ tool gates    │  │  ↑ tool gates    │
+                  │  no tool prompts │  │  no tool prompts │
                   └────────┬─────────┘  └────────┬─────────┘
                            │                     │
                            ▼                     ▼
                 ┌─────────────────────────────────────────┐
                 │  Verify-then-ship chain                 │
-                │  preflight → semantic → style critic →  │
-                │  your app's test/lint/build commands    │
-                │  fail → auto-retry once with context    │
+                │  test/lint/build → preflight →          │
+                │  claim-vs-diff → style critic →         │
+                │  semantic — first block stops the run   │
+                │  fail → retry ladder w/ failure context │
                 └────────────────────┬────────────────────┘
                                      ▼
                           ┌──────────────────┐
@@ -146,7 +148,7 @@ move freely, just keep the bridge as a sibling of your app folders.
 
 ## ⚡ Quick start
 
-**Requirements:** Node 20+ *or* Bun 1.x, plus the `claude` CLI authenticated however you'd
+**Requirements:** Node 20+ (the server runs on it), plus the `claude` CLI authenticated however you'd
 normally use it (Anthropic API key, Pro, or workspace).
 
 ```bash
@@ -177,7 +179,7 @@ password) so you don't need a separate CLI step. After that:
 > Both are git-ignored by default — your project state stays separate from the bridge code.
 
 > **CLI password setter:** If you'd rather seed the password from the terminal (e.g. for
-> headless deploys), `bun run set:password` does the same thing as the in-UI form.
+> headless deploys), `npm run set:password` does the same thing as the in-UI form.
 
 ### Production env vars
 
@@ -275,8 +277,9 @@ bun run lint
 # Open a PR against `main`
 ```
 
-Please keep changes runtime-agnostic — anything you add should run identically under Bun, npm,
-and pnpm. Tests use Vitest; the test runner is the same regardless of your local runtime.
+Please keep changes package-manager-agnostic — a `package.json` script must not invoke `bun`,
+`npm`, or `pnpm` by name, so it behaves the same whichever one the user reaches for. Tests use
+Vitest; the test runner is the same regardless of your local setup.
 
 ---
 

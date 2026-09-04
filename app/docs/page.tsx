@@ -150,8 +150,9 @@ cd claude-bridge`}</Pre>
       </P>
       <Pre>{`bun install     # or: npm install / pnpm install`}</Pre>
       <P>
-        Requirements: <Code>Node 20+</Code> (for npm/pnpm) or <Code>Bun 1.x</Code>, the{" "}
-        <Code>claude</Code> CLI authenticated, and at least one sibling app repo of any stack.
+        Requirements: <Code>Node 20+</Code> — the server process runs on it whichever package
+        manager you used to install — plus the <Code>claude</Code> CLI authenticated, and at
+        least one sibling app repo of any stack.
       </P>
     </section>
   );
@@ -223,15 +224,16 @@ function Architecture() {
           ┌──────────────────┐  ┌──────────────────┐
           │ coder · app-api  │  │ coder · app-web  │
           │  streams tokens  │  │  streams tokens  │
-          │  ↑ tool gates    │  │  ↑ tool gates    │
+          │  no tool prompts │  │  no tool prompts │
           └────────┬─────────┘  └────────┬─────────┘
                    │                     │
                    ▼                     ▼
         ┌─────────────────────────────────────────┐
         │  Verify-then-ship chain                 │
-        │  preflight → semantic → style critic →  │
-        │  your app's test/lint/build commands    │
-        │  fail → auto-retry once with context    │
+        │  test/lint/build → preflight →          │
+        │  claim-vs-diff → style critic →         │
+        │  semantic — first block stops the run   │
+        │  fail → retry ladder w/ failure context │
         └────────────────────┬────────────────────┘
                              ▼
                   ┌──────────────────┐
@@ -338,8 +340,8 @@ function Auth() {
         If you also configure Telegram, login attempts from a fresh device can require approval
         from the operator&apos;s chat — useful when the bridge is exposed beyond <Code>localhost</Code>.
       </P>
-      <Pre>{`bun run set:password         # set or rotate the password
-bun run telegram:login       # one-shot Telegram approval flow (optional)`}</Pre>
+      <Pre>{`npm run set:password         # set or rotate the password
+npm run telegram:login       # one-shot Telegram approval flow (optional)`}</Pre>
     </section>
   );
 }
@@ -520,10 +522,12 @@ function Faq() {
       q: "What happens if an agent fails?",
       a: (
         <>
-          The verify chain runs every successful child through preflight, semantic,
-          style-critic, and your app&apos;s <Code>test</Code> / <Code>lint</Code> /{" "}
-          <Code>build</Code>. On failure the bridge auto-retries once with the failure
-          transcript fed to a fix agent. If the retry still fails, the task stays in{" "}
+          The verify chain runs every successful child through five gates, in order:
+          your app&apos;s <Code>test</Code> / <Code>lint</Code> / <Code>build</Code>,
+          then preflight, claim-vs-diff, style-critic, and semantic. The first gate
+          that blocks stops the run short of any commit, merge, or push. On failure the
+          bridge auto-retries with the failure transcript fed to a fix agent, within
+          that gate&apos;s retry budget. If the retry still fails, the task stays in{" "}
           <Code>DOING</Code> with the failure surfaced in the run tree.
         </>
       ),

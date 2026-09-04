@@ -621,7 +621,7 @@ export function FinalCTA() {
           Stop juggling repos. Start dispatching.
         </h2>
         <p className="max-w-xl mx-auto text-sm text-muted-foreground mb-6 sm:mb-7 leading-relaxed text-pretty">
-          Free, open source, and runs identically on Bun, npm, or pnpm. Clone, run, ship.
+          Free, open source, and installs the same with Bun, npm, or pnpm. Clone, run, ship.
         </p>
         <RuntimeTabs />
         <div className="text-[10px] sm:text-[11px] text-fg-dim text-center mb-6 sm:mb-7">
