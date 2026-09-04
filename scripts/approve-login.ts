@@ -24,7 +24,7 @@ if (!pendingId) {
 const BRIDGE_JSON = join(homedir(), ".claude", "bridge.json");
 if (!existsSync(BRIDGE_JSON)) {
   console.error(
-    `✗ ~/.claude/bridge.json not found — run \`bun run set:password\` first.`,
+    `✗ ~/.claude/bridge.json not found — run \`npm run set:password\` first.`,
   );
   process.exit(1);
 }
@@ -44,7 +44,7 @@ const token = cfg.auth?.internalToken?.trim();
 if (!token) {
   console.error(
     "✗ no internalToken in bridge.json. The bridge auto-creates one on" +
-    " first auth setup; re-run `bun run set:password` to seed it.",
+    " first auth setup; re-run `npm run set:password` to seed it.",
   );
   process.exit(1);
 }
@@ -59,28 +59,35 @@ const origin = envOrigin || runtimeUrl || `http://localhost:${fallbackPort}`;
 const url = `${origin}/api/auth/approvals/${encodeURIComponent(pendingId)}`;
 const decision = denyMode ? "denied" : "approved";
 
-try {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-bridge-internal-token": token,
-    },
-    body: JSON.stringify({ decision }),
-  });
-  const text = await r.text();
-  if (!r.ok) {
-    console.error(`✗ ${r.status} ${text || r.statusText}`);
+// Wrapped in a function rather than left at the top level: the npm scripts run
+// these through `node --import tsx`, and with no "type": "module" in
+// package.json tsx emits CJS, where a top-level await is a hard compile error.
+async function main(authToken: string) {
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-bridge-internal-token": authToken,
+      },
+      body: JSON.stringify({ decision }),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      console.error(`✗ ${r.status} ${text || r.statusText}`);
+      process.exit(1);
+    }
+    console.log(
+      `${denyMode ? "🛑 denied" : "✅ approved"} pending login \`${pendingId}\``,
+    );
+    if (text) console.log(text);
+  } catch (err) {
+    console.error(
+      `✗ request failed: ${(err as Error).message}`,
+      `\n  is the bridge running at ${origin}?`,
+    );
     process.exit(1);
   }
-  console.log(
-    `${denyMode ? "🛑 denied" : "✅ approved"} pending login \`${pendingId}\``,
-  );
-  if (text) console.log(text);
-} catch (err) {
-  console.error(
-    `✗ request failed: ${(err as Error).message}`,
-    `\n  is the bridge running at ${origin}?`,
-  );
-  process.exit(1);
 }
+
+void main(token);

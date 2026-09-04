@@ -309,8 +309,8 @@ function SetupForm({ onDone }: { onDone(): void }) {
         <p className="text-[10px] text-muted-foreground">
           Look for{" "}
           <code className="font-mono">[bridge] auth MISSING …</code> in the
-          terminal where you ran <code className="font-mono">bun dev</code> /{" "}
-          <code className="font-mono">bun start</code>. The token guards
+          terminal where you ran <code className="font-mono">npm run dev</code> /{" "}
+          <code className="font-mono">npm run start</code>. The token guards
           first-run setup against LAN visitors.
         </p>
       </div>

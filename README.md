@@ -91,8 +91,8 @@ The smaller stuff that makes the five pillars pleasant to live with:
 - 📋 **Plan gate** — before anything is dispatched, a planner drafts the approach and asks its clarifying questions (bounded rounds, on by default); nothing spawns until you approve.
 - 🔁 **Scheduled workflows** — name an ordered set of stages (role + prompt + verify on/off), pin them to an app, and run them on demand or on a cron.
 - 🤖 **Auto-queue** — let the bridge drain `TODO` unattended with a concurrency cap, instead of dispatching each task by hand.
-- 🔗 **Task share links** — hand a stakeholder a token link scoped to one task: read-only by default, with opt-in grants (send a message, spawn an agent, answer a permission prompt, commit, push, approve a plan) and per-device approval you can revoke.
-- 🏁 **Speculative runs + judge panel** — race sibling attempts in isolated worktrees and keep the first to claim; multi-lens voting backs the semantic gate.
+- 🔗 **Task share links** — hand a stakeholder a token link scoped to one task, with seven grants to pick from (send a message, spawn an agent, answer a permission prompt, commit, push, approve a plan, view the preview), its own branch policy, an expiry, and per-device approval you can revoke. The share dialog opens with messaging and permission answers already ticked — untick them for a read-only link.
+- 🏁 **Speculative runs + judge panel** — race sibling attempts in isolated worktrees and keep the first to claim; multi-lens voting backs both the style and semantic gates.
 - 🚢 **Integration modes** — per app, a run that ships can stop at the commit, auto-merge into your target branch, or hand off to a `devops` role that opens the PR/MR through `gh` / `glab` (GitHub + GitLab).
 - 🌿 **Branch-aware dispatch** — per-app git policy (current / fixed / `claude/<task-id>` / fresh worktree) + optional auto-commit & push.
 - 📝 **Cross-repo registers** — `decisions.md`, `bugs.md`, `questions.md` so cross-repo agreements outlive the AI session.
