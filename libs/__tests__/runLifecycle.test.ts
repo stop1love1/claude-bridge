@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve as resolvePath } from "node:path";
 import type { ChildProcess } from "node:child_process";
+import type { Run } from "../meta";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Module = require("node:module") as typeof import("node:module") & {
@@ -1239,6 +1240,7 @@ describe("postExitFlow — diff-judging gates skip runs that changed nothing (Ta
     quality: object;
     styleCritic?: ReturnType<typeof vi.fn>;
     semanticVerifier?: ReturnType<typeof vi.fn>;
+    seedRun?: Partial<Run>;
   }) {
     const styleCritic =
       opts.styleCritic ??
@@ -1267,6 +1269,7 @@ describe("postExitFlow — diff-judging gates skip runs that changed nothing (Ta
       startedAt: "2026-04-24T10:00:01Z",
       endedAt: null,
       parentSessionId: "00000000-0000-0000-0000-000000000000",
+      ...(opts.seedRun ?? {}),
     });
     getAppMock.mockReturnValue({ ...REAL_APP, quality: opts.quality });
 
@@ -1424,5 +1427,255 @@ describe("postExitFlow — diff-judging gates skip runs that changed nothing (Ta
 
     expect(styleCritic).toHaveBeenCalledTimes(1);
     expect(semanticVerifier).toHaveBeenCalledTimes(1);
+  });
+
+  // A second post-exit flow for the same run — the process restarted after the
+  // first panel already recorded its verdict — used to spawn a whole second
+  // panel of judges. The gate is idempotent on the persisted result.
+  describe("semantic verifier idempotency", () => {
+    const RECORDED_SEMANTIC = {
+      verdict: "drift" as const,
+      reason: "the first panel already judged this run",
+      concerns: [],
+      durationMs: 1,
+    };
+
+    it("never re-spawns the panel for a run that already has a recorded non-blocking `drift` result", async () => {
+      const { semanticVerifier, escalations, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: { semanticVerifier: RECORDED_SEMANTIC },
+      });
+
+      expect(semanticVerifier).not.toHaveBeenCalled();
+      expect(run?.semanticVerifier).toEqual(RECORDED_SEMANTIC);
+      expect(escalations).toHaveLength(0);
+    });
+
+    it("still spawns the panel for a run with no recorded semanticVerifier result", async () => {
+      const { semanticVerifier, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+      });
+
+      expect(semanticVerifier).toHaveBeenCalledTimes(1);
+      expect(run?.semanticVerifier?.verdict).toBe("pass");
+    });
+
+    it("reads the recorded result from disk, not from the in-memory exit snapshot", async () => {
+      const { updateRun } = await import("../meta");
+      const semanticVerifier = vi.fn().mockResolvedValue({
+        verdict: "pass",
+        reason: "second panel should never get here",
+        concerns: [],
+        durationMs: 1,
+      });
+      // The exit snapshot (ctx.run) carries no semanticVerifier; a concurrent
+      // flow records one on disk while this flow is still in the style gate.
+      const styleCritic = vi.fn().mockImplementation(async () => {
+        await updateRun(tmp, SID, { semanticVerifier: RECORDED_SEMANTIC });
+        return { verdict: "match", reason: "fits", issues: [], durationMs: 1 };
+      });
+
+      const { run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: true, verifier: true },
+        styleCritic,
+        semanticVerifier,
+      });
+
+      expect(styleCritic).toHaveBeenCalledTimes(1);
+      expect(semanticVerifier).not.toHaveBeenCalled();
+      expect(run?.semanticVerifier).toEqual(RECORDED_SEMANTIC);
+    });
+
+    it("never re-spawns the panel for a run that already has a recorded `pass` result", async () => {
+      const { semanticVerifier, escalations, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: {
+          semanticVerifier: { ...RECORDED_SEMANTIC, verdict: "pass" },
+        },
+      });
+
+      expect(semanticVerifier).not.toHaveBeenCalled();
+      expect(run?.semanticVerifier?.verdict).toBe("pass");
+      expect(escalations).toHaveLength(0);
+    });
+
+    // A recorded `broken` / `crashed` verdict BLOCKS the commit. A resumed run
+    // reuses the same run row with that verdict still attached, so replaying it
+    // as a skip would auto-commit a diff no panel ever judged.
+    it("re-judges a run whose recorded verdict is `broken` rather than skipping the gate", async () => {
+      const semanticVerifier = vi.fn().mockResolvedValue({
+        verdict: "pass",
+        reason: "the resumed child addressed the concerns",
+        concerns: [],
+        durationMs: 1,
+      });
+      const { escalations, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: {
+          semanticVerifier: { ...RECORDED_SEMANTIC, verdict: "broken" },
+        },
+        semanticVerifier,
+      });
+
+      expect(semanticVerifier).toHaveBeenCalledTimes(1);
+      expect(run?.semanticVerifier?.verdict).toBe("pass");
+      expect(run?.semanticVerifier?.reason).toBe(
+        "the resumed child addressed the concerns",
+      );
+      expect(escalations).toHaveLength(0);
+    });
+
+    it("re-judges a run whose recorded verdict is `crashed` rather than skipping the gate", async () => {
+      const semanticVerifier = vi.fn().mockResolvedValue({
+        verdict: "drift",
+        reason: "second panel actually looked at the new diff",
+        concerns: [],
+        durationMs: 1,
+      });
+      const { escalations, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: {
+          semanticVerifier: {
+            ...RECORDED_SEMANTIC,
+            verdict: "crashed",
+            reason: "semantic verifier crashed — inconclusive",
+          },
+        },
+        semanticVerifier,
+      });
+
+      expect(semanticVerifier).toHaveBeenCalledTimes(1);
+      expect(run?.semanticVerifier?.verdict).toBe("drift");
+      expect(escalations).toHaveLength(0);
+    });
+
+    // Regression for the fail-open hole: a run blocked by `crashed`, resumed,
+    // fixed and exited again must not sail past the gate on the stale verdict.
+    // If the fresh panel still says stop, the gate must still say "blocked" —
+    // observable here as the semantic escalation that precedes auto-commit.
+    it("keeps blocking a resumed `crashed` run when the fresh panel also fails", async () => {
+      const semanticVerifier = vi
+        .fn()
+        .mockRejectedValue(new Error("panel exploded again"));
+      const { escalations, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: {
+          semanticVerifier: {
+            ...RECORDED_SEMANTIC,
+            verdict: "crashed",
+            reason: "semantic verifier crashed — inconclusive",
+          },
+        },
+        semanticVerifier,
+      });
+
+      expect(semanticVerifier).toHaveBeenCalledTimes(1);
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0][0]).toMatchObject({
+        gate: "semantic",
+        retryScheduled: false,
+      });
+      expect(run?.semanticVerifier?.verdict).toBe("crashed");
+    });
+
+    it("keeps blocking a resumed `broken` run when the fresh panel votes broken again", async () => {
+      const semanticVerifier = vi.fn().mockResolvedValue({
+        verdict: "broken",
+        reason: "the resume did not fix the deliverable",
+        concerns: [],
+        durationMs: 1,
+      });
+      const { escalations, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: {
+          semanticVerifier: { ...RECORDED_SEMANTIC, verdict: "broken" },
+        },
+        semanticVerifier,
+      });
+
+      expect(semanticVerifier).toHaveBeenCalledTimes(1);
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0][0]).toMatchObject({
+        gate: "semantic",
+        retryScheduled: false,
+      });
+      expect(run?.semanticVerifier?.reason).toBe(
+        "the resume did not fix the deliverable",
+      );
+    });
+
+    it("never re-spawns the panel for a run that already has a recorded `skipped` result", async () => {
+      const { semanticVerifier, escalations, run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: {
+          semanticVerifier: {
+            ...RECORDED_SEMANTIC,
+            verdict: "skipped",
+            reason: "inconclusive panel: only 1/3 judges reported a usable verdict",
+          },
+        },
+      });
+
+      expect(semanticVerifier).not.toHaveBeenCalled();
+      expect(run?.semanticVerifier?.verdict).toBe("skipped");
+      expect(escalations).toHaveLength(0);
+    });
+
+    // The row state a resume leaves behind (libs/resumeSession.ts clears the
+    // field). The resumed run wrote new code, so it must be judged afresh.
+    it("re-judges a run whose verdict a resume cleared", async () => {
+      const semanticVerifier = vi.fn().mockResolvedValue({
+        verdict: "pass",
+        reason: "judged the diff the resumed run actually produced",
+        concerns: [],
+        durationMs: 1,
+      });
+      const { run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: { semanticVerifier: null },
+        semanticVerifier,
+      });
+
+      expect(semanticVerifier).toHaveBeenCalledTimes(1);
+      expect(run?.semanticVerifier?.reason).toBe(
+        "judged the diff the resumed run actually produced",
+      );
+    });
+
+    // Fail-closed: the allow-list names every replayable verdict, so a value it
+    // does not recognise (a future union member, or junk on disk) re-runs the
+    // panel instead of being waved through.
+    it("re-judges a run carrying a verdict the allow-list does not name", async () => {
+      const semanticVerifier = vi.fn().mockResolvedValue({
+        verdict: "pass",
+        reason: "fresh panel, not a replay",
+        concerns: [],
+        durationMs: 1,
+      });
+      const { run } = await driveExit({
+        verifier: TOUCHED_VERIFIER,
+        quality: { critic: false, verifier: true },
+        seedRun: {
+          semanticVerifier: {
+            ...RECORDED_SEMANTIC,
+            verdict: "quarantined" as unknown as "pass",
+          },
+        },
+        semanticVerifier,
+      });
+
+      expect(semanticVerifier).toHaveBeenCalledTimes(1);
+      expect(run?.semanticVerifier?.reason).toBe("fresh panel, not a replay");
+    });
   });
 });

@@ -500,6 +500,25 @@ async function runStyleCriticGate(ctx: PostExitContext): Promise<GateOutcome> {
   return "proceed";
 }
 
+// Allow-list, deliberately not a deny-list: a recorded verdict may be replayed
+// as a skip ONLY if it is named `true` here. `broken` and `crashed` are the
+// verdicts this gate answers with "blocked" further down, so replaying either
+// would wave through a diff the panel never judged. Anything unrecognised —
+// including a verdict added to the union later — falls through to re-running
+// the panel, so the failure mode is a duplicate panel, never a silent
+// fail-open. The exhaustive `Record` makes adding a verdict a compile error
+// here rather than an omission nobody notices.
+const SKIPPABLE_SEMANTIC_VERDICTS: Record<
+  RunSemanticVerifier["verdict"],
+  boolean
+> = {
+  pass: true,
+  drift: true,
+  skipped: true,
+  broken: false,
+  crashed: false,
+};
+
 async function runSemanticVerifierGate(
   ctx: PostExitContext,
 ): Promise<GateOutcome> {
@@ -510,6 +529,21 @@ async function runSemanticVerifierGate(
   if (observedNoChanges(ctx)) {
     logInfo("semantic-verifier", "skipped — run produced no changed files, no diff to judge", { tag: t });
     return "proceed";
+  }
+  // Idempotency guard: re-read from disk (not ctx.run) because the duplicate
+  // panel we are blocking comes from a second post-exit flow in a process that
+  // restarted after the first panel already recorded its verdict.
+  // Replay only an allow-listed verdict — see SKIPPABLE_SEMANTIC_VERDICTS
+  // above. A resume clears this field (libs/resumeSession.ts), so anything
+  // still here was recorded against the same diff we are about to commit.
+  const persisted = readMeta(dir)?.runs.find((x) => x.sessionId === run.sessionId);
+  const persistedVerdict = persisted?.semanticVerifier?.verdict;
+  if (persistedVerdict && SKIPPABLE_SEMANTIC_VERDICTS[persistedVerdict] === true) {
+    logInfo("semantic-verifier", `skipped — run already has a recorded \`${persistedVerdict}\` semanticVerifier gate result`, { tag: t });
+    return "proceed";
+  }
+  if (persistedVerdict) {
+    logInfo("semantic-verifier", `re-judging — recorded \`${persistedVerdict}\` verdict is not replayable and the diff may have changed since`, { tag: t });
   }
 
   const sv = loadSemanticVerifier();

@@ -39,6 +39,12 @@ export function resumeSessionWithLifecycle(
     status: "running",
     startedAt: new Date().toISOString(),
     endedAt: null,
+    // A resumed run writes NEW code under the same run row, so the semantic
+    // verdict recorded for the previous exit no longer describes the diff the
+    // next post-exit flow will commit. Clear it here — every resume path goes
+    // through this function — so the gate always re-judges instead of
+    // replaying a stale `pass`/`drift` as a skip.
+    semanticVerifier: null,
   }).catch((e) =>
     logError("resume-session", "status flip failed", e, {
       tag: `${owningTask.id}/${args.sessionId.slice(0, 8)}`,
