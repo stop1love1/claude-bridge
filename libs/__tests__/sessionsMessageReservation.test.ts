@@ -312,4 +312,88 @@ describe("sessions/[sessionId]/message — repo reservation + atomic claim (F3)"
     resumedChildren[0].emit("exit", 0, null);
     await flushAsync();
   });
+
+  it("does NOT reserve when the chatted session is the task's coordinator (T2: self-target deadlock)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { createMeta, appendRun } = await import("../meta");
+    const { acquireRepoReservation, currentReservation, releaseRepoReservation } =
+      await import("../repoReservation");
+
+    const taskId = "t_20260905_010";
+    const dir = `${TMP_SESSIONS}/${taskId}`;
+    createMeta(dir, {
+      taskId,
+      taskTitle: "self-target coordinator chat",
+      taskBody: "",
+      taskStatus: "doing" as const,
+      taskSection: "DOING" as const,
+      taskChecked: false,
+      createdAt: "2026-09-05T10:00:00Z",
+    });
+    const sid = "88888888-8888-8888-8888-888888888888";
+    await appendRun(dir, {
+      sessionId: sid,
+      role: "coordinator",
+      repo: "fake-message-app",
+      status: "done" as const,
+      startedAt: "2026-09-05T09:00:00Z",
+      endedAt: "2026-09-05T09:05:00Z",
+    });
+
+    owningTaskRef.value = { id: taskId, checked: false, section: "DOING" };
+    writeFileSync(`${TMP_PROJECT_DIR}/${sid}.jsonl`, "");
+
+    const res = await postMessage(sid, { message: "status?", repo: "fake-message-app" });
+    expect(res.status).toBe(200);
+    expect(resumedChildren).toHaveLength(1);
+    expect(currentReservation("fake-message-app")).toBeNull();
+
+    // The child the coordinator dispatches next claims the same repo — this is
+    // the 409 the old behaviour produced while the coordinator was still alive.
+    const childClaim = acquireRepoReservation("fake-message-app", "child-after-chat");
+    expect(childClaim.ok).toBe(true);
+    releaseRepoReservation("fake-message-app", "child-after-chat");
+
+    resumedChildren[0].emit("exit", 0, null);
+    await flushAsync();
+  });
+
+  it("still reserves when the sessionId matches no run in the owning task's meta (fail-safe)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { createMeta, appendRun } = await import("../meta");
+    const { currentReservation } = await import("../repoReservation");
+
+    const taskId = "t_20260905_011";
+    const dir = `${TMP_SESSIONS}/${taskId}`;
+    createMeta(dir, {
+      taskId,
+      taskTitle: "unknown run chat",
+      taskBody: "",
+      taskStatus: "doing" as const,
+      taskSection: "DOING" as const,
+      taskChecked: false,
+      createdAt: "2026-09-05T10:00:00Z",
+    });
+    await appendRun(dir, {
+      sessionId: "99999999-9999-9999-9999-999999999999",
+      role: "coordinator",
+      repo: "fake-message-app",
+      status: "done" as const,
+      startedAt: "2026-09-05T09:00:00Z",
+      endedAt: "2026-09-05T09:05:00Z",
+    });
+
+    // Same task, but a session the bridge has no run row for: we cannot tell
+    // whether it edits the tree, so it must still take the reservation.
+    const sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    owningTaskRef.value = { id: taskId, checked: false, section: "DOING" };
+    writeFileSync(`${TMP_PROJECT_DIR}/${sid}.jsonl`, "");
+
+    const res = await postMessage(sid, { message: "keep going", repo: "fake-message-app" });
+    expect(res.status).toBe(200);
+    expect(currentReservation("fake-message-app")?.sessionId).toBe(sid);
+
+    resumedChildren[0].emit("exit", 0, null);
+    await flushAsync();
+  });
 });

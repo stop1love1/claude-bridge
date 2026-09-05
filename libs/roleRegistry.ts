@@ -17,6 +17,14 @@ import { BRIDGE_LOGIC_DIR } from "./paths";
 export interface RoleSpec {
   name: string;
   mutating: boolean;
+  /**
+   * The role drives *other* agents instead of a repo's working tree: it runs
+   * from BRIDGE_ROOT, spawns children, and reads/writes only session artifacts.
+   * Call sites that hand out the one-run-per-repo reservation skip these roles
+   * — an orchestrator that held its own repo's reservation would lock its own
+   * children out of it (the self-target deadlock).
+   */
+  orchestrator: boolean;
   disallowedTools: string[];
   playbook: string | null;
   description: string;
@@ -28,10 +36,20 @@ const MUTATING_DENY = ["Task"];
 interface RoleDef {
   name: string;
   mutating: boolean;
+  orchestrator?: boolean;
   description: string;
 }
 
 const ROLE_DEFS: RoleDef[] = [
+  {
+    // Kept `mutating: true` on purpose: the coordinator writes summary.md and
+    // is the role the plan gate is allowed to kick planning from, exactly as
+    // before this entry existed (it used to fall through to defaultRoleSpec).
+    name: "coordinator",
+    mutating: true,
+    orchestrator: true,
+    description: "Bridge-reserved: orchestrates one task, dispatches children, edits no app tree.",
+  },
   {
     name: "coder",
     mutating: true,
@@ -115,6 +133,7 @@ function specFor(def: RoleDef): RoleSpec {
   return {
     name: def.name,
     mutating: def.mutating,
+    orchestrator: def.orchestrator === true,
     disallowedTools: def.mutating ? [...MUTATING_DENY] : [...READ_ONLY_DENY],
     playbook: hasPlaybook(def.name) ? def.name : null,
     description: def.description,
@@ -129,6 +148,7 @@ export function defaultRoleSpec(role: string): RoleSpec {
   return {
     name: role,
     mutating: true,
+    orchestrator: false,
     disallowedTools: [...MUTATING_DENY],
     playbook: null,
     description: "Unregistered role; treated as mutating with only Task denied.",
@@ -155,6 +175,18 @@ export function resolveRole(role: string): RoleSpec {
 /** Tool names to pass as `disallowedTools` when spawning or resuming `role`. */
 export function disallowedToolsForRole(role: string): string[] {
   return resolveRole(role).disallowedTools;
+}
+
+/**
+ * True when `role` orchestrates other agents rather than editing an app's
+ * working tree. Resume paths (`/tasks/<id>/continue`, `/sessions/<id>/message`)
+ * use this to decide whether the resumed session needs the repo reservation:
+ * a coordinator does not, and taking it would block the children it is about
+ * to dispatch into the same repo. Unknown roles are never orchestrators, so
+ * the reservation is still taken when we cannot identify the run.
+ */
+export function isOrchestrationRole(role: string): boolean {
+  return resolveRole(role).orchestrator;
 }
 
 /**

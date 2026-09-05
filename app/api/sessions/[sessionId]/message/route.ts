@@ -21,6 +21,7 @@ import { ok } from "@/libs/apiResponse";
 import { isAlive } from "@/libs/sessionEvents";
 import { withInFlight } from "@/libs/inFlight";
 import { acquireRepoReservation, releaseRepoReservation } from "@/libs/repoReservation";
+import { isOrchestrationRole } from "@/libs/roleRegistry";
 import { evaluatePlanGate } from "@/libs/planGate";
 import { readPlanGateConfig } from "@/libs/planGateConfig";
 import {
@@ -171,34 +172,45 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       const owningTask = findTaskBySessionId(sessionId);
       const isFreshDispatch = !existsSync(file);
 
-      if (isFreshDispatch && owningTask) {
-        const ownerRow = readMeta(join(SESSIONS_DIR, owningTask.id))?.runs.find(
-          (r) => r.sessionId === sessionId,
-        ) ?? null;
-        if (ownerRow) {
-          const cfg = readPlanGateConfig();
-          const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
-          const intake = readIntake(join(SESSIONS_DIR, owningTask.id));
-          const decision = evaluatePlanGate({
-            role: ownerRow.role,
-            intakeStatus: intake?.status ?? "none",
-            gateApplies,
-          });
-          if (!decision.allowed) {
-            return NextResponse.json(
-              {
-                error: "plan-gate",
-                reason: decision.reason,
-                intakeStatus: intake?.status ?? "none",
-              },
-              { status: 423 },
-            );
-          }
+      // This route resumes an arbitrary session by id, so the role has to come
+      // from the run row in the owning task's meta — it is both the plan-gate
+      // input and (below) the signal for whether the session needs the repo
+      // reservation.
+      const ownerRow = owningTask
+        ? readMeta(join(SESSIONS_DIR, owningTask.id))?.runs.find(
+            (r) => r.sessionId === sessionId,
+          ) ?? null
+        : null;
+
+      if (isFreshDispatch && owningTask && ownerRow) {
+        const cfg = readPlanGateConfig();
+        const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
+        const intake = readIntake(join(SESSIONS_DIR, owningTask.id));
+        const decision = evaluatePlanGate({
+          role: ownerRow.role,
+          intakeStatus: intake?.status ?? "none",
+          gateApplies,
+        });
+        if (!decision.allowed) {
+          return NextResponse.json(
+            {
+              error: "plan-gate",
+              reason: decision.reason,
+              intakeStatus: intake?.status ?? "none",
+            },
+            { status: 423 },
+          );
         }
       }
 
       const app = effectiveRepo ? getApp(effectiveRepo) : null;
-      const reservable = !!app && app.git.worktreeMode !== "enabled";
+      // A coordinator chatted back to life orchestrates from BRIDGE_ROOT and
+      // never edits the app's shared working tree; holding the reservation
+      // until it exits would 409 every child it dispatches into that repo. Any
+      // other role — and any session we cannot match to a run row — still
+      // reserves, so an unidentified resume never loosens the guarantee.
+      const orchestrator = ownerRow != null && isOrchestrationRole(ownerRow.role);
+      const reservable = !orchestrator && !!app && app.git.worktreeMode !== "enabled";
       if (reservable && app) {
         const reservation = acquireRepoReservation(app.name, sessionId);
         if (!reservation.ok) {

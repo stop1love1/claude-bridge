@@ -7,7 +7,7 @@ import type { ReferenceFile } from "./contextAttach";
 import type { RecentDirection } from "./recentDirection";
 import type { DetectedScope } from "./detect/types";
 import { renderDetectedScope } from "./detect/render";
-import { BRIDGE_URL, BRIDGE_FOLDER } from "./paths";
+import { BRIDGE_URL, BRIDGE_ROOT } from "./paths";
 
 export interface BuildChildPromptOpts {
   taskId: string;
@@ -21,7 +21,7 @@ export interface BuildChildPromptOpts {
   contextBlock?: string;
   coordinatorBody: string;
   profile?: RepoProfile;
-  bridgeFolder?: string;
+  bridgeRoot?: string;
   houseRules?: string | null;
   playbookBody?: string | null;
   verifyHint?: AppVerify | null;
@@ -65,10 +65,27 @@ export function sanitizeTaskBodyForFence(body: string): string {
   return (body ?? "").replace(/^(\s*)(`{3,})/gm, "$1​ ​$2");
 }
 
+/**
+ * Absolute path of a task's session folder, for embedding in a child prompt.
+ *
+ * These paths must not be relative to the child's cwd. A child is not always
+ * spawned in a repo that sits next to the bridge folder — it can run in a git
+ * worktree under `.worktrees/<sid>/`, or in a placeholder repo when the real
+ * target repo is reserved — and the old `../<bridge-folder>/sessions/...` form
+ * then resolved to a directory that does not exist. Because every instruction
+ * says `mkdir -p` first, the child silently *created* that wrong directory and
+ * wrote its report and verdict there, so the bridge saw neither. Slashes are
+ * normalised so the Windows path stays pasteable into the child's shell.
+ */
+function sessionDirFor(bridgeRoot: string, taskId: string): string {
+  const root = bridgeRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  return `${root}/sessions/${taskId}`;
+}
+
 function renderVerdictFileLines(
   verdictFileName: string | null | undefined,
   taskId: string,
-  bridgeFolder: string,
+  sessionDir: string,
 ): string[] {
   const name = (verdictFileName ?? "").trim();
   if (name.length === 0) return [];
@@ -77,7 +94,7 @@ function renderVerdictFileLines(
     "",
     `Write **exactly one** verdict file for this gate, named \`${name}\`. Use that name character-for-character: the bridge reads that one path and nothing else, so a verdict written under any other name is read as no verdict at all and the gate is recorded as skipped.`,
     "",
-    `Full path from your cwd: \`../${bridgeFolder}/sessions/${taskId}/${name}\` — directly in \`sessions/${taskId}/\`, a sibling of the \`reports/\` folder and not inside it. \`mkdir -p\` that directory first.`,
+    `Absolute path — use it verbatim, do NOT rebuild it relative to your cwd: \`${sessionDir}/${name}\`. It sits directly in \`sessions/${taskId}/\`, a sibling of the \`reports/\` folder and not inside it. \`mkdir -p\` that directory first.`,
     "",
     "The verdict file is a separate artifact from the report described below — you write both. Your playbook gives the JSON schema for the verdict's contents. If anything else in this prompt shows a different verdict filename, the name above is the one that counts.",
     "",
@@ -105,7 +122,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     contextBlock,
     coordinatorBody,
     profile,
-    bridgeFolder = BRIDGE_FOLDER,
+    bridgeRoot = BRIDGE_ROOT,
     houseRules,
     playbookBody,
     verifyHint,
@@ -119,6 +136,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     sharedPlan,
   } = opts;
 
+  const sessionDir = sessionDirFor(bridgeRoot, taskId);
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
   const safeTaskBody = sanitizeTaskBodyForFence(taskBody);
   const safeTitle = sanitizeUserPromptContent(taskTitle).replace(/\r?\n/g, " ");
@@ -211,7 +229,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     lines.push(
       "## Peer notes (from sibling agents)",
       "",
-      "Other agents on this task have already left cross-cutting observations in `sessions/" + taskId + "/notes.md`. Read them before diving in — they may answer a question you're about to ask the codebase, flag a contract another sibling already chose, or warn you about a footgun. Append your OWN observations (one bullet per entry, prefixed with your role label) when you discover something a later sibling would benefit from. Don't edit or delete prior entries — append-only.",
+      "Other agents on this task have already left cross-cutting observations in `" + sessionDir + "/notes.md`. Read them before diving in — they may answer a question you're about to ask the codebase, flag a contract another sibling already chose, or warn you about a footgun. Append your OWN observations (one bullet per entry, prefixed with your role label) when you discover something a later sibling would benefit from. Don't edit or delete prior entries — append-only.",
       "",
       peerNotesTrimmed,
       "",
@@ -321,12 +339,12 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "",
     "**Do NOT re-POST `status:\"done\"` at the end.** The bridge's lifecycle hook flips your run from `running → done` automatically when this turn ends cleanly (or `failed` on non-zero exit). Self-POSTing `done` while you're still streaming the final summary makes the UI show DONE before the user sees your reply. The only legitimate self-POST is the initial `running` confirmation above.",
     "",
-    ...renderVerdictFileLines(opts.verdictFileName, taskId, bridgeFolder),
+    ...renderVerdictFileLines(opts.verdictFileName, taskId, sessionDir),
     "## Report contract — REQUIRED",
     "",
     "**If ambiguous, escalate.** Don't guess past a multi-option choice or approval gate. Stop, set verdict `NEEDS-DECISION`, fill `## Questions for the user` (concrete options + recommendation), exit. Guessing wastes a retry slot.",
     "",
-    `Before exit, write \`../${bridgeFolder}/sessions/${taskId}/reports/${role}-${repo}.md\` (\`mkdir -p\` first). Schema (headers parsed verbatim — adding is OK, renaming/removing is NOT):`,
+    `Before exit, write \`${sessionDir}/reports/${role}-${repo}.md\` (\`mkdir -p\` first). Use that absolute path verbatim — it is the only path the bridge reads, and rebuilding it relative to your cwd writes the report where nothing will find it. Schema (headers parsed verbatim — adding is OK, renaming/removing is NOT):`,
     "",
     "```markdown",
     `# ${role} @ ${repo}`,
@@ -349,7 +367,7 @@ export function buildChildPrompt(opts: BuildChildPromptOpts): string {
     "Cross-repo deps (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks. If NEEDS-DECISION, flag the most blocking question.",
     "```",
     "",
-    "**Peer notes (cross-cutting observations for siblings):** if during your work you discover something a SIBLING agent on the same task would benefit from — a contract you chose, a footgun you hit, a file the task body didn't mention — append ONE bullet to `sessions/<task-id>/notes.md` (create the file if absent, never edit prior entries). Format: `- [<your-role>] <observation>`. Examples worth recording: \"API uses field `userId` not `user_id`, plan said the latter\", \"refunds page is in `apps/center/finance/refunds/` not `apps/lms/`\". Skip this when there's nothing genuinely cross-cutting — noise hurts later siblings more than silence does.",
+    "**Peer notes (cross-cutting observations for siblings):** if during your work you discover something a SIBLING agent on the same task would benefit from — a contract you chose, a footgun you hit, a file the task body didn't mention — append ONE bullet to `" + sessionDir + "/notes.md` (absolute path, create the file if absent, never edit prior entries). Format: `- [<your-role>] <observation>`. Examples worth recording: \"API uses field `userId` not `user_id`, plan said the latter\", \"refunds page is in `apps/center/finance/refunds/` not `apps/lms/`\". Skip this when there's nothing genuinely cross-cutting — noise hurts later siblings more than silence does.",
     "",
     "**End-of-turn:** (1) write the report file; (2) optionally append a peer note; (3) chat reply mirrors `## Summary`; (4) stop — no tool calls, no link re-POST, no status PATCH. Trailing tool calls render as noise; the lifecycle hook closes the run.",
     "",
@@ -503,7 +521,7 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     repoCwd,
     contextBlock,
     coordinatorBody,
-    bridgeFolder = BRIDGE_FOLDER,
+    bridgeRoot = BRIDGE_ROOT,
     playbookBody,
     attachedReferences,
     recentDirection,
@@ -511,6 +529,7 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     sharedPlan,
   } = opts;
 
+  const sessionDir = sessionDirFor(bridgeRoot, taskId);
   const safeBody = sanitizeCoordinatorBody(coordinatorBody);
   const safeTaskBody = sanitizeTaskBodyForFence(taskBody);
   const safeTitle = sanitizeUserPromptContent(taskTitle).replace(/\r?\n/g, " ");
@@ -560,7 +579,7 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     lines.push(
       "## Peer notes (from sibling agents)",
       "",
-      "Other agents on this task have already left cross-cutting observations in `sessions/" + taskId + "/notes.md`. Read them before diving in — they may answer a question you're about to ask the codebase, flag a contract another sibling already chose, or warn you about a footgun. Append your OWN observations (one bullet per entry, prefixed with your role label) when you discover something a later sibling would benefit from. Don't edit or delete prior entries — append-only.",
+      "Other agents on this task have already left cross-cutting observations in `" + sessionDir + "/notes.md`. Read them before diving in — they may answer a question you're about to ask the codebase, flag a contract another sibling already chose, or warn you about a footgun. Append your OWN observations (one bullet per entry, prefixed with your role label) when you discover something a later sibling would benefit from. Don't edit or delete prior entries — append-only.",
       "",
       peerNotesTrimmed,
       "",
@@ -639,12 +658,12 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     "",
     "**Do NOT re-POST `status:\"done\"` at the end.** The bridge's lifecycle hook flips your run from `running → done` automatically when this turn ends cleanly (or `failed` on non-zero exit). Self-POSTing `done` while you're still streaming the final summary makes the UI show DONE before the user sees your reply. The only legitimate self-POST is the initial `running` confirmation above.",
     "",
-    ...renderVerdictFileLines(opts.verdictFileName, taskId, bridgeFolder),
+    ...renderVerdictFileLines(opts.verdictFileName, taskId, sessionDir),
     "## Report contract — REQUIRED",
     "",
     "**If ambiguous, escalate.** Don't guess past a multi-option choice or approval gate. Stop, set verdict `NEEDS-DECISION`, fill `## Questions for the user` (concrete options + recommendation), exit. Guessing wastes a retry slot.",
     "",
-    `Before exit, write \`../${bridgeFolder}/sessions/${taskId}/reports/${role}-${repo}.md\` (\`mkdir -p\` first). Schema (headers parsed verbatim — adding is OK, renaming/removing is NOT):`,
+    `Before exit, write \`${sessionDir}/reports/${role}-${repo}.md\` (\`mkdir -p\` first). Use that absolute path verbatim — it is the only path the bridge reads, and rebuilding it relative to your cwd writes the report where nothing will find it. Schema (headers parsed verbatim — adding is OK, renaming/removing is NOT):`,
     "",
     "```markdown",
     `# ${role} @ ${repo}`,
@@ -667,7 +686,7 @@ export function buildUserMessage(opts: BuildChildPromptOpts): string {
     "Cross-repo deps (`NEEDS-OTHER-SIDE: <thing>`), hidden gotchas, follow-up tasks. If NEEDS-DECISION, flag the most blocking question.",
     "```",
     "",
-    "**Peer notes (cross-cutting observations for siblings):** if during your work you discover something a SIBLING agent on the same task would benefit from — a contract you chose, a footgun you hit, a file the task body didn't mention — append ONE bullet to `sessions/<task-id>/notes.md` (create the file if absent, never edit prior entries). Format: `- [<your-role>] <observation>`. Examples worth recording: \"API uses field `userId` not `user_id`, plan said the latter\", \"refunds page is in `apps/center/finance/refunds/` not `apps/lms/`\". Skip this when there's nothing genuinely cross-cutting — noise hurts later siblings more than silence does.",
+    "**Peer notes (cross-cutting observations for siblings):** if during your work you discover something a SIBLING agent on the same task would benefit from — a contract you chose, a footgun you hit, a file the task body didn't mention — append ONE bullet to `" + sessionDir + "/notes.md` (absolute path, create the file if absent, never edit prior entries). Format: `- [<your-role>] <observation>`. Examples worth recording: \"API uses field `userId` not `user_id`, plan said the latter\", \"refunds page is in `apps/center/finance/refunds/` not `apps/lms/`\". Skip this when there's nothing genuinely cross-cutting — noise hurts later siblings more than silence does.",
     "",
     "**End-of-turn:** (1) write the report file; (2) optionally append a peer note; (3) chat reply mirrors `## Summary`; (4) stop — no tool calls, no link re-POST, no status PATCH. Trailing tool calls render as noise; the lifecycle hook closes the run.",
     "",

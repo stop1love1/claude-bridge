@@ -7,6 +7,14 @@ import {
 } from "../childPrompt";
 import type { RepoProfile } from "../repoProfile";
 
+// Deliberately a path that exists on no dev machine: when the fixture matched the
+// real bridge root, these assertions passed whether buildChildPrompt honoured the
+// bridgeRoot argument or hardcoded that literal, so they could not fail on the bug
+// they exist to catch.
+const FAKE_BRIDGE_ROOT = "/srv/test-bridge";
+const FAKE_BRIDGE_ROOT_WINDOWS = "X:\\srv\\test-bridge\\";
+const FAKE_BRIDGE_FOLDER = "test-bridge";
+
 const baseOpts = {
   taskId: "t_20260425_001",
   taskTitle: "Add /users/me endpoint",
@@ -18,7 +26,7 @@ const baseOpts = {
   repoCwd: "/parent/app-api",
   contextBlock: "## Repo context\n(clean)",
   coordinatorBody: "Build the endpoint POST /users/me. Out of scope: auth.",
-  bridgeFolder: "claude-bridge",
+  bridgeRoot: FAKE_BRIDGE_ROOT,
 };
 
 describe("buildChildPrompt", () => {
@@ -117,17 +125,43 @@ describe("buildChildPrompt", () => {
     expect(out).toMatch(/no link re-POST/);
   });
 
-  it("includes the report path in the report contract using bridgeFolder", () => {
+  it("includes the report path in the report contract as an absolute path under bridgeRoot", () => {
     const out = buildChildPrompt(baseOpts);
     expect(out).toContain(
-      `../${baseOpts.bridgeFolder}/sessions/${baseOpts.taskId}/reports/${baseOpts.role}-${baseOpts.repo}.md`,
+      `${baseOpts.bridgeRoot}/sessions/${baseOpts.taskId}/reports/${baseOpts.role}-${baseOpts.repo}.md`,
+    );
+    // The old cwd-relative form broke for any child whose cwd is not a sibling
+    // of the bridge folder (worktrees, placeholder repos).
+    expect(out).not.toContain(`../${FAKE_BRIDGE_FOLDER}/sessions/`);
+  });
+
+  it("keeps session-artifact paths absolute even when the child's cwd is a different repo", () => {
+    const out = buildChildPrompt({ ...baseOpts, repoCwd: "D:/somewhere/else/placeholder-repo" });
+    const dir = `${baseOpts.bridgeRoot}/sessions/${baseOpts.taskId}`;
+    expect(out).toContain(`${dir}/reports/${baseOpts.role}-${baseOpts.repo}.md`);
+    expect(out).toContain(`${dir}/notes.md`);
+    expect(out).not.toMatch(/\.\.\/[^/\s]+\/sessions\//);
+  });
+
+  it("points the verdict file at the absolute session dir too", () => {
+    const out = buildChildPrompt({ ...baseOpts, verdictFileName: "semantic-verifier-verdict.json" });
+    expect(out).toContain(
+      `${baseOpts.bridgeRoot}/sessions/${baseOpts.taskId}/semantic-verifier-verdict.json`,
     );
   });
 
-  it("falls back to runtime BRIDGE_FOLDER when bridgeFolder is omitted", () => {
-    const { bridgeFolder: _omitted, ...rest } = baseOpts;
+  it("falls back to runtime BRIDGE_ROOT when bridgeRoot is omitted", async () => {
+    const { BRIDGE_ROOT } = await import("../paths");
+    const { bridgeRoot: _omitted, ...rest } = baseOpts;
     const out = buildChildPrompt(rest);
-    expect(out).toMatch(/\.\.\/[^/]+\/sessions\//);
+    expect(out).toContain(`${BRIDGE_ROOT.replace(/\\/g, "/")}/sessions/${baseOpts.taskId}/reports/`);
+  });
+
+  it("normalises backslashes so the Windows path is pasteable into the child's shell", () => {
+    const out = buildChildPrompt({ ...baseOpts, bridgeRoot: FAKE_BRIDGE_ROOT_WINDOWS });
+    expect(out).toContain(
+      `X:/srv/test-bridge/sessions/${baseOpts.taskId}/reports/${baseOpts.role}-${baseOpts.repo}.md`,
+    );
   });
 
   it("omits the House rules section when houseRules is null/empty", () => {
@@ -623,11 +657,12 @@ describe("buildUserMessage", () => {
     expect(out.toLowerCase()).toContain("system prompt");
   });
 
-  it("preserves the report contract (taskId-specific path)", () => {
+  it("preserves the report contract (absolute, taskId-specific path)", () => {
     const out = buildUserMessage(baseOpts);
     expect(out).toContain(
-      `../${baseOpts.bridgeFolder}/sessions/${baseOpts.taskId}/reports/${baseOpts.role}-${baseOpts.repo}.md`,
+      `${baseOpts.bridgeRoot}/sessions/${baseOpts.taskId}/reports/${baseOpts.role}-${baseOpts.repo}.md`,
     );
+    expect(out).not.toMatch(/\.\.\/[^/\s]+\/sessions\//);
   });
 
   it("renders Recent direction and Reference files when provided (volatile / task-specific)", () => {

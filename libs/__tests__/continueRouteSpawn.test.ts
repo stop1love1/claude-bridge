@@ -91,7 +91,7 @@ describe("POST /api/tasks/[id]/continue — resume settings deny Task (Task 28 f
     expect(settings.disallowedTools).toContain("Task");
   });
 
-  it("acquires the coordinator repo's reservation on resume and refuses a concurrent continue while held", async () => {
+  it("does NOT take the repo reservation when resuming the coordinator (T2: self-target deadlock)", async () => {
     const { NextRequest } = await import("next/server");
     const { POST } = await import("../../app/api/tasks/[id]/continue/route");
     const { currentReservation, releaseRepoReservation } = await import("@/libs/repoReservation");
@@ -118,12 +118,19 @@ describe("POST /api/tasks/[id]/continue — resume settings deny Task (Task 28 f
     const res = await POST(req, { params: Promise.resolve({ id: TASK_ID }) });
 
     expect(res.status).toBe(200);
-    expect(currentReservation("claude-bridge")?.sessionId).toBe("coord-continue-route-2");
+    // The coordinator holding claude-bridge is exactly what used to 409 every
+    // child it dispatched into claude-bridge right after this resume.
+    expect(currentReservation("claude-bridge")).toBeNull();
 
-    releaseRepoReservation("claude-bridge", "coord-continue-route-2");
+    // …and the claim `/agents` makes for a child in that same repo now succeeds
+    // (agents/route.ts takes exactly this reservation before spawning).
+    const { acquireRepoReservation } = await import("@/libs/repoReservation");
+    const childClaim = acquireRepoReservation("claude-bridge", "child-after-continue");
+    expect(childClaim.ok).toBe(true);
+    releaseRepoReservation("claude-bridge", "child-after-continue");
   });
 
-  it("refuses a resume when the app is already reserved by a different session", async () => {
+  it("still resumes the coordinator while one of its children holds the repo", async () => {
     const { NextRequest } = await import("next/server");
     const { POST } = await import("../../app/api/tasks/[id]/continue/route");
     const { acquireRepoReservation, currentReservation, releaseRepoReservation } =
@@ -151,14 +158,90 @@ describe("POST /api/tasks/[id]/continue — resume settings deny Task (Task 28 f
     });
     const res = await POST(req, { params: Promise.resolve({ id: TASK_ID }) });
 
-    expect(res.status).toBe(409);
-    expect(resumeSessionWithLifecycleMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(resumeSessionWithLifecycleMock).toHaveBeenCalledTimes(1);
+    // The child's claim is left untouched — the coordinator never competes for it.
     expect(currentReservation("claude-bridge")?.sessionId).toBe("someone-else");
 
     releaseRepoReservation("claude-bridge", "someone-else");
   });
 
-  it("releases the reservation when resumeSessionWithLifecycle itself throws", async () => {
+  it("resumes the LIVE coordinator row, not the dead one appended before it (F4)", async () => {
+    const { NextRequest } = await import("next/server");
+    const { POST } = await import("../../app/api/tasks/[id]/continue/route");
+
+    getAppMock.mockReturnValue(FAKE_CONTINUE_APP);
+    getTaskMock.mockReturnValue({ id: TASK_ID, title: "t", body: "" });
+    // Append order is the order the bridge writes them: the exited coordinator
+    // from the first spawn comes first, the live one that replaced it second.
+    readMetaMock.mockReturnValue({
+      runs: [
+        {
+          sessionId: "coord-dead",
+          role: "coordinator",
+          repo: "claude-bridge",
+          status: "done",
+          startedAt: "2026-09-05T08:00:00Z",
+          endedAt: "2026-09-05T08:30:00Z",
+        },
+        {
+          sessionId: "coord-live",
+          role: "coordinator",
+          repo: "claude-bridge",
+          status: "running",
+          startedAt: "2026-09-05T09:00:00Z",
+          endedAt: null,
+        },
+      ],
+    });
+
+    const req = new NextRequest(`http://localhost/api/tasks/${TASK_ID}/continue`, {
+      method: "POST",
+    });
+    const res = await POST(req, { params: Promise.resolve({ id: TASK_ID }) });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).sessionId).toBe("coord-live");
+    expect(resumeSessionWithLifecycleMock.mock.calls[0][0].sessionId).toBe("coord-live");
+  });
+
+  it("falls back to the most recently started orchestrator when every row is terminal", async () => {
+    const { NextRequest } = await import("next/server");
+    const { POST } = await import("../../app/api/tasks/[id]/continue/route");
+
+    getAppMock.mockReturnValue(FAKE_CONTINUE_APP);
+    getTaskMock.mockReturnValue({ id: TASK_ID, title: "t", body: "" });
+    readMetaMock.mockReturnValue({
+      runs: [
+        {
+          sessionId: "coord-newest",
+          role: "coordinator",
+          repo: "claude-bridge",
+          status: "done",
+          startedAt: "2026-09-05T09:00:00Z",
+          endedAt: "2026-09-05T09:30:00Z",
+        },
+        {
+          sessionId: "coord-older",
+          role: "coordinator",
+          repo: "claude-bridge",
+          status: "failed",
+          startedAt: "2026-09-05T08:00:00Z",
+          endedAt: "2026-09-05T08:30:00Z",
+        },
+      ],
+    });
+
+    const req = new NextRequest(`http://localhost/api/tasks/${TASK_ID}/continue`, {
+      method: "POST",
+    });
+    const res = await POST(req, { params: Promise.resolve({ id: TASK_ID }) });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).sessionId).toBe("coord-newest");
+  });
+
+  it("leaves no reservation behind when resumeSessionWithLifecycle itself throws", async () => {
     const { NextRequest } = await import("next/server");
     const { POST } = await import("../../app/api/tasks/[id]/continue/route");
     const { currentReservation, releaseRepoReservation } = await import("@/libs/repoReservation");

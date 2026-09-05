@@ -3,6 +3,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   disallowedToolsForRole,
+  isOrchestrationRole,
   listRoles,
   mergeDisallowedTools,
   resolveRole,
@@ -110,6 +111,27 @@ describe("roleRegistry.mergeDisallowedTools", () => {
 
   it("disallowedToolsForRole is a thin alias over resolveRole", () => {
     expect(disallowedToolsForRole("style-critic-2")).toEqual(resolveRole("style-critic").disallowedTools);
+  });
+});
+
+describe("roleRegistry.isOrchestrationRole", () => {
+  it("marks coordinator as the orchestrator and nothing else", () => {
+    expect(isOrchestrationRole("coordinator")).toBe(true);
+    for (const r of ["coder", "fixer", "planner", "reviewer", "ui-tester", "devops"]) {
+      expect(isOrchestrationRole(r), r).toBe(false);
+    }
+  });
+
+  it("treats an unregistered role as a non-orchestrator (reservation stays fail-safe)", () => {
+    expect(isOrchestrationRole("wizard-of-oz")).toBe(false);
+    expect(isOrchestrationRole("")).toBe(false);
+  });
+
+  it("keeps the coordinator's pre-registry classification: mutating, only Task denied", () => {
+    const spec = resolveRole("coordinator");
+    expect(spec.mutating).toBe(true);
+    expect(spec.disallowedTools).toEqual(["Task"]);
+    expect(isMutatingRole("coordinator")).toBe(true);
   });
 });
 
