@@ -22,6 +22,7 @@ import { readPlanGateConfig } from "./planGateConfig";
 import { denyTaskToolNames, resumeClaude } from "./spawn";
 import { killChild } from "./spawnRegistry";
 import { releaseRepoReservation } from "./repoReservation";
+import { settleTaskAfterKill } from "./settleTaskAfterKill";
 import { autoDetectApps, loadApps } from "./apps";
 import {
   isValidTaskId,
@@ -585,7 +586,9 @@ async function commandKill(idArg: string | undefined): Promise<string> {
     })),
   );
   for (const r of running) releaseRepoReservation(r.repo, r.sessionId);
-  return `🛑 Killed ${killed} of ${running.length} session\\(s\\) for \`${idArg}\``;
+  const parkedIn = await settleTaskAfterKill(idArg);
+  const parked = parkedIn ? ` — moved to \`${parkedIn}\`` : "";
+  return `🛑 Killed ${killed} of ${running.length} session\\(s\\) for \`${idArg}\`${parked}`;
 }
 
 async function commandDelete(idArg: string | undefined): Promise<string> {

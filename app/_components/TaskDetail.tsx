@@ -174,8 +174,8 @@ function TaskDetailInner({
     });
     if (!ok) return;
     try {
-      await api.killRun(task.id, run.sessionId);
-      toast("info", `Killed ${run.role}`);
+      const r = await api.killRun(task.id, run.sessionId);
+      toast("info", r.parkedIn ? `Killed ${run.role} — task moved to ${r.parkedIn}` : `Killed ${run.role}`);
     } catch (e) {
       toast("error", (e as Error).message);
     }

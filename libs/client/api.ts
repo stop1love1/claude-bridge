@@ -88,12 +88,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
   killSession: (sessionId: string) =>
-    req<{ sessionId: string; action: "killed" }>(
+    req<{ sessionId: string; action: "killed"; parkedIn: string | null }>(
       `/sessions/${sessionId}/kill`,
       { method: "POST" },
     ),
   killRun: (taskId: string, sessionId: string) =>
-    req<{ sessionId: string; action: "killed" }>(
+    req<{ sessionId: string; action: "killed"; parkedIn: string | null }>(
       `/tasks/${taskId}/runs/${sessionId}/kill`,
       { method: "POST" },
     ),

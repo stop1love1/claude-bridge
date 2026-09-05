@@ -8,7 +8,7 @@ import {
   Plus, Inbox, Trash2, LayoutGrid, Columns, Check,
 } from "lucide-react";
 import { relativeTime } from "@/libs/client/time";
-import { STATUS_PILL, type DerivedStatus } from "@/libs/client/runStatus";
+import { STATUS_PILL, deriveTaskStatus } from "@/libs/client/runStatus";
 import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { EmptyState } from "./ui/empty-state";
 import { Skeleton } from "./ui/skeleton";
@@ -26,19 +26,6 @@ type Layout = "grid" | "kanban";
 const loadLayout = (raw: string | null): Layout =>
   raw === "kanban" ? "kanban" : "grid";
 const dumpLayout = (v: Layout) => v;
-
-function deriveStatus(task: Task, meta: Meta | undefined): DerivedStatus {
-  if (task.checked) return "completed";
-  if (!meta) return "spawning";
-  const runs = meta.runs ?? [];
-  const createdMs = meta.createdAt ? new Date(meta.createdAt).getTime() : 0;
-  const fresh = createdMs > 0 && Date.now() - createdMs < 20_000;
-  if (runs.length === 0) return fresh ? "spawning" : "idle";
-  if (runs.some((r) => r.status === "running")) return "running";
-  if (runs.some((r) => r.status === "failed")) return "failed";
-  if (runs.some((r) => r.status === "done")) return "done";
-  return "idle";
-}
 
 function GridCard({
   task,
@@ -66,7 +53,7 @@ function GridCard({
   const runs = meta?.runs ?? [];
   const childRuns = runs.filter((r) => r.role !== "coordinator");
   const repoSet = Array.from(new Set(childRuns.map((r) => r.repo)));
-  const status = deriveStatus(task, meta);
+  const status = deriveTaskStatus(task, meta);
   const pill = STATUS_PILL[status];
   const agentCount = childRuns.length;
 

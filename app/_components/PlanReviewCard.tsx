@@ -1,9 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { TaskIntake } from "@/libs/client/types";
+import { MarkdownText } from "./SessionLog/views";
+
+/**
+ * The planner's `plan.md` rendered with the same component map the session
+ * log uses. The repo does not ship `@tailwindcss/typography`, so a bare
+ * `prose` wrapper leaves GFM tables unstyled and lets a wide shortlist table
+ * blow out the card; `MarkdownText` boxes tables in an `overflow-x-auto`
+ * container with bordered, top-aligned cells.
+ */
+export function PlanMarkdown({ markdown }: { markdown: string }) {
+  return (
+    <div className="text-xs leading-relaxed min-w-0 overflow-hidden">
+      <MarkdownText text={markdown} />
+    </div>
+  );
+}
 
 export function PlanReviewCard({
   taskId,
@@ -83,11 +97,7 @@ export function PlanReviewCard({
         <p className="text-xs text-muted-foreground italic">{intake.summary}</p>
       )}
 
-      {status !== "planning" && planMd && (
-        <div className="prose prose-sm dark:prose-invert max-w-none text-xs">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{planMd}</ReactMarkdown>
-        </div>
-      )}
+      {status !== "planning" && planMd && <PlanMarkdown markdown={planMd} />}
 
       {status === "awaiting-approval" && (intake?.questions?.length ?? 0) > 0 && (
         <div className="space-y-2">

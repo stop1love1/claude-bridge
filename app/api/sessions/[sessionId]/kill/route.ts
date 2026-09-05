@@ -5,6 +5,7 @@ import { readMeta, updateRun } from "@/libs/meta";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { killChild } from "@/libs/spawnRegistry";
 import { releaseRepoReservation } from "@/libs/repoReservation";
+import { settleTaskAfterKill } from "@/libs/settleTaskAfterKill";
 import { badRequest, isValidSessionId } from "@/libs/validate";
 import { ok } from "@/libs/apiResponse";
 import { clearQueue } from "@/libs/messageQueue";
@@ -33,6 +34,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
     );
   }
 
+  let parkedIn: string | null = null;
   if (existsSync(SESSIONS_DIR)) {
     for (const taskId of readdirSync(SESSIONS_DIR)) {
       const dir = join(SESSIONS_DIR, taskId);
@@ -49,9 +51,10 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       if (cancelled.run) {
         releaseRepoReservation(cancelled.run.repo, sessionId);
       }
+      parkedIn = await settleTaskAfterKill(taskId);
       break;
     }
   }
 
-  return ok({ sessionId, action: "killed" });
+  return ok({ sessionId, action: "killed", parkedIn });
 }
