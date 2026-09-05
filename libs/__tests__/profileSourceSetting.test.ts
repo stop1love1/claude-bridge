@@ -132,12 +132,12 @@ describe("setManifestProfileSource", () => {
   });
 
   it("leaves the detect section untouched", () => {
-    writeManifest({ detect: { source: "llm", scanRoots: ["D:/projects"] } });
+    writeManifest({ detect: { source: "llm", scanRoots: ["/tmp/scan-root"] } });
     setManifestProfileSource("llm");
     setManifestProfileSource("heuristic");
     expect(readManifestFile().detect).toEqual({
       source: "llm",
-      scanRoots: ["D:/projects"],
+      scanRoots: ["/tmp/scan-root"],
     });
   });
 });

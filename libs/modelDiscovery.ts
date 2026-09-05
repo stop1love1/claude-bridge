@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
-import { MODEL_VALUE_RE } from "./validate";
+import { MODEL_VALUE_RE } from "./validate"; // same shape spawn requires before it passes --model through
 
 /**
  * The model list is discovered at runtime rather than hardcoded: the CLI
@@ -24,12 +24,6 @@ export interface ExtractedModel {
   label: string;
   description?: string;
 }
-
-/**
- * Same shape `libs/spawn.ts` requires before it will pass --model through —
- * imported from `libs/validate.ts` (see the top of this file) so the picker can
- * never offer a value spawn would silently drop.
- */
 
 /**
  * Reads the aliases out of the `--model` entry of `claude --help`, e.g.

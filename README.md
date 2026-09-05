@@ -262,7 +262,7 @@ model-agnostic, repo-agnostic, tracker-agnostic.
 - [x] Built-in token usage analytics per task
 - [x] Single-operator auth with trusted devices + login approvals
 - [x] One-click public tunnels (cloudflare + localtunnel + ngrok auto-install)
-- [x] Per-role / per-task model pinning — pin a model on the task (`meta.taskModel`) or per role on the app (`bridge.json` → `apps[].roleModels`, keyed by base role or `"*"`); every pin is optional and an absent one keeps the CLI default
+- [x] Per-role / per-task model pinning — pin a model on the task (`meta.taskModel`) or per role on the app (`bridge.json` → `apps[].roleModels`, keyed by base role or `"*"`); every pin is optional, an absent one keeps the CLI default, and an app-level pin wins over the task-level one
 - [x] LLM-assisted repo profiles — an opt-in `claude -p` pass rewrites each app's summary / features on an explicit refresh, one repo at a time, falling back to the heuristic scan on any error
 - [x] UI-managed role playbooks + packaging — add a `security-auditor` or `perf-tuner` from Settings, playbook and all (`.bridge-state/roles.json`), export/import the set as one JSON file; a custom role can only ever be *more* restricted than the built-in it sits beside
 
