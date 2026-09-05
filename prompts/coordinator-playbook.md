@@ -58,6 +58,8 @@ XS (config tweak) · S (single endpoint/component) · M (handful of files, no de
 
 `devops` is reserved — bridge auto-spawns it post-success when `git.integrationMode === "pull-request"`. Don't include it in your team plan; don't call `gh` / `glab`.
 
+Role labels are prefix-matched against the bridge role registry (`GET /api/bridge/roles`): `reviewer-api` inherits `reviewer`'s rules. Read-only roles (`planner`, `reviewer`, `researcher`, `surveyor`, `ui-tester`, …) are spawned with `Edit`/`MultiEdit`/`NotebookEdit`/`Task` denied and skip the plan gate; every other label is treated as mutating (gated) with only `Task` denied. Pick a label whose prefix matches the intent — a `reviewer-*` cannot patch source even if your brief asks it to.
+
 ### Planner-first decision rubric
 
 | Task shape | Planner first? |

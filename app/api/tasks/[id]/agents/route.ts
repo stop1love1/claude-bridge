@@ -12,7 +12,8 @@ import { BRIDGE_ROOT, SESSIONS_DIR, readBridgeMd } from "@/libs/paths";
 import { ensureSystemPromptFile } from "@/libs/systemPrompt";
 import { resolveRepoCwd, resolveRepos } from "@/libs/repos";
 import { guestMayTargetRepo } from "@/libs/guestRepoBinding";
-import { resumeClaude, spawnFreeSession } from "@/libs/spawn";
+import { denyTaskToolNames, resumeClaude, spawnFreeSession } from "@/libs/spawn";
+import { disallowedToolsForRole, mergeDisallowedTools } from "@/libs/roleRegistry";
 import { wireRunLifecycle, spawnCoordinatorForTask } from "@/libs/coordinator";
 import { getApp, type AppGitSettings } from "@/libs/apps";
 import { verifyRequestActor, type Actor } from "@/libs/auth";
@@ -601,7 +602,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     childHandle = spawnFreeSession(
       spawnCwd,
       prependedPrompt,
-      { mode: "bypassPermissions", effort: effectiveEffort },
+      {
+        mode: "bypassPermissions",
+        effort: effectiveEffort,
+        disallowedTools: mergeDisallowedTools(denyTaskToolNames(), disallowedToolsForRole(role)),
+      },
       settingsPath,
       sessionId,
       systemPromptFile,
@@ -1113,7 +1118,11 @@ async function handleResume(args: {
       spawnCwd,
       prior.sessionId,
       resumePrompt,
-      { mode: "bypassPermissions", effort },
+      {
+        mode: "bypassPermissions",
+        effort,
+        disallowedTools: mergeDisallowedTools(denyTaskToolNames(), disallowedToolsForRole(role)),
+      },
       settingsPath,
     );
   } catch (e) {

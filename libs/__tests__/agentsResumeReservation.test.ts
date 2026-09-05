@@ -72,6 +72,8 @@ vi.mock("../spawn", () => ({
   spawnFreeSession: () => {
     throw new Error("spawnFreeSession should not be reached in these resume tests");
   },
+  // The route merges this with the role registry's deny-list on every resume.
+  denyTaskToolNames: () => ["Task"],
 }));
 
 const writeSessionSettingsShouldThrow = vi.hoisted(() => ({ value: false }));

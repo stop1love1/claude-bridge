@@ -1,3 +1,4 @@
+import { resolveRole } from "./roleRegistry";
 
 export type IntakeStatus =
   | "none"
@@ -40,21 +41,10 @@ export interface IntakeRecord {
   updatedAt: string;
 }
 
-const NON_MUTATING_ROLES = [
-  "planner",
-  "reviewer",
-  "ui-tester",
-  "semantic-verifier",
-  "style-critic",
-  "devops",
-];
-
+// The role → mutating table lives in `libs/roleRegistry.ts` so the plan gate
+// and the per-role tool-restriction applied at spawn time can never disagree.
 export function isMutatingRole(role: string): boolean {
-  const r = role.toLowerCase();
-  for (const base of NON_MUTATING_ROLES) {
-    if (r === base || r.startsWith(base + "-")) return false;
-  }
-  return true;
+  return resolveRole(role).mutating;
 }
 
 export type ApproverActor =

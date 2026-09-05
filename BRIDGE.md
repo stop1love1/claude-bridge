@@ -53,6 +53,7 @@ After finishing a cross-repo task:
 | `prompts/coordinator.md` | Coordinator prompt template | Bridge maintainers | very low |
 | `prompts/report-template.md` | Child agent report contract (canonical copy; `libs/childPrompt.ts` injects it into every child) | Bridge maintainers | very low |
 | `prompts/playbooks/<role>.md` | Per-role playbook (style-critic, semantic-verifier, ui-tester, devops, …). Auto-injected into a child whose role matches the file's basename. | Bridge maintainers | low |
+| `libs/roleRegistry.ts` | Role registry: per role, `mutating` (drives the plan gate) and `disallowedTools` (passed as `--disallowed-tools` on every `/agents` spawn/resume). Prefix-matched (`reviewer-api` → `reviewer`); unknown roles are mutating with only `Task` denied. Inspect via `GET /api/bridge/roles`. | Bridge maintainers | low |
 | `prompts/tasks.md` | Legacy notebook — runtime state lives in `sessions/<id>/meta.json` | (none — bridge writes meta.json) | n/a |
 | `prompts/decisions.md` | Decisions log (append-only, dated) | Any repo | low |
 | `prompts/questions.md` | Open questions between repos | Repo that asks | low |
