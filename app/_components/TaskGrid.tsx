@@ -136,7 +136,7 @@ function GridCard({
           {repoSet.map((r) => (
             <span
               key={r}
-              className="text-[9px] font-mono font-semibold px-1 py-px rounded bg-primary/10 text-primary truncate max-w-[100px]"
+              className="text-[9px] font-mono font-semibold px-1 py-px rounded bg-primary/10 text-primary truncate max-w-25"
               title={r}
             >
               {r}
@@ -473,7 +473,7 @@ export function TaskGrid({
                   onDrop={onDrop}
                   className={`flex flex-col rounded-lg border-2 ${
                     isDropTarget ? "border-primary bg-primary/10" : `${SECTION_ACCENT[section]} bg-secondary/30`
-                  } min-h-[160px] transition-colors`}
+                  } min-h-40 transition-colors`}
                 >
                   <div className="flex items-center justify-between px-3 py-2 border-b border-border/60">
                     <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground font-semibold">

@@ -331,11 +331,11 @@ function Dashboard() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search tasks"
           aria-label="Search tasks"
-          className="flex-1 min-w-[120px] max-w-sm h-7 text-xs"
+          className="flex-1 min-w-30 max-w-sm h-7 text-xs"
         />
         <Select value={appFilter} onValueChange={setAppFilter}>
           <SelectTrigger
-            className="h-7 px-2 text-xs gap-1 [&>span]:truncate w-[110px] sm:w-[150px]"
+            className="h-7 px-2 text-xs gap-1 [&>span]:truncate w-27.5 sm:w-37.5"
             title="Filter tasks by target app"
           >
             <SelectValue />

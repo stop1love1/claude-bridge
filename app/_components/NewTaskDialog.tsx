@@ -363,7 +363,7 @@ function NewTaskDialogBody({
           }}
           placeholder="What needs to happen? First line becomes the task title; rest is context, acceptance criteria, contract links…"
           rows={8}
-          className="font-mono min-h-[180px]"
+          className="font-mono min-h-45"
         />
 
         <DialogFooter>
