@@ -99,7 +99,7 @@ describe("countReadsBeforeEdit", () => {
 
     it("looks past a leading cd and an env assignment", () => {
       const text = jsonlWithInput([
-        bash("cd D:/projects/claude-bridge && cat libs/spawn.ts"),
+        bash("cd /srv/test-bridge && cat libs/spawn.ts"),
         bash("cd /repo; FOO=1 sed -n 1,40p libs/meta.ts"),
         { name: "Write", input: { file_path: "/repo/plan.md" } },
       ]);

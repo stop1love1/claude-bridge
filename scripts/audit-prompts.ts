@@ -138,12 +138,12 @@ function buildSampleChildPrompt(taskId: string | null): string {
     childSessionId: "00000000-0000-0000-0000-000000000002",
     role: "coder",
     repo: "edusoft-lms-api",
-    repoCwd: "D:/Edusoft/edusoft-lms-api",
+    repoCwd: join(REPO_ROOT, "..", "edusoft-lms-api"),
     contextBlock: "## Repo context\n\nHEAD: abc1234 — fix(auth): rotate refresh tokens\nUntracked: 0\nRecent: …",
     coordinatorBody:
       "Implement the `LedgerAccountCodeService` per spec at docs/specs/ledger.md. Add unit tests under src/api/v2/finance/student-ledgers/__tests__. Out of scope: UI changes.",
     profile,
-    bridgeFolder: "claude-bridge",
+    bridgeRoot: REPO_ROOT,
     houseRules: "- prefer named exports\n- no `any`\n- functions ≤ 60 lines",
     playbookBody:
       "**Coder playbook:** read the file you're about to change first, run the per-app verify chain locally before writing the report, never reformat unrelated code.",
