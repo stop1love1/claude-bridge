@@ -10,6 +10,9 @@ import type {
   AppRetry,
   SlashCommandsItemDto,
   ModelChoice,
+  RoleSpec,
+  CustomRoleDef,
+  RoleBundle,
   TunnelEntry,
   TunnelProvider,
   TunnelProviderStatus,
@@ -31,6 +34,18 @@ import type { ActivePipelineRun } from "../pipelineEngine";
 
 export type ReqOpts = { signal?: AbortSignal };
 
+/** Every role write answers with the fresh registry, so callers never refetch. */
+export type RolesResponse = { roles: RoleSpec[]; custom: CustomRoleDef[] };
+
+export type CustomRoleInput = {
+  name: string;
+  mutating: boolean;
+  description?: string;
+  /** Additive denies; the server merges the base deny-list on top. */
+  disallowedTools?: string[];
+  playbook?: string | null;
+};
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
     ...init,
@@ -44,12 +59,37 @@ export const api = {
   repos: () => req<Repo[]>("/repos"),
   models: (opts?: ReqOpts) =>
     req<{ models: ModelChoice[] }>("/models", { signal: opts?.signal }),
+  roles: (opts?: ReqOpts) =>
+    req<RolesResponse>("/bridge/roles", { signal: opts?.signal }),
+  createRole: (body: CustomRoleInput) =>
+    req<RolesResponse & { role: CustomRoleDef }>("/bridge/roles", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateRole: (name: string, patch: Omit<Partial<CustomRoleInput>, "name">) =>
+    req<RolesResponse & { role: CustomRoleDef }>("/bridge/roles", {
+      method: "PATCH",
+      body: JSON.stringify({ ...patch, name }),
+    }),
+  deleteRole: (name: string) =>
+    req<RolesResponse & { ok: true }>(`/bridge/roles?name=${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+  exportRoles: (opts?: ReqOpts) =>
+    req<RoleBundle>("/bridge/roles/bundle", { signal: opts?.signal }),
+  importRoles: (bundle: unknown, mode: "merge" | "replace" = "merge") =>
+    req<RolesResponse & { imported: number; replaced: number; skipped: number }>(
+      "/bridge/roles/bundle",
+      { method: "POST", body: JSON.stringify({ bundle, mode }) },
+    ),
   tasks: () => req<Task[]>("/tasks"),
   createTask: (body: {
     title?: string;
     body: string;
     app?: string | null;
     effort?: EffortLevel | null;
+    /** Task-level `--model` pin; omit or null for the CLI default. */
+    model?: string | null;
     /** "manual" parks the task in TODO instead of spawning a coordinator. */
     dispatch?: "immediate" | "manual";
     /** ISO time; implies dispatch "manual". */
@@ -193,6 +233,8 @@ export const api = {
       description?: string;
       git?: Partial<AppGitSettings>;
       retry?: Partial<Record<keyof AppRetry, number | null>>;
+      /** Key: base role name or "*". Value: a model, or null to clear the pin. */
+      roleModels?: Record<string, string | null>;
     },
   ) =>
     req<App & { migratedTasks?: number }>(`/apps/${encodeURIComponent(name)}`, {
@@ -454,6 +496,13 @@ export const api = {
     req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`, { signal: opts?.signal }),
   updateDetectSettings: (patch: { source: "auto" | "llm" | "heuristic" }) =>
     req<{ source: "auto" | "llm" | "heuristic" }>(`/detect/settings`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  profileSettings: (opts?: ReqOpts) =>
+    req<{ source: "heuristic" | "llm" }>(`/profiles/settings`, { signal: opts?.signal }),
+  updateProfileSettings: (patch: { source: "heuristic" | "llm" }) =>
+    req<{ source: "heuristic" | "llm" }>(`/profiles/settings`, {
       method: "PUT",
       body: JSON.stringify(patch),
     }),

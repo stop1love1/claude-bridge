@@ -2,11 +2,13 @@
 import { normalize } from "node:path";
 import { validateAppPath, type PathGuardFail } from "../pathGuard";
 import { detectVerifyCommands } from "../verifyDetect";
+import { isValidModel } from "../validate";
 import type {
   App,
   AppGitSettings,
   AppQuality,
   AppRetry,
+  AppRoleModels,
   AppVerify,
 } from "./types";
 import {
@@ -331,6 +333,33 @@ export function updateAppRetry(
     }
   }
   target.retry = next;
+  saveApps(apps);
+  return target;
+}
+
+/**
+ * Sets or clears this app's per-role model pins. A key mapped to `null` is
+ * removed; a key mapped to an invalid model is ignored rather than persisted,
+ * so a bad value can never end up in `bridge.json` where dispatch would have
+ * to keep re-rejecting it.
+ */
+export function updateAppRoleModels(
+  name: string,
+  patch: Record<string, string | null | undefined>,
+): App | null {
+  if (!isValidAppName(name)) return null;
+  const apps = loadApps();
+  const target = apps.find((a) => a.name === name);
+  if (!target) return null;
+  const next: AppRoleModels = { ...(target.roleModels ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === undefined || value === "") {
+      delete next[key];
+    } else if (isValidModel(value)) {
+      next[key] = value;
+    }
+  }
+  target.roleModels = Object.keys(next).length > 0 ? next : undefined;
   saveApps(apps);
   return target;
 }

@@ -1,6 +1,6 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   isUserClientConfigured,
   sendUserMessage,
@@ -23,7 +23,8 @@ import { denyTaskToolNames, resumeClaude } from "./spawn";
 import { killChild } from "./spawnRegistry";
 import { releaseRepoReservation } from "./repoReservation";
 import { settleTaskAfterKill } from "./settleTaskAfterKill";
-import { autoDetectApps, loadApps } from "./apps";
+import { autoDetectApps, getApp, loadApps } from "./apps";
+import { resolveModelForContinuation } from "./modelResolve";
 import {
   isValidTaskId,
   SECTION_BLOCKED,
@@ -649,6 +650,14 @@ async function commandContinue(idArg: string | undefined): Promise<string> {
     resumeClaude(BRIDGE_ROOT, coord.sessionId, message, {
       mode: "bypassPermissions",
       disallowedTools: denyTaskToolNames(),
+      // Same continuation rule as every other resume: re-pin the model this
+      // coordinator was spawned with rather than dropping it to the default.
+      model: resolveModelForContinuation({
+        priorModel: coord.model ?? null,
+        app: getApp(basename(BRIDGE_ROOT)),
+        role: "coordinator",
+        taskModel: meta?.taskModel ?? null,
+      }),
     });
     return `▶️ Resumed coordinator for \`${idArg}\` \\(\`${coord.sessionId.slice(0, 8)}\`\\)`;
   }

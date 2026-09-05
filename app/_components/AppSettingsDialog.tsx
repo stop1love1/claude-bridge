@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Settings } from "lucide-react";
 import type {
   App,
@@ -8,6 +8,7 @@ import type {
   AppRetry,
   GitBranchMode,
   GitIntegrationMode,
+  RoleSpec,
 } from "@/libs/client/types";
 import { api } from "@/libs/client/api";
 import { appDetailRouteSegment } from "@/libs/client/appRoutes";
@@ -23,7 +24,11 @@ import {
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
+import { useModelChoices } from "./ModelPicker";
 import { useToast } from "./Toasts";
+
+/** Matches `ROLE_MODELS_WILDCARD` on the server: "every role in this app". */
+const ROLE_MODELS_WILDCARD = "*";
 
 interface AppSettingsDialogProps {
   app: App | null;
@@ -129,8 +134,31 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
   const [description, setDescription] = useState<string>(app?.description ?? "");
   const [git, setGit] = useState<AppGitSettings | null>(app?.git ? { ...app.git } : null);
   const [retry, setRetry] = useState<AppRetry>(app?.retry ?? {});
+  const [roleModels, setRoleModels] = useState<Record<string, string>>(
+    () => ({ ...(app?.roleModels ?? {}) }),
+  );
+  const [roles, setRoles] = useState<RoleSpec[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const toast = useToast();
+
+  const open = !!app;
+  const { models, failed: modelsFailed } = useModelChoices(open);
+
+  useEffect(() => {
+    if (!open || roles !== null) return;
+    let cancelled = false;
+    void api
+      .roles()
+      .then((r) => {
+        if (!cancelled) setRoles(r.roles);
+      })
+      .catch(() => {
+        if (!cancelled) setRoles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, roles]);
 
   if (!app || !git) return null;
 
@@ -173,7 +201,14 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
     }
     return false;
   })();
-  const dirty = nameDirty || descriptionDirty || gitDirty || retryDirty;
+  const originalRoleModels = app.roleModels ?? {};
+  const roleModelKeys = Array.from(
+    new Set([...Object.keys(originalRoleModels), ...Object.keys(roleModels)]),
+  );
+  const roleModelsDirty = roleModelKeys.some(
+    (k) => (originalRoleModels[k] ?? null) !== (roleModels[k] ?? null),
+  );
+  const dirty = nameDirty || descriptionDirty || gitDirty || retryDirty || roleModelsDirty;
 
   const submit = async () => {
     if (!APP_NAME_RE.test(trimmedName)) {
@@ -217,6 +252,18 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
           next[k] = after;
         }
         patch.retry = next;
+      }
+      if (roleModelsDirty) {
+        // Only the keys that actually changed travel; a key whose pin was
+        // cleared is sent as null so the server deletes it.
+        const next: Record<string, string | null> = {};
+        for (const k of roleModelKeys) {
+          const before = originalRoleModels[k] ?? null;
+          const after = roleModels[k] ?? null;
+          if (before === after) continue;
+          next[k] = after;
+        }
+        patch.roleModels = next;
       }
       const updated = await api.updateApp(appDetailRouteSegment(app), patch);
       const migrated = updated.migratedTasks ?? 0;
@@ -457,6 +504,61 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
             })}
           </fieldset>
 
+          <fieldset className="grid gap-2 border-t border-border pt-3">
+            <legend className="text-xs font-medium text-foreground mb-1">
+              Model pinning
+            </legend>
+            <p className="text-[11px] text-muted-foreground -mt-1 mb-1">
+              Pins the <span className="font-mono">--model</span> the bridge
+              spawns each role with in this app. A role&apos;s own pin beats
+              the wildcard, and both beat a task-level pin. Leave everything on
+              Default and dispatch behaves exactly as it does with no pin at
+              all. Labelled roles inherit their base — a{" "}
+              <span className="font-mono">coder-api</span> child uses the{" "}
+              <span className="font-mono">coder</span> pin.
+            </p>
+            {modelsFailed && (
+              <p className="text-[11px] text-amber-700">
+                Could not read the model list from the Claude CLI — existing
+                pins are shown but cannot be changed here.
+              </p>
+            )}
+            <RoleModelRow
+              label="All roles"
+              hint="Wildcard fallback for any role without a pin of its own."
+              value={roleModels[ROLE_MODELS_WILDCARD]}
+              models={models}
+              onChange={(v) =>
+                setRoleModels((m) => {
+                  const next = { ...m };
+                  if (v) next[ROLE_MODELS_WILDCARD] = v;
+                  else delete next[ROLE_MODELS_WILDCARD];
+                  return next;
+                })
+              }
+            />
+            {(roles ?? []).map((r) => (
+              <RoleModelRow
+                key={r.name}
+                label={r.name}
+                hint={r.description}
+                value={roleModels[r.name]}
+                models={models}
+                onChange={(v) =>
+                  setRoleModels((m) => {
+                    const next = { ...m };
+                    if (v) next[r.name] = v;
+                    else delete next[r.name];
+                    return next;
+                  })
+                }
+              />
+            ))}
+            {roles === null && (
+              <p className="text-[11px] text-muted-foreground">Reading the role registry…</p>
+            )}
+          </fieldset>
+
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
               Cancel
@@ -468,6 +570,46 @@ export function AppSettingsDialog({ app, onClose, onSaved }: AppSettingsDialogPr
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function RoleModelRow({
+  label,
+  hint,
+  value,
+  models,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: string | undefined;
+  models: { value: string; label: string }[] | null;
+  onChange: (next: string | undefined) => void;
+}) {
+  // A pin already saved for a model the CLI no longer advertises still has to
+  // be selectable, or opening this dialog would silently drop it on save.
+  const options = models ?? [];
+  const missing = value && !options.some((m) => m.value === value) ? value : null;
+  return (
+    <div className="grid gap-1 rounded-md border border-border p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium font-mono">{label}</span>
+        <select
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value || undefined)}
+          className="h-7 max-w-[60%] rounded border border-input bg-background px-2 text-xs font-mono"
+        >
+          <option value="">Default (no pin)</option>
+          {missing && <option value={missing}>{missing} (not in CLI list)</option>}
+          {options.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <span className="text-[11px] text-muted-foreground">{hint}</span>
+    </div>
   );
 }
 

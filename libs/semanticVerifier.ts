@@ -29,6 +29,7 @@ import {
   renderStrategyPrefix,
 } from "./retryLadder";
 import { logError, logWarn } from "./log";
+import { resolveModelForContinuation } from "./modelResolve";
 
 export const SEMANTIC_VERIFIER_ROLE = "semantic-verifier";
 export const SEMANTIC_VERIFIER_RETRY_SUFFIX = "-svretry";
@@ -447,6 +448,14 @@ export async function spawnSemanticVerifierRetry(args: {
   });
   if (!elig.eligible) return null;
   const parsed = parseRole(finishedRun.role);
+  // Same continuation rule as the other retry ladders: re-pin the model the
+  // run was spawned with unless the app/task config supplies one.
+  const model = resolveModelForContinuation({
+    priorModel: finishedRun.model ?? null,
+    app,
+    role: finishedRun.role,
+    taskModel: meta.taskModel ?? null,
+  });
   const maxAttempts = maxAttemptsFor(app?.retry, "semantic");
 
   const strategyPrefix = renderStrategyPrefix({
@@ -482,7 +491,7 @@ export async function spawnSemanticVerifierRetry(args: {
     childHandle = spawnFreeSession(
       spawnCwd,
       retryPrompt,
-      { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() },
+      { mode: "bypassPermissions", disallowedTools: denyTaskToolNames(), model },
       settingsPath,
       sessionId,
     );
@@ -496,6 +505,7 @@ export async function spawnSemanticVerifierRetry(args: {
       parentSessionId: finishedRun.parentSessionId ?? null,
       retryOf: finishedRun.sessionId,
       retryAttempt: elig.nextAttempt,
+      model: model ?? null,
       ...inheritWorktreeFields(finishedRun),
     };
     await appendRun(sessionsDir, retryRun);

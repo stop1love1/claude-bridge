@@ -12,6 +12,18 @@ vi.mock("../paths", () => ({
   get SESSIONS_DIR() {
     return sessionsRoot;
   },
+  // resumeSession reads the app registry to resolve the run's model pin, and
+  // that chain reaches bridgeManifest → USER_CLAUDE_DIR. Point it at the same
+  // throwaway dir so no real ~/.claude/bridge.json is touched.
+  get USER_CLAUDE_DIR() {
+    return sessionsRoot;
+  },
+  get BRIDGE_ROOT() {
+    return sessionsRoot;
+  },
+  get BRIDGE_STATE_DIR() {
+    return sessionsRoot;
+  },
 }));
 
 const fakeChild = { on: () => { }, once: () => { } } as unknown as ChildProcess;

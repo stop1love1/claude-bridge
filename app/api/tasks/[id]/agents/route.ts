@@ -44,7 +44,8 @@ import { ensureFreshStyleFingerprint } from "@/libs/styleStore";
 import { attachReferences } from "@/libs/contextAttach";
 import { buildRecentDirection } from "@/libs/recentDirection";
 import { isValidTaskId } from "@/libs/tasks";
-import { badRequest, isValidAgentRole, isValidEffort, isValidSessionId, type EffortLevel } from "@/libs/validate";
+import { badRequest, isValidAgentRole, isValidEffort, isValidModel, isValidSessionId, type EffortLevel } from "@/libs/validate";
+import { resolveModelForContinuation, resolveModelForRun } from "@/libs/modelResolve";
 import { safeErrorMessage, serverError } from "@/libs/errorResponse";
 import { checkRateLimit } from "@/libs/rateLimit";
 import { getClientIp } from "@/libs/clientIp";
@@ -74,6 +75,7 @@ interface AgentBody {
   noSpeculative?: boolean;
   mode?: "spawn" | "resume";
   effort?: EffortLevel;
+  model?: string;
   priorSessionId?: string;
 }
 
@@ -165,6 +167,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
   const requestedEffort: EffortLevel | undefined = isValidEffort(body.effort)
     ? body.effort
+    : undefined;
+
+  if (body.model !== undefined && !isValidModel(body.model)) {
+    return badRequest("invalid model");
+  }
+  const requestedModel: string | undefined = isValidModel(body.model)
+    ? body.model
     : undefined;
 
   if (!role) {
@@ -303,6 +312,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       priorSessionId: priorSessionId ?? null,
       runs: meta.runs,
       effort: effectiveEffort,
+      requestedModel,
+      taskModel: meta.taskModel ?? null,
     });
   }
 
@@ -331,6 +342,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   const app = getApp(repo);
+  const effectiveModel = resolveModelForRun({
+    requested: requestedModel,
+    app,
+    role,
+    taskModel: meta.taskModel ?? null,
+  });
   const effGit = app ? effectiveGitForActor(app.git, actor, id) : null;
   const useWorktree = !!(app && effGit && effGit.worktreeMode === "enabled");
 
@@ -558,6 +575,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       worktreeBranch: worktreeBranch ?? null,
       worktreeBaseBranch: worktreeBaseBranch ?? null,
       speculativeGroup: speculative.groupId,
+      model: effectiveModel ?? null,
     },
     (existing) =>
       !skipDedup &&
@@ -605,6 +623,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       {
         mode: "bypassPermissions",
         effort: effectiveEffort,
+        model: effectiveModel,
         disallowedTools: mergeDisallowedTools(denyTaskToolNames(), disallowedToolsForRole(role)),
       },
       settingsPath,
@@ -914,6 +933,8 @@ async function handleResume(args: {
   priorSessionId: string | null;
   runs: Run[];
   effort?: EffortLevel;
+  requestedModel?: string;
+  taskModel?: string | null;
 }): Promise<NextResponse> {
   const {
     sessionsDir,
@@ -926,6 +947,8 @@ async function handleResume(args: {
     priorSessionId,
     runs,
     effort,
+    requestedModel,
+    taskModel,
   } = args;
 
   let prior: Run;
@@ -1041,16 +1064,30 @@ async function handleResume(args: {
     spawnCwd = prior.worktreePath;
   }
 
+  // A resume re-pins the model the session was spawned with unless this call
+  // asked for a different one — see resolveModelForContinuation.
+  const resumeModel = resolveModelForContinuation({
+    requested: requestedModel,
+    priorModel: prior.model ?? null,
+    app: getApp(repo),
+    role,
+    taskModel: taskModel ?? null,
+  });
+
   const priorRoleChanged = prior.role !== role;
   const priorStatusSnapshot = prior.status;
   const priorEndedAtSnapshot = prior.endedAt;
   const priorRoleSnapshot = prior.role;
+  const priorModelSnapshot = prior.model ?? null;
   let claim: ClaimRunForResumeResult;
   try {
     claim = await claimRunForResume(
       sessionsDir,
       prior.sessionId,
-      priorRoleChanged ? { role } : {},
+      {
+        ...(priorRoleChanged ? { role } : {}),
+        model: resumeModel ?? null,
+      },
     );
   } catch (e) {
     logError("agents", "failed to flip resume run back to running", e);
@@ -1082,6 +1119,7 @@ async function handleResume(args: {
         await updateRun(sessionsDir, prior.sessionId, {
           status: priorStatusSnapshot,
           endedAt: priorEndedAtSnapshot,
+          model: priorModelSnapshot,
           ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
         });
       } catch (uErr) {
@@ -1121,15 +1159,19 @@ async function handleResume(args: {
       {
         mode: "bypassPermissions",
         effort,
+        model: resumeModel,
         disallowedTools: mergeDisallowedTools(denyTaskToolNames(), disallowedToolsForRole(role)),
       },
       settingsPath,
     );
   } catch (e) {
     try {
+      // The claim already wrote the resume's model onto the row; put the
+      // spawned-with value back so a later retry re-pins what actually ran.
       await updateRun(sessionsDir, prior.sessionId, {
         status: priorStatusSnapshot,
         endedAt: priorEndedAtSnapshot,
+        model: priorModelSnapshot,
         ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
       });
     } catch (uErr) {

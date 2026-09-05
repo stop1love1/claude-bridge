@@ -124,6 +124,43 @@ export interface App {
   symbolDirs: string[];
   quality: AppQuality;
   retry: AppRetry;
+  /**
+   * Per-role `--model` pins. Keys are base role names ("coder") or the "*"
+   * wildcard; absent means "no pin", i.e. the CLI default.
+   */
+  roleModels?: Record<string, string>;
+}
+
+export interface RoleSpec {
+  name: string;
+  mutating: boolean;
+  orchestrator: boolean;
+  disallowedTools: string[];
+  playbook: string | null;
+  description: string;
+}
+
+/**
+ * An operator-defined role from `.bridge-state/roles.json` — the editable
+ * half of the registry. `disallowedTools` here is additive: the server merges
+ * the base deny-list for `mutating` on top, so what a run actually gets is the
+ * `RoleSpec` of the same name, never this list on its own.
+ */
+export interface CustomRoleDef {
+  name: string;
+  mutating: boolean;
+  description: string;
+  disallowedTools: string[];
+  playbook: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoleBundle {
+  version: 1;
+  kind: "bridge-roles";
+  exportedAt: string;
+  roles: CustomRoleDef[];
 }
 
 export interface SessionSummary {

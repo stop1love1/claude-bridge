@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GitBranch, Plus, Bookmark, BookmarkPlus, X } from "lucide-react";
 import type { App, Repo, EffortLevel } from "@/libs/client/types";
 import { EffortControl } from "./EffortControl";
+import { ModelPicker } from "./ModelPicker";
 import {
   type TaskTemplate,
   allTemplates,
@@ -35,6 +36,8 @@ export interface NewTaskInput {
   body: string;
   app: string | null;
   effort: EffortLevel | null;
+  /** Task-level `--model` pin, or null to leave every run on the CLI default. */
+  model: string | null;
   /** "manual" parks the task in TODO; "immediate" spawns a coordinator now. */
   dispatch: "immediate" | "manual";
   /** ISO start time for a parked task, or null. */
@@ -122,6 +125,7 @@ function NewTaskDialogBody({
   const [body, setBody] = useState("");
   const [app, setApp] = useState<string>(APP_AUTO);
   const [effort, setEffort] = useState<EffortLevel | undefined>(undefined);
+  const [model, setModel] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [templates, setTemplates] = useState<TaskTemplate[]>(() => allTemplates());
@@ -164,6 +168,7 @@ function NewTaskDialogBody({
         body: trimmed,
         app: app === APP_AUTO ? null : app,
         effort: effort ?? null,
+        model: model ?? null,
         dispatch: draft ? "manual" : "immediate",
         scheduledAt: draft ? localInputToIso(startAt) : null,
       });
@@ -330,6 +335,20 @@ function NewTaskDialogBody({
             Effort tier for the coordinator and the children it spawns.
             <span className="font-medium"> Ultracode</span> runs at xhigh and
             tells agents to fan out work aggressively via bridge dispatch.
+          </p>
+        </div>
+
+        <div className="grid gap-1.5">
+          <div className="rounded-md border border-border px-3 py-2">
+            <div className="text-[11px] uppercase tracking-wider font-medium text-muted-foreground mb-1">
+              Model
+            </div>
+            <ModelPicker value={model} onChange={setModel} />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Pins every run under this task — coordinator, children, and gate
+            retries. An app that sets its own per-role model in App settings
+            wins over this pin; Default leaves each run on the CLI default.
           </p>
         </div>
 

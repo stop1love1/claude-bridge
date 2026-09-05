@@ -42,6 +42,7 @@ function metaToTask(meta: Meta): Task {
     origin: meta.origin ?? "manual",
     workflowId: meta.workflowId ?? null,
     effort: meta.taskEffort ?? null,
+    model: meta.taskModel ?? null,
     intakeStatus: meta.intake?.status ?? null,
     createdAt: meta.createdAt,
     dispatch: meta.dispatch ?? "immediate",
@@ -146,6 +147,7 @@ export function createTask(input: {
   origin?: "manual" | "cron" | "pipeline";
   workflowId?: string | null;
   effort?: Task["effort"];
+  model?: Task["model"];
   dispatch?: Task["dispatch"];
   scheduledAt?: string | null;
 }): Task {
@@ -157,6 +159,7 @@ export function createTask(input: {
   const origin = input.origin ?? "manual";
   const workflowId = input.workflowId ?? null;
   const taskEffort = input.effort ?? null;
+  const taskModel = input.model ?? null;
   const dispatch = input.dispatch ?? "immediate";
   const scheduledAt = input.scheduledAt ?? null;
   createMeta(dir, {
@@ -168,6 +171,7 @@ export function createTask(input: {
     taskChecked: false,
     taskApp,
     taskEffort,
+    taskModel,
     createdAt: now.toISOString(),
     origin,
     workflowId,
@@ -186,6 +190,7 @@ export function createTask(input: {
     origin,
     workflowId,
     effort: taskEffort,
+    model: taskModel,
     createdAt: now.toISOString(),
     dispatch,
     scheduledAt,

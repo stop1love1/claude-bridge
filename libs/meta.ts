@@ -32,6 +32,13 @@ export interface Run {
   parentSessionId?: string | null;
   retryOf?: string | null;
   retryAttempt?: number | null;
+  /**
+   * The `--model` this run was spawned with, or null/absent when it was
+   * spawned on the CLI default. Recorded so a retry or resume of the same
+   * session re-pins the same model instead of silently sliding back to the
+   * default halfway through a task.
+   */
+  model?: string | null;
   verify?: RunVerify | null;
   verifier?: RunVerifier | null;
   styleCritic?: RunStyleCritic | null;
@@ -121,6 +128,11 @@ export interface Meta {
   taskChecked: boolean;
   taskApp?: string | null;
   taskEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | null;
+  /**
+   * Task-level model pin: an alias (`opus`) or a full model id. Absent/null
+   * means "no task pin" — the app's `roleModels` or the CLI default decides.
+   */
+  taskModel?: string | null;
   createdAt: string;
   origin?: "manual" | "cron" | "pipeline";
   workflowId?: string | null;

@@ -17,7 +17,17 @@ vi.mock("../spawn", () => ({
   },
 }));
 
-const fakeMeta = {
+const fakeMeta: {
+  taskId: string;
+  taskTitle: string;
+  taskBody: string;
+  taskStatus: string;
+  taskSection: string;
+  taskChecked: boolean;
+  createdAt: string;
+  runs: unknown[];
+  taskModel?: string | null;
+} = {
   taskId: "t_20260424_001",
   taskTitle: "fake task",
   taskBody: "fake body",
@@ -27,6 +37,12 @@ const fakeMeta = {
   createdAt: "2026-04-24T00:00:00Z",
   runs: [],
 };
+
+// The coordinator resolves its model against the *bridge's* own app entry, so
+// the registry is mocked here rather than read off the operator's real
+// ~/.claude/bridge.json.
+const getAppMock = vi.hoisted(() => vi.fn<(name: string) => unknown>());
+vi.mock("../apps", () => ({ getApp: (name: string) => getAppMock(name) }));
 vi.mock("../meta", () => ({
   readMeta: () => fakeMeta,
   appendRun: vi.fn().mockResolvedValue(undefined),
@@ -52,6 +68,9 @@ vi.mock("../detect", () => ({
 
 beforeEach(() => {
   spawnCalls.length = 0;
+  getAppMock.mockReset();
+  getAppMock.mockReturnValue(null);
+  fakeMeta.taskModel = null;
   vi.resetModules();
 });
 
@@ -173,5 +192,42 @@ describe("spawnCoordinatorForTask — prompt rendering", () => {
     expect(prompt).toContain(`folder=\`${BRIDGE_FOLDER}\``);
     expect(prompt).not.toContain("{{EXAMPLE_REPO}}");
     expect(prompt).not.toContain("{{BRIDGE_FOLDER}}");
+  });
+});
+
+describe("spawnCoordinatorForTask — model pinning", () => {
+  async function spawnAnd(): Promise<Record<string, unknown>> {
+    const { spawnCoordinatorForTask } = await import("../coordinator");
+    await spawnCoordinatorForTask({ id: "t_20260424_004", title: "t", body: "b", app: null });
+    return (spawnCalls[0].opts as { settings: Record<string, unknown> }).settings;
+  }
+
+  it("passes no model when neither the task nor the bridge app pins one", async () => {
+    expect((await spawnAnd()).model).toBeUndefined();
+  });
+
+  it("uses the task-level pin", async () => {
+    fakeMeta.taskModel = "claude-opus-5";
+    expect((await spawnAnd()).model).toBe("claude-opus-5");
+  });
+
+  it("lets the bridge app's coordinator pin win over the task pin", async () => {
+    fakeMeta.taskModel = "claude-opus-5";
+    getAppMock.mockReturnValue({ roleModels: { coordinator: "claude-sonnet-5" } });
+    expect((await spawnAnd()).model).toBe("claude-sonnet-5");
+  });
+
+  it("falls back to the bridge app's wildcard pin", async () => {
+    getAppMock.mockReturnValue({ roleModels: { coder: "claude-opus-5", "*": "claude-sonnet-5" } });
+    expect((await spawnAnd()).model).toBe("claude-sonnet-5");
+  });
+
+  it("records the resolved model on the queued run row", async () => {
+    fakeMeta.taskModel = "claude-opus-5";
+    const meta = await import("../meta");
+    await spawnAnd();
+    expect(vi.mocked(meta.appendRun).mock.calls.at(-1)?.[1]).toMatchObject({
+      model: "claude-opus-5",
+    });
   });
 });

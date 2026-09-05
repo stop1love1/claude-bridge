@@ -12,6 +12,7 @@ import type {
   App,
   AppDispatch,
   AppGitSettings,
+  AppRoleModels,
   AppMemory,
   AppQuality,
   AppRetry,
@@ -30,8 +31,10 @@ import {
   DEFAULT_GIT_SETTINGS,
   DEFAULT_QUALITY,
   DEFAULT_VERIFY,
+  ROLE_MODELS_WILDCARD,
 } from "./types";
 import { logError } from "../log";
+import { isValidModel } from "../validate";
 
 export const APP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SCHEMA_VERSION = 1;
@@ -258,6 +261,31 @@ function normalizeSpeculativeAngles(raw: unknown): SpeculativeAngle[] {
   return out.slice(0, SPECULATIVE_MAX_N);
 }
 
+const ROLE_MODEL_KEY_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * Reads `roleModels` off a manifest entry. Keys must be a plain role label or
+ * the `"*"` wildcard, values must survive `isValidModel` — anything else is
+ * dropped silently, the same way an unparseable `--model` is dropped at spawn
+ * time. `undefined` (not `{}`) when nothing valid is left, so an app that never
+ * configured this keeps serializing byte-identically to today.
+ */
+function normalizeRoleModels(raw: unknown): AppRoleModels | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: AppRoleModels = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const k = key.trim();
+    if (k !== ROLE_MODELS_WILDCARD && !ROLE_MODEL_KEY_RE.test(k)) continue;
+    if (!isValidModel(value)) continue;
+    out[k] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function serializeRoleModels(m: AppRoleModels | undefined): AppRoleModels | undefined {
+  return normalizeRoleModels(m);
+}
+
 function serializeDispatch(d: AppDispatch | undefined): AppDispatch | undefined {
   if (!d || !d.speculative || !d.speculative.enabled) return undefined;
   const speculative: NonNullable<AppDispatch["speculative"]> = {
@@ -340,6 +368,7 @@ function parseAppsFromManifest(parsed: Partial<BridgeManifest> | Record<string, 
     const retryRaw = (raw as { retry?: unknown }).retry;
     const memoryRaw = (raw as { memory?: unknown }).memory;
     const dispatchRaw = (raw as { dispatch?: unknown }).dispatch;
+    const roleModels = normalizeRoleModels((raw as { roleModels?: unknown }).roleModels);
     if (!isValidAppName(name)) continue;
     if (typeof rawPath !== "string" || !rawPath.trim()) continue;
     out.push({
@@ -356,6 +385,7 @@ function parseAppsFromManifest(parsed: Partial<BridgeManifest> | Record<string, 
       retry: normalizeRetry(retryRaw),
       memory: normalizeMemory(memoryRaw),
       dispatch: normalizeDispatch(dispatchRaw),
+      ...(roleModels ? { roleModels } : {}),
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
@@ -391,6 +421,8 @@ export function serializeApps(apps: App[]): string {
       if (memory) entry.memory = memory;
       const dispatch = serializeDispatch(a.dispatch);
       if (dispatch) entry.dispatch = dispatch;
+      const roleModels = serializeRoleModels(a.roleModels);
+      if (roleModels) entry.roleModels = roleModels;
       return entry;
     }),
   };
@@ -444,6 +476,8 @@ export function saveApps(apps: App[]): void {
     if (memory) entry.memory = memory;
     const dispatch = serializeDispatch(a.dispatch);
     if (dispatch) entry.dispatch = dispatch;
+    const roleModels = serializeRoleModels(a.roleModels);
+    if (roleModels) entry.roleModels = roleModels;
     return entry;
   });
   updateBridgeManifest((m) => ({

@@ -1,6 +1,14 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_LOGIC_DIR } from "./paths";
+import {
+  matchLongest,
+  MUTATING_DENY,
+  READ_ONLY_DENY,
+  ROLE_DEFS,
+  type RoleDef,
+} from "./roleDefs";
+import { findCustomRole, listCustomRoles, type CustomRoleDef } from "./roleStore";
 
 /**
  * Single source of truth for what a child role is allowed to do.
@@ -30,100 +38,8 @@ export interface RoleSpec {
   description: string;
 }
 
-const READ_ONLY_DENY = ["Edit", "MultiEdit", "NotebookEdit", "Task"];
-const MUTATING_DENY = ["Task"];
-
-interface RoleDef {
-  name: string;
-  mutating: boolean;
-  orchestrator?: boolean;
-  description: string;
-}
-
-const ROLE_DEFS: RoleDef[] = [
-  {
-    // Kept `mutating: true` on purpose: the coordinator writes summary.md and
-    // is the role the plan gate is allowed to kick planning from, exactly as
-    // before this entry existed (it used to fall through to defaultRoleSpec).
-    name: "coordinator",
-    mutating: true,
-    orchestrator: true,
-    description: "Bridge-reserved: orchestrates one task, dispatches children, edits no app tree.",
-  },
-  {
-    name: "coder",
-    mutating: true,
-    description: "Implements a feature or change end-to-end in one repo.",
-  },
-  {
-    name: "fixer",
-    mutating: true,
-    description: "Fixes a specific bug or a finding from a reviewer/tester.",
-  },
-  {
-    name: "api-builder",
-    mutating: true,
-    description: "Builds the backend half of a cross-repo feature.",
-  },
-  {
-    name: "ui-builder",
-    mutating: true,
-    description: "Builds the frontend half of a cross-repo feature.",
-  },
-  {
-    name: "writer",
-    mutating: true,
-    description: "Produces docs or prose deliverables inside the repo.",
-  },
-  {
-    name: "planner",
-    mutating: false,
-    description: "Drafts plan.md and intake.json; never edits source.",
-  },
-  {
-    name: "reviewer",
-    mutating: false,
-    description: "Reviews a diff or module and reports findings with file:line.",
-  },
-  {
-    name: "researcher",
-    mutating: false,
-    description: "Read-only research or audit; answers a question about the code.",
-  },
-  {
-    name: "surveyor",
-    mutating: false,
-    description: "Maps an area before a refactor; hands findings to a coder.",
-  },
-  {
-    name: "ui-tester",
-    mutating: false,
-    description: "Drives the rendered UI (Playwright MCP) and reports bugs.",
-  },
-  {
-    name: "semantic-verifier",
-    mutating: false,
-    description: "Post-run gate: checks the change matches the task intent.",
-  },
-  {
-    name: "style-critic",
-    mutating: false,
-    description: "Post-run gate: checks the diff against the house style.",
-  },
-  {
-    name: "memory-distill",
-    mutating: false,
-    description: "Post-run: distills durable lessons into the app memory.",
-  },
-  {
-    name: "devops",
-    mutating: false,
-    description: "Bridge-reserved: opens the PR when integrationMode is pull-request.",
-  },
-];
-
 // Same convention as `libs/playbooks.ts` (`prompts/playbooks/<role>.md`), spelled
-// out here so the registry stays a leaf module: planGate imports it, and tests
+// out here rather than imported from it: planGate imports this module, and tests
 // that stub `../playbooks` must not be able to break role resolution.
 function hasPlaybook(role: string): boolean {
   return existsSync(join(BRIDGE_LOGIC_DIR, "playbooks", `${role}.md`));
@@ -140,8 +56,39 @@ function specFor(def: RoleDef): RoleSpec {
   };
 }
 
+/**
+ * Turn an operator-defined role into a spec.
+ *
+ * Two things are deliberately not readable from the stored definition:
+ *
+ *  - `orchestrator` is always false. An orchestrator skips the one-run-per-repo
+ *    reservation; that is a bridge-internal privilege, never something the UI
+ *    hands out.
+ *  - the deny-list is computed here, from `mutating`, and the stored list can
+ *    only *add* to it. `mergeDisallowedTools` is the single exit, so a custom
+ *    role's deny-list is a superset of the built-in one for its class — a
+ *    role that declares itself read-only (and therefore skips the plan gate)
+ *    always gets the read-only denies, whatever the payload asked for.
+ */
+function specForCustom(def: CustomRoleDef): RoleSpec {
+  const base = def.mutating ? MUTATING_DENY : READ_ONLY_DENY;
+  return {
+    name: def.name,
+    mutating: def.mutating,
+    orchestrator: false,
+    disallowedTools: mergeDisallowedTools(base, def.disallowedTools),
+    playbook: def.playbook !== null || hasPlaybook(def.name) ? def.name : null,
+    description: def.description,
+  };
+}
+
+/**
+ * The built-in table first, then any operator-defined roles from
+ * `.bridge-state/roles.json`. With no overlay file this is exactly
+ * `ROLE_DEFS.map(specFor)` — the pre-overlay behaviour.
+ */
 export function listRoles(): RoleSpec[] {
-  return ROLE_DEFS.map(specFor);
+  return [...ROLE_DEFS.map(specFor), ...listCustomRoles().map(specForCustom)];
 }
 
 export function defaultRoleSpec(role: string): RoleSpec {
@@ -160,16 +107,19 @@ export function defaultRoleSpec(role: string): RoleSpec {
  * `reviewer-2` both resolve to `reviewer`; `coder-phase24` resolves to
  * `coder`. Matching is case-insensitive and picks the longest base so that
  * `ui-tester` never collides with a hypothetical `ui` role.
+ *
+ * Built-ins are matched **before** the operator overlay, so a custom role can
+ * never take over a label a built-in already owns. `roleStore` refuses to
+ * store such a name in the first place; checking in this order means even a
+ * hand-edited `roles.json` cannot loosen `planner` into a mutating role.
  */
 export function resolveRole(role: string): RoleSpec {
   const r = role.trim().toLowerCase();
-  let best: RoleDef | null = null;
-  for (const def of ROLE_DEFS) {
-    if (r === def.name || r.startsWith(def.name + "-")) {
-      if (!best || def.name.length > best.name.length) best = def;
-    }
-  }
-  return best ? specFor(best) : defaultRoleSpec(role);
+  const builtin = matchLongest(ROLE_DEFS, r);
+  if (builtin) return specFor(builtin);
+  const custom = findCustomRole(r);
+  if (custom) return specForCustom(custom);
+  return defaultRoleSpec(role);
 }
 
 /** Tool names to pass as `disallowedTools` when spawning or resuming `role`. */

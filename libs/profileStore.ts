@@ -4,10 +4,18 @@ import { join } from "node:path";
 import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanRepoIfExists, type RepoProfile } from "./repoProfile";
-import { logError } from "./log";
+import { summarizeWithLLM } from "./repoProfileLlm";
+import { getManifestProfileSource } from "./bridgeSettings";
+import { logError, logWarn } from "./log";
 
 export const PROFILE_STORE_VERSION = 1;
 export const PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Wall-clock ceiling for the LLM pass over a whole refresh. Enrichment runs
+ * one repo at a time (never fanned out); once the budget is spent the
+ * remaining repos keep their heuristic profile.
+ */
+export const PROFILE_LLM_BUDGET_MS = 5 * 60 * 1000;
 
 export interface ProfileStore {
   version: number;
@@ -79,6 +87,67 @@ export function refreshOne(repo: RepoLike): ProfileStore {
   if (repo.exists !== false) {
     const profile = scanRepoIfExists(repo.path);
     if (profile) store.profiles[repo.name] = profile;
+  }
+  store.refreshedAt = new Date().toISOString();
+  store.version = PROFILE_STORE_VERSION;
+  saveProfiles(store);
+  return store;
+}
+
+/**
+ * Enrichment gate. Returns the heuristic profile untouched unless the
+ * operator opted into `profiles.source = "llm"`; a failing or slow CLI is
+ * logged and swallowed, never propagated.
+ */
+async function enrich(profile: RepoProfile, deadline: number): Promise<RepoProfile> {
+  if (getManifestProfileSource() !== "llm") return profile;
+  if (Date.now() >= deadline) {
+    logWarn("profile-store", "llm budget spent, keeping heuristic profile", {
+      repo: profile.name,
+    });
+    return profile;
+  }
+  try {
+    return await summarizeWithLLM(profile);
+  } catch (err) {
+    logWarn("profile-store", "llm summary failed (non-fatal)", {
+      repo: profile.name,
+      error: (err as Error).message,
+    });
+    return profile;
+  }
+}
+
+/**
+ * `refreshAll` plus the optional LLM pass. Used by the operator-triggered
+ * refresh endpoint; the synchronous `refreshAll` stays the fast path for
+ * auto-init and TTL refreshes.
+ */
+export async function refreshAllEnriched(repos: RepoLike[]): Promise<ProfileStore> {
+  const store = loadProfiles() ?? emptyStore();
+  const deadline = Date.now() + PROFILE_LLM_BUDGET_MS;
+  for (const r of repos) {
+    if (r.exists === false) continue;
+    const profile = scanRepoIfExists(r.path);
+    if (!profile) continue;
+    store.profiles[r.name] = await enrich(profile, deadline);
+  }
+  store.refreshedAt = new Date().toISOString();
+  store.version = PROFILE_STORE_VERSION;
+  saveProfiles(store);
+  return store;
+}
+
+export async function refreshOneEnriched(repo: RepoLike): Promise<ProfileStore> {
+  const store = loadProfiles() ?? emptyStore();
+  if (repo.exists !== false) {
+    const profile = scanRepoIfExists(repo.path);
+    if (profile) {
+      store.profiles[repo.name] = await enrich(
+        profile,
+        Date.now() + PROFILE_LLM_BUDGET_MS,
+      );
+    }
   }
   store.refreshedAt = new Date().toISOString();
   store.version = PROFILE_STORE_VERSION;

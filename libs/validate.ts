@@ -51,6 +51,29 @@ export function isValidEffort(s: unknown): s is EffortLevel {
   return typeof s === "string" && (EFFORT_LEVELS as readonly string[]).includes(s);
 }
 
+/**
+ * The shape `--model` values are allowed to take. Anything outside it could
+ * smuggle a path or a second CLI flag into the argv we hand to `claude`, so a
+ * failing value is dropped rather than escaped. Aliases (`opus`) and full ids
+ * (`claude-fable-5-1`, `us.anthropic.claude-opus-5`) both fit.
+ *
+ * The leading character must be alphanumeric: `-` is a legal *inner* character,
+ * but a value that begins with one (`--dangerously-skip-permissions`) would be
+ * read by the CLI as a flag of its own rather than as the argument to
+ * `--model`. That matters more now than it did when the only source was the
+ * operator's own picker — a pin can arrive from `bridge.json`, from
+ * `meta.taskModel`, or from an API body.
+ *
+ * This is the single definition: `libs/spawn.ts` gates `--model` on it and
+ * `libs/modelDiscovery.ts` filters discovered values through it, so a model the
+ * picker offers is by construction a model spawn will pass through.
+ */
+export const MODEL_VALUE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+
+export function isValidModel(s: unknown): s is string {
+  return typeof s === "string" && MODEL_VALUE_RE.test(s);
+}
+
 export function isValidSessionId(s: unknown): s is string {
   return typeof s === "string" && UUID_RE.test(s);
 }

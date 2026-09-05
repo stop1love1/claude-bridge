@@ -14,6 +14,8 @@ import {
   renderDetectedScope,
 } from "./detect";
 import { buildTeamHint } from "./teamHints";
+import { getApp } from "./apps";
+import { resolveModelForRun } from "./modelResolve";
 
 export { wireRunLifecycle } from "./runLifecycle";
 import { wireRunLifecycle } from "./runLifecycle";
@@ -68,10 +70,20 @@ export async function spawnCoordinatorForTask(
 ): Promise<string | null> {
   const sessionsDir = join(SESSIONS_DIR, task.id);
 
-  if (!readMeta(sessionsDir)) {
+  const meta = readMeta(sessionsDir);
+  if (!meta) {
     logError("coordinator", "coordinator spawn skipped: meta.json missing", undefined, { taskId: task.id });
     return null;
   }
+
+  // The coordinator runs in the bridge repo, so its per-role pin comes from
+  // the bridge's own app entry — not from the app the task targets, which the
+  // children it dispatches will pick up on their own.
+  const model = resolveModelForRun({
+    app: getApp(basename(BRIDGE_ROOT)),
+    role: "coordinator",
+    taskModel: meta.taskModel ?? null,
+  });
 
   try {
     const sessionId = randomUUID();
@@ -113,6 +125,7 @@ export async function spawnCoordinatorForTask(
       status: "queued",
       startedAt: null,
       endedAt: null,
+      model: model ?? null,
     });
 
     let child;
@@ -126,6 +139,7 @@ export async function spawnCoordinatorForTask(
           mode: "bypassPermissions",
           disallowedTools: ["Task"],
           effort: task.effort ?? undefined,
+          model,
         },
       }));
     } catch (spawnErr) {

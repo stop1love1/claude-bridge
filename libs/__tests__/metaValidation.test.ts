@@ -92,6 +92,70 @@ describe("readMeta shape validation", () => {
     });
     expect(readMeta(dir)).not.toBeNull();
   });
+
+  // Model pinning added `Meta.taskModel` and `Run.model`. Both are optional,
+  // so a meta.json written before they existed has to keep reading — and one
+  // written with them has to survive the round trip, or a retry could not
+  // re-pin the model its run was spawned with.
+  it("reads a meta that predates taskModel / run.model", () => {
+    const dir = join(tmp, "t_pre_model");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({
+        taskId: "t_pre_model",
+        taskTitle: "old",
+        taskBody: "",
+        taskStatus: "todo",
+        taskSection: "TODO",
+        taskChecked: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        runs: [
+          {
+            sessionId: "s1",
+            role: "coder",
+            repo: "app",
+            status: "done",
+            startedAt: null,
+            endedAt: null,
+          },
+        ],
+      }),
+    );
+    const meta = readMeta(dir);
+    expect(meta).not.toBeNull();
+    expect(meta?.taskModel ?? null).toBeNull();
+    expect(meta?.runs[0].model ?? null).toBeNull();
+  });
+
+  it("round-trips taskModel and run.model", async () => {
+    const { appendRun, updateRun } = await import("../meta");
+    const dir = join(tmp, "t_with_model");
+    createMeta(dir, {
+      taskId: "t_with_model",
+      taskTitle: "pinned",
+      taskBody: "",
+      taskStatus: "todo",
+      taskSection: "TODO",
+      taskChecked: false,
+      taskModel: "claude-opus-5",
+      createdAt: new Date().toISOString(),
+    });
+    await appendRun(dir, {
+      sessionId: "s1",
+      role: "coder",
+      repo: "app",
+      status: "queued",
+      startedAt: null,
+      endedAt: null,
+      model: "claude-opus-5",
+    });
+    expect(readMeta(dir)?.taskModel).toBe("claude-opus-5");
+    expect(readMeta(dir)?.runs[0].model).toBe("claude-opus-5");
+
+    await updateRun(dir, "s1", { model: null });
+    expect(readMeta(dir)?.runs[0].model).toBeNull();
+  });
 });
 
 describe("listTasks isolates a corrupt sibling task", () => {

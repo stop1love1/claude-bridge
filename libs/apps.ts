@@ -6,6 +6,7 @@ import type {
   AppMemory,
   AppQuality,
   AppRetry,
+  AppRoleModels,
   AppVerify,
   BridgeManifest,
   GitBranchMode,
@@ -33,6 +34,7 @@ export type {
   AppMemory,
   AppQuality,
   AppRetry,
+  AppRoleModels,
   AppVerify,
   BridgeManifest,
   GitBranchMode,
@@ -76,6 +78,7 @@ import {
   updateAppGitSettings,
   updateAppQuality,
   updateAppRetry,
+  updateAppRoleModels,
   updateAppVerify,
 } from "./apps/crud";
 import type { AddAppFailure, AddAppResult, AppInput, RenameAppFailure } from "./apps/crud";
@@ -93,6 +96,7 @@ export {
   updateAppGitSettings,
   updateAppQuality,
   updateAppRetry,
+  updateAppRoleModels,
   updateAppVerify,
 };
 export type { AddAppFailure, AddAppResult, AppInput, RenameAppFailure };
@@ -100,26 +104,34 @@ export type { AddAppFailure, AddAppResult, AppInput, RenameAppFailure };
 import {
   getManifestDetectScanRoots,
   getManifestDetectSource,
+  getManifestProfileSource,
   getManifestPublicUrl,
   getTunnelAutoStart,
   setManifestDetectScanRoots,
   setManifestDetectSource,
+  setManifestProfileSource,
   setManifestPublicUrl,
   setTunnelAutoStart,
 } from "./bridgeSettings";
-import type { DetectManifestSource, TunnelAutoStart } from "./bridgeSettings";
+import type {
+  DetectManifestSource,
+  ProfileManifestSource,
+  TunnelAutoStart,
+} from "./bridgeSettings";
 
 export {
   getManifestDetectScanRoots,
   getManifestDetectSource,
+  getManifestProfileSource,
   getManifestPublicUrl,
   getTunnelAutoStart,
   setManifestDetectScanRoots,
   setManifestDetectSource,
+  setManifestProfileSource,
   setManifestPublicUrl,
   setTunnelAutoStart,
 };
-export type { DetectManifestSource, TunnelAutoStart };
+export type { DetectManifestSource, ProfileManifestSource, TunnelAutoStart };
 
 import {
   DEFAULT_FORWARD_CHAT,

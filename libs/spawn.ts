@@ -5,6 +5,7 @@ import { emitAlive, emitPartial, emitStatus } from "./sessionEvents";
 import { BRIDGE_PORT, BRIDGE_URL } from "./paths";
 import { getOrCreateInternalToken } from "./auth";
 import { withUltracodeDirective } from "./systemPrompt";
+import { isValidModel } from "./validate";
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 
@@ -41,7 +42,7 @@ function settingsArgs(s: ChatSettings | undefined): string[] {
   if (s.mode && VALID_MODES.has(s.mode)) args.push("--permission-mode", s.mode);
   const { cliEffort } = resolveEffort(s.effort);
   if (cliEffort) args.push("--effort", cliEffort);
-  if (s.model && /^[a-zA-Z0-9._-]+$/.test(s.model)) args.push("--model", s.model);
+  if (isValidModel(s.model)) args.push("--model", s.model);
   if (Array.isArray(s.disallowedTools) && s.disallowedTools.length > 0) {
     const clean = s.disallowedTools.filter(
       (t) => typeof t === "string" && TOOL_NAME_RE.test(t),

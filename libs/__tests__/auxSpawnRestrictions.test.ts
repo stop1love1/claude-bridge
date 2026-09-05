@@ -3,6 +3,7 @@ import { resolve as resolvePath } from "node:path";
 import { readOnlyChildArgs, denyTaskToolNames } from "../spawn";
 import { buildTelegramIntentArgs } from "../telegramIntent";
 import { buildDetectLLMArgs } from "../detect/llm";
+import { buildProfileLLMArgs } from "../repoProfileLlm";
 import { buildScanAppArgs, PROMPT as SCAN_APP_PROMPT } from "../scanApp";
 import { buildCommitMessageArgs } from "../commitMessage";
 
@@ -49,6 +50,24 @@ describe("detect/llm argv", () => {
   it("places the prompt before --disallowed-tools so the CLI's variadic flag parser can't swallow it", () => {
     const args = buildDetectLLMArgs("detect this scope");
     const promptIdx = args.indexOf("detect this scope");
+    const flagIdx = args.indexOf("--disallowed-tools");
+    expect(promptIdx).toBeGreaterThanOrEqual(0);
+    expect(flagIdx).toBeGreaterThan(promptIdx);
+  });
+});
+
+describe("repoProfileLlm argv", () => {
+  it("includes --disallowed-tools", () => {
+    const args = buildProfileLLMArgs("profile this repo");
+    expect(args).toContain("--disallowed-tools");
+    for (const tool of REQUIRED_DENIALS) {
+      expect(args).toContain(tool);
+    }
+  });
+
+  it("places the prompt before --disallowed-tools so the CLI's variadic flag parser can't swallow it", () => {
+    const args = buildProfileLLMArgs("profile this repo");
+    const promptIdx = args.indexOf("profile this repo");
     const flagIdx = args.indexOf("--disallowed-tools");
     expect(promptIdx).toBeGreaterThanOrEqual(0);
     expect(flagIdx).toBeGreaterThan(promptIdx);

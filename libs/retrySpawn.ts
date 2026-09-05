@@ -17,6 +17,7 @@ import {
   type RetryGate,
 } from "./retryLadder";
 import { logError, logWarn } from "./log";
+import { resolveModelForContinuation } from "./modelResolve";
 
 export interface SpawnRetryArgs {
   taskId: string;
@@ -72,6 +73,15 @@ export async function spawnRetry(
   }
 
   const parsed = parseRole(finishedRun.role);
+  // A gate retry continues the same session, so it re-pins the model that
+  // session was spawned with rather than sliding back to the CLI default
+  // halfway through a diff.
+  const model = resolveModelForContinuation({
+    priorModel: finishedRun.model ?? null,
+    app,
+    role: finishedRun.role,
+    taskModel: readMeta(sessionsDir)?.taskModel ?? null,
+  });
   const maxAttempts = maxAttemptsFor(app?.retry, gate);
   const strategyPrefix = renderStrategyPrefix({ gate, attempt: nextAttempt, maxAttempts });
 
@@ -136,7 +146,7 @@ export async function spawnRetry(
       spawnCwd,
       sessionId,
       retryMessage,
-      { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() },
+      { mode: "bypassPermissions", disallowedTools: denyTaskToolNames(), model },
       settingsPath,
     );
   } catch (e) {

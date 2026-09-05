@@ -29,6 +29,9 @@ vi.mock("../gateEscalation", () => ({
 vi.mock("../meta", () => ({
   appendRun: vi.fn().mockResolvedValue(undefined),
   updateRun: vi.fn().mockResolvedValue(undefined),
+  // The gate reads the task's model pin off meta before it spawns; no pin in
+  // these fixtures, so the gate must land on the CLI default.
+  readMeta: vi.fn().mockReturnValue(null),
 }));
 
 const getAppMock = vi.fn();

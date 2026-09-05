@@ -2,7 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { existsSync } from "node:fs";
 import { resolveRepos } from "@/libs/repos";
 import { BRIDGE_ROOT, readBridgeMd } from "@/libs/paths";
-import { refreshAll, refreshOne, type RepoLike } from "@/libs/profileStore";
+import {
+  refreshAllEnriched,
+  refreshOneEnriched,
+  type RepoLike,
+} from "@/libs/profileStore";
 import { isValidAppName } from "@/libs/apps";
 import { badRequest } from "@/libs/validate";
 
@@ -32,10 +36,10 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    const store = refreshOne(target);
+    const store = await refreshOneEnriched(target);
     return NextResponse.json(store);
   }
 
-  const store = refreshAll(repos);
+  const store = await refreshAllEnriched(repos);
   return NextResponse.json(store);
 }

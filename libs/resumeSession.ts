@@ -6,6 +6,8 @@ import { resumeClaude, type ChatSettings } from "./spawn";
 import { findTaskBySessionId } from "./tasksStore";
 import { SESSIONS_DIR } from "./paths";
 import { logError } from "./log";
+import { getApp } from "./apps";
+import { resolveModelForContinuation } from "./modelResolve";
 
 export interface ResumeWithLifecycleArgs {
   cwd: string;
@@ -19,21 +21,38 @@ export interface ResumeWithLifecycleArgs {
 export function resumeSessionWithLifecycle(
   args: ResumeWithLifecycleArgs,
 ): ChildProcess {
+  // Resolved before the spawn, not after, because it feeds the spawn: a
+  // continuation re-pins the model its run was started with unless the caller
+  // (an operator picking a model in the composer, say) asked for another one.
+  // Reads only — findTaskBySessionId/readMeta have no side effects — so
+  // hoisting them above resumeClaude changes nothing else.
+  const owningTask = findTaskBySessionId(args.sessionId);
+  const sessionsDir = owningTask ? join(SESSIONS_DIR, owningTask.id) : null;
+  const meta = sessionsDir ? readMeta(sessionsDir) : null;
+  const row = meta?.runs.find((r) => r.sessionId === args.sessionId) ?? null;
+
+  const settings = row
+    ? {
+        ...args.settings,
+        model: resolveModelForContinuation({
+          requested: args.settings?.model,
+          priorModel: row.model ?? null,
+          app: getApp(row.repo),
+          role: row.role,
+          taskModel: meta?.taskModel ?? null,
+        }),
+      }
+    : args.settings;
+
   const child = resumeClaude(
     args.cwd,
     args.sessionId,
     args.message,
-    args.settings,
+    settings,
     args.settingsPath,
   );
 
-  const owningTask = findTaskBySessionId(args.sessionId);
-  if (!owningTask) return child;
-
-  const sessionsDir = join(SESSIONS_DIR, owningTask.id);
-  const meta = readMeta(sessionsDir);
-  const row = meta?.runs.find((r) => r.sessionId === args.sessionId);
-  if (!row) return child;
+  if (!owningTask || !sessionsDir || !row) return child;
 
   void updateRun(sessionsDir, args.sessionId, {
     status: "running",

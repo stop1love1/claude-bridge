@@ -18,6 +18,41 @@ export function setManifestDetectSource(source: DetectManifestSource): void {
   updateBridgeManifest((m) => ({ ...m, detect: { source } }));
 }
 
+export type ProfileManifestSource = "heuristic" | "llm";
+
+/**
+ * Whether repo profiles get an LLM-written summary on an explicit refresh.
+ * Defaults to `"heuristic"`, which is the pure-local scan the bridge has
+ * always done — no key is written to `bridge.json` for that value.
+ */
+export function getManifestProfileSource(): ProfileManifestSource {
+  const m = readManifest();
+  const prof = (m as { profiles?: { source?: unknown } }).profiles;
+  const s = prof?.source;
+  if (s === "llm" || s === "heuristic") return s;
+  return "heuristic";
+}
+
+export function setManifestProfileSource(source: ProfileManifestSource): void {
+  updateBridgeManifest((m) => {
+    const next: BridgeManifest = { ...(m as BridgeManifest) };
+    const prev = (next as { profiles?: Record<string, unknown> }).profiles;
+    const profiles: Record<string, unknown> = {
+      ...(prev && typeof prev === "object" && !Array.isArray(prev) ? prev : {}),
+    };
+    // Only `source` is ours. Any other key under `profiles` belongs to a
+    // different setting and must survive a flip back to the default.
+    if (source === "llm") profiles.source = source;
+    else delete profiles.source;
+    if (Object.keys(profiles).length > 0) {
+      (next as { profiles?: Record<string, unknown> }).profiles = profiles;
+    } else {
+      delete (next as { profiles?: unknown }).profiles;
+    }
+    return next;
+  });
+}
+
 function normalizePublicUrl(raw: unknown): string {
   if (typeof raw !== "string") return "";
   const trimmed = raw.trim();

@@ -9,6 +9,7 @@ import {
   updateAppGitSettings,
   updateAppQuality,
   updateAppRetry,
+  updateAppRoleModels,
   updateAppVerify,
   type AppGitSettings,
   type AppQuality,
@@ -19,6 +20,7 @@ import {
 } from "@/libs/apps";
 import { migrateTaskApp } from "@/libs/tasksStore";
 import { MAX_RETRY_PER_GATE } from "@/libs/retryLadder";
+import { isValidModel } from "@/libs/validate";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +36,11 @@ interface PatchBody {
   verify?: Partial<AppVerify>;
   quality?: Partial<AppQuality>;
   retry?: Partial<Record<keyof AppRetry, number | null>>;
+  roleModels?: Record<string, string | null>;
 }
+
+/** A base role name as `resolveRole()` reports it, or the "*" wildcard. */
+const ROLE_MODEL_KEY_RE = /^(\*|[A-Za-z0-9._-]{1,64})$/;
 
 const QUALITY_KEYS = ["critic", "verifier"] as const;
 
@@ -83,9 +89,18 @@ export async function PATCH(
   const hasQuality = !!qualityPatch && typeof qualityPatch === "object";
   const retryPatch = body.retry;
   const hasRetry = !!retryPatch && typeof retryPatch === "object";
-  if (!hasName && !hasDescription && !hasGit && !hasVerify && !hasQuality && !hasRetry) {
+  const roleModelsPatch = body.roleModels;
+  const hasRoleModels =
+    !!roleModelsPatch && typeof roleModelsPatch === "object" && !Array.isArray(roleModelsPatch);
+  if (
+    !hasName && !hasDescription && !hasGit && !hasVerify && !hasQuality && !hasRetry &&
+    !hasRoleModels
+  ) {
     return NextResponse.json(
-      { error: "patch is empty (expected name, description, git, verify, quality, or retry)" },
+      {
+        error:
+          "patch is empty (expected name, description, git, verify, quality, retry, or roleModels)",
+      },
       { status: 400 },
     );
   }
@@ -253,6 +268,32 @@ export async function PATCH(
       sanitized[key] = Math.floor(v);
     }
     const updated = updateAppRetry(currentName, sanitized);
+    if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
+  if (hasRoleModels) {
+    const rmp = roleModelsPatch as Record<string, string | null>;
+    const sanitized: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(rmp)) {
+      if (!ROLE_MODEL_KEY_RE.test(key)) {
+        return NextResponse.json(
+          { error: `invalid roleModels key: "${key}"` },
+          { status: 400 },
+        );
+      }
+      if (value === null || value === "") {
+        sanitized[key] = null;
+        continue;
+      }
+      if (!isValidModel(value)) {
+        return NextResponse.json(
+          { error: `roleModels.${key} must be a valid model (or null to clear)` },
+          { status: 400 },
+        );
+      }
+      sanitized[key] = value;
+    }
+    const updated = updateAppRoleModels(currentName, sanitized);
     if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 

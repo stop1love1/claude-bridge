@@ -25,6 +25,8 @@ export interface Task {
   origin?: "manual" | "cron" | "pipeline";
   workflowId?: string | null;
   effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | null;
+  /** Task-level `--model` pin; null/absent means "no pin". */
+  model?: string | null;
   intakeStatus?: "none" | "planning" | "awaiting-approval" | "approved" | "error" | null;
   createdAt?: string;
   /**

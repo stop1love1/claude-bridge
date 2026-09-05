@@ -281,6 +281,56 @@ describe("buildResumeArgs — terminality (Task 28 follow-up)", () => {
   });
 });
 
+// Model pinning threads a `settings.model` down every dispatch path. The
+// contract that matters most is the *absence* case: a bridge.json with no
+// `roleModels`, a task with no `taskModel`, and a request with no `model` must
+// produce exactly the argv it produced before pinning existed — no `--model`.
+describe("--model is opt-in on every dispatch path", () => {
+  const builders = [
+    ["buildCoordinatorArgs", (settings?: Parameters<typeof buildFreeSessionArgs>[0]["settings"]) =>
+      buildCoordinatorArgs({ role: "coder", taskId: "t_x", prompt: "", settings }, "id")],
+    ["buildFreeSessionArgs", (settings?: Parameters<typeof buildFreeSessionArgs>[0]["settings"]) =>
+      buildFreeSessionArgs({ settings }, "id")],
+    ["buildResumeArgs", (settings?: Parameters<typeof buildResumeArgs>[0]["settings"]) =>
+      buildResumeArgs({ settings }, "id")],
+  ] as const;
+
+  it.each(builders)("%s emits no --model when settings are absent entirely", (_name, build) => {
+    expect(build(undefined)).not.toContain("--model");
+  });
+
+  it.each(builders)(
+    "%s emits no --model when settings carry mode/effort/deny-list but no model",
+    (_name, build) => {
+      const args = build({
+        mode: "bypassPermissions",
+        effort: "high",
+        disallowedTools: denyTaskToolNames(),
+      });
+      expect(args).not.toContain("--model");
+    },
+  );
+
+  it.each(builders)("%s emits no --model when the resolved model is undefined", (_name, build) => {
+    // This is literally what the dispatch sites pass: `model: resolveModelForRun(...)`,
+    // which is `undefined` whenever no source pinned one.
+    const args = build({ mode: "bypassPermissions", model: undefined });
+    expect(args).not.toContain("--model");
+  });
+
+  it.each(builders)("%s forwards a pinned model exactly once, as a flag pair", (_name, build) => {
+    const args = build({ mode: "bypassPermissions", model: "claude-opus-5" });
+    expect(args.filter((a) => a === "--model")).toHaveLength(1);
+    expect(args[args.indexOf("--model") + 1]).toBe("claude-opus-5");
+  });
+
+  it.each(builders)("%s drops a model that fails the shared charset guard", (_name, build) => {
+    for (const model of ["opus 5", "../etc/passwd", "m;rm -rf /", "--dangerously-skip", ""]) {
+      expect(build({ model }), `model=${JSON.stringify(model)}`).not.toContain("--model");
+    }
+  });
+});
+
 describe("appendRun-before-spawn (H4)", () => {
   let tmp: string;
   beforeEach(() => {

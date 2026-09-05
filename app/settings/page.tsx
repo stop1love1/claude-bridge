@@ -5,13 +5,16 @@ import {
   Bell,
   Globe,
   Send,
+  ScanSearch,
   Settings as SettingsIcon,
   ShieldCheck,
   Sparkles,
   Trash2,
   User,
+  Users,
 } from "lucide-react";
 import { api } from "@/libs/client/api";
+import type { CustomRoleDef, RoleSpec } from "@/libs/client/types";
 import { usePushSubscribe } from "@/libs/client/usePushSubscribe";
 import { HeaderShell } from "../_components/HeaderShell";
 import { SettingsCard, SettingsGroup } from "../_components/SettingsCard";
@@ -19,9 +22,13 @@ import { Button } from "../_components/ui/button";
 import { Input } from "../_components/ui/input";
 import { Label } from "../_components/ui/label";
 import { useToast } from "../_components/Toasts";
+import { useConfirm } from "../_components/ConfirmProvider";
+import { Badge } from "../_components/ui/badge";
+import { Textarea } from "../_components/ui/textarea";
 import { ListSkeleton } from "../_components/ui/skeleton";
 
 type DetectSource = "auto" | "llm" | "heuristic";
+type ProfileSource = "heuristic" | "llm";
 
 const DETECT_OPTIONS: { value: DetectSource; label: string; hint: string }[] = [
   {
@@ -38,6 +45,19 @@ const DETECT_OPTIONS: { value: DetectSource; label: string; hint: string }[] = [
     value: "heuristic",
     label: "Heuristic only",
     hint: "Pure local keyword matching. Fastest, deterministic, no API call.",
+  },
+];
+
+const PROFILE_OPTIONS: { value: ProfileSource; label: string; hint: string }[] = [
+  {
+    value: "heuristic",
+    label: "Heuristic only",
+    hint: "Local scan of the manifest, README and file tree. Fast, deterministic, no API call. Default.",
+  },
+  {
+    value: "llm",
+    label: "LLM-assisted",
+    hint: "On an explicit refresh, run claude -p inside each repo to rewrite the summary and features. Falls back to the heuristic profile on error or timeout.",
   },
 ];
 
@@ -76,7 +96,9 @@ function SettingsPage() {
 
           <SettingsGroup title="Agent behaviour" hint="how tasks are scoped, gated and dispatched">
             <DetectSettingsSection />
+            <ProfileSettingsSection />
             <PlanGateSettingsSection />
+            <RolesSettingsSection />
             <ConfidenceSettingsSection />
             <AutoQueueSettingsSection />
           </SettingsGroup>
@@ -352,6 +374,102 @@ function DetectSettingsSection() {
   );
 }
 
+function ProfileSettingsSection() {
+  const [source, setSource] = useState<ProfileSource>("heuristic");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const s = await api.profileSettings({ signal: ac.signal });
+        if (!ac.signal.aborted) setSource(s.source);
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [toast]);
+
+  const choose = async (next: ProfileSource) => {
+    if (next === source) return;
+    setSaving(true);
+    try {
+      const r = await api.updateProfileSettings({ source: next });
+      setSource(r.source);
+      toast("success", `Repo profiles: ${r.source}`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SettingsCard
+      title="Repo profiles"
+      icon={<ScanSearch size={14} />}
+      summary={loading ? "…" : source === "llm" ? "LLM-assisted" : "heuristic only"}
+      changed={source !== "heuristic"}
+    >
+      <p className="text-[11px] text-muted-foreground mb-4">
+        Each app gets a profile — summary, stack, features, entrypoints — that
+        the scope detector and every child prompt read. Profiles are cached in{" "}
+        <code className="font-mono">.bridge-state/repo-profiles.json</code> and
+        rebuilt on demand; LLM enrichment only runs on an explicit refresh, one
+        repo at a time.
+      </p>
+
+      {loading ? (
+        <ListSkeleton rows={2} />
+      ) : (
+        <div className="grid gap-2">
+          {PROFILE_OPTIONS.map((opt) => {
+            const active = opt.value === source;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => choose(opt.value)}
+                disabled={saving}
+                aria-pressed={active}
+                className={`text-left rounded-md border p-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  active
+                    ? "border-primary/40 bg-primary/5"
+                    : "border-border hover:border-primary/30 hover:bg-accent/30"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex h-3.5 w-3.5 rounded-full border ${
+                      active
+                        ? "border-primary bg-primary"
+                        : "border-border bg-transparent"
+                    }`}
+                    aria-hidden
+                  />
+                  <span className="text-sm font-medium">{opt.label}</span>
+                  <span className="text-[10px] font-mono text-muted-foreground">
+                    {opt.value}
+                  </span>
+                </div>
+                <p className="mt-1 ml-5 text-[11px] text-muted-foreground">
+                  {opt.hint}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </SettingsCard>
+  );
+}
+
 function PlanGateSettingsSection() {
   const [operatorEnabled, setOperatorEnabled] = useState(true);
   const [maxClarifyRounds, setMaxClarifyRounds] = useState(3);
@@ -455,6 +573,430 @@ function PlanGateSettingsSection() {
               How many clarify cycles before the gate forces a manual decision.
               Default 3.
             </p>
+          </div>
+        </div>
+      )}
+    </SettingsCard>
+  );
+}
+
+const EMPTY_DRAFT: RoleDraft = {
+  name: "",
+  mutating: true,
+  description: "",
+  disallowedTools: "",
+  playbook: "",
+};
+
+type RoleDraft = {
+  name: string;
+  mutating: boolean;
+  description: string;
+  /** Comma-separated in the form; split on save. */
+  disallowedTools: string;
+  playbook: string;
+};
+
+function draftFrom(role: CustomRoleDef): RoleDraft {
+  return {
+    name: role.name,
+    mutating: role.mutating,
+    description: role.description,
+    disallowedTools: role.disallowedTools.join(", "),
+    playbook: role.playbook ?? "",
+  };
+}
+
+function splitTools(s: string): string[] {
+  return s
+    .split(/[,\s]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Custom roles: the editable overlay on the built-in registry.
+ *
+ * Deliberately does not offer a "denied tools" *removal* control — the server
+ * treats the list as additive on top of the base deny-list for the role's
+ * class, and the form says so, so nothing here implies a role can be given
+ * more access than its class allows.
+ */
+function RolesSettingsSection() {
+  const [roles, setRoles] = useState<RoleSpec[]>([]);
+  const [custom, setCustom] = useState<CustomRoleDef[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<RoleDraft | null>(null);
+  /** Non-null while editing an existing role; its name is then immutable. */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [showBuiltins, setShowBuiltins] = useState(false);
+  const toast = useToast();
+  const confirm = useConfirm();
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const r = await api.roles({ signal: ac.signal });
+        if (ac.signal.aborted) return;
+        setRoles(r.roles);
+        setCustom(r.custom);
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        toast("error", (e as Error).message);
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    })();
+    return () => ac.abort();
+  }, [toast]);
+
+  const apply = (r: { roles: RoleSpec[]; custom: CustomRoleDef[] }) => {
+    setRoles(r.roles);
+    setCustom(r.custom);
+    setDraft(null);
+    setEditing(null);
+  };
+
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      const payload = {
+        mutating: draft.mutating,
+        description: draft.description.trim(),
+        disallowedTools: splitTools(draft.disallowedTools),
+        playbook: draft.playbook.trim() || null,
+      };
+      const r = editing
+        ? await api.updateRole(editing, payload)
+        : await api.createRole({ name: draft.name.trim().toLowerCase(), ...payload });
+      apply(r);
+      toast("success", `Role "${r.role.name}" saved`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (name: string) => {
+    const ok = await confirm({
+      title: `Delete role "${name}"?`,
+      description:
+        "Runs already dispatched under this label keep the tools they were spawned with; new dispatches fall back to the unregistered default (mutating, only Task denied).",
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      apply(await api.deleteRole(name));
+      toast("success", `Role "${name}" deleted`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const exportBundle = async () => {
+    try {
+      const bundle = await api.exportRoles();
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }),
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "bridge-roles.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    }
+  };
+
+  const importBundle = async (file: File) => {
+    setSaving(true);
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      const r = await api.importRoles(parsed, "merge");
+      apply(r);
+      toast(
+        "success",
+        `Imported ${r.imported} · replaced ${r.replaced}${r.skipped ? ` · skipped ${r.skipped}` : ""}`,
+      );
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const builtins = roles.filter((r) => !custom.some((c) => c.name === r.name));
+
+  return (
+    <SettingsCard
+      title="Agent roles"
+      icon={<Users size={14} />}
+      summary={
+        loading
+          ? "…"
+          : custom.length
+            ? `${custom.length} custom · ${builtins.length} built-in`
+            : `${builtins.length} built-in`
+      }
+      changed={custom.length > 0}
+    >
+      <p className="text-[11px] text-muted-foreground mb-4">
+        A role decides two things at dispatch: which CLI tools the bridge denies
+        the child, and whether the plan gate applies. Built-ins ship with the
+        code; custom roles live in{" "}
+        <code className="font-mono">.bridge-state/roles.json</code> and take
+        effect on the next dispatch — no file edit, no restart. Labels inherit by
+        prefix, so <code className="font-mono">security-auditor-api</code> gets{" "}
+        <code className="font-mono">security-auditor</code>&apos;s rules. A
+        custom role can only ever be <strong>more</strong> restricted than its
+        class: read-only roles always have Edit/MultiEdit/NotebookEdit denied,
+        and every role always has Task denied.
+      </p>
+
+      {loading ? (
+        <ListSkeleton rows={3} />
+      ) : (
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            {custom.length === 0 && !draft && (
+              <p className="text-[11px] text-muted-foreground italic">
+                No custom roles yet — the registry is the built-in table.
+              </p>
+            )}
+            {custom.map((r) => (
+              <div
+                key={r.name}
+                className="rounded-md border border-border p-2.5 flex items-start gap-2"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <code className="text-xs font-mono font-medium">{r.name}</code>
+                    <Badge variant={r.mutating ? "warning" : "muted"}>
+                      {r.mutating ? "mutating" : "read-only"}
+                    </Badge>
+                    {r.playbook && <Badge variant="info">playbook</Badge>}
+                  </div>
+                  {r.description && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">{r.description}</p>
+                  )}
+                  <p className="mt-1 text-[10px] font-mono text-fg-dim truncate">
+                    denies{" "}
+                    {roles.find((s) => s.name === r.name)?.disallowedTools.join(", ") ?? "—"}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => {
+                    setEditing(r.name);
+                    setDraft(draftFrom(r));
+                  }}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => void remove(r.name)}
+                  aria-label={`Delete role ${r.name}`}
+                >
+                  <Trash2 size={13} />
+                </Button>
+              </div>
+            ))}
+          </div>
+
+          {draft ? (
+            <div className="rounded-md border border-primary/40 bg-primary/5 p-3 grid gap-2.5">
+              <div className="grid gap-1.5">
+                <Label htmlFor="role-name">Name</Label>
+                <Input
+                  id="role-name"
+                  value={draft.name}
+                  disabled={!!editing || saving}
+                  placeholder="security-auditor"
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Lowercase letters, digits and single dashes. Names a built-in
+                  already owns (including{" "}
+                  <code className="font-mono">coder-api</code>-style variants)
+                  are rejected. Renaming means delete + create.
+                </p>
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label>Class</Label>
+                <div className="grid gap-2">
+                  {[
+                    {
+                      mutating: false,
+                      label: "Read-only",
+                      hint: "Edit, MultiEdit, NotebookEdit and Task denied. Skips the plan gate — for reviewers, auditors, researchers.",
+                    },
+                    {
+                      mutating: true,
+                      label: "Mutating",
+                      hint: "Only Task denied; the child can edit the working tree. Goes through the plan gate like a coder.",
+                    },
+                  ].map((opt) => {
+                    const active = opt.mutating === draft.mutating;
+                    return (
+                      <button
+                        key={String(opt.mutating)}
+                        type="button"
+                        onClick={() => setDraft({ ...draft, mutating: opt.mutating })}
+                        disabled={saving}
+                        aria-pressed={active}
+                        className={`text-left rounded-md border p-2.5 transition-colors disabled:opacity-50 ${
+                          active
+                            ? "border-primary/40 bg-primary/10"
+                            : "border-border hover:border-primary/30 hover:bg-accent/30"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-flex h-3.5 w-3.5 rounded-full border ${
+                              active ? "border-primary bg-primary" : "border-border bg-transparent"
+                            }`}
+                            aria-hidden
+                          />
+                          <span className="text-sm font-medium">{opt.label}</span>
+                        </div>
+                        <p className="mt-1 ml-5 text-[11px] text-muted-foreground">{opt.hint}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="role-desc">Description</Label>
+                <Input
+                  id="role-desc"
+                  value={draft.description}
+                  disabled={saving}
+                  placeholder="Audits a diff for auth and injection bugs."
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                />
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="role-denies">Extra denied tools</Label>
+                <Input
+                  id="role-denies"
+                  value={draft.disallowedTools}
+                  disabled={saving}
+                  placeholder="Bash, WebFetch"
+                  onChange={(e) => setDraft({ ...draft, disallowedTools: e.target.value })}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Comma-separated, <strong>added on top of</strong> the class
+                  deny-list. Listing a tool here can only take access away —
+                  there is no field that gives any back.
+                </p>
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="role-playbook">Playbook (markdown)</Label>
+                <Textarea
+                  id="role-playbook"
+                  rows={8}
+                  value={draft.playbook}
+                  disabled={saving}
+                  placeholder={"# Security auditor\n\nFor every new route, check…"}
+                  onChange={(e) => setDraft({ ...draft, playbook: e.target.value })}
+                  className="font-mono min-h-[140px]"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Injected into the child prompt exactly like{" "}
+                  <code className="font-mono">prompts/playbooks/&lt;role&gt;.md</code>{" "}
+                  is for a built-in. Leave empty for none.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => void save()} disabled={saving || !draft.name.trim()}>
+                  {editing ? "Save changes" : "Create role"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => {
+                    setDraft(null);
+                    setEditing(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={saving}
+                onClick={() => {
+                  setEditing(null);
+                  setDraft({ ...EMPTY_DRAFT });
+                }}
+              >
+                Add role
+              </Button>
+              <Button size="sm" variant="ghost" disabled={saving} onClick={() => void exportBundle()}>
+                Export JSON
+              </Button>
+              <label className="text-[11.5px] text-muted-foreground cursor-pointer underline underline-offset-2 hover:text-foreground">
+                Import JSON
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  disabled={saving}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (f) void importBundle(f);
+                  }}
+                />
+              </label>
+            </div>
+          )}
+
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowBuiltins((v) => !v)}
+              className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+            >
+              {showBuiltins ? "Hide" : "Show"} the {builtins.length} built-in roles
+            </button>
+            {showBuiltins && (
+              <div className="mt-2 grid gap-1">
+                {builtins.map((r) => (
+                  <div key={r.name} className="flex items-baseline gap-2 text-[11px]">
+                    <code className="font-mono text-foreground w-36 shrink-0">{r.name}</code>
+                    <span className="text-fg-dim shrink-0">
+                      {r.mutating ? "mutating" : "read-only"}
+                    </span>
+                    <span className="text-muted-foreground truncate">{r.description}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -119,6 +119,17 @@ export interface SpeculativeAngle {
 
 export const DEFAULT_APP_DISPATCH: AppDispatch = {};
 
+/**
+ * Per-role model pins for one app. Keys are *base* role names as
+ * `resolveRole()` reports them (`"coder"`, `"reviewer"`, …) so a labelled child
+ * like `coder-api` inherits `coder`'s pin, plus the wildcard `"*"` for "every
+ * role in this app". Values are `--model` arguments — an alias (`opus`) or a
+ * full id. Absent means no pin, which is exactly today's behaviour.
+ */
+export type AppRoleModels = Record<string, string>;
+
+export const ROLE_MODELS_WILDCARD = "*";
+
 export interface App {
   name: string;
   path: string;
@@ -133,6 +144,7 @@ export interface App {
   memory: AppMemory;
   dispatch: AppDispatch;
   capabilities: string[];
+  roleModels?: AppRoleModels;
 }
 
 export interface ManifestAppEntry {
@@ -148,6 +160,7 @@ export interface ManifestAppEntry {
   retry?: AppRetry;
   memory?: AppMemory;
   dispatch?: AppDispatch;
+  roleModels?: AppRoleModels;
 }
 
 export interface BridgeManifest {

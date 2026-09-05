@@ -34,6 +34,11 @@ export interface RepoProfile {
   fileCounts: Record<string, number>;
   refreshedAt: string;
   signals: RepoProfileSignals;
+  /**
+   * Where `summary` / `features` came from. Absent means `"heuristic"`, which
+   * keeps every profile written before LLM enrichment existed readable as-is.
+   */
+  summarySource?: "heuristic" | "llm";
 }
 
 const READ_CAP_BYTES = 4096;
@@ -444,10 +449,6 @@ export const __test = {
   FILE_WALK_CAP,
   KEYWORD_CAP,
 };
-
-export function summarizeWithLLM(profile: RepoProfile): RepoProfile {
-  return profile;
-}
 
 export function scanRepoIfExists(
   repoPath: string,

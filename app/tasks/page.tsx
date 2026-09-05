@@ -131,9 +131,9 @@ function Dashboard() {
     [router],
   );
 
-  const handleCreate = async ({ body, app, effort, dispatch, scheduledAt }: NewTaskInput) => {
+  const handleCreate = async ({ body, app, effort, model, dispatch, scheduledAt }: NewTaskInput) => {
     try {
-      const t = await api.createTask({ body, app, effort, dispatch, scheduledAt });
+      const t = await api.createTask({ body, app, effort, model, dispatch, scheduledAt });
       await refreshTasks();
       if (dispatch === "manual") {
         toast("success", scheduledAt

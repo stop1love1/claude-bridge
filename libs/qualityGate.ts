@@ -18,6 +18,8 @@ import {
   writeSessionSettings,
 } from "./permissionSettings";
 import { SESSIONS_DIR } from "./paths";
+import { readMeta } from "./meta";
+import { resolveModelForRun } from "./modelResolve";
 
 export const GATE_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -113,6 +115,11 @@ export async function runAgentGate(
   const pinnedFiles = loadPinnedFiles(app.path, app.pinnedFiles);
 
   const sessionId = randomUUID();
+  const model = resolveModelForRun({
+    app,
+    role: opts.role,
+    taskModel: readMeta(sessionsDir)?.taskModel ?? null,
+  });
   const prompt = buildChildPrompt({
     taskId: opts.taskId,
     taskTitle: opts.taskTitle,
@@ -143,6 +150,7 @@ export async function runAgentGate(
     startedAt: new Date().toISOString(),
     endedAt: null,
     parentSessionId: opts.finishedRun.parentSessionId ?? null,
+    model: model ?? null,
   });
 
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
@@ -151,7 +159,7 @@ export async function runAgentGate(
     childHandle = spawnFreeSession(
       opts.appPath,
       prompt,
-      { mode: "bypassPermissions", disallowedTools: denyTaskToolNames() },
+      { mode: "bypassPermissions", disallowedTools: denyTaskToolNames(), model },
       settingsPath,
       sessionId,
     );

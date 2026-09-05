@@ -18,7 +18,7 @@ import {
 import { detectWithLLM } from "@/libs/detect/llm";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { safeErrorMessage } from "@/libs/errorResponse";
-import { isValidEffort, parseScheduledAt } from "@/libs/validate";
+import { isValidEffort, isValidModel, parseScheduledAt } from "@/libs/validate";
 import { checkRateLimit } from "@/libs/rateLimit";
 import { verifyRequestAuth, verifyRequestActor } from "@/libs/auth";
 import { getClientIp } from "@/libs/clientIp";
@@ -61,12 +61,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
   }
 
-  const { title: givenTitle, body, app, effort, dispatch, scheduledAt: rawScheduledAt } =
+  const { title: givenTitle, body, app, effort, model, dispatch, scheduledAt: rawScheduledAt } =
     (await req.json()) as {
       title?: string;
       body?: string;
       app?: string | null;
       effort?: unknown;
+      model?: unknown;
       dispatch?: unknown;
       scheduledAt?: unknown;
     };
@@ -78,6 +79,9 @@ export async function POST(req: NextRequest) {
   }
   if (effort !== undefined && effort !== null && !isValidEffort(effort)) {
     return NextResponse.json({ error: "invalid effort" }, { status: 400 });
+  }
+  if (model !== undefined && model !== null && !isValidModel(model)) {
+    return NextResponse.json({ error: "invalid model" }, { status: 400 });
   }
   if (dispatch !== undefined && dispatch !== "immediate" && dispatch !== "manual") {
     return NextResponse.json({ error: "dispatch must be 'immediate' or 'manual'" }, { status: 400 });
@@ -95,6 +99,7 @@ export async function POST(req: NextRequest) {
     body: rawBody,
     app: app ?? null,
     effort: isValidEffort(effort) ? effort : null,
+    model: isValidModel(model) ? model : null,
     dispatch: dispatchMode,
     scheduledAt: parsedSchedule.value,
   });
