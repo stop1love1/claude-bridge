@@ -92,6 +92,21 @@ describe("deriveTaskStatus", () => {
     expect(deriveTaskStatus(task(), undefined, NOW)).toBe("spawning");
   });
 
+  it("a hand-controlled TODO draft reads as waiting, and scheduled once it has a start time", () => {
+    const old = new Date(NOW - 60_000).toISOString();
+    const draft = task({ section: "TODO", dispatch: "manual", createdAt: old });
+    expect(deriveTaskStatus(draft, meta([], { createdAt: old }), NOW)).toBe("waiting");
+    const timed = task({ section: "TODO", dispatch: "manual", scheduledAt: "2026-09-05T20:00:00.000Z", createdAt: old });
+    expect(deriveTaskStatus(timed, meta([], { createdAt: old }), NOW)).toBe("scheduled");
+    // A draft that was already started keeps the run-derived status.
+    expect(deriveTaskStatus(draft, meta([run({ status: "running" })]), NOW)).toBe("running");
+    // Only in TODO — once dragged away without a run it is plain idle.
+    const moved = task({ section: "BLOCKED", dispatch: "manual", createdAt: old });
+    expect(deriveTaskStatus(moved, meta([], { createdAt: old }), NOW)).toBe("idle");
+    expect(STATUS_PILL.waiting.label).toBe("waiting");
+    expect(STATUS_PILL.scheduled.label).toBe("scheduled");
+  });
+
   it("a brand-new task with no runs yet is spawning for 20s", () => {
     const created = new Date(NOW - 5_000).toISOString();
     expect(deriveTaskStatus(task({ createdAt: created }), meta([], { createdAt: created }), NOW)).toBe("spawning");

@@ -7,6 +7,7 @@ import {
   type Workflow,
 } from "./workflowStore";
 import { autoQueueTick } from "./autoQueue";
+import { scheduledStartTick } from "./scheduledStart";
 import { logError, logInfo } from "./log";
 
 const TICK_MS = 30_000;
@@ -73,6 +74,11 @@ async function tick(): Promise<void> {
   } catch (e) {
     state.lastError = (e as Error).message;
     logError("scheduler", "tick failed", e);
+  }
+  try {
+    await scheduledStartTick(now);
+  } catch (e) {
+    logError("scheduler", "scheduled-start tick failed", e);
   }
   try {
     await autoQueueTick();

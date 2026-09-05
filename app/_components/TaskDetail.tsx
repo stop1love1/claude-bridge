@@ -15,13 +15,16 @@ import {
   RotateCw,
   Download,
   Link2,
+  Clock,
+  Play,
 } from "lucide-react";
 import { ShareTaskDialog } from "./ShareTaskDialog";
 import { exportTaskMarkdown, downloadFile } from "@/libs/client/exportTask";
 import { TokenUsage, type TokenTotals } from "./TokenUsage";
 import { StatusDot } from "./StatusDot";
 import { isCoordinatorOrchestrating } from "@/libs/client/coordinatorStatus";
-import { relativeTime, duration } from "@/libs/client/time";
+import { relativeTime, duration, untilTime } from "@/libs/client/time";
+import { Input } from "./ui/input";
 import { useToast } from "./Toasts";
 import { useConfirm } from "./ConfirmProvider";
 import { api } from "@/libs/client/api";
@@ -49,6 +52,91 @@ export function TaskDetail(props: TaskDetailProps) {
       key={props.task?.id ?? "__none__"}
       {...props}
     />
+  );
+}
+
+/** ISO → value for a `datetime-local` input (local wall clock, minute precision). */
+function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * Shown for a hand-controlled task still waiting in Todo: set or clear its
+ * start time, or start it right away. Disappears once a run exists.
+ */
+function WaitingInTodoCard({ task }: { task: Task }) {
+  const toast = useToast();
+  const [scheduledAt, setScheduledAt] = useState<string | null>(task.scheduledAt ?? null);
+  const [input, setInput] = useState(() => isoToLocalInput(task.scheduledAt));
+  const [busy, setBusy] = useState(false);
+  // The caller keys this card on task.scheduledAt, so a server-side change
+  // (SSE refresh) remounts it with fresh state instead of syncing in an effect.
+
+  const save = async (next: string | null) => {
+    setBusy(true);
+    try {
+      const updated = await api.updateTask(task.id, { scheduledAt: next });
+      setScheduledAt(updated.scheduledAt ?? null);
+      setInput(isoToLocalInput(updated.scheduledAt));
+      toast("success", updated.scheduledAt ? `Starts ${untilTime(updated.scheduledAt)}` : "Schedule cleared");
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startNow = async () => {
+    setBusy(true);
+    try {
+      const r = await api.dispatchTask(task.id);
+      toast("success", `Started — coordinator ${r.sessionId.slice(0, 8)}`);
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dirty = (input ? new Date(input).toISOString() : null) !== scheduledAt;
+
+  return (
+    <div className="rounded-lg border border-info/30 bg-info/5 p-3 mb-6">
+      <div className="flex items-center gap-2 mb-2 text-xs font-medium text-foreground">
+        <Clock size={13} className="text-info" /> Waiting in Todo
+        {scheduledAt && (
+          <span className="text-info font-normal">· starts {untilTime(scheduledAt)}</span>
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground leading-relaxed mb-2">
+        Nothing runs until you drag the card to Doing, press Start, or the start time below arrives (checked every 30s).
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="datetime-local"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          aria-label="Start at"
+          className="h-7 text-xs w-auto"
+          disabled={busy}
+        />
+        <Button size="xs" variant="secondary" disabled={busy || !dirty || !input} onClick={() => save(new Date(input).toISOString())}>
+          Save time
+        </Button>
+        {scheduledAt && (
+          <Button size="xs" variant="ghost" disabled={busy} onClick={() => save(null)}>
+            Clear
+          </Button>
+        )}
+        <Button size="xs" disabled={busy} onClick={startNow} className="ml-auto gap-1" title="Spawn the coordinator now">
+          <Play size={12} /> Start now
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -301,6 +389,10 @@ function TaskDetailInner({
         >
           {task.title}
         </h2>
+
+        {!hasRuns && task.section === "TODO" && task.dispatch === "manual" && !task.checked && (
+          <WaitingInTodoCard key={task.scheduledAt ?? "none"} task={task} />
+        )}
 
         {canContinue && (
           <div className="flex gap-2 mb-6 items-center flex-wrap">

@@ -7,7 +7,7 @@ import {
 import { basename, join } from "node:path";
 import { EventEmitter } from "node:events";
 import { writeJsonAtomic } from "./atomicWrite";
-import { SECTION_STATUS, type TaskStatus, type TaskSection } from "./tasks";
+import { SECTION_STATUS, type TaskDispatch, type TaskStatus, type TaskSection } from "./tasks";
 import type { DetectedScopeCacheEntry } from "./detect/types";
 import { SESSIONS_DIR } from "./paths";
 import type { RunStatus } from "./runStatus";
@@ -124,6 +124,8 @@ export interface Meta {
   createdAt: string;
   origin?: "manual" | "cron" | "pipeline";
   workflowId?: string | null;
+  dispatch?: TaskDispatch;
+  scheduledAt?: string | null;
   pipeline?: PipelineRunState | null;
   runs: Run[];
   detectedScope?: DetectedScopeCacheEntry | null;

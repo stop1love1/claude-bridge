@@ -128,6 +128,15 @@ describe("pickNextTodoTask (pure)", () => {
     const justCreated = task({ id: "t_1", section: "TODO", createdAt: new Date().toISOString() });
     expect(pickNextTodoTask([justCreated], new Map([["t_1", 0]]))).toBeNull();
   });
+  it("leaves hand-controlled (dispatch=manual) tasks alone", () => {
+    const manual = task({
+      id: "t_1",
+      section: "TODO",
+      dispatch: "manual",
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+    expect(pickNextTodoTask([manual], new Map([["t_1", 0]]))).toBeNull();
+  });
   it("picks a task that has been sitting in TODO", () => {
     const old = task({
       id: "t_1",

@@ -50,7 +50,14 @@ export const api = {
     body: string;
     app?: string | null;
     effort?: EffortLevel | null;
+    /** "manual" parks the task in TODO instead of spawning a coordinator. */
+    dispatch?: "immediate" | "manual";
+    /** ISO time; implies dispatch "manual". */
+    scheduledAt?: string | null;
   }) => req<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
+  /** Start a task that is waiting in TODO (or was just dragged to DOING). */
+  dispatchTask: (id: string) =>
+    req<{ action: "spawned"; sessionId: string }>(`/tasks/${id}/dispatch`, { method: "POST" }),
   updateTask: (id: string, patch: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteTask: (id: string) =>

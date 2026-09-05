@@ -5,9 +5,9 @@ import type { Meta, Task, TaskSection } from "@/libs/client/types";
 import { SECTION_ORDER, SECTION_LABEL } from "@/libs/client/types";
 import { SECTION_BLOCKED, SECTION_DOING, SECTION_DONE, SECTION_TODO } from "@/libs/tasks";
 import {
-  Plus, Inbox, Trash2, LayoutGrid, Columns, Check,
+  Plus, Inbox, Trash2, LayoutGrid, Columns, Check, Clock,
 } from "lucide-react";
-import { relativeTime } from "@/libs/client/time";
+import { relativeTime, untilTime } from "@/libs/client/time";
 import { STATUS_PILL, deriveTaskStatus } from "@/libs/client/runStatus";
 import { useLocalStorage } from "@/libs/client/useLocalStorage";
 import { EmptyState } from "./ui/empty-state";
@@ -145,6 +145,16 @@ function GridCard({
         </div>
       )}
 
+      {status === "scheduled" && task.scheduledAt && (
+        <div
+          className="mt-2 ml-6 inline-flex items-center gap-1 text-[10px] text-info"
+          title={`Starts ${new Date(task.scheduledAt).toLocaleString()}`}
+        >
+          <Clock size={10} />
+          starts {untilTime(task.scheduledAt)}
+        </div>
+      )}
+
       <div className="mt-2 ml-6 flex items-center justify-between text-[10px] text-fg-dim">
         <span>{relativeTime(meta?.createdAt ?? `${task.date}T00:00:00Z`)}</span>
         <button
@@ -169,8 +179,8 @@ const SECTION_ACCENT: Record<TaskSection, string> = {
 };
 
 const SECTION_EMPTY: Record<TaskSection, { title: string; hint: string }> = {
-  [SECTION_TODO]:    { title: "Nothing queued",  hint: "Drag a card here, or quick-add above." },
-  [SECTION_DOING]:   { title: "Idle",            hint: "Drag a card here to mark it in-progress." },
+  [SECTION_TODO]:    { title: "Nothing queued",  hint: "Press + above to add a waiting card, or drag one here." },
+  [SECTION_DOING]:   { title: "Idle",            hint: "Drag a Todo card here to start it." },
   [SECTION_BLOCKED]: { title: "Nothing blocked", hint: "Drag a card here when work can't proceed." },
   [SECTION_DONE]: {
     title: "Nothing shipped yet",
@@ -192,6 +202,7 @@ export function TaskGrid({
   onBulkDelete,
   onBulkMove,
   onMoveTask,
+  onAddTodo,
 }: {
   tasks: Task[];
   metaByTask: Map<string, Meta>;
@@ -201,6 +212,8 @@ export function TaskGrid({
   onOpenTask: (id: string) => void;
   onQuickAdd: (body: string) => void;
   onDeleteTask: (id: string) => void;
+  /** Kanban only: "+" in the Todo column header — adds a waiting card. */
+  onAddTodo?: () => void;
   onBulkDelete?: (ids: string[]) => Promise<void> | void;
   onBulkMove?: (ids: string[], section: TaskSection) => Promise<void> | void;
   onMoveTask?: (id: string, section: TaskSection) => Promise<void> | void;
@@ -466,7 +479,20 @@ export function TaskGrid({
                     <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground font-semibold">
                       {SECTION_LABEL[section]}
                     </span>
-                    <span className="text-[10px] text-fg-dim tabular-nums">{list.length}</span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="text-[10px] text-fg-dim tabular-nums">{list.length}</span>
+                      {section === SECTION_TODO && onAddTodo && (
+                        <button
+                          type="button"
+                          onClick={onAddTodo}
+                          className="inline-flex items-center justify-center h-5 w-5 rounded text-fg-dim hover:text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                          title="Add a task to Todo without starting it"
+                          aria-label="Add task to Todo"
+                        >
+                          <Plus size={12} />
+                        </button>
+                      )}
+                    </span>
                   </div>
                   <div className="flex-1 p-2 space-y-2">
                     {list.length === 0 ? (

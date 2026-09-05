@@ -18,7 +18,7 @@ import {
 import { detectWithLLM } from "@/libs/detect/llm";
 import { SESSIONS_DIR } from "@/libs/paths";
 import { safeErrorMessage } from "@/libs/errorResponse";
-import { isValidEffort } from "@/libs/validate";
+import { isValidEffort, parseScheduledAt } from "@/libs/validate";
 import { checkRateLimit } from "@/libs/rateLimit";
 import { verifyRequestAuth, verifyRequestActor } from "@/libs/auth";
 import { getClientIp } from "@/libs/clientIp";
@@ -61,12 +61,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(denied.body, { status: denied.status, headers: denied.headers });
   }
 
-  const { title: givenTitle, body, app, effort } = (await req.json()) as {
-    title?: string;
-    body?: string;
-    app?: string | null;
-    effort?: unknown;
-  };
+  const { title: givenTitle, body, app, effort, dispatch, scheduledAt: rawScheduledAt } =
+    (await req.json()) as {
+      title?: string;
+      body?: string;
+      app?: string | null;
+      effort?: unknown;
+      dispatch?: unknown;
+      scheduledAt?: unknown;
+    };
   const rawBody = (body ?? "").trim();
   const title = givenTitle?.trim() || deriveTitle(rawBody);
 
@@ -76,12 +79,24 @@ export async function POST(req: NextRequest) {
   if (effort !== undefined && effort !== null && !isValidEffort(effort)) {
     return NextResponse.json({ error: "invalid effort" }, { status: 400 });
   }
+  if (dispatch !== undefined && dispatch !== "immediate" && dispatch !== "manual") {
+    return NextResponse.json({ error: "dispatch must be 'immediate' or 'manual'" }, { status: 400 });
+  }
+  const parsedSchedule = parseScheduledAt(rawScheduledAt);
+  if (!parsedSchedule.ok) {
+    return NextResponse.json({ error: `scheduledAt: ${parsedSchedule.error}` }, { status: 400 });
+  }
+  // A scheduled start only makes sense for a task that waits; a schedule
+  // implies manual dispatch.
+  const dispatchMode = dispatch === "manual" || parsedSchedule.value ? "manual" : "immediate";
 
   const task = createTask({
     title,
     body: rawBody,
     app: app ?? null,
     effort: isValidEffort(effort) ? effort : null,
+    dispatch: dispatchMode,
+    scheduledAt: parsedSchedule.value,
   });
   autoInitProfilesOnce();
 
@@ -115,7 +130,9 @@ export async function POST(req: NextRequest) {
     const cfg = readPlanGateConfig();
     const actor = verifyRequestActor(req);
     const gateApplies = cfg.operatorEnabled || actor?.kind === "guest";
-    if (gateApplies) {
+    // A parked (manual) task opens its gate when it is dispatched instead
+    // (libs/dispatchTodoTask), so the waiting card doesn't show "planning".
+    if (gateApplies && dispatchMode !== "manual") {
       await setIntake(join(SESSIONS_DIR, task.id), {
         status: "planning",
         submittedBy:
@@ -126,6 +143,12 @@ export async function POST(req: NextRequest) {
     }
   } catch (err) {
     logWarn("plan-gate", "task-create gate init failed (non-fatal)", { error: (err as Error)?.message ?? String(err) });
+  }
+
+  if (dispatchMode === "manual") {
+    // Parked in TODO: the coordinator comes when the operator drags the card
+    // to DOING, clicks Start, or scheduledAt arrives (libs/scheduledStart).
+    return NextResponse.json(task, { status: 201 });
   }
 
   let spawnError: string | null = null;

@@ -5,15 +5,15 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/libs/client/api";
 import {
   type App,
-  type EffortLevel,
   type Meta,
   type Repo,
   type SessionSummary,
   type Task,
 } from "@/libs/client/types";
-import { SECTION_DONE } from "@/libs/tasks";
+import { SECTION_DOING, SECTION_DONE, SECTION_TODO, type TaskSection } from "@/libs/tasks";
+import { untilTime } from "@/libs/client/time";
 import { HeaderShell } from "../_components/HeaderShell";
-import { NewTaskDialog } from "../_components/NewTaskDialog";
+import { NewTaskDialog, type NewTaskDialogOpen, type NewTaskInput } from "../_components/NewTaskDialog";
 import { TaskGrid } from "../_components/TaskGrid";
 import { CommandPalette } from "../_components/CommandPalette";
 import { Button } from "../_components/ui/button";
@@ -53,7 +53,7 @@ function Dashboard() {
   const toast = useToast();
   const confirm = useConfirm();
 
-  const newDialogRef = useRef<(() => void) | null>(null);
+  const newDialogRef = useRef<NewTaskDialogOpen | null>(null);
 
   const refreshTasks = useCallback(async () => {
     try { setTasks(await api.tasks()); }
@@ -131,22 +131,37 @@ function Dashboard() {
     [router],
   );
 
-  const handleCreate = async ({
-    body,
-    app,
-    effort,
-  }: {
-    body: string;
-    app: string | null;
-    effort: EffortLevel | null;
-  }) => {
+  const handleCreate = async ({ body, app, effort, dispatch, scheduledAt }: NewTaskInput) => {
     try {
-      const t = await api.createTask({ body, app, effort });
+      const t = await api.createTask({ body, app, effort, dispatch, scheduledAt });
       await refreshTasks();
+      if (dispatch === "manual") {
+        toast("success", scheduledAt
+          ? `Added ${t.id} to Todo — starts ${untilTime(scheduledAt)}`
+          : `Added ${t.id} to Todo — drag to Doing to start`);
+        return;
+      }
       toast("success", `Created ${t.id}`);
       router.push(`/tasks/${t.id}`);
     } catch (e) { toast("error", (e as Error).message); throw e; }
   };
+
+  // A card moved from TODO into DOING gets its coordinator here; the PATCH
+  // alone only changes the column. Other drags stay column-only.
+  const startIfDraggedToDoing = useCallback(
+    async (id: string, from: TaskSection | undefined, to: TaskSection) => {
+      if (to !== SECTION_DOING || from !== SECTION_TODO) return;
+      try {
+        const r = await api.dispatchTask(id);
+        toast("info", `Started ${id} (${r.sessionId.slice(0, 8)})`);
+      } catch (e) {
+        // 409 = already running / nothing to start; the column move stands.
+        const msg = (e as Error).message;
+        if (!/already live|already in flight/.test(msg)) toast("error", `Start failed: ${msg}`);
+      }
+    },
+    [toast],
+  );
 
   const handleQuickAdd = async (body: string) => {
     try {
@@ -211,7 +226,8 @@ function Dashboard() {
   }, [confirm, refreshTasks, refreshAllMeta, toast]);
 
   const handleMoveTask = useCallback(
-    async (id: string, section: import("@/libs/client/types").TaskSection) => {
+    async (id: string, section: TaskSection) => {
+      const from = tasks.find((t) => t.id === id)?.section;
       setTasks((prev) =>
         prev.map((t) =>
           t.id === id
@@ -228,6 +244,7 @@ function Dashboard() {
           section,
           checked: section === SECTION_DONE,
         });
+        await startIfDraggedToDoing(id, from, section);
         await refreshTasks();
         await refreshAllMeta();
       } catch (e) {
@@ -235,19 +252,21 @@ function Dashboard() {
         toast("error", (e as Error).message);
       }
     },
-    [refreshTasks, refreshAllMeta, toast],
+    [tasks, startIfDraggedToDoing, refreshTasks, refreshAllMeta, toast],
   );
 
-  const handleBulkMove = useCallback(async (ids: string[], section: import("@/libs/client/types").TaskSection) => {
+  const handleBulkMove = useCallback(async (ids: string[], section: TaskSection) => {
     let moved = 0;
     let failed = 0;
     for (const id of ids) {
+      const from = tasks.find((t) => t.id === id)?.section;
       try {
         await api.updateTask(id, {
           section,
           checked: section === SECTION_DONE,
         });
         moved += 1;
+        await startIfDraggedToDoing(id, from, section);
       } catch {
         failed += 1;
       }
@@ -256,7 +275,7 @@ function Dashboard() {
     await refreshAllMeta();
     toast(failed > 0 ? "error" : "info",
       `${moved} moved to ${section}${failed ? `, ${failed} failed` : ""}`);
-  }, [refreshTasks, refreshAllMeta, toast]);
+  }, [tasks, startIfDraggedToDoing, refreshTasks, refreshAllMeta, toast]);
 
   useEffect(() => {
     const isTextInput = (el: EventTarget | null) => {
@@ -368,6 +387,7 @@ function Dashboard() {
           onBulkDelete={handleBulkDelete}
           onBulkMove={handleBulkMove}
           onMoveTask={handleMoveTask}
+          onAddTodo={() => newDialogRef.current?.({ draft: true })}
         />
       </main>
 

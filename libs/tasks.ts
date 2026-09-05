@@ -27,7 +27,18 @@ export interface Task {
   effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultracode" | null;
   intakeStatus?: "none" | "planning" | "awaiting-approval" | "approved" | "error" | null;
   createdAt?: string;
+  /**
+   * How the task gets its coordinator. `immediate` (the default, and what
+   * every pre-existing task reads as) spawns on creation; `manual` parks the
+   * task in TODO until the operator drags it to DOING, hits Start, or the
+   * `scheduledAt` time arrives.
+   */
+  dispatch?: TaskDispatch;
+  /** ISO time at which a waiting TODO task should start on its own. */
+  scheduledAt?: string | null;
 }
+
+export type TaskDispatch = "immediate" | "manual";
 
 export const SECTION_STATUS: Record<TaskSection, TaskStatus> = {
   TODO: "todo",

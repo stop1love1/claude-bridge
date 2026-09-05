@@ -44,6 +44,8 @@ function metaToTask(meta: Meta): Task {
     effort: meta.taskEffort ?? null,
     intakeStatus: meta.intake?.status ?? null,
     createdAt: meta.createdAt,
+    dispatch: meta.dispatch ?? "immediate",
+    scheduledAt: meta.scheduledAt ?? null,
   };
 }
 
@@ -144,6 +146,8 @@ export function createTask(input: {
   origin?: "manual" | "cron" | "pipeline";
   workflowId?: string | null;
   effort?: Task["effort"];
+  dispatch?: Task["dispatch"];
+  scheduledAt?: string | null;
 }): Task {
   ensureSessionsDir();
   const now = new Date();
@@ -153,6 +157,8 @@ export function createTask(input: {
   const origin = input.origin ?? "manual";
   const workflowId = input.workflowId ?? null;
   const taskEffort = input.effort ?? null;
+  const dispatch = input.dispatch ?? "immediate";
+  const scheduledAt = input.scheduledAt ?? null;
   createMeta(dir, {
     taskId: id,
     taskTitle: input.title,
@@ -165,6 +171,8 @@ export function createTask(input: {
     createdAt: now.toISOString(),
     origin,
     workflowId,
+    dispatch,
+    scheduledAt,
   });
   return {
     id,
@@ -179,10 +187,12 @@ export function createTask(input: {
     workflowId,
     effort: taskEffort,
     createdAt: now.toISOString(),
+    dispatch,
+    scheduledAt,
   };
 }
 
-type TaskPatch = Partial<Pick<Task, "title" | "body" | "section" | "status" | "checked">>;
+type TaskPatch = Partial<Pick<Task, "title" | "body" | "section" | "status" | "checked" | "scheduledAt">>;
 
 export async function updateTask(id: string, patch: TaskPatch): Promise<Task | null> {
   const dir = safeSessionDir(id);
@@ -194,6 +204,7 @@ export async function updateTask(id: string, patch: TaskPatch): Promise<Task | n
     if (patch.title !== undefined) meta.taskTitle = patch.title;
     if (patch.body !== undefined) meta.taskBody = patch.body;
     if (patch.checked !== undefined) meta.taskChecked = patch.checked;
+    if (patch.scheduledAt !== undefined) meta.scheduledAt = patch.scheduledAt;
     if (patch.section !== undefined) {
       meta.taskSection = patch.section;
       meta.taskStatus = SECTION_STATUS[patch.section];

@@ -89,3 +89,18 @@ export function isValidUserPermissionMode(s: unknown): s is PermissionMode {
 export function badRequest(msg: string): NextResponse {
   return NextResponse.json({ error: msg }, { status: 400 });
 }
+
+/**
+ * Parse a task's scheduled start. `null`, `undefined` and `""` mean "no
+ * schedule"; any other value must be a parseable date and comes back as a
+ * normalised ISO string (so `datetime-local` input lands in UTC on disk).
+ */
+export function parseScheduledAt(
+  v: unknown,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (v === null || v === undefined || v === "") return { ok: true, value: null };
+  if (typeof v !== "string") return { ok: false, error: "must be an ISO date string or null" };
+  const ms = Date.parse(v);
+  if (!Number.isFinite(ms)) return { ok: false, error: "not a parseable date" };
+  return { ok: true, value: new Date(ms).toISOString() };
+}

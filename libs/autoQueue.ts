@@ -73,6 +73,9 @@ export function pickNextTodoTask(tasks: Task[], runCountById: Map<string, number
   const now = Date.now();
   const eligible = tasks.filter((t) => {
     if (t.section !== "TODO") return false;
+    // Hand-controlled tasks wait for a drag, a Start click, or their own
+    // scheduledAt — the auto-queue never picks them up.
+    if (t.dispatch === "manual") return false;
     if ((runCountById.get(t.id) ?? 0) > 0) return false;
     const intake = t.intakeStatus ?? "none";
     if (intake !== "none") return false;

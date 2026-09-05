@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { updateTask, deleteTask, isValidSection } from "@/libs/tasksStore";
-import { isValidTaskId, SECTION_DONE, SECTION_STATUS, type Task, type TaskSection } from "@/libs/tasks";
-import { badRequest } from "@/libs/validate";
+import { updateTask, deleteTask, getTask, isValidSection } from "@/libs/tasksStore";
+import { isValidTaskId, SECTION_DONE, SECTION_STATUS, SECTION_TODO, type Task, type TaskSection } from "@/libs/tasks";
+import { badRequest, parseScheduledAt } from "@/libs/validate";
 import { verifyRequestAuth } from "@/libs/auth";
 
 export const dynamic = "force-dynamic";
@@ -14,9 +14,32 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   if (!isValidTaskId(id)) return badRequest("invalid task id");
-  const patch = (await req.json()) as Partial<
+  const raw = (await req.json()) as Partial<
     Pick<Task, "title" | "body" | "section" | "status" | "checked">
-  >;
+  > & { scheduledAt?: unknown };
+
+  const { scheduledAt: rawScheduledAt, ...patch } = raw as typeof raw & {
+    scheduledAt?: unknown;
+  };
+  let scheduledAt: string | null | undefined;
+  if (rawScheduledAt !== undefined) {
+    const parsed = parseScheduledAt(rawScheduledAt);
+    if (!parsed.ok) return badRequest(`scheduledAt: ${parsed.error}`);
+    scheduledAt = parsed.value;
+    if (scheduledAt !== null) {
+      // A schedule only means something while the card is waiting in TODO;
+      // the section being patched in the same request counts.
+      const current = getTask(id);
+      if (!current) return NextResponse.json({ error: "not found" }, { status: 404 });
+      const section = patch.section ?? current.section;
+      if (section !== SECTION_TODO || current.checked) {
+        return NextResponse.json(
+          { error: "only a task waiting in TODO can be scheduled", section },
+          { status: 409 },
+        );
+      }
+    }
+  }
 
   if (patch.section && !isValidSection(patch.section)) {
     return NextResponse.json(
@@ -38,7 +61,10 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
   }
 
-  const updated = await updateTask(id, patch);
+  const updated = await updateTask(
+    id,
+    scheduledAt === undefined ? patch : { ...patch, scheduledAt },
+  );
   if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(updated);
 }

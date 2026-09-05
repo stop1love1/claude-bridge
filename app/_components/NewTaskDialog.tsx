@@ -31,11 +31,24 @@ import { Textarea } from "./ui/textarea";
 
 export const APP_AUTO = "__auto__";
 
+export interface NewTaskInput {
+  body: string;
+  app: string | null;
+  effort: EffortLevel | null;
+  /** "manual" parks the task in TODO; "immediate" spawns a coordinator now. */
+  dispatch: "immediate" | "manual";
+  /** ISO start time for a parked task, or null. */
+  scheduledAt: string | null;
+}
+
+/** How the dialog was opened: run now (default) or add a waiting card to TODO. */
+export type NewTaskDialogOpen = (opts?: { draft?: boolean }) => void;
+
 interface DialogProps {
   apps: App[];
   repos?: Repo[];
-  onCreate: (t: { body: string; app: string | null; effort: EffortLevel | null }) => Promise<void>;
-  openRef?: React.MutableRefObject<(() => void) | null>;
+  onCreate: (t: NewTaskInput) => Promise<void>;
+  openRef?: React.MutableRefObject<NewTaskDialogOpen | null>;
 }
 
 export function NewTaskDialog({
@@ -45,7 +58,11 @@ export function NewTaskDialog({
   openRef,
 }: DialogProps) {
   const [open, setOpen] = useState(false);
-  const triggerOpen = useCallback(() => setOpen(true), []);
+  const [draft, setDraft] = useState(false);
+  const triggerOpen = useCallback<NewTaskDialogOpen>((opts) => {
+    setDraft(!!opts?.draft);
+    setOpen(true);
+  }, []);
 
   useEffect(() => {
     if (!openRef) return;
@@ -57,7 +74,7 @@ export function NewTaskDialog({
 
   return (
     <>
-      <Button onClick={triggerOpen} title="New task" aria-label="New task">
+      <Button onClick={() => triggerOpen()} title="New task" aria-label="New task">
         <Plus className="h-3.5 w-3.5" />
         <span className="hidden sm:inline">New task</span>
       </Button>
@@ -67,6 +84,7 @@ export function NewTaskDialog({
           <NewTaskDialogBody
             apps={apps}
             repos={repos}
+            draft={draft}
             onCreate={onCreate}
             onClose={() => setOpen(false)}
           />
@@ -76,17 +94,27 @@ export function NewTaskDialog({
   );
 }
 
+/** `datetime-local` value (local wall clock, no zone) → ISO, or null when empty. */
+function localInputToIso(v: string): string | null {
+  if (!v) return null;
+  const ms = new Date(v).getTime();
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
 function NewTaskDialogBody({
   apps,
   repos,
+  draft,
   onCreate,
   onClose,
 }: {
   apps: App[];
   repos: Repo[];
-  onCreate: (t: { body: string; app: string | null; effort: EffortLevel | null }) => Promise<void>;
+  draft: boolean;
+  onCreate: (t: NewTaskInput) => Promise<void>;
   onClose: () => void;
 }) {
+  const [startAt, setStartAt] = useState("");
   const branchByApp = useMemo(
     () => new Map(repos.map((r) => [r.name, r.branch ?? null])),
     [repos],
@@ -136,6 +164,8 @@ function NewTaskDialogBody({
         body: trimmed,
         app: app === APP_AUTO ? null : app,
         effort: effort ?? null,
+        dispatch: draft ? "manual" : "immediate",
+        scheduledAt: draft ? localInputToIso(startAt) : null,
       });
       onClose();
     } finally {
@@ -146,10 +176,11 @@ function NewTaskDialogBody({
   return (
     <DialogContent className="max-w-xl">
       <DialogHeader>
-        <DialogTitle>Describe the task</DialogTitle>
+        <DialogTitle>{draft ? "Add to Todo" : "Describe the task"}</DialogTitle>
         <DialogDescription>
-          The coordinator reads this as the brief. Keep the first line short
-          and specific — it becomes the session title.
+          {draft
+            ? "The card waits in Todo. Drag it to Doing, press Start, or set a start time below — nothing runs until then."
+            : "The coordinator reads this as the brief. Keep the first line short and specific — it becomes the session title."}
         </DialogDescription>
       </DialogHeader>
 
@@ -302,6 +333,22 @@ function NewTaskDialogBody({
           </p>
         </div>
 
+        {draft && (
+          <div className="grid gap-1.5">
+            <Label htmlFor="task-start-at">Start at (optional)</Label>
+            <Input
+              id="task-start-at"
+              type="datetime-local"
+              value={startAt}
+              onChange={(e) => setStartAt(e.target.value)}
+              className="h-8 text-xs"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              The bridge starts the coordinator on its own at this time (checked every 30s). Leave empty to start by hand.
+            </p>
+          </div>
+        )}
+
         <Textarea
           ref={taRef}
           autoFocus
@@ -324,7 +371,7 @@ function NewTaskDialogBody({
             Cancel
           </Button>
           <Button type="submit" disabled={!body.trim() || submitting}>
-            {submitting ? "Creating…" : "Create"}
+            {submitting ? (draft ? "Adding…" : "Creating…") : draft ? "Add to Todo" : "Create"}
             <kbd className="ml-1 text-[9px] font-mono opacity-60">⌘↵</kbd>
           </Button>
         </DialogFooter>
