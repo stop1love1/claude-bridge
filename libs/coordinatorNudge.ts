@@ -7,8 +7,8 @@ import {
   updateRun,
   type MetaChangeEvent,
   type Run,
-  type RunStatus,
 } from "./meta";
+import { isTerminal } from "./runStatus";
 import { isAlive } from "./sessionEvents";
 import { resumeSessionWithLifecycle } from "./resumeSession";
 import { denyTaskToolNames } from "./spawn";
@@ -71,9 +71,9 @@ const state: NudgeState = G.__bridgeCoordinatorNudge ?? {
 };
 G.__bridgeCoordinatorNudge = state;
 
-function isTerminal(s: RunStatus): boolean {
-  return s === "done" || s === "failed" || s === "cancelled" || s === "stale";
-}
+// Lives in the leaf `runStatus` module so routes can import it without
+// pulling this module's spawn/lifecycle import cycle into their bundle.
+export { isTerminal } from "./runStatus";
 
 export function shouldFinalizeDeferredCoordinator(args: {
   parentSessionId: string;

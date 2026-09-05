@@ -70,6 +70,20 @@ curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
 
 The `prompt` is JUST your role-specific brief — the bridge wraps it with task header, language directive, repo profile, pre-warmed context, self-register snippet, report contract. Don't duplicate any of that. Omit `repo` to auto-detect from the task body. For error codes (403/400/409/500), retry rules, and `mode:"resume"` follow-ups, see playbook §2 + §3.
 
+Then wait for your children with the long-poll endpoint — NOT a `GET /meta` + `sleep` loop. Each call blocks until a child of yours flips to `done` / `failed` / `cancelled` / `stale`, or 30s elapses (`timedOut: true`). Repeat until `pending` is empty, then read the reports:
+
+```bash
+while :; do
+  out=$(curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/wait \
+    -H 'content-type: application/json' \
+    -d '{"parentSessionId":"{{SESSION_ID}}"}')
+  echo "$out" | jq -c '{timedOut, settled: [.settled[] | {role, repo, status}], pending: [.pending[] | {role, repo, status}]}'
+  [ "$(echo "$out" | jq '.pending | length')" = "0" ] && break
+done
+```
+
+Pass `"sessionIds":["<uuid>", …]` to watch a subset (e.g. a planner you spawned alone). Playbook §3 step 3 has the details.
+
 ## Strict end-of-turn order
 
 1. Aggregate child reports per playbook §5 (read `sessions/{{TASK_ID}}/reports/*.md`).

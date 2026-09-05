@@ -150,9 +150,20 @@ For each agent:
    - **400** `unknown repo` — doesn't match any app in `~/.claude/bridge.json`.
    - **409** `duplicate spawn` — active `(parentSessionId, role, repo)` triple exists. Read `existingSessionId`; treat that earlier run as canonical. If you genuinely need two on the same role+repo, change the role or set `allowDuplicate: true`.
 
-3. **Watch for completion:** poll `GET /api/tasks/{{TASK_ID}}/meta` for the run's `status` to leave `running`. `wireRunLifecycle` flips it to `done` (exit 0) or `failed` (non-zero) — you don't PATCH it yourself.
+3. **Watch for completion:** long-poll `POST /api/tasks/{{TASK_ID}}/wait` instead of polling `GET /meta` in a `sleep` loop:
 
-Run agents sequentially unless the task explicitly benefits from parallelism (independent repos, non-overlapping files). The `/agents` endpoint returns immediately — fire parallel children with one curl each, then move into the watch loop.
+   ```bash
+   curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/wait \
+     -H 'content-type: application/json' \
+     -d '{"parentSessionId":"{{SESSION_ID}}"}'
+   # → {"settled":[Run…],"pending":[Run…],"timedOut":false}
+   ```
+
+   The call returns as soon as one of YOUR children (`parentSessionId` = you) flips to a terminal status (`done` / `failed` / `cancelled` / `stale`), or after `timeoutMs` (default 30000, max 55000) with `timedOut: true` and the same partition. Loop until `pending` is empty — one call per iteration, no `sleep` needed. Add `"sessionIds": ["<uuid>", …]` to watch only a subset (planner-first, or one lane of a parallel fan-out). `wireRunLifecycle` flips the status to `done` (exit 0) or `failed` (non-zero) — you don't PATCH it yourself. A `timedOut: true` response is normal — just call again.
+
+   **Fallback if you'd rather exit:** if you end your turn while children are still running, the bridge resumes you with an `Auto-nudge` message once every child is terminal (only when `summary.md` is missing or stale). Prefer the `/wait` loop — it keeps you in one session with full context.
+
+Run agents sequentially unless the task explicitly benefits from parallelism (independent repos, non-overlapping files). The `/agents` endpoint returns immediately — fire parallel children with one curl each, then move into the `/wait` loop.
 
 **Git is bridge-managed.** The bridge runs `git checkout` before spawn, `git add -A && git commit && git push` after a clean exit (per `bridge.json` settings), and post-success integration (`auto-merge` or `pull-request` via `devops`). **Never instruct a child to run `git checkout` / `commit` / `push` / `merge` / `gh pr create` / `glab mr create`** — duplicates race the lifecycle hook.
 
