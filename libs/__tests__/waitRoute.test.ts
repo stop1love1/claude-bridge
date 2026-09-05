@@ -170,6 +170,24 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
     expect(badTimeout.status).toBe(400);
   });
 
+  it("400s (not 500) when the JSON body is valid but not an object", async () => {
+    await seed(child(CHILD_A_SID, "done"));
+
+    for (const raw of ["null", "42", "\"str\"", "[]"]) {
+      const res = await postWait(raw);
+      expect(res.status, `body ${raw}`).toBe(400);
+      expect((await res.json()).error).toMatch(/JSON object|parentSessionId/);
+    }
+  });
+
+  it("400s on an empty sessionIds filter instead of answering 'all settled'", async () => {
+    await seed(child(CHILD_A_SID, "running"));
+
+    const res = await postWait({ parentSessionId: COORD_SID, sessionIds: [] });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/non-empty/);
+  });
+
   it("404s when the task has no meta.json", async () => {
     const res = await postWait({ parentSessionId: COORD_SID });
     expect(res.status).toBe(404);

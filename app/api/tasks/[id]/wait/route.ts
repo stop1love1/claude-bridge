@@ -109,13 +109,23 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   } catch {
     return badRequest("invalid JSON body");
   }
+  // `null`, arrays and primitives parse as valid JSON but are not a body.
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return badRequest("body must be a JSON object");
+  }
   if (!isValidSessionId(body.parentSessionId)) {
     return badRequest("parentSessionId is required and must be a session UUID");
   }
   let only: Set<string> | null = null;
   if (body.sessionIds !== undefined) {
-    if (!Array.isArray(body.sessionIds) || !body.sessionIds.every(isValidSessionId)) {
-      return badRequest("sessionIds must be an array of session UUIDs");
+    // An empty filter would match nothing and answer "all settled" — reject it
+    // so a coordinator that lost its child ids fails loudly instead.
+    if (
+      !Array.isArray(body.sessionIds) ||
+      body.sessionIds.length === 0 ||
+      !body.sessionIds.every(isValidSessionId)
+    ) {
+      return badRequest("sessionIds must be a non-empty array of session UUIDs");
     }
     only = new Set(body.sessionIds);
   }

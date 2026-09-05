@@ -153,13 +153,20 @@ For each agent:
 3. **Watch for completion:** long-poll `POST /api/tasks/{{TASK_ID}}/wait` instead of polling `GET /meta` in a `sleep` loop:
 
    ```bash
-   curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/wait \
+   curl -s -w '\n%{http_code}' -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/wait \
      -H 'content-type: application/json' \
+     -H "x-bridge-internal-token: $BRIDGE_INTERNAL_TOKEN" \
      -d '{"parentSessionId":"{{SESSION_ID}}"}'
    # → {"settled":[Run…],"pending":[Run…],"timedOut":false}
+   #   200
    ```
 
-   The call returns as soon as one of YOUR children (`parentSessionId` = you) flips to a terminal status (`done` / `failed` / `cancelled` / `stale`), or after `timeoutMs` (default 30000, max 55000) with `timedOut: true` and the same partition. Loop until `pending` is empty — one call per iteration, no `sleep` needed. Add `"sessionIds": ["<uuid>", …]` to watch only a subset (planner-first, or one lane of a parallel fan-out). `wireRunLifecycle` flips the status to `done` (exit 0) or `failed` (non-zero) — you don't PATCH it yourself. A `timedOut: true` response is normal — just call again.
+   The token header is mandatory — without it the CSRF gate rejects the POST with 403 (same as `/link`). The call returns as soon as one of YOUR children (`parentSessionId` = you) flips to a terminal status (`done` / `failed` / `cancelled` / `stale`), or after `timeoutMs` (default 30000, max 55000) with `timedOut: true` and the same partition. Add `"sessionIds": ["<uuid>", …]` (non-empty) to watch only a subset (planner-first, or one lane of a parallel fan-out). `wireRunLifecycle` flips the status to `done` (exit 0) or `failed` (non-zero) — you don't PATCH it yourself.
+
+   **Loop rules (the kernel prompt's `for i in 1 2 3` block already implements them):**
+   - **One tool call = one bounded block**, at most 3 calls × 30s. Your Bash tool kills a command after 120s, so never `while :` inside a single call — re-run the block in the next tool call until `pending` is empty.
+   - **Done = HTTP 200 AND `pending` empty.** Nothing else counts. `timedOut: true` is normal — call again.
+   - **Errors never end the loop.** On a non-200 or an `{"error":…}` body, print it, pause ~3s, retry; if it keeps failing across several blocks, fall back to `GET /api/tasks/{{TASK_ID}}/meta` and surface `BLOCKED — bridge wait unavailable (<error>)` per the dispatch rule below. Don't parse with `jq` (not installed here) — use `node -e` as in the kernel snippet.
 
    **Fallback if you'd rather exit:** if you end your turn while children are still running, the bridge resumes you with an `Auto-nudge` message once every child is terminal (only when `summary.md` is missing or stale). Prefer the `/wait` loop — it keeps you in one session with full context.
 

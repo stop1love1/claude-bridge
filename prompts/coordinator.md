@@ -70,19 +70,27 @@ curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/agents \
 
 The `prompt` is JUST your role-specific brief — the bridge wraps it with task header, language directive, repo profile, pre-warmed context, self-register snippet, report contract. Don't duplicate any of that. Omit `repo` to auto-detect from the task body. For error codes (403/400/409/500), retry rules, and `mode:"resume"` follow-ups, see playbook §2 + §3.
 
-Then wait for your children with the long-poll endpoint — NOT a `GET /meta` + `sleep` loop. Each call blocks until a child of yours flips to `done` / `failed` / `cancelled` / `stale`, or 30s elapses (`timedOut: true`). Repeat until `pending` is empty, then read the reports:
+Then wait for your children with the long-poll endpoint — NOT a `GET /meta` + `sleep` loop. Each call blocks until a child of yours flips to `done` / `failed` / `cancelled` / `stale`, or 30s elapses (`timedOut: true`). Your Bash tool kills a single command after 120s, so ONE tool call = the bounded block below (≤ 3 × 30s). Re-run the block in a new tool call until it prints `ALL CHILDREN SETTLED`, then read the reports:
 
 ```bash
-while :; do
-  out=$(curl -s -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/wait \
+for i in 1 2 3; do
+  out=$(curl -s -w '\n%{http_code}' -X POST {{BRIDGE_URL}}/api/tasks/{{TASK_ID}}/wait \
     -H 'content-type: application/json' \
+    -H "x-bridge-internal-token: $BRIDGE_INTERNAL_TOKEN" \
     -d '{"parentSessionId":"{{SESSION_ID}}"}')
-  echo "$out" | jq -c '{timedOut, settled: [.settled[] | {role, repo, status}], pending: [.pending[] | {role, repo, status}]}'
-  [ "$(echo "$out" | jq '.pending | length')" = "0" ] && break
+  code=${out##*$'\n'}; body=${out%$'\n'*}
+  if [ "$code" != "200" ]; then echo "wait → HTTP $code: $body"; sleep 3; continue; fi
+  echo "$body" | node -e '
+    const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    if (r.error || !Array.isArray(r.pending)) { console.log("wait → error:", r.error ?? "bad shape"); process.exit(1); }
+    const f = (a) => a.map((x) => x.role + "@" + x.repo + "=" + x.status).join(", ") || "-";
+    console.log("timedOut=" + r.timedOut + " settled: " + f(r.settled) + " | pending: " + f(r.pending));
+    if (r.pending.length === 0) { console.log("ALL CHILDREN SETTLED"); process.exit(0); }
+    process.exit(1);' && break
 done
 ```
 
-Pass `"sessionIds":["<uuid>", …]` to watch a subset (e.g. a planner you spawned alone). Playbook §3 step 3 has the details.
+Only a `200` with an empty `pending` means done. A non-200, an `{"error":…}` body, or `timedOut: true` is NOT done — the block prints it and tries again; if the block ends without `ALL CHILDREN SETTLED`, just run it again. (`jq` is not installed on this machine — that's why the parse goes through `node -e`.) Pass `"sessionIds":["<uuid>", …]` to watch a subset (e.g. a planner you spawned alone). Playbook §3 step 3 has the details.
 
 ## Strict end-of-turn order
 
