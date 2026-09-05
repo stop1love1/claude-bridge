@@ -10,6 +10,61 @@ export const DEFAULT_MIN_READS_BEFORE_EDIT = 3;
 const READ_TOOLS = new Set(["Read", "Grep", "Glob", "LS"]);
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
+/**
+ * Shell commands that only look at files. A Bash call whose first real
+ * command is one of these (and that doesn't redirect into a file) counts as
+ * a read, the same as the Read tool: agents that survey a repo with
+ * `cat`/`grep`/`sed -n` were being scored as "0 Read call(s)" and escalated.
+ */
+const READ_ONLY_COMMANDS = new Set([
+  "cat", "head", "tail", "less", "more", "sed", "awk", "grep", "rg", "egrep", "fgrep",
+  "ls", "find", "tree", "wc", "stat", "file", "diff", "type",
+]);
+const GIT_READ_SUBCOMMANDS = new Set(["show", "diff", "log", "blame", "status", "ls-files", "grep"]);
+
+/** Redirects that write somewhere other than stderr→stdout / the bit bucket. */
+function hasFileRedirect(command: string): boolean {
+  const stripped = command
+    .replace(/2>&1/g, "")
+    .replace(/[12]?>\s*\/dev\/null/g, "")
+    .replace(/[12]?>\s*NUL\b/gi, "");
+  return />/.test(stripped) || /\btee\b/.test(stripped);
+}
+
+/** First command word of a shell line, skipping `cd … &&`/`;` and `VAR=x` prefixes. */
+function firstCommandWord(command: string): { word: string; rest: string } | null {
+  const segments = command.split(/&&|;|\n/).map((s) => s.trim()).filter(Boolean);
+  for (const seg of segments) {
+    const tokens = seg.split(/\s+/);
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+    if (i >= tokens.length) continue;
+    if (tokens[i] === "cd") continue;
+    return { word: tokens[i], rest: tokens.slice(i + 1).join(" ") };
+  }
+  return null;
+}
+
+function bashReadKey(input: unknown): string | null {
+  const obj = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const command = typeof obj.command === "string" ? obj.command.trim() : "";
+  if (!command) return null;
+  if (hasFileRedirect(command)) return null;
+  const first = firstCommandWord(command);
+  if (!first) return null;
+  if (first.word === "sed") {
+    // `sed -n` prints; `sed -i` rewrites in place.
+    if (/(^|\s)-[a-zA-Z]*i/.test(first.rest)) return null;
+    if (!/(^|\s)-[a-zA-Z]*n/.test(first.rest)) return null;
+  } else if (first.word === "git") {
+    const sub = first.rest.split(/\s+/)[0] ?? "";
+    if (!GIT_READ_SUBCOMMANDS.has(sub)) return null;
+  } else if (!READ_ONLY_COMMANDS.has(first.word)) {
+    return null;
+  }
+  return `bash:${normalizeReadKey(command.replace(/\s+/g, " "))}`;
+}
+
 export type PreflightVerdict = "pass" | "skipped" | "fail";
 
 export interface PreflightResult {
@@ -99,6 +154,9 @@ export function countReadsBeforeEdit(
       } else if (READ_TOOLS.has(name) && !firstEditSeen) {
         if (isOutOfAppRoot(appPath, extractFilePath(b.input))) continue;
         readKeys.add(readIdentityKey(name, b.input, ` #${unidentifiedReadCount++}`));
+      } else if (name === "Bash" && !firstEditSeen) {
+        const key = bashReadKey(b.input);
+        if (key) readKeys.add(key);
       }
     }
   }
@@ -125,7 +183,11 @@ export function runPreflight(opts: RunPreflightOptions): PreflightResult {
       required: configuredMin,
     };
   }
-  if (/review|audit|inspect/i.test(finishedRun.role)) {
+  // Planners only write plan.md / intake.json / their report under
+  // sessions/ — a survey-then-write shape preflight is not built to judge.
+  // (That footprint sits inside the app root only when the bridge targets
+  // itself, which is exactly when this used to fire.)
+  if (/review|audit|inspect|^planner\b/i.test(finishedRun.role)) {
     return {
       verdict: "skipped",
       reason: `read-only role pattern in \`${finishedRun.role}\` — preflight does not apply`,

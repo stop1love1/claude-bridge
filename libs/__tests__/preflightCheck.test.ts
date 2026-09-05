@@ -79,6 +79,74 @@ describe("countReadsBeforeEdit", () => {
     expect(got.editCount).toBe(1);
   });
 
+  describe("Bash commands that only read", () => {
+    // Regression: t_20260905_001 — the planner surveyed the repo with 25
+    // Bash calls (cat/grep/sed) and zero Read calls, so preflight reported
+    // "0 Read call(s)" and escalated the task to BLOCKED.
+    const bash = (command: string) => ({ name: "Bash", input: { command } });
+
+    it("counts cat / sed -n / grep / rg / head as reads", () => {
+      const text = jsonlWithInput([
+        bash("cat libs/planGate.ts"),
+        bash("sed -n 80,160p prompts/playbooks/planner.md"),
+        bash("grep -rn intake libs/*.ts | head -30"),
+        bash("rg --files-with-matches escalate libs"),
+        bash("head -c 2000 sessions/t_1/plan.md"),
+        { name: "Write", input: { file_path: "/repo/plan.md" } },
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(5);
+    });
+
+    it("looks past a leading cd and an env assignment", () => {
+      const text = jsonlWithInput([
+        bash("cd D:/projects/claude-bridge && cat libs/spawn.ts"),
+        bash("cd /repo; FOO=1 sed -n 1,40p libs/meta.ts"),
+        { name: "Write", input: { file_path: "/repo/plan.md" } },
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(2);
+    });
+
+    it("de-duplicates the same command", () => {
+      const text = jsonlWithInput([
+        bash("cat libs/planGate.ts"),
+        bash("cat libs/planGate.ts"),
+        { name: "Write", input: { file_path: "/repo/plan.md" } },
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(1);
+    });
+
+    it("does not count commands that write, run, or redirect", () => {
+      const text = jsonlWithInput([
+        bash("cat > sessions/t_1/plan.md <<'EOF'\nhello\nEOF"),
+        bash("grep -n foo libs/a.ts > /tmp/out.txt"),
+        bash("npm test"),
+        bash("sed -i 's/a/b/' libs/a.ts"),
+        bash("curl -s -X POST http://localhost:7777/api/tasks/t_1/link"),
+        bash("rm -rf sessions/t_1"),
+        bash("echo hi"),
+        { name: "Write", input: { file_path: "/repo/plan.md" } },
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(0);
+    });
+
+    it("still allows the usual stderr / null redirects", () => {
+      const text = jsonlWithInput([
+        bash("grep -rn foo libs 2>/dev/null | head"),
+        bash("cat libs/a.ts 2>&1"),
+        { name: "Write", input: { file_path: "/repo/plan.md" } },
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(2);
+    });
+
+    it("only counts reads before the first edit, like the Read tool", () => {
+      const text = jsonlWithInput([
+        { name: "Write", input: { file_path: "/repo/plan.md" } },
+        bash("cat libs/a.ts"),
+      ]);
+      expect(countReadsBeforeEdit(text).readsBeforeEdit).toBe(0);
+    });
+  });
+
   it("survives malformed lines / empty lines", () => {
     const text = ["", "not json", jsonl(["Read", "Edit"]), ""].join("\n");
     const got = countReadsBeforeEdit(text);
@@ -251,6 +319,15 @@ describe("runPreflight", () => {
       endedAt: null,
     };
   }
+
+  it("exempts the planner role (and its retry alias) — it only writes plan.md/intake.json", () => {
+    const entries = [toolUse("Write", { file_path: "/repo/sessions/t_1/plan.md" })];
+    for (const role of ["planner", "planner-cretry", "planner-retry"]) {
+      const result = runPreflight({ finishedRun: runFrom(entries, role), appPath: "/repo" });
+      expect(result.verdict).toBe("skipped");
+      expect(result.reason).toContain(role);
+    }
+  });
 
   it("a one-file task passes when the agent read that one file", () => {
     const entries = [
