@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Bell,
   Globe,
+  RefreshCw,
   Send,
   ScanSearch,
   Settings as SettingsIcon,
@@ -378,6 +379,7 @@ function ProfileSettingsSection() {
   const [source, setSource] = useState<ProfileSource>("heuristic");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -407,6 +409,29 @@ function ProfileSettingsSection() {
       toast("error", (e as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // The only way to trigger a rebuild from the UI. Picking `llm` above changes
+  // nothing on its own — enrichment runs on an explicit refresh and nowhere
+  // else — so without this button the setting was unreachable.
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const store = await api.refreshProfiles();
+      const names = Object.keys(store.profiles);
+      const enriched = names.filter(
+        (n) => store.profiles[n]?.summarySource === "llm",
+      ).length;
+      toast(
+        "success",
+        `Refreshed ${names.length} profile${names.length === 1 ? "" : "s"}` +
+          (enriched ? ` · ${enriched} LLM-enriched` : ""),
+      );
+    } catch (e) {
+      toast("error", (e as Error).message);
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -464,6 +489,23 @@ function ProfileSettingsSection() {
               </button>
             );
           })}
+
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refresh}
+              disabled={refreshing || saving}
+            >
+              <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+              {refreshing ? "Refreshing…" : "Refresh now"}
+            </Button>
+            <p className="text-[11px] text-muted-foreground">
+              {source === "llm"
+                ? "Rescans every repo and runs the LLM pass one repo at a time — can take a few minutes."
+                : "Rescans every repo with the heuristic detector."}
+            </p>
+          </div>
         </div>
       )}
     </SettingsCard>
@@ -760,6 +802,15 @@ function RolesSettingsSection() {
         custom role can only ever be <strong>more</strong> restricted than its
         class: read-only roles always have Edit/MultiEdit/NotebookEdit denied,
         and every role always has Task denied.
+      </p>
+      <p className="text-[11px] text-muted-foreground mb-4">
+        <strong>Read-only means no code edits, not no writes.</strong>{" "}
+        <code className="font-mono">Write</code> and{" "}
+        <code className="font-mono">Bash</code> stay allowed — every child needs
+        them to write its report and self-register — exactly as the built-in{" "}
+        <code className="font-mono">reviewer</code> and{" "}
+        <code className="font-mono">planner</code> roles do. Add them to
+        &ldquo;Extra denied tools&rdquo; yourself if a role should not have them.
       </p>
 
       {loading ? (

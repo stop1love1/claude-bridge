@@ -37,6 +37,12 @@ export type ReqOpts = { signal?: AbortSignal };
 /** Every role write answers with the fresh registry, so callers never refetch. */
 export type RolesResponse = { roles: RoleSpec[]; custom: CustomRoleDef[] };
 
+/** `ProfileStore` narrowed to the fields the Settings card actually reads. */
+export type ProfileRefreshResult = {
+  refreshedAt: string;
+  profiles: Record<string, { summarySource?: "heuristic" | "llm" }>;
+};
+
 export type CustomRoleInput = {
   name: string;
   mutating: boolean;
@@ -505,6 +511,17 @@ export const api = {
     req<{ source: "heuristic" | "llm" }>(`/profiles/settings`, {
       method: "PUT",
       body: JSON.stringify(patch),
+    }),
+  /**
+   * Rebuild every repo profile now. Answers only when the whole pass is done:
+   * in `llm` mode the server budgets 5 minutes for enrichment plus up to a 60s
+   * CLI timeout on the last repo, so this deliberately carries no
+   * `AbortSignal` — the caller owns the busy state instead.
+   */
+  refreshProfiles: () =>
+    req<ProfileRefreshResult>(`/repos/profiles/refresh`, {
+      method: "POST",
+      body: JSON.stringify({}),
     }),
   planGateSettings: (opts?: ReqOpts) =>
     req<{ operatorEnabled: boolean; maxClarifyRounds: number }>(`/settings/plan-gate`, {

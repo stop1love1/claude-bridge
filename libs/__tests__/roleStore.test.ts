@@ -138,8 +138,19 @@ describe("roleStore — create / update / delete", () => {
     for (const name of ["planner", "coder", "reviewer-api", "coder-phase24", "PLANNER"]) {
       const res = createCustomRole({ name, mutating: true });
       expect(res.ok, name).toBe(false);
+      // 409, not 400: the name is well-formed, it is just taken. Answering
+      // with the charset error sent operators off fixing a valid name.
+      expect(res.ok === false && res.status, name).toBe(409);
+      expect(res.ok === false && res.error, name).toMatch(/is reserved/);
     }
     expect(listCustomRoles()).toEqual([]);
+  });
+
+  it("names the built-in a suffixed variant collides with", () => {
+    const res = createCustomRole({ name: "coder-phase24", mutating: true });
+    expect(res.ok === false && res.error).toBe(
+      `"coder-phase24" is reserved: it resolves to the built-in role "coder"`,
+    );
   });
 
   it("rejects malformed names and duplicates", () => {

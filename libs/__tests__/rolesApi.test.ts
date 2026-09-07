@@ -88,9 +88,15 @@ describe("POST /api/bridge/roles — body validation", () => {
   });
 
   it("409s on a name a built-in owns, and on a duplicate", async () => {
-    for (const name of ["planner", "coder-api"]) {
+    // The reason has to survive to the operator: these names are well-formed,
+    // so the charset message they used to get told them to fix nothing.
+    for (const [name, reason] of [
+      ["planner", `"planner" is reserved by a built-in role`],
+      ["coder-api", `"coder-api" is reserved: it resolves to the built-in role "coder"`],
+    ]) {
       const res = await POST(reqWith({ name, mutating: true }));
-      expect(res.status, name).toBe(400);
+      expect(res.status, name).toBe(409);
+      expect((await res.json()).error, name).toBe(reason);
     }
     expect((await POST(reqWith({ name: "perf-tuner", mutating: true }))).status).toBe(200);
     const dup = await POST(reqWith({ name: "perf-tuner", mutating: true }));

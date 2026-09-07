@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanRepo, type RepoProfile } from "../repoProfile";
 import {
+  __test,
   applyProfileLLMResponse,
   buildProfileLLMArgs,
   buildProfileLLMPrompt,
@@ -100,6 +101,18 @@ describe("buildProfileLLMPrompt", () => {
   });
 });
 
+describe("__test.sameList", () => {
+  it("compares element by element, so a space in a path cannot fake equality", () => {
+    // The reason this is not `a.join(" ") === b.join(" ")`: entrypoints are
+    // paths, and a Windows path may contain a space.
+    expect(__test.sameList(["a b", "c"], ["a", "b c"])).toBe(false);
+    expect(__test.sameList(["a", "b"], ["b", "a"])).toBe(false);
+    expect(__test.sameList(["a", "b"], ["a", "b"])).toBe(true);
+    expect(__test.sameList([], [])).toBe(true);
+    expect(__test.sameList(["a"], ["a", "b"])).toBe(false);
+  });
+});
+
 describe("applyProfileLLMResponse", () => {
   let profile: RepoProfile;
   beforeEach(() => {
@@ -186,6 +199,22 @@ describe("applyProfileLLMResponse", () => {
       profile,
     );
     expect(out).toBeNull();
+  });
+
+  it("counts a same-length reordering of entrypoints as a change", () => {
+    // The model may only narrow or reorder the heuristic entrypoints, so a
+    // reprioritised list of the same length is the one way "changed" can be
+    // true while every array length stayed put. Comparing by count dropped the
+    // whole enrichment — summarySource included — without a word.
+    expect(profile.entrypoints.length).toBeGreaterThan(1);
+    const reordered = [...profile.entrypoints].reverse();
+    const out = applyProfileLLMResponse(
+      fence({ summary: profile.summary, features: [], entrypoints: reordered }),
+      profile,
+    );
+    expect(out).not.toBeNull();
+    expect(out!.entrypoints).toEqual(reordered);
+    expect(out!.summarySource).toBe("llm");
   });
 });
 
@@ -351,5 +380,198 @@ describe("profileStore wiring", () => {
     const profiles = readStoreFile().profiles;
     expect(profiles.a.summarySource).toBe("llm");
     expect(profiles.b.summarySource).toBeUndefined();
+  });
+
+  // -- the TTL path must not eat an enrichment -------------------------------
+
+  /** Rewrites the store's own timestamp so `ensureFreshOrAuto` sees it stale. */
+  function ageStorePastTtl(): void {
+    const path = join(stateDir, "repo-profiles.json");
+    const store = JSON.parse(readFileSync(path, "utf8")) as {
+      refreshedAt: string;
+      profiles: Record<string, RepoProfile>;
+    };
+    store.refreshedAt = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    writeFileSync(path, JSON.stringify(store), "utf8");
+  }
+
+  it("ensureFreshOrAuto past the TTL keeps an LLM summary and still re-scans the heuristics", async () => {
+    const enriching = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({
+        ...p,
+        summary: "rewritten by the model",
+        features: [...p.features, "catalogue"],
+        entrypoints: ["app/page.tsx"],
+        summarySource: "llm" as const,
+      }),
+    });
+    await enriching.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const before = readStoreFile().profiles.shop;
+    expect(before.summarySource).toBe("llm");
+
+    ageStorePastTtl();
+    // The repo grew a dependency the heuristic scan should pick up.
+    writeFiles(repoRoot, {
+      "package.json": JSON.stringify({
+        name: "shop-web",
+        description: "Storefront",
+        dependencies: { next: "^15.0.0", react: "^19.0.0", "@prisma/client": "^5.0.0" },
+        devDependencies: { typescript: "^5.0.0" },
+      }),
+      "prisma/schema.prisma": "model User { id Int @id }\n",
+    });
+
+    const auto = await loadStore("heuristic", neverCalled);
+    auto.ensureFreshOrAuto([{ name: "shop", path: repoRoot }]);
+
+    const after = readStoreFile().profiles.shop;
+    expect(after.summarySource).toBe("llm");
+    expect(after.summary).toBe("rewritten by the model");
+    expect(after.features).toEqual(before.features);
+    expect(after.entrypoints).toEqual(["app/page.tsx"]);
+    // …but the heuristic half is genuinely fresh.
+    expect(after.stack).toContain("prisma");
+    expect(after.refreshedAt).not.toBe(before.refreshedAt);
+  });
+
+  it("a heuristic profile is still overwritten wholesale by a later scan", async () => {
+    const store = await loadStore("heuristic", neverCalled);
+    store.refreshAll([{ name: "shop", path: repoRoot }]);
+    const fresh = readStoreFile().profiles.shop;
+
+    // Same store, but the entry now looks like a stale heuristic profile.
+    const path = join(stateDir, "repo-profiles.json");
+    const raw = JSON.parse(readFileSync(path, "utf8")) as {
+      profiles: Record<string, RepoProfile>;
+    };
+    raw.profiles.shop = { ...fresh, summary: "stale heuristic guess", features: ["gone"] };
+    writeFileSync(path, JSON.stringify(raw), "utf8");
+
+    store.refreshAll([{ name: "shop", path: repoRoot }]);
+    const after = readStoreFile().profiles.shop;
+    expect(after.summary).toBe(fresh.summary);
+    expect(after.features).toEqual(fresh.features);
+  });
+
+  // -- an LLM pass that was asked for and did not land ------------------------
+
+  /** Seeds the store with one enriched profile and returns it. */
+  async function seedEnriched(name = "shop", path = repoRoot): Promise<RepoProfile> {
+    const enriching = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({
+        ...p,
+        summary: "rewritten by the model",
+        features: [...p.features, "catalogue"],
+        summarySource: "llm" as const,
+      }),
+    });
+    await enriching.refreshAllEnriched([{ name, path }]);
+    const seeded = readStoreFile().profiles[name];
+    expect(seeded.summarySource).toBe("llm");
+    return seeded;
+  }
+
+  it("keeps the previous summary when the LLM was asked and came back empty-handed", async () => {
+    const before = await seedEnriched();
+    // What a broken CLI actually looks like from here: summarizeWithLLM
+    // swallows its own failure and hands the heuristic profile straight back.
+    const failing = await loadStore("llm", { summarizeWithLLM: async (p: RepoProfile) => p });
+    await failing.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const after = readStoreFile().profiles.shop;
+    expect(after.summarySource).toBe("llm");
+    expect(after.summary).toBe(before.summary);
+    expect(after.features).toEqual(before.features);
+  });
+
+  it("keeps the previous summary when the enricher throws", async () => {
+    const before = await seedEnriched();
+    const throwing = await loadStore("llm", {
+      summarizeWithLLM: async () => {
+        throw new Error("claude exited 1");
+      },
+    });
+    await throwing.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const after = readStoreFile().profiles.shop;
+    expect(after.summarySource).toBe("llm");
+    expect(after.summary).toBe(before.summary);
+  });
+
+  it("keeps the previous summary for repos the wall-clock budget never reached", async () => {
+    const second = makeRepo("store2");
+    const before = await seedEnriched("b", second);
+
+    const spy = vi.fn(async (p: RepoProfile) => {
+      // Burn the whole budget on the first repo, so "b" is never attempted.
+      vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+      return { ...p, summary: "fresh model text", summarySource: "llm" as const };
+    });
+    const store = await loadStore("llm", { summarizeWithLLM: spy });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await store.refreshAllEnriched([
+        { name: "a", path: repoRoot },
+        { name: "b", path: second },
+      ]);
+    } finally {
+      vi.useRealTimers();
+      rmSync(second, { recursive: true, force: true });
+    }
+    expect(spy).toHaveBeenCalledTimes(1);
+    const after = readStoreFile().profiles.b;
+    expect(after.summarySource).toBe("llm");
+    expect(after.summary).toBe(before.summary);
+  });
+
+  it("refreshOneEnriched keeps the previous summary on a failed pass too", async () => {
+    const before = await seedEnriched();
+    const failing = await loadStore("llm", { summarizeWithLLM: async (p: RepoProfile) => p });
+    await failing.refreshOneEnriched({ name: "shop", path: repoRoot });
+    expect(readStoreFile().profiles.shop.summary).toBe(before.summary);
+  });
+
+  it("an explicit refresh with the LLM turned off re-derives the profile from scratch", async () => {
+    await seedEnriched();
+    // The escape hatch: nobody asked for a pass, so the fresh scan wins.
+    const plain = await loadStore("heuristic", neverCalled);
+    await plain.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const after = readStoreFile().profiles.shop;
+    expect(after.summarySource).toBeUndefined();
+    expect(after.summary).not.toBe("rewritten by the model");
+  });
+
+  it("drops the enrichment when the app is repointed at a different directory", async () => {
+    const before = await seedEnriched();
+    const moved = makeRepo("moved");
+    try {
+      const store = await loadStore("heuristic", neverCalled);
+      // Same name in bridge.json, different tree underneath.
+      store.refreshAll([{ name: "shop", path: moved }]);
+      const after = readStoreFile().profiles.shop;
+      expect(after.path).toBe(moved);
+      expect(after.summarySource).toBeUndefined();
+      expect(after.summary).not.toBe(before.summary);
+    } finally {
+      rmSync(moved, { recursive: true, force: true });
+    }
+  });
+
+  it("survives a hand-edited entry that claims summarySource llm but has no arrays", async () => {
+    const store = await loadStore("heuristic", neverCalled);
+    store.refreshAll([{ name: "shop", path: repoRoot }]);
+    const fresh = readStoreFile().profiles.shop;
+
+    const path = join(stateDir, "repo-profiles.json");
+    const raw = JSON.parse(readFileSync(path, "utf8")) as {
+      profiles: Record<string, unknown>;
+    };
+    // `fresh.path` rather than `repoRoot`: the scan normalises the path it is
+    // handed, and the enrichment guard compares it verbatim.
+    raw.profiles.shop = { path: fresh.path, summary: "hand written", summarySource: "llm" };
+    writeFileSync(path, JSON.stringify(raw), "utf8");
+
+    expect(() => store.refreshAll([{ name: "shop", path: repoRoot }])).not.toThrow();
+    const after = readStoreFile().profiles.shop;
+    expect(after.features).toEqual(fresh.features);
+    expect(after.summary).toBe(fresh.summary);
   });
 });

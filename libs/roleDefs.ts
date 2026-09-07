@@ -127,5 +127,15 @@ export function matchLongest<T extends { name: string }>(
  * classification of a label operators already dispatch under.
  */
 export function isBuiltinRoleLabel(label: string): boolean {
-  return matchLongest(ROLE_DEFS, label.trim().toLowerCase()) !== null;
+  return builtinRoleBase(label) !== null;
+}
+
+/**
+ * The built-in a label resolves to, or `null`. Callers that need to *explain*
+ * the rejection want the base name — `coder-api` is refused because of
+ * `coder`, and saying so is the difference between an operator fixing the name
+ * and an operator filing a bug.
+ */
+export function builtinRoleBase(label: string): string | null {
+  return matchLongest(ROLE_DEFS, label.trim().toLowerCase())?.name ?? null;
 }

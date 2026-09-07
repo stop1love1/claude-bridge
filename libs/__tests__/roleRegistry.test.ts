@@ -169,9 +169,24 @@ const TMP_SESSIONS = vi.hoisted(() => {
   return mkdtempSync(join(tmpdir(), "bridge-role-registry-"));
 });
 
+/**
+ * `listRoles()` reads the custom overlay out of `BRIDGE_STATE_DIR`, so this
+ * mock has to redirect it too — leaving it at the real path makes these tests
+ * depend on whatever `roles.json` the operator happens to have on disk.
+ */
+const TMP_STATE = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mkdtempSync } = require("node:fs") as typeof import("node:fs");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { join } = require("node:path") as typeof import("node:path");
+  return mkdtempSync(join(tmpdir(), "bridge-role-registry-state-"));
+});
+
 vi.mock("../paths", async () => {
   const actual = await vi.importActual<typeof import("../paths")>("../paths");
-  return { ...actual, SESSIONS_DIR: TMP_SESSIONS };
+  return { ...actual, SESSIONS_DIR: TMP_SESSIONS, BRIDGE_STATE_DIR: TMP_STATE };
 });
 
 vi.mock("../auth", () => ({

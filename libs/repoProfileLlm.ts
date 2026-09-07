@@ -239,10 +239,16 @@ export function applyProfileLLMResponse(
     : [];
   const entrypoints = picked.length > 0 ? picked : profile.entrypoints;
 
+  // Compared element by element, not by count and not by joined string: the
+  // model may return the same number of entrypoints in a different
+  // (deliberate) order, and a length check would call that "unchanged" and
+  // throw the whole enrichment — `summarySource` included — away without a
+  // word. Entrypoints are paths and can contain spaces, so joining first would
+  // let `["a b", "c"]` and `["a", "b c"]` compare equal.
   const changed =
     (summary.length > 0 && summary !== profile.summary) ||
-    features.length !== profile.features.length ||
-    entrypoints.length !== profile.entrypoints.length;
+    !sameList(features, profile.features) ||
+    !sameList(entrypoints, profile.entrypoints);
   if (!changed) return null;
 
   return {
@@ -283,6 +289,10 @@ function dedupe<T>(arr: T[]): T[] {
   return [...new Set(arr)];
 }
 
+function sameList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 export const __test = {
   FEATURE_RE,
   SUMMARY_CAP_CHARS,
@@ -290,4 +300,5 @@ export const __test = {
   PROFILE_TIMEOUT_MS,
   extractJsonBlock,
   sanitizeFeatures,
+  sameList,
 };

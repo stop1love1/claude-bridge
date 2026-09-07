@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { writeJsonAtomic } from "./atomicWrite";
-import { isBuiltinRoleLabel } from "./roleDefs";
+import { builtinRoleBase, isBuiltinRoleLabel } from "./roleDefs";
 import { isValidAgentRole, isValidToolName } from "./validate";
 
 /**
@@ -290,6 +290,18 @@ export function createCustomRole(input: RoleWriteInput): RoleWriteResult {
   const bad = validateInput(input);
   if (bad) return fail(bad.error);
   const name = normalizeName(input.name);
+  // Checked before the charset branch: a built-in name is usually well-formed,
+  // so folding it into "must be lowercase letters and dashes" told operators
+  // to fix a name that was already valid.
+  const builtin = builtinRoleBase(name);
+  if (builtin) {
+    return fail(
+      builtin === name
+        ? `"${name}" is reserved by a built-in role`
+        : `"${name}" is reserved: it resolves to the built-in role "${builtin}"`,
+      409,
+    );
+  }
   if (!isAssignableCustomName(name)) {
     return fail(
       "name must be lowercase letters, digits and single dashes (e.g. security-auditor)",
