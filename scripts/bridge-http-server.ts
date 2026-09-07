@@ -1,3 +1,6 @@
+// Keep first: installs globalThis.AsyncLocalStorage before any import can drag
+// Next's app-render store in without it. See the module for the full story.
+import "./nodeEnvironmentBootstrap";
 import { createServer, type IncomingMessage } from "node:http";
 import { parse as parseUrl } from "node:url";
 import type { Duplex } from "node:stream";
