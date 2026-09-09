@@ -373,7 +373,7 @@ export async function runSemanticVerifier(
     });
   }
 
-  const agg = aggregatePanel(votes, lenses.length);
+  const agg = aggregatePanel(votes, lenses.length, lenses.map((l) => l.key));
   return {
     verdict: agg.verdict,
     reason: agg.reason,
@@ -506,6 +506,10 @@ export async function spawnSemanticVerifierRetry(args: {
       retryOf: finishedRun.sessionId,
       retryAttempt: elig.nextAttempt,
       model: model ?? null,
+      // A semantic retry gets a fresh session id, so unlike a claim retry it
+      // has to carry the baseline across explicitly — otherwise the attempt it
+      // is fixing would look like somebody else's work and go unclaimed.
+      diffBaseline: finishedRun.diffBaseline ?? null,
       ...inheritWorktreeFields(finishedRun),
     };
     await appendRun(sessionsDir, retryRun);

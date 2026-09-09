@@ -344,3 +344,78 @@ describe("a resume that never spawns leaves the row's model as it was", () => {
     expect(row?.status).toBe("done");
   });
 });
+
+describe("POST /api/tasks/<id>/agents — clearModel on a resume", () => {
+  async function seedFinishedRun(model: string | null) {
+    await seedTask();
+    const { appendRun } = await import("../meta");
+    const sid = "77777777-7777-7777-7777-777777777777";
+    await appendRun(taskDir(), {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-model-app",
+      status: "done",
+      startedAt: "2026-09-05T10:00:01Z",
+      endedAt: "2026-09-05T10:00:02Z",
+      model,
+    });
+    return sid;
+  }
+
+  it("unpins the session: the resume spawns with no --model at all", async () => {
+    const sid = await seedFinishedRun("claude-opus-5");
+    const res = await postAgents({
+      role: "coder",
+      repo: "fake-model-app",
+      prompt: "keep going",
+      mode: "resume",
+      priorSessionId: sid,
+      clearModel: true,
+    });
+    expect(res.status).toBe(201);
+    expect(spawnCalls[0].kind).toBe("resume");
+    expect(spawnCalls[0].settings?.model).toBeUndefined();
+  });
+
+  it("clearModel: false is the same as saying nothing", async () => {
+    const sid = await seedFinishedRun("claude-opus-5");
+    await postAgents({
+      role: "coder",
+      repo: "fake-model-app",
+      prompt: "keep going",
+      mode: "resume",
+      priorSessionId: sid,
+      clearModel: false,
+    });
+    expect(spawnCalls[0].settings?.model).toBe("claude-opus-5");
+  });
+
+  it("still honours a standing app pin — clearing is about the session only", async () => {
+    const sid = await seedFinishedRun("claude-opus-5");
+    roleModels.value = { coder: "claude-sonnet-5" };
+    await postAgents({
+      role: "coder",
+      repo: "fake-model-app",
+      prompt: "keep going",
+      mode: "resume",
+      priorSessionId: sid,
+      clearModel: true,
+    });
+    expect(spawnCalls[0].settings?.model).toBe("claude-sonnet-5");
+  });
+
+  it("rejects a non-boolean clearModel instead of coercing it", async () => {
+    const sid = await seedFinishedRun("claude-opus-5");
+    const res = await postAgents({
+      role: "coder",
+      repo: "fake-model-app",
+      prompt: "keep going",
+      mode: "resume",
+      priorSessionId: sid,
+      clearModel: "true",
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("invalid clearModel");
+    expect(spawnCalls).toHaveLength(0);
+  });
+});

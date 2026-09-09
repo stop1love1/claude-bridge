@@ -140,7 +140,7 @@ export async function runStyleCritic(
     styleVotes.push({ lens, verdict: parsed.verdict, reason: parsed.reason });
   }
 
-  const agg = aggregatePanel(genericVotes, lenses.length);
+  const agg = aggregatePanel(genericVotes, lenses.length, lenses.map((l) => l.key));
   return {
     verdict: genericToStyle(agg.verdict),
     reason: agg.reason,

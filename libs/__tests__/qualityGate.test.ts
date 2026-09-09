@@ -96,6 +96,12 @@ function fakeChildExiting(code: number): ChildProcess {
 }
 
 beforeEach(() => {
+  // Other tests in this file write a verdict file into the shared temp
+  // sessions dir; the "missing verdict file" cases assert it is absent. In
+  // declaration order the readers happened to run first, so the coupling was
+  // invisible until the order changed. Reset the filesystem, not just the
+  // mocks — a new test that writes a verdict file is then isolated for free.
+  try { rmSync(join(TMP_SESSIONS, TASK_ID), { recursive: true, force: true }); } catch { }
   notifyGateInfraSkip.mockClear();
   spawnFreeSessionMock.mockReset();
   getAppMock.mockReset();

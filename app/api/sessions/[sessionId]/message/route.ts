@@ -9,7 +9,7 @@ import { resumeSessionWithLifecycle } from "@/libs/resumeSession";
 import { projectDirFor } from "@/libs/sessions";
 import { freeSessionSettingsPath, writeSessionSettings } from "@/libs/permissionSettings";
 import { setSessionBypass } from "@/libs/sessionBypass";
-import { badRequest, isValidEffort, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
+import { badRequest, isValidClearModel, isValidEffort, isValidModel, isValidSessionId, isValidUserPermissionMode } from "@/libs/validate";
 import { findTaskBySessionId, updateTask } from "@/libs/tasksStore";
 import { SECTION_DOING, SECTION_DONE } from "@/libs/tasks";
 import { getApp, isValidAppName } from "@/libs/apps";
@@ -93,6 +93,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
   if (settings?.effort !== undefined && !isValidEffort(settings.effort)) {
     return badRequest("invalid settings.effort");
+  }
+  if (settings?.model !== undefined && !isValidModel(settings.model)) {
+    return badRequest("invalid settings.model");
+  }
+  if (settings?.clearModel !== undefined && !isValidClearModel(settings.clearModel)) {
+    return badRequest("invalid settings.clearModel");
   }
 
   const actor = verifyRequestActor(req);

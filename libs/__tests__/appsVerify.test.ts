@@ -118,6 +118,12 @@ describe("apps.verify — addApp auto-detect (D2)", () => {
   let appDir: string;
   const savedAllowedRoots = process.env.BRIDGE_ALLOWED_ROOTS;
 
+  // Same reason as `BRIDGE_ALLOWED_ROOTS` below: the worker process outlives
+  // this file, so an unrestored HOME points every later file in it at a temp
+  // directory that afterEach has already deleted.
+  const savedHome = process.env.HOME;
+  const savedUserProfile = process.env.USERPROFILE;
+
   beforeEach(() => {
     tempHome = mkdtempSync(join(tmpdir(), "bridge-appsverify-home-"));
     appDir = mkdtempSync(join(tmpdir(), "bridge-appsverify-app-"));
@@ -133,6 +139,10 @@ describe("apps.verify — addApp auto-detect (D2)", () => {
     vi.restoreAllMocks();
     if (savedAllowedRoots === undefined) delete process.env.BRIDGE_ALLOWED_ROOTS;
     else process.env.BRIDGE_ALLOWED_ROOTS = savedAllowedRoots;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
     try {
       rmSync(tempHome, { recursive: true, force: true });
     } catch {

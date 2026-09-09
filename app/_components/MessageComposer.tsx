@@ -20,7 +20,12 @@ const COMPOSER_DEFAULT_MODE =
 const EMPTY_SETTINGS: ChatSettings = COMPOSER_DEFAULT_MODE
   ? { mode: COMPOSER_DEFAULT_MODE }
   : {};
-const dumpSettings = (s: ChatSettings) => JSON.stringify(s);
+/**
+ * `clearModel` is an instruction about one session ("stop inheriting its
+ * pin"), not a preference. Persisting it would carry the unpin into every
+ * other session the composer is later opened on and silently drop their pins.
+ */
+const dumpSettings = ({ clearModel: _drop, ...s }: ChatSettings) => JSON.stringify(s);
 
 interface Attachment {
   name: string;
@@ -62,6 +67,7 @@ function MessageComposerInner({
   repo,
   repoPath: _repoPath,
   role,
+  sessionModel = null,
   taskId,
   isResponding = false,
   onSent,
@@ -73,6 +79,8 @@ function MessageComposerInner({
   repo: string;
   repoPath?: string;
   role: string;
+  /** `Run.model` for this session, so the picker can offer to unpin it. */
+  sessionModel?: string | null;
   taskId?: string;
   isResponding?: boolean;
   onSent?: (text: string) => void;
@@ -540,7 +548,11 @@ function MessageComposerInner({
                 {queuedCount} queued
               </span>
             )}
-            <ChatSettingsMenu value={settings} onChange={setSettings} />
+            <ChatSettingsMenu
+              value={settings}
+              onChange={setSettings}
+              sessionModel={sessionModel}
+            />
             {canSend || !isResponding ? (
               <button
                 type="submit"

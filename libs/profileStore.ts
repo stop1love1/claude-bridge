@@ -5,7 +5,7 @@ import { writeJsonAtomic } from "./atomicWrite";
 import { BRIDGE_STATE_DIR } from "./paths";
 import { scanRepoIfExists, type RepoProfile } from "./repoProfile";
 import { summarizeWithLLM } from "./repoProfileLlm";
-import { getManifestProfileSource } from "./bridgeSettings";
+import { getManifestProfileSource, type ProfileManifestSource } from "./bridgeSettings";
 import { logError, logWarn } from "./log";
 
 export const PROFILE_STORE_VERSION = 1;
@@ -114,6 +114,9 @@ function keepEnrichment(
     features: [...prev.features],
     entrypoints: [...prev.entrypoints],
     summarySource: "llm",
+    // Carried with the summary it dates. Dropping it here would leave an
+    // enriched profile whose only timestamp is the heuristic re-scan.
+    enrichedAt: prev.enrichedAt ?? null,
   };
 }
 
@@ -148,10 +151,19 @@ export function refreshOne(repo: RepoLike): ProfileStore {
 
 interface EnrichOutcome {
   profile: RepoProfile;
-  /** The operator asked for an LLM pass (`profiles.source === "llm"`). */
-  requested: boolean;
-  /** The pass actually produced an LLM-written profile. */
-  enriched: boolean;
+  /**
+   * What the gate did.
+   *
+   * `not-requested` — `profiles.source` is `heuristic`; nobody asked.
+   * `enriched`      — the pass ran and produced a new LLM summary.
+   * `unchanged`     — the pass ran and had nothing to add to the heuristic.
+   * `failed`        — the pass could not run, or answered unusably.
+   *
+   * `unchanged` used to be folded into `failed` because `summarizeWithLLM`
+   * handed back a bare profile either way. It matters: a quiet-but-working
+   * pass is evidence the enrichment is current, and should refresh its age.
+   */
+  status: "not-requested" | "enriched" | "unchanged" | "failed";
 }
 
 /**
@@ -159,32 +171,37 @@ interface EnrichOutcome {
  * operator opted into `profiles.source = "llm"`; a failing or slow CLI is
  * logged and swallowed, never propagated.
  *
- * The two flags exist because "here is your heuristic profile" is the answer
- * to two very different questions — *nobody asked for an LLM pass* and *the
- * LLM pass did not work* — and only the second one may not overwrite whatever
- * a previous pass already wrote. `summarizeWithLLM` swallows its own failures
- * and hands the input profile straight back, so the returned `summarySource`
- * is the only honest signal that the pass landed.
+ * `source` is passed in rather than read here: a refresh reads
+ * `profiles.source` once at the top and holds it for the whole pass. Reading
+ * it per repo let an operator flipping the Settings toggle mid-refresh — five
+ * minutes is a long time to hold still — turn the remaining repos into
+ * "nobody asked", which writes their fresh heuristic scan straight over an
+ * enrichment. Half a refresh under each setting is not a state anyone asked
+ * for.
  */
-async function enrich(profile: RepoProfile, deadline: number): Promise<EnrichOutcome> {
-  if (getManifestProfileSource() !== "llm") {
-    return { profile, requested: false, enriched: false };
+async function enrich(
+  profile: RepoProfile,
+  deadline: number,
+  source: ProfileManifestSource,
+): Promise<EnrichOutcome> {
+  if (source !== "llm") {
+    return { profile, status: "not-requested" };
   }
   if (Date.now() >= deadline) {
     logWarn("profile-store", "llm budget spent, keeping heuristic profile", {
       repo: profile.name,
     });
-    return { profile, requested: true, enriched: false };
+    return { profile, status: "failed" };
   }
   try {
     const out = await summarizeWithLLM(profile);
-    return { profile: out, requested: true, enriched: out.summarySource === "llm" };
+    return { profile: out.profile, status: out.status };
   } catch (err) {
     logWarn("profile-store", "llm summary failed (non-fatal)", {
       repo: profile.name,
       error: (err as Error).message,
     });
-    return { profile, requested: true, enriched: false };
+    return { profile, status: "failed" };
   }
 }
 
@@ -201,12 +218,29 @@ async function enrich(profile: RepoProfile, deadline: number): Promise<EnrichOut
  * back to `heuristic` and refreshing is how an operator re-derives a profile
  * from scratch.
  */
+/**
+ * `enrichedAt` only means something on a profile whose summary actually came
+ * from the model, so a pass that agreed with the heuristic on a repo that was
+ * never enriched leaves no timestamp behind.
+ */
+function stampEnrichedAt(p: RepoProfile, at: string): RepoProfile {
+  return p.summarySource === "llm" ? { ...p, enrichedAt: at } : p;
+}
+
 function resolveEnriched(
   prev: RepoProfile | undefined,
   outcome: EnrichOutcome,
+  now: string,
 ): RepoProfile {
-  if (!outcome.requested || outcome.enriched) return outcome.profile;
+  if (outcome.status === "not-requested") return outcome.profile;
+  if (outcome.status === "enriched") return stampEnrichedAt(outcome.profile, now);
+
   const kept = keepEnrichment(prev, outcome.profile);
+  if (outcome.status === "unchanged") {
+    // The CLI ran and confirmed what we already had — the enrichment is as
+    // current as it can be, even though not a byte of it changed.
+    return stampEnrichedAt(kept, now);
+  }
   if (kept !== outcome.profile) {
     logWarn("profile-store", "llm pass produced nothing, keeping the previous summary", {
       repo: outcome.profile.name,
@@ -220,22 +254,53 @@ function resolveEnriched(
  * refresh endpoint; the synchronous `refreshAll` stays the fast path for
  * auto-init and TTL refreshes.
  */
+/**
+ * The refresh currently in flight, if any.
+ *
+ * Module-level rather than `globalThis`-backed on purpose: the tests re-import
+ * this module per case (`vi.resetModules()`), so a module-level binding resets
+ * itself and no `_resetForTests` hook is needed. In the server it is a single
+ * long-lived module, which is exactly the scope the guard wants.
+ */
+let inFlightRefreshAll: Promise<ProfileStore> | null = null;
+
+/**
+ * Rebuild every profile, optionally through the LLM.
+ *
+ * Concurrent calls share one pass instead of racing. The window is real now
+ * that Settings has a "Refresh now" button: each call loads the store, awaits
+ * for up to five minutes, then writes the whole thing back, so two overlapping
+ * refreshes end with the slower one silently discarding everything the faster
+ * one enriched. Sharing rather than rejecting because the failure mode this
+ * fixes is a double-click, and a second click should mean "yes, that one".
+ */
 export async function refreshAllEnriched(repos: RepoLike[]): Promise<ProfileStore> {
-  const store = loadProfiles() ?? emptyStore();
-  const deadline = Date.now() + PROFILE_LLM_BUDGET_MS;
-  for (const r of repos) {
-    if (r.exists === false) continue;
-    const profile = scanRepoIfExists(r.path);
-    if (!profile) continue;
-    store.profiles[r.name] = resolveEnriched(
-      store.profiles[r.name],
-      await enrich(profile, deadline),
-    );
+  if (inFlightRefreshAll) return inFlightRefreshAll;
+  const pass = (async () => {
+    const store = loadProfiles() ?? emptyStore();
+    const deadline = Date.now() + PROFILE_LLM_BUDGET_MS;
+    const source = getManifestProfileSource();
+    for (const r of repos) {
+      if (r.exists === false) continue;
+      const profile = scanRepoIfExists(r.path);
+      if (!profile) continue;
+      store.profiles[r.name] = resolveEnriched(
+        store.profiles[r.name],
+        await enrich(profile, deadline, source),
+        new Date().toISOString(),
+      );
+    }
+    store.refreshedAt = new Date().toISOString();
+    store.version = PROFILE_STORE_VERSION;
+    saveProfiles(store);
+    return store;
+  })();
+  inFlightRefreshAll = pass;
+  try {
+    return await pass;
+  } finally {
+    inFlightRefreshAll = null;
   }
-  store.refreshedAt = new Date().toISOString();
-  store.version = PROFILE_STORE_VERSION;
-  saveProfiles(store);
-  return store;
 }
 
 export async function refreshOneEnriched(repo: RepoLike): Promise<ProfileStore> {
@@ -245,7 +310,12 @@ export async function refreshOneEnriched(repo: RepoLike): Promise<ProfileStore> 
     if (profile) {
       store.profiles[repo.name] = resolveEnriched(
         store.profiles[repo.name],
-        await enrich(profile, Date.now() + PROFILE_LLM_BUDGET_MS),
+        await enrich(
+          profile,
+          Date.now() + PROFILE_LLM_BUDGET_MS,
+          getManifestProfileSource(),
+        ),
+        new Date().toISOString(),
       );
     }
   }

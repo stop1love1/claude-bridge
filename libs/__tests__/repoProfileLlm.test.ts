@@ -9,6 +9,7 @@ import {
   buildProfileLLMArgs,
   buildProfileLLMPrompt,
   summarizeWithLLM,
+  type SummarizeResult,
 } from "../repoProfileLlm";
 
 const REQUIRED_DENIALS = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "Task"];
@@ -227,8 +228,10 @@ describe("summarizeWithLLM", () => {
       const mod = await import("../repoProfileLlm");
       const profile = scanRepo(makeRepo("spawnfail"));
       const out = await mod.summarizeWithLLM(profile);
-      expect(out).toEqual(profile);
-      expect(out.summarySource).toBeUndefined();
+      expect(out.profile).toEqual(profile);
+      expect(out.profile.summarySource).toBeUndefined();
+      // A CLI that will not spawn is a failure, not a quiet agreement.
+      expect(out.status).toBe("failed");
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_BIN;
       else process.env.CLAUDE_BIN = prev;
@@ -240,7 +243,10 @@ describe("summarizeWithLLM", () => {
     const root = makeRepo("missing");
     const profile = scanRepo(root);
     rmSync(root, { recursive: true, force: true });
-    await expect(summarizeWithLLM(profile)).resolves.toEqual(profile);
+    await expect(summarizeWithLLM(profile)).resolves.toEqual({
+      profile,
+      status: "failed",
+    });
   });
 });
 
@@ -262,15 +268,36 @@ describe("profileStore wiring", () => {
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  async function loadStore(source: "heuristic" | "llm", llm: {
-    summarizeWithLLM: (p: RepoProfile) => Promise<RepoProfile>;
-  }) {
+  /**
+   * Cases may hand back a bare profile (the common shape: "this is what the
+   * model produced") or a full `SummarizeResult` when they care about the
+   * difference between a pass that ran quietly and one that failed. A bare
+   * profile is normalised the way the real function does it.
+   */
+  type LlmMock = {
+    summarizeWithLLM: (p: RepoProfile) => Promise<RepoProfile | SummarizeResult>;
+  };
+
+  async function loadStore(
+    source: "heuristic" | "llm" | (() => "heuristic" | "llm"),
+    llm: LlmMock,
+  ) {
     vi.resetModules();
     vi.doMock("../paths", () => ({ BRIDGE_STATE_DIR: stateDir }));
     vi.doMock("../bridgeSettings", () => ({
-      getManifestProfileSource: () => source,
+      getManifestProfileSource: () =>
+        typeof source === "function" ? source() : source,
     }));
-    vi.doMock("../repoProfileLlm", () => llm);
+    vi.doMock("../repoProfileLlm", () => ({
+      summarizeWithLLM: async (p: RepoProfile): Promise<SummarizeResult> => {
+        const out = await llm.summarizeWithLLM(p);
+        if ("status" in out) return out;
+        return {
+          profile: out,
+          status: out.summarySource === "llm" ? "enriched" : "failed",
+        };
+      },
+    }));
     return import("../profileStore");
   }
 
@@ -573,5 +600,172 @@ describe("profileStore wiring", () => {
     const after = readStoreFile().profiles.shop;
     expect(after.features).toEqual(fresh.features);
     expect(after.summary).toBe(fresh.summary);
+  });
+
+  // -- how old is the enrichment, really -------------------------------------
+
+  it("stamps enrichedAt when a pass lands, and a heuristic re-scan does not touch it", async () => {
+    const enriching = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({
+        ...p,
+        summary: "rewritten by the model",
+        summarySource: "llm" as const,
+      }),
+    });
+    await enriching.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const enriched = readStoreFile().profiles.shop;
+    expect(enriched.enrichedAt).toBeTruthy();
+
+    // A heuristic re-scan later: refreshedAt moves, enrichedAt must not — that
+    // gap is the only way to see that the LLM summary is a day stale.
+    await new Promise((r) => setTimeout(r, 5));
+    const plain = await loadStore("heuristic", neverCalled);
+    plain.refreshAll([{ name: "shop", path: repoRoot }]);
+    const after = readStoreFile().profiles.shop;
+    expect(after.enrichedAt).toBe(enriched.enrichedAt);
+    expect(after.refreshedAt).not.toBe(enriched.refreshedAt);
+  });
+
+  it("a working pass that agrees with the heuristic refreshes the age but keeps the summary", async () => {
+    const enriching = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({
+        ...p,
+        summary: "rewritten by the model",
+        summarySource: "llm" as const,
+      }),
+    });
+    await enriching.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const before = readStoreFile().profiles.shop;
+
+    await new Promise((r) => setTimeout(r, 5));
+    // The CLI ran fine; the model just had nothing to add this time. That is
+    // not an outage, so the enrichment is as current as it can be.
+    const quiet = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({ profile: p, status: "unchanged" as const }),
+    });
+    await quiet.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+
+    const after = readStoreFile().profiles.shop;
+    expect(after.summary).toBe(before.summary);
+    expect(after.summarySource).toBe("llm");
+    expect(after.enrichedAt).not.toBe(before.enrichedAt);
+  });
+
+  it("a failed pass leaves the age alone, so a broken CLI cannot fake freshness", async () => {
+    const enriching = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({
+        ...p,
+        summary: "rewritten by the model",
+        summarySource: "llm" as const,
+      }),
+    });
+    await enriching.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const before = readStoreFile().profiles.shop;
+
+    await new Promise((r) => setTimeout(r, 5));
+    const broken = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({ profile: p, status: "failed" as const }),
+    });
+    await broken.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+
+    const after = readStoreFile().profiles.shop;
+    expect(after.summary).toBe(before.summary);
+    expect(after.enrichedAt).toBe(before.enrichedAt);
+  });
+
+  it("leaves no enrichedAt behind when a quiet pass runs on a never-enriched repo", async () => {
+    const quiet = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => ({ profile: p, status: "unchanged" as const }),
+    });
+    await quiet.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const saved = readStoreFile().profiles.shop;
+    // The summary is still the heuristic one, so dating it as an LLM summary
+    // would be a lie.
+    expect(saved.summarySource).toBeUndefined();
+    expect(saved.enrichedAt ?? null).toBeNull();
+  });
+
+  // -- one refresh, one setting ----------------------------------------------
+
+  it("holds profiles.source for the whole pass when the operator flips it mid-refresh", async () => {
+    const second = makeRepo("store2");
+    try {
+      // Seed both repos with an enrichment worth losing.
+      const seed = await loadStore("llm", {
+        summarizeWithLLM: async (p: RepoProfile) => ({
+          ...p,
+          summary: `model text for ${p.name}`,
+          summarySource: "llm" as const,
+        }),
+      });
+      await seed.refreshAllEnriched([
+        { name: "a", path: repoRoot },
+        { name: "b", path: second },
+      ]);
+      expect(readStoreFile().profiles.b.summarySource).toBe("llm");
+
+      // Now the operator switches the toggle to `heuristic` while repo "a" is
+      // still being enriched. Before the fix, repo "b" was then treated as
+      // "nobody asked" and its enrichment was written straight over.
+      let live: "heuristic" | "llm" = "llm";
+      const store = await loadStore(() => live, {
+        summarizeWithLLM: async (p: RepoProfile) => {
+          live = "heuristic";
+          return { ...p, summary: "fresh model text", summarySource: "llm" as const };
+        },
+      });
+      await store.refreshAllEnriched([
+        { name: "a", path: repoRoot },
+        { name: "b", path: second },
+      ]);
+
+      // The whole pass ran under the setting it started with, so "b" was
+      // enriched like "a". Reading the setting per repo instead made "b" look
+      // like "nobody asked for an LLM pass", which writes its fresh heuristic
+      // scan straight over the enrichment: summarySource would be undefined.
+      expect(readStoreFile().profiles.b.summarySource).toBe("llm");
+      expect(readStoreFile().profiles.b.summary).toBe("fresh model text");
+    } finally {
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  // -- two clicks on "Refresh now" -------------------------------------------
+
+  it("shares one pass between overlapping refreshAllEnriched calls", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const store = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => {
+        calls += 1;
+        await gate;
+        return { ...p, summary: "model text", summarySource: "llm" as const };
+      },
+    });
+
+    const first = store.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    const second = store.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+
+    // One pass, one result object — not two passes racing to write the store.
+    expect(calls).toBe(1);
+    expect(a).toBe(b);
+    expect(readStoreFile().profiles.shop.summarySource).toBe("llm");
+  });
+
+  it("lets a later refresh run once the first one has finished", async () => {
+    let calls = 0;
+    const store = await loadStore("llm", {
+      summarizeWithLLM: async (p: RepoProfile) => {
+        calls += 1;
+        return { ...p, summary: `pass ${calls}`, summarySource: "llm" as const };
+      },
+    });
+    await store.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    await store.refreshAllEnriched([{ name: "shop", path: repoRoot }]);
+    expect(calls).toBe(2);
+    expect(readStoreFile().profiles.shop.summary).toBe("pass 2");
   });
 });

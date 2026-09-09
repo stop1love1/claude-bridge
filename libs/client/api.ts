@@ -38,10 +38,19 @@ export type ReqOpts = { signal?: AbortSignal };
 export type RolesResponse = { roles: RoleSpec[]; custom: CustomRoleDef[] };
 
 /** `ProfileStore` narrowed to the fields the Settings card actually reads. */
-export type ProfileRefreshResult = {
+export type ProfileStoreView = {
   refreshedAt: string;
-  profiles: Record<string, { summarySource?: "heuristic" | "llm" }>;
+  profiles: Record<
+    string,
+    {
+      summarySource?: "heuristic" | "llm";
+      /** When the LLM summary was last produced or confirmed. */
+      enrichedAt?: string | null;
+    }
+  >;
 };
+
+export type ProfileRefreshResult = ProfileStoreView;
 
 export type CustomRoleInput = {
   name: string;
@@ -52,12 +61,46 @@ export type CustomRoleInput = {
   playbook?: string | null;
 };
 
+/**
+ * The message a failed response should show a human.
+ *
+ * Every bridge route answers errors as `{ "error": "..." }` (see
+ * `libs/validate.ts` `badRequest` and `libs/errorResponse.ts`), and callers
+ * pipe `(e as Error).message` straight into a toast. Throwing the raw
+ * `${status} ${body}` therefore put `409 {"error":"\"planner\" is reserved by a
+ * built-in role"}` on screen — the status code and the JSON wrapper are noise
+ * the operator has to read past to find the sentence written for them.
+ *
+ * The status is kept only when there is no message to show instead, so a 502
+ * from a proxy or an empty body still says something.
+ */
+export function httpErrorMessage(status: number, body: string): string {
+  const text = body.trim();
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const o = parsed as { error?: unknown; reason?: unknown; hint?: unknown };
+        const parts = [o.error, o.hint].filter(
+          (v): v is string => typeof v === "string" && v.trim().length > 0,
+        );
+        if (parts.length > 0) return parts.join(" — ");
+        if (typeof o.reason === "string" && o.reason.trim()) return o.reason.trim();
+      }
+    } catch {
+      // Not JSON — an HTML error page or a proxy string. Fall through.
+    }
+    if (!text.startsWith("<")) return `${status} ${text}`;
+  }
+  return `HTTP ${status}`;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  if (!r.ok) throw new Error(httpErrorMessage(r.status, await r.text()));
   return r.json() as Promise<T>;
 }
 
@@ -172,7 +215,7 @@ export const api = {
     const fd = new FormData();
     fd.append("file", file);
     const r = await fetch(`/api/sessions/${sessionId}/upload`, { method: "POST", body: fd });
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    if (!r.ok) throw new Error(httpErrorMessage(r.status, await r.text()));
     return r.json() as Promise<{ path: string; name: string; size: number }>;
   },
   uploadFileWithProgress: (
@@ -194,7 +237,9 @@ export const api = {
           try { resolveP(JSON.parse(xhr.responseText)); }
           catch (e) { rejectP(e); }
         } else {
-          rejectP(new Error(`${xhr.status} ${xhr.responseText || xhr.statusText}`));
+          rejectP(
+            new Error(httpErrorMessage(xhr.status, xhr.responseText || xhr.statusText)),
+          );
         }
       });
       xhr.addEventListener("error", () => rejectP(new Error("network error")));
@@ -260,7 +305,13 @@ export const api = {
       failed: Array<{
         ok: false;
         name: string;
-        reason: "invalid-name" | "missing-path" | "duplicate-name" | "invalid-input";
+        reason:
+          | "invalid-name"
+          | "missing-path"
+          | "duplicate-name"
+          | "invalid-input"
+          | "write-failed";
+        detail?: string;
       }>;
     }>("/apps/bulk", { method: "POST", body: JSON.stringify({ apps }) }),
   scanRoots: () =>
@@ -518,6 +569,13 @@ export const api = {
    * CLI timeout on the last repo, so this deliberately carries no
    * `AbortSignal` — the caller owns the busy state instead.
    */
+  /**
+   * Reads the cached store. Note the server re-runs the heuristic scan here if
+   * the store is past its TTL — this is the same call the scope detector makes,
+   * so it is not an extra side effect, just a visible one.
+   */
+  profiles: (opts?: ReqOpts) =>
+    req<ProfileStoreView>("/repos/profiles", { signal: opts?.signal }),
   refreshProfiles: () =>
     req<ProfileRefreshResult>(`/repos/profiles/refresh`, {
       method: "POST",

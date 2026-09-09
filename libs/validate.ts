@@ -74,6 +74,21 @@ export function isValidModel(s: unknown): s is string {
   return typeof s === "string" && MODEL_VALUE_RE.test(s);
 }
 
+/**
+ * `clearModel` on a continuation request: "do not inherit the model this
+ * session was spawned with".
+ *
+ * It is a separate boolean rather than a sentinel model value (`""`) on
+ * purpose. A sentinel lives in the same field as a real model id, so every
+ * `model || undefined` / `if (!model)` between the browser and
+ * `resolveModelForContinuation` silently converts it back into "the caller
+ * asked for nothing" — which is the exact ambiguity the flag exists to remove.
+ * A boolean survives those idioms untouched.
+ */
+export function isValidClearModel(v: unknown): v is boolean {
+  return typeof v === "boolean";
+}
+
 export function isValidSessionId(s: unknown): s is string {
   return typeof s === "string" && UUID_RE.test(s);
 }

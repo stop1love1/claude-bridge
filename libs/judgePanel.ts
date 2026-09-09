@@ -15,12 +15,31 @@ export interface PanelAggregate {
 
 const CONCERNS_CAP = 10;
 
-export function aggregatePanel(votes: PanelVote[], panelSize: number): PanelAggregate {
+/**
+ * @param expectedLenses every lens the panel was supposed to hear from.
+ *   Optional, and worth supplying: without it a shortfall can only be
+ *   reported as a count, and "partial panel: 2/3" reads like two judges
+ *   agreeing when it can equally mean one judge died and two survived. A
+ *   judge that produced no verdict crashed, timed out or was killed — it did
+ *   not abstain, and the difference changes whether you trust the result.
+ */
+export function aggregatePanel(
+  votes: PanelVote[],
+  panelSize: number,
+  expectedLenses?: string[],
+): PanelAggregate {
   const majority = Math.floor(panelSize / 2) + 1;
+  const silentBefore = (expectedLenses ?? []).filter(
+    (l) => !votes.some((v) => v.lens === l),
+  );
   if (votes.length < majority) {
     return {
       verdict: "skipped",
-      reason: `inconclusive panel: only ${votes.length}/${panelSize} judges reported a usable verdict`,
+      reason:
+        `inconclusive panel: only ${votes.length}/${panelSize} judges reported a usable verdict` +
+        (silentBefore.length > 0
+          ? `; no verdict from ${silentBefore.map((l) => `[${l}]`).join(", ")}`
+          : ""),
       concerns: [],
     };
   }
@@ -28,7 +47,14 @@ export function aggregatePanel(votes: PanelVote[], panelSize: number): PanelAggr
   const drift = votes.filter((v) => v.verdict === "drift");
   const dedupeCap = (xs: string[]) => Array.from(new Set(xs)).slice(0, CONCERNS_CAP);
   const partial = votes.length < panelSize;
-  const quorum = `${votes.length}/${panelSize} judges reported`;
+  const heard = new Set(votes.map((v) => v.lens));
+  const silent = (expectedLenses ?? []).filter((l) => !heard.has(l));
+  const quorum =
+    `${votes.length}/${panelSize} judges reported` +
+    (silent.length > 0
+      ? `; no verdict from ${silent.map((l) => `[${l}]`).join(", ")} ` +
+        `(crashed, timed out or killed — a missing judge, not a dissent)`
+      : "");
   const withQuorum = (reason: string) => (partial ? `${reason} (partial panel: ${quorum})` : reason);
 
   if (broken.length >= majority) {
@@ -48,7 +74,7 @@ export function aggregatePanel(votes: PanelVote[], panelSize: number): PanelAggr
   }
   return {
     verdict: "pass",
-    reason: partial ? `partial panel: ${quorum}, all pass` : "panel consensus: pass",
+    reason: partial ? `partial panel: ${quorum}; all who reported pass` : "panel consensus: pass",
     concerns: [],
   };
 }

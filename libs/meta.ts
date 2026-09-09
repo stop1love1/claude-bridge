@@ -9,6 +9,7 @@ import { EventEmitter } from "node:events";
 import { writeJsonAtomic } from "./atomicWrite";
 import { SECTION_STATUS, type TaskDispatch, type TaskStatus, type TaskSection } from "./tasks";
 import type { DetectedScopeCacheEntry } from "./detect/types";
+import type { DiffBaseline } from "./diffBaseline";
 import { SESSIONS_DIR } from "./paths";
 import type { RunStatus } from "./runStatus";
 import type { IntakeRecord } from "./planGate";
@@ -39,6 +40,18 @@ export interface Run {
    * default halfway through a task.
    */
   model?: string | null;
+  /**
+   * `git status` of the target tree the moment this run was dispatched, so the
+   * claim gate can tell this run's edits from the ones its predecessors left
+   * behind. Absent on runs the bridge did not dispatch (self-registered via
+   * `/link`, older `meta.json` files) — the gate then compares against the
+   * whole tree, exactly as it did before baselines existed.
+   *
+   * A retry **inherits** its parent's baseline rather than taking a fresh one:
+   * re-snapshotting would hide the very edits the retry is being asked to
+   * declare correctly.
+   */
+  diffBaseline?: DiffBaseline | null;
   verify?: RunVerify | null;
   verifier?: RunVerifier | null;
   styleCritic?: RunStyleCritic | null;

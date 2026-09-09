@@ -21,6 +21,7 @@ import { prepareBranch } from "@/libs/gitOps";
 import { acquireRepoReservation, releaseRepoReservation } from "@/libs/repoReservation";
 import { createWorktreeForRun, removeWorktree } from "@/libs/worktrees";
 import { loadProfiles } from "@/libs/profileStore";
+import { captureDiffBaseline } from "@/libs/diffBaseline";
 import {
   getOrComputeScope,
   loadDetectInput,
@@ -44,7 +45,7 @@ import { ensureFreshStyleFingerprint } from "@/libs/styleStore";
 import { attachReferences } from "@/libs/contextAttach";
 import { buildRecentDirection } from "@/libs/recentDirection";
 import { isValidTaskId } from "@/libs/tasks";
-import { badRequest, isValidAgentRole, isValidEffort, isValidModel, isValidSessionId, type EffortLevel } from "@/libs/validate";
+import { badRequest, isValidAgentRole, isValidClearModel, isValidEffort, isValidModel, isValidSessionId, type EffortLevel } from "@/libs/validate";
 import { resolveModelForContinuation, resolveModelForRun } from "@/libs/modelResolve";
 import { safeErrorMessage, serverError } from "@/libs/errorResponse";
 import { checkRateLimit } from "@/libs/rateLimit";
@@ -76,6 +77,8 @@ interface AgentBody {
   mode?: "spawn" | "resume";
   effort?: EffortLevel;
   model?: string;
+  /** `mode: "resume"` only — drop the prior session's model pin. */
+  clearModel?: boolean;
   priorSessionId?: string;
 }
 
@@ -175,6 +178,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const requestedModel: string | undefined = isValidModel(body.model)
     ? body.model
     : undefined;
+
+  if (body.clearModel !== undefined && !isValidClearModel(body.clearModel)) {
+    return badRequest("invalid clearModel");
+  }
+  // Only meaningful on `mode: "resume"`; a fresh dispatch has no session pin to
+  // inherit, so it is accepted and ignored rather than rejected.
+  const clearModel: boolean = body.clearModel === true;
 
   if (!role) {
     return NextResponse.json({ error: "role is required" }, { status: 400 });
@@ -313,6 +323,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       runs: meta.runs,
       effort: effectiveEffort,
       requestedModel,
+      clearModel,
       taskModel: meta.taskModel ?? null,
     });
   }
@@ -555,6 +566,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   const settingsPath = writeSessionSettings(freeSessionSettingsPath(sessionId));
 
+  // Snapshot the tree before the child can touch it. Everything already dirty
+  // here belongs to a sibling that ran earlier in this task — the bridge only
+  // auto-commits at the end — and the claim gate must not bill this run for it.
+  const diffBaseline = await captureDiffBaseline(worktreePath ?? repoCwd);
+
   const dedupKey = {
     parentSessionId: parentSessionId ?? null,
     role,
@@ -576,6 +592,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       worktreeBaseBranch: worktreeBaseBranch ?? null,
       speculativeGroup: speculative.groupId,
       model: effectiveModel ?? null,
+      diffBaseline,
     },
     (existing) =>
       !skipDedup &&
@@ -934,6 +951,7 @@ async function handleResume(args: {
   runs: Run[];
   effort?: EffortLevel;
   requestedModel?: string;
+  clearModel?: boolean;
   taskModel?: string | null;
 }): Promise<NextResponse> {
   const {
@@ -948,6 +966,7 @@ async function handleResume(args: {
     runs,
     effort,
     requestedModel,
+    clearModel,
     taskModel,
   } = args;
 
@@ -1068,17 +1087,36 @@ async function handleResume(args: {
   // asked for a different one — see resolveModelForContinuation.
   const resumeModel = resolveModelForContinuation({
     requested: requestedModel,
+    // Operator-driven surface: "Default" in the resume dialog has to be able to
+    // drop the session pin, which omitting `model` cannot express.
+    clearModel: clearModel === true,
     priorModel: prior.model ?? null,
     app: getApp(repo),
     role,
     taskModel: taskModel ?? null,
   });
 
+  // A resume is a fresh unit of work — the coordinator playbook makes
+  // `mode: "resume"` the default for every follow-up brief, so this is the
+  // branch most children actually arrive on. Its baseline therefore has to be
+  // the tree as it stands *now*, not whatever it looked like when the session
+  // was first spawned: otherwise everything this same agent changed in an
+  // earlier turn is excused, and a later turn could edit those files freely
+  // without declaring them.
+  //
+  // Deliberately not shared with `libs/retrySpawn.ts`, which reuses the run
+  // row and must KEEP its baseline: a claim retry exists because the previous
+  // attempt mis-declared its edits, so re-snapshotting would hide exactly what
+  // the retry is being asked to get right. Different code paths, opposite
+  // rules, no shared helper to confuse them.
+  const resumeBaseline = await captureDiffBaseline(spawnCwd);
+
   const priorRoleChanged = prior.role !== role;
   const priorStatusSnapshot = prior.status;
   const priorEndedAtSnapshot = prior.endedAt;
   const priorRoleSnapshot = prior.role;
   const priorModelSnapshot = prior.model ?? null;
+  const priorBaselineSnapshot = prior.diffBaseline ?? null;
   let claim: ClaimRunForResumeResult;
   try {
     claim = await claimRunForResume(
@@ -1087,6 +1125,21 @@ async function handleResume(args: {
       {
         ...(priorRoleChanged ? { role } : {}),
         model: resumeModel ?? null,
+        diffBaseline: resumeBaseline,
+        // A resumed run writes new code under the same row, so the semantic
+        // verdict recorded for its previous exit describes a diff that no
+        // longer exists. `libs/resumeSession.ts` clears it for the composer
+        // path and its comment claims "every resume path goes through this
+        // function" — this one does not, and that is why a `coder` row in
+        // this very task still showed round 1's `drift` after round 2 had
+        // fixed the thing it complained about.
+        //
+        // Cleared rather than kept-with-history: the row has one slot, and the
+        // per-round verdicts already survive as their own
+        // `semantic-verifier-*` run rows. A stale judgement on the current row
+        // is worse than none, because the UI and `meta.json` present it as a
+        // statement about the code that is there now.
+        semanticVerifier: null,
       },
     );
   } catch (e) {
@@ -1120,6 +1173,10 @@ async function handleResume(args: {
           status: priorStatusSnapshot,
           endedAt: priorEndedAtSnapshot,
           model: priorModelSnapshot,
+          // The resume never ran, so its baseline must not stick: a later
+          // claim retry inherits this row, and a too-recent baseline would
+          // excuse edits the previous attempt really did make.
+          diffBaseline: priorBaselineSnapshot,
           ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
         });
       } catch (uErr) {
@@ -1172,6 +1229,7 @@ async function handleResume(args: {
         status: priorStatusSnapshot,
         endedAt: priorEndedAtSnapshot,
         model: priorModelSnapshot,
+        diffBaseline: priorBaselineSnapshot,
         ...(priorRoleChanged ? { role: priorRoleSnapshot } : {}),
       });
     } catch (uErr) {

@@ -127,6 +127,14 @@ function NewTaskDialogBody({
   const [effort, setEffort] = useState<EffortLevel | undefined>(undefined);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
+  /**
+   * Shown next to the button, not only as a toast. `onCreate` rethrows so the
+   * dialog can stay open on failure — but nothing rendered the reason, so a
+   * rejected POST looked exactly like a button that does nothing. The rethrow
+   * also escaped through an un-awaited `submit()`, surfacing as an unhandled
+   * rejection in the console instead of anywhere the operator would look.
+   */
+  const [error, setError] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [templates, setTemplates] = useState<TaskTemplate[]>(() => allTemplates());
   const [savingTpl, setSavingTpl] = useState(false);
@@ -163,6 +171,7 @@ function NewTaskDialogBody({
     const trimmed = body.trim();
     if (!trimmed) return;
     setSubmitting(true);
+    setError(null);
     try {
       await onCreate({
         body: trimmed,
@@ -173,6 +182,8 @@ function NewTaskDialogBody({
         scheduledAt: draft ? localInputToIso(startAt) : null,
       });
       onClose();
+    } catch (e) {
+      setError((e as Error).message || "Could not create the task");
     } finally {
       setSubmitting(false);
     }
@@ -192,7 +203,7 @@ function NewTaskDialogBody({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          submit();
+          void submit();
         }}
         className="grid gap-3"
       >
@@ -377,13 +388,19 @@ function NewTaskDialogBody({
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault();
-              submit();
+              void submit();
             }
           }}
           placeholder="What needs to happen? First line becomes the task title; rest is context, acceptance criteria, contract links…"
           rows={8}
           className="font-mono min-h-45"
         />
+
+        {error && (
+          <p role="alert" className="text-[11px] text-destructive">
+            {error}
+          </p>
+        )}
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={onClose}>

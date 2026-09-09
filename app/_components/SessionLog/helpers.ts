@@ -4,6 +4,8 @@ export type ActiveRun = {
   repoPath: string;
   role: string;
   repo: string;
+  /** `Run.model` — the pin a continuation of this session inherits, if any. */
+  model?: string | null;
 };
 
 export interface ImageSource {

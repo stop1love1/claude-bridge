@@ -201,3 +201,64 @@ describe("runGatePanel", () => {
     expect(calls[0].briefBody).toContain("N1");
   });
 });
+
+describe("aggregatePanel — a silent judge is named, not just counted", () => {
+  // `partial panel: 2/3 judges reported` reads like two judges agreeing. It can
+  // equally mean one judge died and two survived, and those warrant different
+  // amounts of trust. Observed live: a lens hit the 10-minute gate timeout and
+  // the verdict said only "2/3".
+  const vote = (lens: string, verdict: "pass" | "drift" | "broken") => ({
+    lens,
+    verdict,
+    reason: `${lens} says ${verdict}`,
+    concerns: [],
+  });
+
+  it("names the lens that produced no verdict, and says it is not a dissent", () => {
+    const agg = aggregatePanel(
+      [vote("correctness", "pass"), vote("regression", "drift")],
+      3,
+      ["correctness", "regression", "edge-cases"],
+    );
+    expect(agg.verdict).toBe("drift");
+    expect(agg.reason).toContain("2/3 judges reported");
+    expect(agg.reason).toContain("[edge-cases]");
+    expect(agg.reason).toContain("not a dissent");
+  });
+
+  it("names it on an all-pass partial panel too", () => {
+    const agg = aggregatePanel([vote("correctness", "pass"), vote("regression", "pass")], 3, [
+      "correctness",
+      "regression",
+      "edge-cases",
+    ]);
+    expect(agg.verdict).toBe("pass");
+    expect(agg.reason).toContain("[edge-cases]");
+  });
+
+  it("names it when the panel is inconclusive", () => {
+    const agg = aggregatePanel([vote("correctness", "pass")], 3, [
+      "correctness",
+      "regression",
+      "edge-cases",
+    ]);
+    expect(agg.verdict).toBe("skipped");
+    expect(agg.reason).toContain("[regression]");
+    expect(agg.reason).toContain("[edge-cases]");
+  });
+
+  it("says nothing extra when the whole panel reported", () => {
+    const agg = aggregatePanel(
+      [vote("correctness", "pass"), vote("regression", "pass"), vote("edge-cases", "pass")],
+      3,
+      ["correctness", "regression", "edge-cases"],
+    );
+    expect(agg.reason).toBe("panel consensus: pass");
+  });
+
+  it("still works when the caller supplies no lens list", () => {
+    const agg = aggregatePanel([vote("a", "pass"), vote("b", "pass")], 3);
+    expect(agg.reason).toContain("2/3 judges reported");
+    expect(agg.reason).not.toContain("no verdict from");
+  });
+});

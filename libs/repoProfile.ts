@@ -39,6 +39,16 @@ export interface RepoProfile {
    * keeps every profile written before LLM enrichment existed readable as-is.
    */
   summarySource?: "heuristic" | "llm";
+  /**
+   * When the LLM summary currently in this profile was last produced or
+   * confirmed by a pass that actually ran.
+   *
+   * Separate from `refreshedAt` because the two age differently: a heuristic
+   * re-scan refreshes `refreshedAt` while carrying an untouched LLM summary
+   * forward, so without this an operator has no way to tell a summary written
+   * an hour ago from one written a month ago. Absent on heuristic profiles.
+   */
+  enrichedAt?: string | null;
 }
 
 const READ_CAP_BYTES = 4096;

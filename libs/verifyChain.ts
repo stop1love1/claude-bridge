@@ -18,6 +18,23 @@ const STEP_ORDER: RunVerifyStep["name"][] = [
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_OUTPUT_CAP_BYTES = 16 * 1024;
+/**
+ * How the budget is split when a step outruns it: keep the first slice and
+ * the last slice, drop the middle.
+ *
+ * Keeping only the head — what this did before — is the worst of the three
+ * options for the tools that run here. Every test runner, linter and
+ * compiler prints its verdict and its failure list LAST, so a red step
+ * stored 16KB of "compiling…" and threw away the two lines a human needs.
+ * This session lost a whole agent round to exactly that.
+ *
+ * 1:3 because the head only has to answer "what ran and how did it start",
+ * a few lines, while the tail carries the summary, the failed-test names and
+ * the stack traces. The total is unchanged on purpose: `meta.json` holds one
+ * of these per step per run and is rewritten on every status change, so the
+ * budget is a file-size decision, not a diagnostics one.
+ */
+const OUTPUT_HEAD_FRACTION = 0.25;
 const VRETRY_SUFFIX = "-vretry";
 
 export interface RunVerifyChainOptions {
@@ -91,6 +108,19 @@ interface ExecResult {
 
 const KILL_GRACE_MS = 2000;
 
+/**
+ * Decode a byte slice that may begin mid-codepoint.
+ *
+ * The tail window is cut at an arbitrary byte offset, so without this the
+ * first character of the kept tail can render as a replacement glyph.
+ */
+function decodeFromBoundary(buf: Buffer): string {
+  let start = 0;
+  // 0b10xxxxxx is a UTF-8 continuation byte: skip until a lead byte.
+  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start += 1;
+  return buf.subarray(start).toString("utf8");
+}
+
 function execStep(
   cmd: string,
   cwd: string,
@@ -126,22 +156,26 @@ function execStep(
       return;
     }
 
-    let collected = "";
-    let truncated = false;
+    const headCap = Math.max(1, Math.floor(outputCap * OUTPUT_HEAD_FRACTION));
+    const tailCap = Math.max(1, outputCap - headCap);
+    let head = Buffer.alloc(0);
+    let tail = Buffer.alloc(0);
+    let droppedBytes = 0;
+
     const append = (chunk: Buffer) => {
-      if (truncated) return;
-      const remaining = outputCap - Buffer.byteLength(collected, "utf8");
-      if (remaining <= 0) {
-        truncated = true;
-        return;
+      let rest = chunk;
+      if (head.length < headCap) {
+        const take = Math.min(headCap - head.length, rest.length);
+        head = Buffer.concat([head, rest.subarray(0, take)]);
+        rest = rest.subarray(take);
       }
-      const text = chunk.toString("utf8");
-      if (Buffer.byteLength(text, "utf8") <= remaining) {
-        collected += text;
-      } else {
-        const buf = Buffer.from(text, "utf8").subarray(0, remaining);
-        collected += buf.toString("utf8");
-        truncated = true;
+      if (rest.length === 0) return;
+      // Rolling window: the tail always holds the most recent `tailCap`
+      // bytes, and whatever falls out of it is counted rather than forgotten.
+      tail = Buffer.concat([tail, rest]);
+      if (tail.length > tailCap) {
+        droppedBytes += tail.length - tailCap;
+        tail = tail.subarray(tail.length - tailCap);
       }
     };
     child.stdout?.on("data", append);
@@ -160,9 +194,16 @@ function execStep(
     const settle = (exitCode: number | null, suffixNote?: string) => {
       clearTimeout(timer);
       if (killBackstop) clearTimeout(killBackstop);
-      let output = collected;
-      if (truncated) {
-        output += `\n\n…(bridge: output truncated at ${outputCap} bytes)`;
+      let output = decodeFromBoundary(head);
+      if (droppedBytes > 0 || tail.length > 0) {
+        // The marker names the exact byte count so a reader can tell "a little
+        // was dropped" from "almost all of it was".
+        const middle =
+          droppedBytes > 0
+            ? `\n\n…(bridge: ${droppedBytes} bytes dropped from the middle; kept the ` +
+              `first ${head.length} and last ${tail.length} of a ${outputCap}-byte budget)\n\n`
+            : "";
+        output += middle + decodeFromBoundary(tail);
       }
       if (suffixNote) {
         output += (output ? "\n\n" : "") + suffixNote;

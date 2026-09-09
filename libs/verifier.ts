@@ -1,16 +1,24 @@
 import { existsSync, readFileSync } from "node:fs";
-import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import {
+  attributableChanges,
+  normPath,
+  parsePorcelainV1,
+  readDirtyFiles,
+  type DiffBaseline,
+} from "./diffBaseline";
 import { type Run, type RunVerifier } from "./meta";
 import { SESSIONS_DIR } from "./paths";
 import { parseRole } from "./retryLadder";
 import { spawnRetry } from "./retrySpawn";
 import { checkEligibility } from "./retryLadder";
 
-const execFileP = promisify(execFile);
 const CRETRY_SUFFIX = "-cretry";
-const GIT_TIMEOUT_MS = 5000;
+
+// Porcelain parsing lives in the leaf `diffBaseline` module so the dispatch
+// path can snapshot a tree without pulling in the retry ladder. Re-exported
+// here because it is this module's long-standing public surface.
+export { parsePorcelainV1 };
 
 const IGNORED_FILE_PATTERNS = [
   /(^|\/)package-lock\.json$/,
@@ -110,118 +118,32 @@ function readChildReport(taskId: string, run: Run): string {
   return "";
 }
 
-const PORCELAIN_PREFIX_LEN = 3;
-const PORCELAIN_STATUS_CODES = " MTADRCU?!";
-const RENAME_ARROW = " -> ";
 
-const C_ESCAPE_BYTES: Record<string, number> = {
-  a: 0x07,
-  b: 0x08,
-  f: 0x0c,
-  n: 0x0a,
-  r: 0x0d,
-  t: 0x09,
-  v: 0x0b,
-  '"': 0x22,
-  "\\": 0x5c,
-};
-
-function unquotePorcelainPath(token: string): string {
-  if (token.length < 2) return token;
-  if (!token.startsWith('"') || !token.endsWith('"')) return token;
-
-  const chars = Array.from(token.slice(1, -1));
-  const encoder = new TextEncoder();
-  const bytes: number[] = [];
-  let i = 0;
-
-  while (i < chars.length) {
-    const ch = chars[i];
-    if (ch !== "\\") {
-      for (const byte of encoder.encode(ch)) bytes.push(byte);
-      i += 1;
-      continue;
-    }
-    const next = chars[i + 1];
-    if (next === undefined) {
-      bytes.push(C_ESCAPE_BYTES["\\"]);
-      i += 1;
-      continue;
-    }
-    const simple = C_ESCAPE_BYTES[next];
-    if (simple !== undefined) {
-      bytes.push(simple);
-      i += 2;
-      continue;
-    }
-    const octal = chars.slice(i + 1, i + 1 + 3).join("");
-    if (/^[0-7]{3}$/.test(octal)) {
-      bytes.push(parseInt(octal, 8));
-      i += 4;
-      continue;
-    }
-    for (const byte of encoder.encode(next)) bytes.push(byte);
-    i += 2;
-  }
-
-  return new TextDecoder().decode(new Uint8Array(bytes));
-}
-
-function parsePorcelainLine(rawLine: string): string | null {
-  const line = rawLine.replace(/\r+$/, "");
-  if (line.length <= PORCELAIN_PREFIX_LEN) return null;
-  if (line[PORCELAIN_PREFIX_LEN - 1] !== " ") return null;
-
-  const x = line[0];
-  const y = line[1];
-  if (!PORCELAIN_STATUS_CODES.includes(x)) return null;
-  if (!PORCELAIN_STATUS_CODES.includes(y)) return null;
-  if (x === " " && y === " ") return null;
-
-  const rest = line.slice(PORCELAIN_PREFIX_LEN);
-  const isRename = x === "R" || x === "C" || y === "R" || y === "C";
-  let token = rest;
-  if (isRename) {
-    const parts = rest.split(RENAME_ARROW);
-    token = parts[1] ?? parts[0];
-  }
-
-  const path = unquotePorcelainPath(token);
-  return path.length > 0 ? path : null;
-}
-
-export function parsePorcelainV1(stdout: string): string[] {
-  const collected = new Set<string>();
-  for (const rawLine of stdout.split(/\r?\n/)) {
-    const path = parsePorcelainLine(rawLine);
-    if (path !== null) collected.add(path);
-  }
-  return [...collected];
-}
-
-async function readActualFiles(appPath: string): Promise<string[]> {
-  try {
-    const { stdout } = await execFileP("git", ["status", "--porcelain=v1"], {
-      cwd: appPath,
-      timeout: GIT_TIMEOUT_MS,
-      windowsHide: true,
-      maxBuffer: 256 * 1024,
-    });
-    return parsePorcelainV1(stdout);
-  } catch {
-    return [];
-  }
-}
 
 export function deriveVerdict(args: {
   claimed: string[];
   actual: string[];
+  /**
+   * The subset of `actual` this run is answerable for — everything that was
+   * already dirty when it was dispatched has been removed. Defaults to
+   * `actual`, which is the pre-baseline behaviour.
+   *
+   * Only the "reported no changes" branch and `unclaimedActual` use it. The
+   * hallucination and unmatched-claim branches keep comparing against the full
+   * tree on purpose: naming a file a predecessor dirtied is over-reporting, not
+   * a lie, and failing a run for it would just push agents back to padding
+   * their reports with other people's files.
+   */
+  attributed?: string[];
 }): Pick<RunVerifier, "verdict" | "reason" | "unmatchedClaims" | "unclaimedActual"> {
   const claimedNorm = new Set(args.claimed.map(normPath));
   const actualNorm = new Set(args.actual.map(normPath).filter((p) => !isIgnored(p)));
+  const mineNorm = new Set(
+    (args.attributed ?? args.actual).map(normPath).filter((p) => !isIgnored(p)),
+  );
 
   const unmatchedClaims = [...claimedNorm].filter((p) => !actualNorm.has(p));
-  const unclaimedActual = [...actualNorm].filter((p) => !claimedNorm.has(p));
+  const unclaimedActual = [...mineNorm].filter((p) => !claimedNorm.has(p));
 
   if (claimedNorm.size > 0 && actualNorm.size === 0) {
     return {
@@ -232,10 +154,10 @@ export function deriveVerdict(args: {
     };
   }
 
-  if (claimedNorm.size === 0 && actualNorm.size > 0) {
+  if (claimedNorm.size === 0 && mineNorm.size > 0) {
     return {
       verdict: "broken",
-      reason: `agent reported "no changes" but git diff shows ${actualNorm.size} touched file(s) — likely silent edits`,
+      reason: `agent reported "no changes" but git diff shows ${mineNorm.size} touched file(s) — likely silent edits`,
       unmatchedClaims: [],
       unclaimedActual,
     };
@@ -250,18 +172,17 @@ export function deriveVerdict(args: {
     };
   }
 
+  const inherited = actualNorm.size - mineNorm.size;
   return {
     verdict: "pass",
-    reason: actualNorm.size === 0
-      ? "analysis-only run — no diff, no claims, nothing to verify"
+    reason: mineNorm.size === 0
+      ? inherited > 0
+        ? `analysis-only run — ${inherited} file(s) in the tree predate this run`
+        : "analysis-only run — no diff, no claims, nothing to verify"
       : `all ${claimedNorm.size} claimed file(s) match git diff (${unclaimedActual.length} extra unclaimed)`,
     unmatchedClaims: [],
     unclaimedActual,
   };
-}
-
-function normPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
 }
 
 export async function runVerifier(opts: RunVerifierOptions): Promise<RunVerifier> {
@@ -293,8 +214,14 @@ export async function runVerifier(opts: RunVerifierOptions): Promise<RunVerifier
   }
 
   const claimed = parseChangedFiles(report);
-  const actual = await readActualFiles(opts.appPath);
-  const v = deriveVerdict({ claimed, actual });
+  const actual = await readDirtyFiles(opts.appPath);
+  const baseline: DiffBaseline | null = opts.finishedRun.diffBaseline ?? null;
+  const attributed = attributableChanges({
+    actual,
+    baseline,
+    appPath: opts.appPath,
+  });
+  const v = deriveVerdict({ claimed, actual, attributed });
   return {
     ...v,
     claimedFiles: claimed,

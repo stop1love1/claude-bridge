@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 beforeEach(() => {
+  // `libs/loginApprovals.ts` binds `const store` to the globalThis value at module
+  // load, so deleting the key alone leaves the already-cached module holding
+  // the same object and every test inherits its predecessor's entries.
+  // `resetModules` makes the `await import` below return a module that
+  // re-reads the (now absent) global and starts clean.
   delete (globalThis as { __bridgeLoginApprovals?: unknown }).__bridgeLoginApprovals;
+  vi.resetModules();
   vi.useFakeTimers();
 });
 

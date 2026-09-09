@@ -24,27 +24,46 @@ export interface SummarizeOptions {
 }
 
 /**
+ * What one LLM pass actually did.
+ *
+ * `unchanged` and `failed` both hand back the input profile, but they are not
+ * the same event: the first means the model read the repo and had nothing to
+ * add to the heuristic summary, the second means the pass never produced a
+ * usable answer. Collapsing them — which is what returning a bare profile
+ * forced callers to do — makes a working pass look broken.
+ */
+export type ProfileLLMStatus = "enriched" | "unchanged" | "failed";
+
+export interface SummarizeResult {
+  profile: RepoProfile;
+  status: ProfileLLMStatus;
+}
+
+/**
  * Enrich a heuristic profile with a short LLM-written summary.
  *
  * Never throws and never rejects: any failure (missing CLI, non-zero exit,
- * timeout, malformed JSON) resolves to the input profile untouched, so the
- * caller keeps the heuristic result it already had.
+ * timeout, malformed JSON) resolves to the input profile untouched with
+ * `status: "failed"`, so the caller keeps the heuristic result it already had.
  */
 export async function summarizeWithLLM(
   profile: RepoProfile,
   opts: SummarizeOptions = {},
-): Promise<RepoProfile> {
+): Promise<SummarizeResult> {
   try {
-    if (!existsSync(profile.path)) return profile;
+    if (!existsSync(profile.path)) return { profile, status: "failed" };
     const raw = await runClaude(buildProfileLLMPrompt(profile), profile.path, opts.model);
-    if (!raw) return profile;
-    return applyProfileLLMResponse(raw, profile) ?? profile;
+    if (!raw) return { profile, status: "failed" };
+    const applied = applyProfileLLMResponseDetailed(raw, profile);
+    return applied.status === "enriched"
+      ? { profile: applied.profile!, status: "enriched" }
+      : { profile, status: applied.status };
   } catch (err) {
     logWarn("profile-llm", "summarize failed (non-fatal)", {
       repo: profile.name,
       error: (err as Error).message,
     });
-    return profile;
+    return { profile, status: "failed" };
   }
 }
 
@@ -200,10 +219,30 @@ export function applyProfileLLMResponse(
   raw: string,
   profile: RepoProfile,
 ): RepoProfile | null {
+  return applyProfileLLMResponseDetailed(raw, profile).profile;
+}
+
+/**
+ * The same parse, but reporting *why* it produced nothing.
+ *
+ * `failed` = the response was unusable (no JSON block, bad JSON, not an
+ * object). `unchanged` = the response parsed fine and said nothing the
+ * heuristic scan had not already said. Only the second one is evidence that
+ * the CLI is working, which is what lets the store keep an accurate age for an
+ * enrichment instead of treating every quiet pass as an outage.
+ */
+export function applyProfileLLMResponseDetailed(
+  raw: string,
+  profile: RepoProfile,
+): { profile: RepoProfile | null; status: ProfileLLMStatus } {
+  const fail = (): { profile: null; status: ProfileLLMStatus } => ({
+    profile: null,
+    status: "failed",
+  });
   const json = extractJsonBlock(raw);
   if (!json) {
     logWarn("profile-llm", "no JSON block in response", { repo: profile.name });
-    return null;
+    return fail();
   }
   let parsed: unknown;
   try {
@@ -213,11 +252,11 @@ export function applyProfileLLMResponse(
       repo: profile.name,
       error: (err as Error).message,
     });
-    return null;
+    return fail();
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     logWarn("profile-llm", "response was not a JSON object", { repo: profile.name });
-    return null;
+    return fail();
   }
 
   const obj = parsed as Record<string, unknown>;
@@ -249,15 +288,16 @@ export function applyProfileLLMResponse(
     (summary.length > 0 && summary !== profile.summary) ||
     !sameList(features, profile.features) ||
     !sameList(entrypoints, profile.entrypoints);
-  if (!changed) return null;
+  if (!changed) return { profile: null, status: "unchanged" };
 
-  return {
+  const enriched: RepoProfile = {
     ...profile,
     summary: summary || profile.summary,
     features,
     entrypoints,
     summarySource: "llm",
   };
+  return { profile: enriched, status: "enriched" };
 }
 
 function extractJsonBlock(raw: string): string | null {

@@ -8,7 +8,15 @@ let tempHome: string;
 const VALID_SID = "0123abcd-4567-89ef-cdef-0123456789ab";
 const REPO = "/home/u/proj-childretry";
 
+// Saved and restored because vitest reuses a worker process across test
+// files: leaving HOME pointing at the temp dir this file then deletes hands
+// every later file in the same worker a home directory that does not exist.
+let savedHome: string | undefined;
+let savedUserProfile: string | undefined;
+
 beforeEach(() => {
+  savedHome = process.env.HOME;
+  savedUserProfile = process.env.USERPROFILE;
   tempHome = mkdtempSync(join(tmpdir(), "bridge-childretry-test-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
@@ -19,6 +27,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
+  if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = savedUserProfile;
   try {
     rmSync(tempHome, { recursive: true, force: true });
   } catch {

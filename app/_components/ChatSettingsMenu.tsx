@@ -54,15 +54,24 @@ const MODE_OPTIONS: Array<{
 export function ChatSettingsMenu({
   value,
   onChange,
+  sessionModel = null,
 }: {
   value: ChatSettings;
   onChange: (next: ChatSettings) => void;
+  /**
+   * `Run.model` for the session this composer talks to, when it has one. A
+   * continuation inherits it unless the operator says otherwise, so the picker
+   * has to both show it and offer a way out — see the picker below.
+   */
+  sessionModel?: string | null;
 }) {
   const [open, setOpen] = useState(false);
 
   const currentMode = value.mode ?? "default";
   const currentMeta = MODE_OPTIONS.find((m) => m.value === currentMode) ?? MODE_OPTIONS[0];
   const ModeIcon = currentMeta.icon;
+  /** The next turn will run on the session's own pin — nothing overrides it yet. */
+  const inheritsSessionModel = !!sessionModel && !value.model && !value.clearModel;
 
   return (
     <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
@@ -141,18 +150,37 @@ export function ChatSettingsMenu({
             <div className="text-[11px] uppercase tracking-wider font-medium text-muted-foreground mb-1">
               Select a model
             </div>
+            {inheritsSessionModel && (
+              <p className="text-[11px] leading-snug text-muted-foreground mb-1.5">
+                This session was started on{" "}
+                <code className="font-mono text-foreground">{sessionModel}</code> and
+                keeps using it. Pick another model, or Default to stop pinning it.
+              </p>
+            )}
             <ModelPicker
               enabled={open}
-              value={value.model}
+              // With nothing chosen this turn, the picker shows the model the
+              // session is actually going to run on — the inherited pin — so
+              // "Default" reads as a change rather than as the current state.
+              value={value.model ?? (inheritsSessionModel ? sessionModel! : undefined)}
               onChange={(model) => {
-                if (!model) {
-                  const next = { ...value };
-                  delete next.model;
-                  onChange(next);
+                const next = { ...value };
+                delete next.model;
+                delete next.clearModel;
+                if (model) {
+                  onChange({ ...next, model });
                   return;
                 }
-                onChange({ ...value, model });
+                // Default on a pinned session is a real instruction, not a
+                // no-op: without the flag the server re-pins `sessionModel`.
+                if (sessionModel) next.clearModel = true;
+                onChange(next);
               }}
+              defaultDescription={
+                sessionModel
+                  ? "Stop pinning this session; fall back to the task/app pin or your CLI default"
+                  : "Whatever model your Claude CLI is configured to use"
+              }
             />
           </div>
 

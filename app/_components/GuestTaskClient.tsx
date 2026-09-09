@@ -124,7 +124,13 @@ export function GuestTaskClient({ shareId, token }: { shareId: string; token: st
     if (!meta) return null;
     const run = meta.runs.find((r) => r.sessionId === selectedSid) ?? null;
     if (!run || !run.repoPath) return null;
-    return { sessionId: run.sessionId, repoPath: run.repoPath, role: run.role, repo: run.repo };
+    return {
+      sessionId: run.sessionId,
+      repoPath: run.repoPath,
+      role: run.role,
+      repo: run.repo,
+      model: run.model ?? null,
+    };
   }, [meta, selectedSid]);
 
   if (phase !== "approved") {

@@ -13,6 +13,12 @@ export interface ChatSettings {
   mode?: "default" | "acceptEdits" | "plan" | "auto" | "bypassPermissions" | "dontAsk";
   effort?: EffortLevel;
   model?: string;
+  /**
+   * Resume-only intent, not an argv flag: "do not inherit the model this
+   * session was spawned with". Read by `resumeSessionWithLifecycle` before it
+   * resolves `model`; the arg builders below never look at it.
+   */
+  clearModel?: boolean;
   disallowedTools?: string[];
 }
 

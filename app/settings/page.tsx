@@ -14,7 +14,8 @@ import {
   User,
   Users,
 } from "lucide-react";
-import { api } from "@/libs/client/api";
+import { api, type ProfileStoreView } from "@/libs/client/api";
+import { relativeTime } from "@/libs/client/time";
 import type { CustomRoleDef, RoleSpec } from "@/libs/client/types";
 import { usePushSubscribe } from "@/libs/client/usePushSubscribe";
 import { HeaderShell } from "../_components/HeaderShell";
@@ -231,6 +232,10 @@ function PushNotificationsSection() {
   const { state, busy, error, supported, subscribe, unsubscribe } = usePushSubscribe();
 
   const statusLabel: Record<typeof state, string> = {
+    // Rendered on the server and on the first client render alike — see
+    // `PushSubscribeState`. Anything that named a real state here would be a
+    // guess about the browser, which is what caused the hydration mismatch.
+    checking: "Checking this device…",
     unsupported: "Not supported in this browser",
     denied: "Blocked — allow notifications for this site in your browser settings",
     default: "Not enabled on this device",
@@ -258,7 +263,12 @@ function PushNotificationsSection() {
           {statusLabel[state]}
         </span>
         <div className="flex-1" />
-        {state === "subscribed" ? (
+        {state === "checking" ? (
+          <Button disabled>
+            <Bell className="h-3.5 w-3.5" />
+            Checking…
+          </Button>
+        ) : state === "subscribed" ? (
           <Button
             variant="ghost"
             onClick={unsubscribe}
@@ -380,7 +390,15 @@ function ProfileSettingsSection() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  /** Repos whose summary came from the model, newest enrichment first. */
+  const [enriched, setEnriched] = useState<Array<{ name: string; at: string | null }>>([]);
   const toast = useToast();
+
+  const readEnriched = (store: ProfileStoreView) =>
+    Object.entries(store.profiles)
+      .filter(([, p]) => p.summarySource === "llm")
+      .map(([name, p]) => ({ name, at: p.enrichedAt ?? null }))
+      .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
 
   useEffect(() => {
     const ac = new AbortController();
@@ -393,6 +411,16 @@ function ProfileSettingsSection() {
         toast("error", (e as Error).message);
       } finally {
         if (!ac.signal.aborted) setLoading(false);
+      }
+    })();
+    // Separate and best-effort: the age of an enrichment is a nice-to-know, and
+    // failing to read it must not turn the whole card into an error toast.
+    void (async () => {
+      try {
+        const store = await api.profiles({ signal: ac.signal });
+        if (!ac.signal.aborted) setEnriched(readEnriched(store));
+      } catch {
+        // Leaves the list empty; the source picker still works.
       }
     })();
     return () => ac.abort();
@@ -420,13 +448,12 @@ function ProfileSettingsSection() {
     try {
       const store = await api.refreshProfiles();
       const names = Object.keys(store.profiles);
-      const enriched = names.filter(
-        (n) => store.profiles[n]?.summarySource === "llm",
-      ).length;
+      const fresh = readEnriched(store);
+      setEnriched(fresh);
       toast(
         "success",
         `Refreshed ${names.length} profile${names.length === 1 ? "" : "s"}` +
-          (enriched ? ` · ${enriched} LLM-enriched` : ""),
+          (fresh.length ? ` · ${fresh.length} LLM-enriched` : ""),
       );
     } catch (e) {
       toast("error", (e as Error).message);
@@ -489,6 +516,25 @@ function ProfileSettingsSection() {
               </button>
             );
           })}
+
+          {enriched.length > 0 && (
+            <div className="rounded-md border border-border/70 p-2.5 grid gap-1">
+              <p className="text-[10.5px] uppercase tracking-wider font-medium text-muted-foreground">
+                LLM summaries
+              </p>
+              {enriched.map((e) => (
+                <div key={e.name} className="flex items-baseline gap-2 text-[11px]">
+                  <code className="font-mono text-foreground">{e.name}</code>
+                  <span className="text-muted-foreground">
+                    {/* Deliberately not the store's refreshedAt: a heuristic
+                        re-scan bumps that while carrying this summary along
+                        unchanged, so it would report every summary as fresh. */}
+                    {e.at ? `written ${relativeTime(e.at)}` : "age unknown (written before ages were tracked)"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="flex items-center gap-2 pt-1">
             <Button

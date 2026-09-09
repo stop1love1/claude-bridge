@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { addApp, isValidAppName, type App } from "@/libs/apps";
+import { MANIFEST_LABEL, writeFailureHint } from "@/libs/fsDiagnose";
+import { safeErrorMessage } from "@/libs/errorResponse";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +34,8 @@ interface BulkResultItemFailed {
     | "not-absolute"
     | "missing"
     | "not-directory"
-    | "outside-allowed-roots";
+    | "outside-allowed-roots"
+    | "write-failed";
   detail?: string;
 }
 
@@ -66,7 +69,22 @@ export async function POST(req: NextRequest) {
       failed.push({ ok: false, name: name || "(unnamed)", reason: "invalid-input" });
       continue;
     }
-    const result = addApp({ name, path, description, preset });
+    let result: ReturnType<typeof addApp>;
+    try {
+      result = addApp({ name, path, description, preset });
+    } catch (err) {
+      // The manifest write failed. Every remaining item writes the same file
+      // and would fail identically, so record this one and stop rather than
+      // returning a wall of duplicate errors — or throwing away the partial
+      // batch that already landed on disk.
+      failed.push({
+        ok: false,
+        name,
+        reason: "write-failed",
+        detail: writeFailureHint(MANIFEST_LABEL, err) ?? safeErrorMessage(err),
+      });
+      break;
+    }
     if (result.ok) added.push(result.app);
     else {
       const item: BulkResultItemFailed = { ok: false, name, reason: result.reason };

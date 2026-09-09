@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveModelForRun } from "../modelResolve";
+import { resolveModelForContinuation, resolveModelForRun } from "../modelResolve";
 
 describe("resolveModelForRun", () => {
   it("returns undefined when nothing pins a model — the pre-pinning default", () => {
@@ -96,5 +96,88 @@ describe("resolveModelForRun", () => {
         role: "some-role-nobody-registered",
       }),
     ).toBe("sonnet");
+  });
+});
+
+describe("resolveModelForContinuation", () => {
+  it("re-pins the model the session was spawned with", () => {
+    expect(
+      resolveModelForContinuation({ role: "coder", priorModel: "claude-opus-5" }),
+    ).toBe("claude-opus-5");
+  });
+
+  it("lets this call name a different model", () => {
+    expect(
+      resolveModelForContinuation({
+        role: "coder",
+        requested: "claude-sonnet-5",
+        priorModel: "claude-opus-5",
+      }),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("keeps inheriting when the caller simply names nothing — every automatic retry", () => {
+    // The bug this guards: if "no request" also meant "unpin", a gate retry
+    // would finish a half-written diff on a different model.
+    for (const requested of [undefined, null]) {
+      expect(
+        resolveModelForContinuation({ role: "coder", requested, priorModel: "claude-opus-5" }),
+      ).toBe("claude-opus-5");
+    }
+    expect(
+      resolveModelForContinuation({
+        role: "coder",
+        priorModel: "claude-opus-5",
+        clearModel: false,
+      }),
+    ).toBe("claude-opus-5");
+  });
+
+  it("drops the session pin when clearModel is set, and then passes no model", () => {
+    expect(
+      resolveModelForContinuation({
+        role: "coder",
+        priorModel: "claude-opus-5",
+        clearModel: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("clearModel drops only the session pin — a standing app or task pin still applies", () => {
+    // Same meaning "Default" has in the new-task dialog: no pin at *this*
+    // level. Removing a task pin is an edit to the task, not a resume.
+    expect(
+      resolveModelForContinuation({
+        role: "coder",
+        priorModel: "claude-opus-5",
+        taskModel: "claude-haiku-4-5",
+        clearModel: true,
+      }),
+    ).toBe("claude-haiku-4-5");
+    expect(
+      resolveModelForContinuation({
+        role: "coder",
+        priorModel: "claude-opus-5",
+        app: { roleModels: { coder: "claude-sonnet-5" } },
+        clearModel: true,
+      }),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("an explicit model still beats clearModel — the two are not contradictory inputs", () => {
+    expect(
+      resolveModelForContinuation({
+        role: "coder",
+        requested: "claude-sonnet-5",
+        priorModel: "claude-opus-5",
+        clearModel: true,
+      }),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("ignores a prior model that would not survive the argv guard", () => {
+    expect(
+      resolveModelForContinuation({ role: "coder", priorModel: "opus 5" }),
+    ).toBeUndefined();
   });
 });

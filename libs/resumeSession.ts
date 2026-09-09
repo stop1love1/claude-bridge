@@ -36,6 +36,10 @@ export function resumeSessionWithLifecycle(
         ...args.settings,
         model: resolveModelForContinuation({
           requested: args.settings?.model,
+          // Operator-driven surface: the composer's model picker can say "stop
+          // using this session's pin", which no amount of omitting `model`
+          // could express before.
+          clearModel: args.settings?.clearModel === true,
           priorModel: row.model ?? null,
           app: getApp(row.repo),
           role: row.role,
@@ -60,9 +64,15 @@ export function resumeSessionWithLifecycle(
     endedAt: null,
     // A resumed run writes NEW code under the same run row, so the semantic
     // verdict recorded for the previous exit no longer describes the diff the
-    // next post-exit flow will commit. Clear it here — every resume path goes
-    // through this function — so the gate always re-judges instead of
-    // replaying a stale `pass`/`drift` as a skip.
+    // next post-exit flow will commit. Clear it so the gate re-judges instead
+    // of replaying a stale `pass`/`drift` as a skip.
+    //
+    // This covers the composer / nudge / `/continue` paths only. The
+    // coordinator's `POST /api/tasks/<id>/agents` with `mode: "resume"` does
+    // NOT come through here — it claims the row via `libs/resumeGuard.ts` and
+    // clears the field there. An earlier version of this comment claimed
+    // otherwise and the gap went unnoticed until a `coder` row was seen still
+    // carrying the previous round's verdict.
     semanticVerifier: null,
   }).catch((e) =>
     logError("resume-session", "status flip failed", e, {

@@ -6,6 +6,15 @@ import {
   sanitizeTaskBodyForFence,
 } from "../childPrompt";
 import type { RepoProfile } from "../repoProfile";
+// Imported statically, at module-graph load, so this is the SAME `paths`
+// instance `childPrompt.ts` captured — and it is read before any test body
+// runs. The dynamic `await import("../paths")` this replaces executed during
+// the test, i.e. after other files in the reused worker had already had a
+// chance to `process.chdir()` (`telegramCommands`, `coordinatorNudge`) and to
+// `vi.resetModules()`. `BRIDGE_ROOT` is `resolve(process.cwd())` frozen at
+// load, so a second load in that window yields a different string and this
+// assertion compares two different bridge roots.
+import { BRIDGE_ROOT } from "../paths";
 
 // Deliberately a path that exists on no dev machine: when the fixture matched the
 // real bridge root, these assertions passed whether buildChildPrompt honoured the
@@ -150,8 +159,7 @@ describe("buildChildPrompt", () => {
     );
   });
 
-  it("falls back to runtime BRIDGE_ROOT when bridgeRoot is omitted", async () => {
-    const { BRIDGE_ROOT } = await import("../paths");
+  it("falls back to runtime BRIDGE_ROOT when bridgeRoot is omitted", () => {
     const { bridgeRoot: _omitted, ...rest } = baseOpts;
     const out = buildChildPrompt(rest);
     expect(out).toContain(`${BRIDGE_ROOT.replace(/\\/g, "/")}/sessions/${baseOpts.taskId}/reports/`);

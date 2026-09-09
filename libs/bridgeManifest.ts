@@ -4,6 +4,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { writeStringAtomic } from "./atomicWrite";
+import { describeWriteFailure } from "./fsDiagnose";
+import { logError } from "./log";
 import { USER_CLAUDE_DIR } from "./paths";
 
 export const BRIDGE_JSON = join(USER_CLAUDE_DIR, "bridge.json");
@@ -62,7 +64,15 @@ export function onBridgeManifestWrite(fn: () => void): void {
 }
 
 function atomicWrite(contents: string): void {
-  writeStringAtomic(BRIDGE_JSON, contents, { mode: 0o600 });
+  try {
+    writeStringAtomic(BRIDGE_JSON, contents, { mode: 0o600 });
+  } catch (err) {
+    // Node only names the temp file it failed to open. Every caller that lands
+    // here (add app, rename, auth, tunnels, settings) is worth one line saying
+    // who owns the tree and what to run, since the HTTP body cannot carry paths.
+    logError("manifest", describeWriteFailure(BRIDGE_JSON, err), err);
+    throw err;
+  }
 }
 
 export function writeBridgeManifest(manifest: RawBridgeManifest): void {

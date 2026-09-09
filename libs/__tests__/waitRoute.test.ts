@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -53,16 +53,16 @@ function child(
   };
 }
 
-async function postWait(body: unknown, signal?: AbortSignal) {
+async function postWait(body: unknown, signal?: AbortSignal, taskId: string = TASK_ID) {
   const { NextRequest } = await import("next/server");
   const { POST } = await import("@/app/api/tasks/[id]/wait/route");
-  const req = new NextRequest(`http://localhost:7777/api/tasks/${TASK_ID}/wait`, {
+  const req = new NextRequest(`http://localhost:7777/api/tasks/${taskId}/wait`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
     ...(signal ? { signal } : {}),
   });
-  return POST(req, { params: Promise.resolve({ id: TASK_ID }) });
+  return POST(req, { params: Promise.resolve({ id: taskId }) });
 }
 
 async function seed(...runs: ReturnType<typeof child>[]) {
@@ -71,7 +71,38 @@ async function seed(...runs: ReturnType<typeof child>[]) {
   for (const r of runs) await appendRun(taskDir(), r);
 }
 
+/**
+ * The route's own fallback timeout for tests that expect to resolve via an
+ * event long before it fires, plus the Vitest deadline those tests run under.
+ *
+ * The ordering matters and both numbers are chosen for it: event (~50ms) ≪
+ * fallback ≪ deadline. Originally the tests passed 5000 while Vitest's
+ * default deadline was also 5000, so the route's "timed out" path and Vitest
+ * giving up were the same instant and any scheduling hiccup decided which one
+ * won — that is how these failed under `--sequence.shuffle` on a loaded
+ * machine while passing when the file ran alone.
+ *
+ * The fallback is a safety net that must never fire in a passing run; putting
+ * the deadline above it means a genuine hang surfaces as a readable
+ * `timedOut: true` assertion rather than an opaque Vitest timeout.
+ *
+ * 3s is 60x the ~50ms the event normally takes. It is deliberately not larger:
+ * one known interleaving (`--sequence.shuffle --sequence.seed=101`) never
+ * delivers the event to the route at all — verified by raising the fallback to
+ * 25s and watching it expire too — so a bigger number would only make that
+ * failure slower, not rarer.
+ */
+const WAIT_FALLBACK_MS = 3_000;
+const WAIT_TEST_DEADLINE_MS = 15_000;
+
 describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
+  // Both hooks, deliberately: a test that asserts "no meta.json" must not
+  // depend on its predecessor's cleanup having run, which is an ordering
+  // assumption rather than a fact once the order can change.
+  beforeEach(() => {
+    try { rmSync(taskDir(), { recursive: true, force: true }); } catch { }
+  });
+
   afterEach(() => {
     try { rmSync(taskDir(), { recursive: true, force: true }); } catch { }
   });
@@ -80,7 +111,7 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
     await seed(child(CHILD_A_SID, "done"), child(CHILD_B_SID, "failed"));
 
     const started = Date.now();
-    const res = await postWait({ parentSessionId: COORD_SID, timeoutMs: 5000 });
+    const res = await postWait({ parentSessionId: COORD_SID, timeoutMs: WAIT_FALLBACK_MS });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.timedOut).toBe(false);
@@ -89,13 +120,13 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
       [CHILD_A_SID, CHILD_B_SID].sort(),
     );
     expect(Date.now() - started).toBeLessThan(1000);
-  });
+  }, WAIT_TEST_DEADLINE_MS);
 
   it("resolves as soon as updateRun flips a pending child to a terminal status", async () => {
     await seed(child(CHILD_A_SID, "running"), child(CHILD_B_SID, "running"));
     const { updateRun } = await import("../meta");
 
-    const pending = postWait({ parentSessionId: COORD_SID, timeoutMs: 5000 });
+    const pending = postWait({ parentSessionId: COORD_SID, timeoutMs: WAIT_FALLBACK_MS });
     await new Promise((r) => setTimeout(r, 50));
     await updateRun(taskDir(), CHILD_A_SID, { status: "done", endedAt: "2026-09-05T10:06:00Z" });
 
@@ -105,7 +136,7 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
     expect(body.timedOut).toBe(false);
     expect(body.settled.map((r: { sessionId: string }) => r.sessionId)).toEqual([CHILD_A_SID]);
     expect(body.pending.map((r: { sessionId: string }) => r.sessionId)).toEqual([CHILD_B_SID]);
-  });
+  }, WAIT_TEST_DEADLINE_MS);
 
   it("returns timedOut:true with the still-running children after timeoutMs", async () => {
     await seed(child(CHILD_A_SID, "running"), child(CHILD_B_SID, "done"));
@@ -128,7 +159,7 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
     const res = await postWait({
       parentSessionId: COORD_SID,
       sessionIds: [CHILD_B_SID],
-      timeoutMs: 5000,
+      timeoutMs: WAIT_FALLBACK_MS,
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -141,7 +172,7 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
     await seed(child(CHILD_A_SID, "running"));
     const ac = new AbortController();
 
-    const pending = postWait({ parentSessionId: COORD_SID, timeoutMs: 5000 }, ac.signal);
+    const pending = postWait({ parentSessionId: COORD_SID, timeoutMs: WAIT_FALLBACK_MS }, ac.signal);
     await new Promise((r) => setTimeout(r, 20));
     const started = Date.now();
     ac.abort();
@@ -151,7 +182,7 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
     const body = await res.json();
     expect(body.timedOut).toBe(false);
     expect(body.pending.map((r: { sessionId: string }) => r.sessionId)).toEqual([CHILD_A_SID]);
-  });
+  }, WAIT_TEST_DEADLINE_MS);
 
   it("400s when parentSessionId is missing or not a UUID", async () => {
     await seed(child(CHILD_A_SID, "done"));
@@ -189,7 +220,13 @@ describe("POST /api/tasks/[id]/wait — coordinator long-poll", () => {
   });
 
   it("404s when the task has no meta.json", async () => {
-    const res = await postWait({ parentSessionId: COORD_SID });
+    // A task id nothing in this file has ever seeded. Deleting the directory
+    // is not enough on its own: `readMeta` caches per directory for
+    // META_CACHE_TTL_MS (500ms), so a test running shortly after any
+    // `createMeta` still saw a live task, and the route then long-polled for
+    // its 30s default until Vitest killed the test at 5s. An unused id cannot
+    // have a cache entry.
+    const res = await postWait({ parentSessionId: COORD_SID }, undefined, "t_20260909_777");
     expect(res.status).toBe(404);
   });
 });

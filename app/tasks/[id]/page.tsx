@@ -52,6 +52,7 @@ function TaskPageInner() {
       repoPath: repo?.path ?? "",
       role: run.role,
       repo: run.repo,
+      model: run.model ?? null,
     };
   }, [search, meta, repos]);
 

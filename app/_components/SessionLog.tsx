@@ -783,6 +783,7 @@ function SessionLogInner({
           repo={run.repo}
           repoPath={run.repoPath}
           role={run.role}
+          sessionModel={run.model ?? null}
           taskId={taskId}
           isResponding={isResponding}
           onSent={onSent}

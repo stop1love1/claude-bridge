@@ -98,6 +98,10 @@ export async function spawnRetry(
         role: nextRole,
         status: "running",
         startedAt: new Date().toISOString(),
+        // `diffBaseline` is deliberately absent from this patch: the retry
+        // reuses the same run row, so the dispatch-time snapshot carries over
+        // untouched. Re-capturing it would swallow exactly the edits the retry
+        // is being asked to declare correctly.
         endedAt: null,
         retryAttempt: nextAttempt,
       },

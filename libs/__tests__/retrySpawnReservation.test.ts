@@ -19,7 +19,10 @@ vi.mock("../paths", async () => {
   return { ...actual, SESSIONS_DIR: TMP_SESSIONS };
 });
 
-const resumeClaudeCalls: Array<{ sessionId: string; settings?: { disallowedTools?: string[] } }> = [];
+const resumeClaudeCalls: Array<{
+  sessionId: string;
+  settings?: { disallowedTools?: string[]; model?: string };
+}> = [];
 function fakeChild(): ChildProcess {
   return new EventEmitter() as unknown as ChildProcess;
 }
@@ -29,7 +32,7 @@ vi.mock("../spawn", () => ({
     _cwd: string,
     sessionId: string,
     _message: string,
-    settings?: { disallowedTools?: string[] },
+    settings?: { disallowedTools?: string[]; model?: string },
   ) => {
     resumeClaudeCalls.push({ sessionId, settings });
     return fakeChild();
@@ -319,6 +322,79 @@ describe("spawnRetry — re-acquires the reservation the crash path already rele
     // stale-run reaper never touches, and nothing else ever calls release for it.
     expect(currentReservation("fake-crash-retry-app")).toBeNull();
 
+    releaseRepoReservation("fake-crash-retry-app", sid);
+  });
+});
+
+describe("spawnRetry — the model an automatic retry runs on", () => {
+  afterEach(() => {
+    resumeClaudeCalls.length = 0;
+    try { rmSync(taskDir(), { recursive: true, force: true }); } catch { }
+  });
+
+  it("re-pins the model the failed run was spawned with", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { spawnRetry } = await import("../retrySpawn");
+    const { releaseRepoReservation } = await import("../repoReservation");
+
+    createMeta(taskDir(), HEADER);
+    const sid = "aaaaaaaa-1111-2222-3333-444444444444";
+    const failedRun = {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-crash-retry-app",
+      status: "failed" as const,
+      startedAt: "2026-08-27T10:00:01Z",
+      endedAt: "2026-08-27T10:00:02Z",
+      parentSessionId: "parent-1",
+      model: "claude-opus-5",
+    };
+    await appendRun(taskDir(), failedRun);
+
+    const result = await spawnRetry({
+      taskId: TASK_ID,
+      finishedRun: failedRun,
+      gate: "crash",
+      ctxBlock: "retry context",
+      logLabel: "auto-retry",
+      precomputedAttempt: { nextAttempt: 1 },
+    });
+
+    expect(result).not.toBeNull();
+    // There is no operator here to ask, so the diff finishes on the model it
+    // was started on — `clearModel` is not reachable from this path.
+    expect(resumeClaudeCalls[0].settings?.model).toBe("claude-opus-5");
+    releaseRepoReservation("fake-crash-retry-app", sid);
+  });
+
+  it("passes no model when the failed run had none", async () => {
+    const { createMeta, appendRun } = await import("../meta");
+    const { spawnRetry } = await import("../retrySpawn");
+    const { releaseRepoReservation } = await import("../repoReservation");
+
+    createMeta(taskDir(), HEADER);
+    const sid = "bbbbbbbb-1111-2222-3333-444444444444";
+    const failedRun = {
+      sessionId: sid,
+      role: "coder",
+      repo: "fake-crash-retry-app",
+      status: "failed" as const,
+      startedAt: "2026-08-27T10:00:01Z",
+      endedAt: "2026-08-27T10:00:02Z",
+      parentSessionId: "parent-1",
+    };
+    await appendRun(taskDir(), failedRun);
+
+    await spawnRetry({
+      taskId: TASK_ID,
+      finishedRun: failedRun,
+      gate: "crash",
+      ctxBlock: "retry context",
+      logLabel: "auto-retry",
+      precomputedAttempt: { nextAttempt: 1 },
+    });
+
+    expect(resumeClaudeCalls[0].settings?.model).toBeUndefined();
     releaseRepoReservation("fake-crash-retry-app", sid);
   });
 });

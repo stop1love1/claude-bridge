@@ -270,20 +270,49 @@ describe("runVerifyChain", () => {
     }
   });
 
-  it("caps captured output at outputCapBytes and appends a marker", async () => {
+  it("keeps both ends when output outruns the budget, and says what it dropped", async () => {
+    // The regression this replaces: only the head was kept, so a red
+    // `npm run test` stored the runner's warm-up and threw away the summary
+    // line and the failed-test names — the only part anyone reads.
     const cwd = mktmp("cap");
     try {
-      const script = "process.stdout.write('x'.repeat(1024))";
+      const script =
+        "process.stdout.write('FIRST-LINE\\n' + 'x'.repeat(4096) + '\\nLAST-LINE')";
       const result = await runVerifyChain({
         cwd,
         verify: { test: nodeCmd(script) },
-        outputCapBytes: 100,
+        outputCapBytes: 200,
       });
       expect(result.passed).toBe(true);
       const step = result.steps[0];
-      expect(step.output).toContain("…(bridge: output truncated at 100 bytes)");
-      const before = step.output.split("\n\n…(bridge:")[0];
-      expect(Buffer.byteLength(before, "utf8")).toBeLessThanOrEqual(100);
+
+      expect(step.output).toContain("FIRST-LINE");
+      expect(step.output).toContain("LAST-LINE");
+      expect(step.output).toMatch(/bytes dropped from the middle/);
+
+      // Head before the marker, tail after it — in that order.
+      const [before, after] = step.output.split(/\n\n…\(bridge:[^)]*\)\n\n/);
+      expect(before).toContain("FIRST-LINE");
+      expect(after).toContain("LAST-LINE");
+
+      // Still inside the budget: the marker is bookkeeping, not payload.
+      expect(
+        Buffer.byteLength(before, "utf8") + Buffer.byteLength(after, "utf8"),
+      ).toBeLessThanOrEqual(200);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("adds no marker when the output fits inside the budget", async () => {
+    const cwd = mktmp("nocap");
+    try {
+      const result = await runVerifyChain({
+        cwd,
+        verify: { test: nodeCmd("process.stdout.write('short')") },
+        outputCapBytes: 1000,
+      });
+      expect(result.steps[0].output).toBe("short");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

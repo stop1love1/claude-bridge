@@ -293,8 +293,10 @@ export const COMMANDS: CommandDef[] = [
   },
   {
     name: "continue",
-    description: "Resume the existing coordinator for a task — usage: /continue <id>",
-    handler: async (args) => commandContinue(args[0]),
+    description:
+      "Resume the existing coordinator for a task — usage: /continue <id> [default] " +
+      "(add 'default' to stop pinning the model it was started on)",
+    handler: async (args) => commandContinue(args[0], args[1]),
   },
   {
     name: "retry",
@@ -637,9 +639,27 @@ async function commandNew(rawTail: string): Promise<string> {
   return `📝 Created \`${task.id}\`: ${escapeMarkdownV2(truncate(task.title, 80))}`;
 }
 
-async function commandContinue(idArg: string | undefined): Promise<string> {
-  if (!idArg) return "Usage: `/continue t_YYYYMMDD_NNN`";
+/**
+ * The only word this command accepts after the task id.
+ *
+ * Deliberately a literal rather than "any model name": a typo in a model id
+ * would spawn a coordinator on a model nobody chose, whereas an unrecognised
+ * word here is rejected outright.
+ */
+const CONTINUE_CLEAR_MODEL = "default";
+
+async function commandContinue(
+  idArg: string | undefined,
+  modeArg?: string,
+): Promise<string> {
+  if (!idArg) return "Usage: `/continue t_YYYYMMDD_NNN [default]`";
   if (!isValidTaskId(idArg)) return `Invalid task id: \`${idArg}\``;
+  const clearModel = (modeArg ?? "").trim().toLowerCase() === CONTINUE_CLEAR_MODEL;
+  if (modeArg !== undefined && modeArg.trim() !== "" && !clearModel) {
+    // Silently ignoring the word is how an operator ends up believing they
+    // unpinned a model when they did not.
+    return `Unknown option \`${modeArg}\` — usage: \`/continue ${idArg} [default]\``;
+  }
   const task = getTask(idArg);
   if (!task) return `Task not found: \`${idArg}\``;
   const meta = readMeta(join(SESSIONS_DIR, idArg));
@@ -651,15 +671,21 @@ async function commandContinue(idArg: string | undefined): Promise<string> {
       mode: "bypassPermissions",
       disallowedTools: denyTaskToolNames(),
       // Same continuation rule as every other resume: re-pin the model this
-      // coordinator was spawned with rather than dropping it to the default.
+      // coordinator was spawned with rather than dropping it to the default —
+      // unless the operator typed `default`, the only way this command can
+      // express "stop inheriting the session pin".
       model: resolveModelForContinuation({
+        clearModel,
         priorModel: coord.model ?? null,
         app: getApp(basename(BRIDGE_ROOT)),
         role: "coordinator",
         taskModel: meta?.taskModel ?? null,
       }),
     });
-    return `▶️ Resumed coordinator for \`${idArg}\` \\(\`${coord.sessionId.slice(0, 8)}\`\\)`;
+    return (
+      `▶️ Resumed coordinator for \`${idArg}\` \\(\`${coord.sessionId.slice(0, 8)}\`\\)` +
+      (clearModel ? " — model pin cleared" : "")
+    );
   }
   const sid = await spawnCoordinatorForTask(task);
   if (!sid) return `Spawn failed for \`${idArg}\` \\(see server logs\\)`;

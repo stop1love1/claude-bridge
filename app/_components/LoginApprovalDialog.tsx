@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { useToast } from "./Toasts";
+import { httpErrorMessage } from "@/libs/client/api";
 
 interface PendingApproval {
   id: string;
@@ -72,8 +73,7 @@ export function LoginApprovalDialog() {
         body: JSON.stringify({ decision }),
       });
       if (!r.ok) {
-        const text = await r.text();
-        toast("error", `Approval failed: ${text || r.status}`);
+        toast("error", `Approval failed: ${httpErrorMessage(r.status, await r.text())}`);
         return;
       }
       handledRef.current.add(id);

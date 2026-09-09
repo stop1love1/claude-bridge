@@ -27,7 +27,14 @@ vi.mock("@/libs/apps", () => ({
 
 
 beforeEach(() => {
+  // Both halves are required. `libs/rateLimit.ts` binds `const store` to the
+  // globalThis value at module load, so deleting the key alone leaves the
+  // already-cached module holding the same Map — every test after the first
+  // inherits its predecessor's hit counts. `resetModules` forces the
+  // `await import` below to hand back a module that re-reads the (now absent)
+  // global and starts clean.
   delete (globalThis as { __bridgeRateLimit?: unknown }).__bridgeRateLimit;
+  vi.resetModules();
   vi.useFakeTimers();
 });
 

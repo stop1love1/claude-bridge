@@ -21,6 +21,11 @@ export interface Run {
   startedAt: string | null;
   endedAt: string | null;
   parentSessionId?: string | null;
+  /**
+   * The `--model` this run was spawned with, if any. The composer shows it so
+   * the operator can see what a continuation will inherit — and unpin it.
+   */
+  model?: string | null;
   mergeNotPushed?: {
     message: string;
     error: string | null;
@@ -208,6 +213,13 @@ export interface ChatSettings {
   mode?: PermissionMode;
   effort?: EffortLevel;
   model?: string;
+  /**
+   * Sent by the composer's model picker when the operator selects "Default" on
+   * a session that is already pinned. Without it, omitting `model` is
+   * indistinguishable from "I didn't touch the picker" and the server re-pins
+   * the session's own model forever. Never persisted — it is a per-turn intent.
+   */
+  clearModel?: boolean;
 }
 
 export interface DetectCandidate {

@@ -53,6 +53,46 @@ describe("dispatchCommand — parsing", () => {
   });
 });
 
+describe("dispatchCommand — /continue grammar", () => {
+  // The model-pin escape hatch. `resolveModelForContinuation` inherits the
+  // session's model unless a caller says otherwise, and this command had no
+  // word for "otherwise" — so a coordinator pinned once stayed pinned for the
+  // life of the task. Everything below is the parsing half; the one-line
+  // handoff to `clearModel` is covered in modelResolve.test.ts.
+  it("documents the optional argument in its usage line", async () => {
+    const out = await dispatchCommand("/continue");
+    expect(out).toMatch(/Usage:/);
+    expect(out).toContain("[default]");
+  });
+
+  it("rejects an unrecognised option instead of quietly ignoring it", async () => {
+    // Ignoring the word is how an operator ends up believing they unpinned a
+    // model when they did not.
+    const out = await dispatchCommand("/continue t_20260101_001 sonnet");
+    expect(out).toMatch(/Unknown option/);
+    expect(out).toContain("sonnet");
+    expect(out).toContain("[default]");
+  });
+
+  it("accepts 'default' and carries on to the task lookup", async () => {
+    const out = await dispatchCommand("/continue t_20260101_001 default");
+    expect(out).not.toMatch(/Unknown option/);
+    expect(out).toMatch(/Task not found/);
+  });
+
+  it("accepts it case-insensitively and with stray whitespace", async () => {
+    for (const arg of ["DEFAULT", "Default"]) {
+      const out = await dispatchCommand(`/continue t_20260101_001 ${arg}`);
+      expect(out, arg).not.toMatch(/Unknown option/);
+    }
+  });
+
+  it("still works with no option at all", async () => {
+    const out = await dispatchCommand("/continue t_20260101_001");
+    expect(out).toMatch(/Task not found/);
+  });
+});
+
 describe("dispatchCommand — /help content", () => {
   it("lists every registered command", async () => {
     const help = await dispatchCommand("/help");
