@@ -7,6 +7,7 @@ import {
   subscribeUserMessages,
   type InboundMessage,
 } from "./telegramUserClient";
+import type { routeNaturalLanguage as RouteNaturalLanguageFn } from "./telegramIntent";
 import {
   listTasks,
   getTask,
@@ -375,17 +376,35 @@ export const COMMANDS: CommandDef[] = [
 
 const COMMAND_BY_NAME = new Map(COMMANDS.map((c) => [c.name, c] as const));
 
+let routeNaturalLanguageCache: typeof RouteNaturalLanguageFn | null = null;
+let routeNaturalLanguagePromise: Promise<typeof RouteNaturalLanguageFn | null> | null = null;
+
+// Lazy import: telegramIntent imports COMMANDS from this file at module load,
+// so a top-level static import would form a cycle and COMMANDS would still be
+// undefined when telegramIntent evaluates. Resolve on first use.
+async function getRouteNaturalLanguage(): Promise<typeof RouteNaturalLanguageFn | null> {
+  if (routeNaturalLanguageCache) return routeNaturalLanguageCache;
+  if (!routeNaturalLanguagePromise) {
+    routeNaturalLanguagePromise = import("./telegramIntent")
+      .then((m) => {
+        routeNaturalLanguageCache = m.routeNaturalLanguage;
+        return m.routeNaturalLanguage;
+      })
+      .catch(() => null);
+  }
+  return routeNaturalLanguagePromise;
+}
+
 export async function smartDispatch(rawText: string): Promise<string> {
   const trimmed = rawText.trim();
   if (!trimmed) return "Empty message — send /help for the command list.";
   if (trimmed.startsWith("/")) {
     return dispatchCommand(trimmed);
   }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { routeNaturalLanguage } = require("./telegramIntent") as typeof import("./telegramIntent");
+  const routeNaturalLanguage = await getRouteNaturalLanguage();
   let result;
   try {
-    result = await routeNaturalLanguage(trimmed);
+    result = await routeNaturalLanguage?.(trimmed) ?? null;
   } catch (err) {
     logWarn("telegram-cmd", "intent router crashed", { error: (err as Error).message });
     result = null;
@@ -1111,12 +1130,20 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;");
 }
 
+const MD_LITE_MAX_INPUT = 8 * 1024;
+
 function mdLiteToHtml(input: string): string {
-  const stripped = input.replace(/\\([_*[\]()~`>#+\-=|{}.!\\])/g, "$1");
+  const capped = input.length > MD_LITE_MAX_INPUT
+    ? input.slice(0, MD_LITE_MAX_INPUT)
+    : input;
+  const stripped = capped.replace(/\\([_*[\]()~`>#+\-=|{}.!\\])/g, "$1");
 
   const out: string[] = [];
   let i = 0;
-  while (i < stripped.length) {
+  const maxIter = stripped.length + 1;
+  let iter = 0;
+  while (i < stripped.length && iter < maxIter) {
+    iter += 1;
     const ch = stripped[i];
     if (ch === "`") {
       const close = stripped.indexOf("`", i + 1);
@@ -1131,6 +1158,23 @@ function mdLiteToHtml(input: string): string {
       continue;
     }
     if (ch === "*") {
+      if (stripped[i + 1] === "*") {
+        const close = stripped.indexOf("**", i + 2);
+        if (close === -1) {
+          out.push(escapeHtml("**"));
+          i += 2;
+          continue;
+        }
+        const inner = stripped.slice(i + 2, close);
+        if (inner.length === 0) {
+          out.push(escapeHtml("****"));
+          i = close + 2;
+          continue;
+        }
+        out.push(`<b>${escapeHtml(inner)}</b>`);
+        i = close + 2;
+        continue;
+      }
       const close = stripped.indexOf("*", i + 1);
       if (close === -1) {
         out.push(escapeHtml("*"));

@@ -46,7 +46,7 @@ export interface TailResult {
   lineOffsets: number[];
 }
 
-const TAIL_CHUNK_BYTES = 256 * 1024;
+export const TAIL_CHUNK_BYTES = 256 * 1024;
 
 export async function tailJsonl(filePath: string, fromOffset: number): Promise<TailResult> {
   let size: number;
@@ -267,14 +267,20 @@ export function __resetScanHeadCacheForTests(): void {
   scanHeadCache.clear();
 }
 
+// How many bytes of the session JSONL we are willing to scan for the first
+// user/assistant message. 4 MiB skips the bootstrap preamble without blowing
+// the response budget.
+const MAX_PREVIEW_SCAN_BYTES = 4 * 1024 * 1024;
+
+// Read chunk size for the preview scan.
+const SCAN_HEAD_CHUNK_BYTES = 16 * 1024;
+
 function scanSessionHeadUncached(filePath: string): { hasRealEntry: boolean; preview: string } {
   let fd: number;
   try { fd = openSync(filePath, "r"); }
   catch { return { hasRealEntry: false, preview: "" }; }
 
-  const CHUNK = 16 * 1024;
-  const MAX_BYTES = 4 * 1024 * 1024;
-  const buf = Buffer.alloc(CHUNK);
+  const buf = Buffer.alloc(SCAN_HEAD_CHUNK_BYTES);
   const decoder = new StringDecoder("utf8");
   let leftover = "";
   let preview = "";
@@ -295,8 +301,8 @@ function scanSessionHeadUncached(filePath: string): { hasRealEntry: boolean; pre
   };
 
   try {
-    while (pos < MAX_BYTES) {
-      const n = readSync(fd, buf, 0, CHUNK, pos);
+    while (pos < MAX_PREVIEW_SCAN_BYTES) {
+      const n = readSync(fd, buf, 0, SCAN_HEAD_CHUNK_BYTES, pos);
       if (n === 0) break;
       pos += n;
       const text = leftover + decoder.write(buf.subarray(0, n));
@@ -342,6 +348,7 @@ export function listSessions(projectDir: string): SessionEntry[] {
   return out.sort((a, b) => b.mtime - a.mtime);
 }
 
+// Bytes scanned at the head of a session JSONL to find the first `cwd` line.
 const READ_CWD_MAX_BYTES = 16 * 1024;
 
 export function readSessionCwd(filePath: string): string | null {

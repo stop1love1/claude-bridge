@@ -14,6 +14,15 @@ const store: Store =
   G.__bridgeRateLimit ??
   (G.__bridgeRateLimit = { buckets: new Map(), lastGcMs: Date.now() });
 
+// Hot-reload in Next.js dev re-evaluates this module on each edit, which
+// would otherwise leak buckets across reloads. No-op in production where
+// the module loads once.
+if (process.env.NODE_ENV === "development") {
+  process.once("beforeExit", () => {
+    if (store.buckets.size > 0) store.buckets.clear();
+  });
+}
+
 const GC_INTERVAL_MS = 5 * 60 * 1000;
 
 function maybeGc(now: number, windowMs: number): void {
