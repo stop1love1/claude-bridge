@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { AppGitSettings } from "./apps";
+import { shortId } from "./shortId";
 
 const execFileP = promisify(execFile);
 
@@ -235,8 +236,7 @@ async function prepareBranchLocked(
 
 function uniqueBranchSuffix(): string {
   const ts = Date.now().toString(36).slice(-4);
-  const r = Math.random().toString(36).slice(2, 6);
-  return `${ts}${r}`;
+  return `${ts}${shortId(3)}`;
 }
 
 async function checkoutOrCreate(cwd: string, branch: string): Promise<GitOpResult> {

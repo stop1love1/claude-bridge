@@ -26,34 +26,30 @@ import { runDevopsAgent } from "./devops";
 import { escalateGateBlock, type EscalationGate } from "./gateEscalation";
 import { releaseRepoReservation } from "./repoReservation";
 import { logError, logInfo, logWarn } from "./log";
-import type * as VerifyChain from "./verifyChain";
-import type * as Verifier from "./verifier";
 import type * as Preflight from "./preflightCheck";
-import type * as StyleCritic from "./styleCritic";
-import type * as SemanticVerifier from "./semanticVerifier";
-
-function loadVerifyChain(): typeof VerifyChain {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("./verifyChain") as typeof VerifyChain;
-}
-function loadVerifier(): typeof Verifier {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("./verifier") as typeof Verifier;
-}
-function loadPreflight(): typeof Preflight {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("./preflightCheck") as typeof Preflight;
-}
-function loadStyleCritic(): typeof StyleCritic {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("./styleCritic") as typeof StyleCritic;
-}
-function loadSemanticVerifier(): typeof SemanticVerifier {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("./semanticVerifier") as typeof SemanticVerifier;
-}
 
 type GateField = "verify" | "verifier" | "styleCritic" | "semanticVerifier";
+function loadVerifyChain(): typeof import("./verifyChain") {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("./verifyChain");
+}
+function loadVerifier(): typeof import("./verifier") {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("./verifier");
+}
+function loadPreflight(): typeof import("./preflightCheck") {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("./preflightCheck");
+}
+function loadStyleCritic(): typeof import("./styleCritic") {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("./styleCritic");
+}
+function loadSemanticVerifier(): typeof import("./semanticVerifier") {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("./semanticVerifier");
+}
+
 async function attachGateResult<F extends GateField>(
   dir: string,
   runSessionId: string,
@@ -986,6 +982,8 @@ export function wireRunLifecycle(
 
   const tryAutoRetry = (failedRun: Run, exitCode: number | null) => {
     try {
+      // Lazy require: `childRetry → retrySpawn → coordinator → runLifecycle`
+      // forms a cycle. Static import would surface a half-initialised ns.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { maybeScheduleRetry } = require("./childRetry") as typeof import("./childRetry");
       maybeScheduleRetry({ taskId, failedRun, exitCode });
@@ -1010,6 +1008,7 @@ export function wireRunLifecycle(
     let retryWillBeAttempted = false;
     if (failedRun) {
       try {
+        // Same cycle as `tryAutoRetry` above.
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { isEligibleForRetry } = require("./childRetry") as typeof import("./childRetry");
         retryWillBeAttempted = "nextAttempt" in isEligibleForRetry(taskId, failedRun);
@@ -1055,6 +1054,7 @@ export function wireRunLifecycle(
         let isCoordPendingSummary = false;
         if (run.role === "coordinator" && coordHadChildren) {
           try {
+            // Lazy require: `coordinatorNudge → resumeSession → runLifecycle`.
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             const cn = require("./coordinatorNudge") as typeof import("./coordinatorNudge");
             isCoordPendingSummary = cn.isSummaryMissing(taskId);
@@ -1086,6 +1086,7 @@ export function wireRunLifecycle(
 
     if (finishedRun && finishedRun.role === "coordinator") {
       try {
+        // Same cycle as `isCoordPendingSummary` above.
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const cn = require("./coordinatorNudge") as typeof import("./coordinatorNudge");
         cn.scheduleCoordinatorEvaluation(taskId, sessionId, "lifecycle-exit");
@@ -1096,6 +1097,7 @@ export function wireRunLifecycle(
 
     if (finishedRun && finishedRun.role.toLowerCase().startsWith("planner")) {
       try {
+        // Lazy require: `planGateLifecycle → resumeSession → runLifecycle`.
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { resolvePlanGateAfterPlanner } = require("./planGateLifecycle") as typeof import("./planGateLifecycle");
         void resolvePlanGateAfterPlanner({

@@ -66,13 +66,9 @@ export function resumeSessionWithLifecycle(
     // verdict recorded for the previous exit no longer describes the diff the
     // next post-exit flow will commit. Clear it so the gate re-judges instead
     // of replaying a stale `pass`/`drift` as a skip.
-    //
-    // This covers the composer / nudge / `/continue` paths only. The
-    // coordinator's `POST /api/tasks/<id>/agents` with `mode: "resume"` does
-    // NOT come through here — it claims the row via `libs/resumeGuard.ts` and
-    // clears the field there. An earlier version of this comment claimed
-    // otherwise and the gap went unnoticed until a `coder` row was seen still
-    // carrying the previous round's verdict.
+    // Covers the composer / nudge / `/continue` paths only — the coordinator's
+    // `POST /api/tasks/<id>/agents` with `mode: "resume"` claims the row via
+    // `libs/resumeGuard.ts` and clears the field there.
     semanticVerifier: null,
   }).catch((e) =>
     logError("resume-session", "status flip failed", e, {

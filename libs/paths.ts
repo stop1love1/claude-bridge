@@ -43,6 +43,8 @@ export function getPublicBridgeUrl(): string {
   const envExplicit = process.env.BRIDGE_PUBLIC_URL?.trim();
   if (envExplicit) return stripTrailingSlash(envExplicit);
   try {
+    // Lazy require: `./apps → ./apps/manifest → ./paths` would form a cycle
+    // and crash `USER_CLAUDE_DIR` (top-level in this file) under vi.mock.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getManifestPublicUrl } = require("./apps") as {
       getManifestPublicUrl: () => string;

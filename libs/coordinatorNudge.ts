@@ -13,6 +13,7 @@ import { isAlive } from "./sessionEvents";
 import { resumeSessionWithLifecycle } from "./resumeSession";
 import { denyTaskToolNames } from "./spawn";
 import { BRIDGE_ROOT, SESSIONS_DIR } from "./paths";
+import { updateTask } from "./tasksStore";
 import { logError, logInfo, logWarn } from "./log";
 
 const NUDGE_DEBOUNCE_MS = 5_000;
@@ -247,9 +248,7 @@ async function markCoordinatorSummaryBlocked(args: {
     }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const ts = require("./tasksStore") as typeof import("./tasksStore");
-      await ts.updateTask(taskId, { section: "BLOCKED" });
+      await updateTask(taskId, { section: "BLOCKED" });
     } catch (e) {
       logWarn("coordinator-nudge", "could not PATCH task section to BLOCKED", {
         taskId,

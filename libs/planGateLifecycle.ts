@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readMeta, readIntake, setIntake, emitIntakeAwaitingApproval } from "./meta";
 import { deriveGateVerdict, type GateVerdict, type IntakeStatus } from "./planGate";
+import { BRIDGE_ROOT } from "./paths";
+import { denyTaskToolNames } from "./spawn";
 import { logError } from "./log";
 
 export function computeNextIntakeStatus(args: {
@@ -69,14 +71,13 @@ export async function continueCoordinator(
   summary: string | null,
   opts?: { replan?: boolean },
 ): Promise<void> {
+  // Lazy require: `resumeSession → runLifecycle` and `coordinator →
+  // runLifecycle` both reach back through `wireRunLifecycle`. A static
+  // import would surface the half-initialised namespace from this module.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { resumeSessionWithLifecycle } = require("./resumeSession") as typeof import("./resumeSession");
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { spawnCoordinatorForTask } = require("./coordinator") as typeof import("./coordinator");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { BRIDGE_ROOT } = require("./paths") as typeof import("./paths");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { denyTaskToolNames } = require("./spawn") as typeof import("./spawn");
 
   const meta = readMeta(sessionsDir);
   if (!meta) return;

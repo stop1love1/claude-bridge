@@ -36,9 +36,7 @@ const HASH_CAP_BYTES = 2 * 1024 * 1024;
 /** A tree this dirty is not a baseline worth trusting; degrade instead. */
 const MAX_BASELINE_FILES = 1000;
 
-// ---------------------------------------------------------------------------
 // `git status --porcelain=v1` parsing
-// ---------------------------------------------------------------------------
 
 const PORCELAIN_PREFIX_LEN = 3;
 const PORCELAIN_STATUS_CODES = " MTADRCU?!";
@@ -147,9 +145,7 @@ export async function readDirtyFiles(appPath: string): Promise<string[]> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Capture / compare
-// ---------------------------------------------------------------------------
 
 /** Cap on entries walked for one directory digest — see `directoryDigest`. */
 const DIR_WALK_CAP = 2000;

@@ -107,9 +107,7 @@ function persist(): void {
   state.loaded = true;
 }
 
-// ---------------------------------------------------------------------------
 // Normalisation / validation
-// ---------------------------------------------------------------------------
 
 function normalizeName(v: unknown): string {
   return typeof v === "string" ? v.trim().toLowerCase() : "";
@@ -214,9 +212,7 @@ function fail(error: string, status: 400 | 404 | 409 = 400): RoleWriteResult {
   return { ok: false, error, status };
 }
 
-// ---------------------------------------------------------------------------
 // Reads
-// ---------------------------------------------------------------------------
 
 export function listCustomRoles(): CustomRoleDef[] {
   return load().roles.map((r) => ({ ...r, disallowedTools: [...r.disallowedTools] }));
@@ -254,9 +250,7 @@ export function loadCustomPlaybook(label: string): string | null {
   return findCustomRole(label)?.playbook ?? null;
 }
 
-// ---------------------------------------------------------------------------
 // Writes
-// ---------------------------------------------------------------------------
 
 function validateInput(input: RoleWriteInput): { error: string } | null {
   if (typeof input.name !== "string" || !input.name.trim()) {
@@ -371,9 +365,7 @@ export function deleteCustomRole(name: string): boolean {
   return true;
 }
 
-// ---------------------------------------------------------------------------
 // Packaging — export / import the whole overlay as one JSON file
-// ---------------------------------------------------------------------------
 
 export function exportRoleBundle(): RoleBundle {
   return {

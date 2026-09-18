@@ -1,3 +1,5 @@
+import { shortId } from "../shortId";
+
 export interface TaskTemplate {
   id: string;
   label: string;
@@ -121,7 +123,7 @@ export function saveUserTemplates(list: TaskTemplate[]): void {
 
 export function addUserTemplate(label: string, body: string): TaskTemplate {
   const t: TaskTemplate = {
-    id: `user:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `user:${Date.now().toString(36)}-${shortId(3)}`,
     label: label.trim(),
     body,
     builtin: false,

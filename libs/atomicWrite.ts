@@ -6,6 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { shortId } from "./shortId";
 
 export interface AtomicWriteOptions {
   mode?: number;
@@ -44,9 +45,7 @@ function renameWithRetry(tmp: string, filePath: string): void {
 }
 
 function uniqueTmpPath(filePath: string): string {
-  return `${filePath}.${process.pid}.${Date.now()}.${Math.random()
-    .toString(36)
-    .slice(2, 8)}.tmp`;
+  return `${filePath}.${process.pid}.${Date.now()}.${shortId(5)}.tmp`;
 }
 
 export function writeStringAtomic(

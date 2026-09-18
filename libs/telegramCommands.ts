@@ -61,10 +61,18 @@ import { addUsage, sumUsageFromJsonl, type SessionUsage } from "./sessionUsage";
 import { sendTelegramApiMessage } from "./telegramSendRetry";
 import { logInfo, logWarn } from "./log";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
 const TG_HOST = "https://api.telegram.org";
 const POLL_TIMEOUT_S = 25;
 const POLL_RESTART_DELAY_MS = 5_000;
 const REPLY_MAX = 3500;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Poller state (long-poll /getUpdates loop for the bot)
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface PollerState {
   running: boolean;
@@ -194,6 +202,10 @@ async function handleUpdate(
   const reply = await smartDispatch(text);
   if (reply) await sendReply(cfg, buildReplyBody(reply), msg.message_id);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Command registry + dispatcher
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface CommandDef {
   name: string;
@@ -376,6 +388,10 @@ export const COMMANDS: CommandDef[] = [
 
 const COMMAND_BY_NAME = new Map(COMMANDS.map((c) => [c.name, c] as const));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Smart dispatcher (slash commands + free-form natural language routing)
+// ─────────────────────────────────────────────────────────────────────────────
+
 let routeNaturalLanguageCache: typeof RouteNaturalLanguageFn | null = null;
 let routeNaturalLanguagePromise: Promise<typeof RouteNaturalLanguageFn | null> | null = null;
 
@@ -462,6 +478,10 @@ function renderHelp(): string {
 }
 
 export const LIST_CAP = 20;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Renderers (text formatting for command outputs)
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function capListLines(lines: string[], cap: number): string[] {
   if (lines.length <= cap) return lines;
@@ -1069,6 +1089,10 @@ function telegramConfig(): { token: string; chatId: string } | null {
   return { token: s.botToken, chatId: s.chatId };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Reply transport + HTML/MD conversion
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function sendReply(
   cfg: { token: string; chatId: string },
   text: string,
@@ -1224,6 +1248,9 @@ function delay(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// User inbound listener (personal Telegram account, not the bot)
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface UserListenerState {
   unsubscribe: (() => void) | null;
